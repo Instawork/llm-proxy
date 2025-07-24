@@ -13,6 +13,13 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
+    transport:
+      type: "dynamodb" # Options: "file" or "dynamodb"
+      # file:
+      #   path: "./logs/cost-tracking.jsonl"
+      dynamodb:
+        table_name: "llm-proxy-cost-tracking"
+        region: "us-west-2" # Change to your preferred AWS region
   rate_limiting:
     enabled: false
 

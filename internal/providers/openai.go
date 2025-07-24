@@ -489,4 +489,71 @@ func (o *OpenAIProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLimit
 		rateLimitInfo.TokenRemaining, rateLimitInfo.TokenLimit)
 	
 	return rateLimitInfo
+}
+
+// UserIDFromRequest extracts user ID from OpenAI request body
+// OpenAI supports passing user ID in the "user" field for safety tracking
+// See: https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids
+func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
+	if req.Body == nil || req.Method != "POST" {
+		return ""
+	}
+	
+	// Only check OpenAI-specific endpoints
+	if !strings.HasPrefix(req.URL.Path, "/openai/") {
+		return ""
+	}
+	
+	// Read request body
+	bodyBytes, err := o.readRequestBodyForUserID(req)
+	if err != nil {
+		log.Printf("Error reading OpenAI request body for user ID extraction: %v", err)
+		return ""
+	}
+	
+	if len(bodyBytes) == 0 {
+		return ""
+	}
+	
+	// Parse JSON to extract user field
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		log.Printf("Error parsing OpenAI request JSON for user ID extraction: %v", err)
+		return ""
+	}
+	
+	// Extract user ID from the "user" field
+	if userValue, ok := data["user"].(string); ok && userValue != "" {
+		log.Printf("🔍 OpenAI: Extracted user ID: %s", userValue)
+		return userValue
+	}
+	
+	return ""
+}
+
+// readRequestBodyForUserID safely reads the request body for user ID extraction
+func (o *OpenAIProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error) {
+	if req.GetBody != nil {
+		// Body was already cached, use GetBody to get a fresh reader
+		bodyReader, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer bodyReader.Close()
+		return io.ReadAll(bodyReader)
+	}
+	
+	// Read the body for the first time
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Restore the body and create GetBody for future use
+	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
+	}
+	
+	return bodyBytes, nil
 } 

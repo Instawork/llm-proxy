@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
@@ -80,6 +81,19 @@ func NewCostTracker(transport Transport) *CostTracker {
 // NewFileBasedCostTracker creates a new cost tracker with file-based transport (convenience function)
 func NewFileBasedCostTracker(outputFile string) *CostTracker {
 	return NewCostTracker(NewFileTransport(outputFile))
+}
+
+// NewDynamoDBBasedCostTracker creates a new cost tracker with DynamoDB transport (convenience function)
+func NewDynamoDBBasedCostTracker(tableName, region string) (*CostTracker, error) {
+	config := DynamoDBTransportConfig{
+		TableName: tableName,
+		Region:    region,
+	}
+	transport, err := NewDynamoDBTransport(config)
+	if err != nil {
+		return nil, err
+	}
+	return NewCostTracker(transport), nil
 }
 
 // SetLogger sets the logger for the cost tracker
@@ -237,4 +251,94 @@ func (ct *CostTracker) GetStats(since time.Time) (map[string]interface{}, error)
 	}
 	
 	return stats, nil
+} 
+
+// CreateTransportFromConfig creates a transport based on the provided configuration
+func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+	// Use type assertion to work with different config types
+	switch cfg := transportConfig.(type) {
+	case *config.TransportConfig:
+		// Handle structured config (from yamlConfig.GetTransportConfig())
+		logger.Debug("💰 Cost Tracker: Processing structured transport config", "type", cfg.Type)
+		switch cfg.Type {
+		case "file":
+			if cfg.File == nil {
+				return nil, fmt.Errorf("file transport configuration not found")
+			}
+			logger.Debug("💰 Cost Tracker: Creating file transport", "path", cfg.File.Path)
+			return NewFileTransport(cfg.File.Path), nil
+			
+		case "dynamodb":
+			if cfg.DynamoDB == nil {
+				return nil, fmt.Errorf("dynamodb transport configuration not found")
+			}
+			
+			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport", 
+				"table_name", cfg.DynamoDB.TableName, 
+				"region", cfg.DynamoDB.Region)
+			
+			config := DynamoDBTransportConfig{
+				TableName: cfg.DynamoDB.TableName,
+				Region:    cfg.DynamoDB.Region,
+				Logger:    logger,
+			}
+			return NewDynamoDBTransport(config)
+			
+		default:
+			return nil, fmt.Errorf("unsupported transport type: %s", cfg.Type)
+		}
+		
+	case map[string]interface{}:
+		// Handle generic map interface (from YAML parsing)
+		transportType, ok := cfg["type"].(string)
+		if !ok {
+			return nil, fmt.Errorf("transport type not specified")
+		}
+		
+		logger.Debug("💰 Cost Tracker: Processing map-based transport config", "type", transportType)
+		
+		switch transportType {
+		case "file":
+			fileConfig, ok := cfg["file"].(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("file transport configuration not found")
+			}
+			path, ok := fileConfig["path"].(string)
+			if !ok {
+				return nil, fmt.Errorf("file path not specified")
+			}
+			logger.Debug("💰 Cost Tracker: Creating file transport from map", "path", path)
+			return NewFileTransport(path), nil
+			
+		case "dynamodb":
+			dynamoConfig, ok := cfg["dynamodb"].(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("dynamodb transport configuration not found")
+			}
+			tableName, ok := dynamoConfig["table_name"].(string)
+			if !ok {
+				return nil, fmt.Errorf("dynamodb table_name not specified")
+			}
+			region, ok := dynamoConfig["region"].(string)
+			if !ok {
+				return nil, fmt.Errorf("dynamodb region not specified")
+			}
+			
+			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport from map", 
+				"table_name", tableName, 
+				"region", region)
+			
+			config := DynamoDBTransportConfig{
+				TableName: tableName,
+				Region:    region,
+				Logger:    logger,
+			}
+			return NewDynamoDBTransport(config)
+			
+		default:
+			return nil, fmt.Errorf("unsupported transport type: %s", transportType)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported transport config type: %T", transportConfig)
+	}
 } 

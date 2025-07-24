@@ -48,8 +48,32 @@ type YAMLConfig struct {
 
 // FeaturesConfig represents feature toggle configuration
 type FeaturesConfig struct {
-	CostTracking  FeatureConfig `yaml:"cost_tracking"`
-	RateLimiting  FeatureConfig `yaml:"rate_limiting"`
+	CostTracking  CostTrackingConfig `yaml:"cost_tracking"`
+	RateLimiting  FeatureConfig      `yaml:"rate_limiting"`
+}
+
+// CostTrackingConfig represents cost tracking feature configuration
+type CostTrackingConfig struct {
+	Enabled   bool            `yaml:"enabled"`
+	Transport TransportConfig `yaml:"transport"`
+}
+
+// TransportConfig represents cost tracking transport configuration
+type TransportConfig struct {
+	Type     string          `yaml:"type"` // "file" or "dynamodb"
+	File     *FileTransportConfig     `yaml:"file,omitempty"`
+	DynamoDB *DynamoDBTransportConfig `yaml:"dynamodb,omitempty"`
+}
+
+// FileTransportConfig represents file-based transport configuration
+type FileTransportConfig struct {
+	Path string `yaml:"path"`
+}
+
+// DynamoDBTransportConfig represents DynamoDB transport configuration
+type DynamoDBTransportConfig struct {
+	TableName string `yaml:"table_name"`
+	Region    string `yaml:"region"`
 }
 
 // FeatureConfig represents a single feature's configuration
@@ -203,6 +227,13 @@ func (c *YAMLConfig) Validate() error {
 		return fmt.Errorf("providers configuration is required")
 	}
 	
+	// Validate transport configuration if cost tracking is enabled
+	if c.Features.CostTracking.Enabled {
+		if err := c.validateTransportConfig(); err != nil {
+			return fmt.Errorf("invalid transport configuration: %w", err)
+		}
+	}
+	
 	for providerName, provider := range c.Providers {
 		if provider.Enabled {
 			if provider.Models == nil {
@@ -222,6 +253,46 @@ func (c *YAMLConfig) Validate() error {
 	}
 	
 	return nil
+}
+
+// validateTransportConfig validates the transport configuration
+func (c *YAMLConfig) validateTransportConfig() error {
+	transport := c.Features.CostTracking.Transport
+	
+	switch transport.Type {
+	case "file":
+		if transport.File == nil {
+			return fmt.Errorf("file transport configuration is required when type is 'file'")
+		}
+		if transport.File.Path == "" {
+			return fmt.Errorf("file path is required for file transport")
+		}
+	case "dynamodb":
+		if transport.DynamoDB == nil {
+			return fmt.Errorf("dynamodb transport configuration is required when type is 'dynamodb'")
+		}
+		if transport.DynamoDB.TableName == "" {
+			return fmt.Errorf("table_name is required for dynamodb transport")
+		}
+		if transport.DynamoDB.Region == "" {
+			return fmt.Errorf("region is required for dynamodb transport")
+		}
+	case "":
+		return fmt.Errorf("transport type is required")
+	default:
+		return fmt.Errorf("unsupported transport type: %s (supported: file, dynamodb)", transport.Type)
+	}
+	
+	return nil
+}
+
+// GetTransportConfig returns the transport configuration
+func (c *YAMLConfig) GetTransportConfig() (*TransportConfig, error) {
+	if !c.Features.CostTracking.Enabled {
+		return nil, fmt.Errorf("cost tracking is disabled")
+	}
+	
+	return &c.Features.CostTracking.Transport, nil
 }
 
 // ParsePricing iterates through all models and parses the flexible `Pricing` field
@@ -663,8 +734,14 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 	return &YAMLConfig{
 		Enabled: true,
 		Features: FeaturesConfig{
-			CostTracking: FeatureConfig{
+			CostTracking: CostTrackingConfig{
 				Enabled: true,
+				Transport: TransportConfig{
+					Type: "file",
+					File: &FileTransportConfig{
+						Path: "./cost_tracking.json",
+					},
+				},
 			},
 			RateLimiting: FeatureConfig{
 				Enabled: true,

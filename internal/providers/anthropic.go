@@ -721,4 +721,72 @@ func (a *AnthropicProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLi
 		rateLimitInfo.OutputTokenRemaining, rateLimitInfo.OutputTokenLimit)
 	
 	return rateLimitInfo
+}
+
+// UserIDFromRequest extracts user ID from Anthropic request body
+// Anthropic supports passing user ID in the "metadata.user_id" field
+func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
+	if req.Body == nil || req.Method != "POST" {
+		return ""
+	}
+	
+	// Only check Anthropic-specific endpoints
+	if !strings.HasPrefix(req.URL.Path, "/anthropic/") {
+		return ""
+	}
+	
+	// Read request body
+	bodyBytes, err := a.readRequestBodyForUserID(req)
+	if err != nil {
+		log.Printf("Error reading Anthropic request body for user ID extraction: %v", err)
+		return ""
+	}
+	
+	if len(bodyBytes) == 0 {
+		return ""
+	}
+	
+	// Parse JSON to extract metadata.user_id field
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		log.Printf("Error parsing Anthropic request JSON for user ID extraction: %v", err)
+		return ""
+	}
+	
+	// Extract user ID from the "metadata.user_id" field
+	if metadata, ok := data["metadata"].(map[string]interface{}); ok {
+		if userValue, ok := metadata["user_id"].(string); ok && userValue != "" {
+			log.Printf("🔍 Anthropic: Extracted user ID: %s", userValue)
+			return userValue
+		}
+	}
+	
+	return ""
+}
+
+// readRequestBodyForUserID safely reads the request body for user ID extraction
+func (a *AnthropicProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error) {
+	if req.GetBody != nil {
+		// Body was already cached, use GetBody to get a fresh reader
+		bodyReader, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer bodyReader.Close()
+		return io.ReadAll(bodyReader)
+	}
+	
+	// Read the body for the first time
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Restore the body and create GetBody for future use
+	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
+	}
+	
+	return bodyBytes, nil
 } 

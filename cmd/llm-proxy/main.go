@@ -143,81 +143,165 @@ func convertYAMLToRateLimitProviderConfig(yamlConfig *config.YAMLConfig) ratelim
 
 // initializeCostTracker creates and configures the cost tracker with pricing data from config
 func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
-	// Determine output file location
-	outputFile := os.Getenv("COST_TRACKING_FILE")
-	if outputFile == "" {
-		outputFile = "logs/cost-tracking.jsonl" // Default location
+	// Check if cost tracking is enabled
+	if !yamlConfig.Features.CostTracking.Enabled {
+		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
+		return nil
 	}
 	
-	// Create cost tracker
-	costTracker := cost.NewFileBasedCostTracker(outputFile)
-	logger.Info("💰 Cost Tracker: Initialized", "output_file", outputFile)
+	// Get transport configuration
+	transportConfig, err := yamlConfig.GetTransportConfig()
+	if err != nil {
+		logger.Error("💰 Cost Tracker: Failed to get transport config", "error", err)
+		return nil
+	}
+	
+	// Create transport based on configuration
+	logger.Info("💰 Cost Tracker: Creating transport", "configured_type", transportConfig.Type)
+	
+	// Log additional transport config details
+	switch transportConfig.Type {
+	case "dynamodb":
+		if transportConfig.DynamoDB != nil {
+			logger.Info("💰 Cost Tracker: DynamoDB configuration", 
+				"table_name", transportConfig.DynamoDB.TableName, 
+				"region", transportConfig.DynamoDB.Region)
+		}
+	case "file":
+		if transportConfig.File != nil {
+			logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
+		}
+	}
+	
+	transport, err := cost.CreateTransportFromConfig(transportConfig, logger)
+	
+	var costTracker *cost.CostTracker
+	if err != nil {
+		// Log the failed config details
+		switch transportConfig.Type {
+		case "dynamodb":
+			if transportConfig.DynamoDB != nil {
+				logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport", 
+					"configured_type", transportConfig.Type,
+					"table_name", transportConfig.DynamoDB.TableName, 
+					"region", transportConfig.DynamoDB.Region,
+					"error", err)
+			} else {
+				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+			}
+		case "file":
+			if transportConfig.File != nil {
+				logger.Error("💰 Cost Tracker: Failed to create file transport", 
+					"configured_type", transportConfig.Type,
+					"path", transportConfig.File.Path,
+					"error", err)
+			} else {
+				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+			}
+		default:
+			logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+		}
+		
+		// Fallback to file transport with env var or default
+		outputFile := os.Getenv("COST_TRACKING_FILE")
+		if outputFile == "" {
+			outputFile = "logs/cost-tracking.jsonl"
+		}
+		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
+		transport = cost.NewFileTransport(outputFile)
+		
+		// Create cost tracker with fallback transport
+		costTracker = cost.NewCostTracker(transport)
+		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
+	} else {
+		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
+		
+		// Create cost tracker with the configured transport
+		costTracker = cost.NewCostTracker(transport)
+		
+		// Log initialization with config details
+		switch transportConfig.Type {
+		case "dynamodb":
+			if transportConfig.DynamoDB != nil {
+				logger.Info("💰 Cost Tracker: Initialized with DynamoDB", 
+					"transport_type", "dynamodb",
+					"table_name", transportConfig.DynamoDB.TableName, 
+					"region", transportConfig.DynamoDB.Region)
+			} else {
+				logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
+			}
+		case "file":
+			if transportConfig.File != nil {
+				logger.Info("💰 Cost Tracker: Initialized with file transport", 
+					"transport_type", "file",
+					"path", transportConfig.File.Path)
+			} else {
+				logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
+			}
+		default:
+			logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
+		}
+	}
 	
 	// Load pricing data from config for each provider and model
-	if yamlConfig.Features.CostTracking.Enabled {
-		totalModelsConfigured := 0
+	totalModelsConfigured := 0
+	
+	for providerName, providerConfig := range yamlConfig.Providers {
+		if !providerConfig.Enabled {
+			continue
+		}
 		
-		for providerName, providerConfig := range yamlConfig.Providers {
-			if !providerConfig.Enabled {
+		for modelName, modelConfig := range providerConfig.Models {
+			if !modelConfig.Enabled {
 				continue
 			}
 			
-			for modelName, modelConfig := range providerConfig.Models {
-				if !modelConfig.Enabled {
+			if modelConfig.Pricing != nil {
+				// Convert YAML pricing to cost tracker format
+				modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
+				if !ok {
+					logger.Warn("Could not parse pricing", "provider", providerName, "model", modelName)
 					continue
 				}
-				
-				if modelConfig.Pricing != nil {
-					// Convert YAML pricing to cost tracker format
-					modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
-					if !ok {
-						logger.Warn("Could not parse pricing", "provider", providerName, "model", modelName)
-						continue
-					}
 
-					var costTrackerPricing cost.ModelPricing
-					for _, tier := range modelPricing.Tiers {
-						costTrackerPricing.Tiers = append(costTrackerPricing.Tiers, cost.PricingTier{
-							Threshold: tier.Threshold,
-							Input:     tier.Input,
-							Output:    tier.Output,
-						})
-					}
+				var costTrackerPricing cost.ModelPricing
+				for _, tier := range modelPricing.Tiers {
+					costTrackerPricing.Tiers = append(costTrackerPricing.Tiers, cost.PricingTier{
+						Threshold: tier.Threshold,
+						Input:     tier.Input,
+						Output:    tier.Output,
+					})
+				}
 
-					if modelPricing.Overrides != nil {
-						costTrackerPricing.Overrides = make(map[string]struct {
+				if modelPricing.Overrides != nil {
+					costTrackerPricing.Overrides = make(map[string]struct {
+						Input  float64 `json:"input"`
+						Output float64 `json:"output"`
+					})
+					for alias, override := range modelPricing.Overrides {
+						costTrackerPricing.Overrides[alias] = struct {
 							Input  float64 `json:"input"`
 							Output float64 `json:"output"`
-						})
-						for alias, override := range modelPricing.Overrides {
-							costTrackerPricing.Overrides[alias] = struct {
-								Input  float64 `json:"input"`
-								Output float64 `json:"output"`
-							}{Input: override.Input, Output: override.Output}
-						}
+						}{Input: override.Input, Output: override.Output}
 					}
-
-					// Set pricing for main model name
-					costTracker.SetPricingForModel(providerName, modelName, &costTrackerPricing)
-					totalModelsConfigured++
-
-					// Set pricing for all aliases
-					for _, alias := range modelConfig.Aliases {
-						costTracker.SetPricingForModel(providerName, alias, &costTrackerPricing)
-						totalModelsConfigured++
-					}
-				} else {
-					logger.Warn("Model has no pricing configured", "provider", providerName, "model", modelName)
 				}
+
+				// Set pricing for main model name
+				costTracker.SetPricingForModel(providerName, modelName, &costTrackerPricing)
+				totalModelsConfigured++
+
+				// Set pricing for all aliases
+				for _, alias := range modelConfig.Aliases {
+					costTracker.SetPricingForModel(providerName, alias, &costTrackerPricing)
+					totalModelsConfigured++
+				}
+			} else {
+				logger.Warn("Model has no pricing configured", "provider", providerName, "model", modelName)
 			}
 		}
-		
-		logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
-	} else {
-		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
-		return nil // Return nil if cost tracking is disabled
 	}
 	
+	logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
 	return costTracker
 }
 
@@ -344,7 +428,8 @@ func main() {
 	if globalCostTracker != nil {
 		costTrackingCallback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
 			if metadata.TotalTokens > 0 {
-				userID := middleware.ExtractUserIDFromRequest(r)
+				provider := middleware.GetProviderFromRequest(globalProviderManager, r)
+				userID := middleware.ExtractUserIDFromRequest(r, provider)
 				ipAddress := middleware.ExtractIPAddressFromRequest(r)
 				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path); err != nil {
 					logger.Warn("Failed to track request cost", "error", err)

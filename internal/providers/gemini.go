@@ -659,4 +659,11 @@ func (g *GeminiProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLimit
 	// Return nil to indicate no rate limit information is available
 	log.Printf("🔄 Gemini: No rate limit headers available from Gemini API")
 	return nil
+}
+
+// UserIDFromRequest extracts user ID from Gemini request body
+// For Gemini, we only support passing user ID down, not extracting it
+func (g *GeminiProxy) UserIDFromRequest(req *http.Request) string {
+	// Gemini doesn't support user ID extraction, only passing it down
+	return ""
 } 

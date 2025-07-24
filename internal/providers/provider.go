@@ -85,6 +85,10 @@ type Provider interface {
 	
 	// GetHealthStatus returns the health status of the provider
 	GetHealthStatus() map[string]interface{}
+	
+	// UserIDFromRequest extracts user ID from request body in a provider-specific way
+	// Returns empty string if no user ID can be extracted
+	UserIDFromRequest(req *http.Request) string
 }
 
 // ProviderManager manages multiple providers
