@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -164,6 +165,37 @@ func TestExtractUserIDFromRequest_PriorityOrder(t *testing.T) {
 	
 	if userID != "headeruser" {
 		t.Errorf("Expected X-User-ID header to take priority, got '%s'", userID)
+	}
+}
+
+func TestExtractUserIDFromRequest_Context(t *testing.T) {
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	
+	// Add user ID to context (simulating what MetaURLRewritingMiddleware does)
+	ctx := context.WithValue(req.Context(), userIDContextKey, "context-user-123")
+	req = req.WithContext(ctx)
+	
+	userID := ExtractUserIDFromRequest(req, nil)
+	
+	if userID != "context-user-123" {
+		t.Errorf("Expected user ID 'context-user-123', got '%s'", userID)
+	}
+}
+
+func TestExtractUserIDFromRequest_ContextPriority(t *testing.T) {
+	// Test that context takes priority over other methods
+	req := httptest.NewRequest("POST", "/meta/url-user/openai/v1/chat/completions?llm_user_id=queryuser", nil)
+	req.Header.Set("X-User-ID", "headeruser")
+	req.Header.Set("Authorization", "Bearer tokenuser")
+	
+	// Add user ID to context (should take highest priority)
+	ctx := context.WithValue(req.Context(), userIDContextKey, "context-user-priority")
+	req = req.WithContext(ctx)
+	
+	userID := ExtractUserIDFromRequest(req, nil)
+	
+	if userID != "context-user-priority" {
+		t.Errorf("Expected context user ID to take priority, got '%s'", userID)
 	}
 }
 

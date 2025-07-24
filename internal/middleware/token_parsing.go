@@ -216,8 +216,14 @@ func min(a, b int) int {
 } 
 
 // ExtractUserIDFromRequest extracts user ID from request headers, query parameters, or provider-specific methods
-// Follows the priority order: URL path → headers → query parameters → provider-specific extraction → fallback to IP
+// Follows the priority order: context (from meta URL) → URL path → headers → query parameters → provider-specific extraction → fallback to IP
 func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) string {
+	// Priority 0: Check for user ID in request context (from meta URL rewriting)
+	if userID, ok := req.Context().Value(userIDContextKey).(string); ok && userID != "" {
+		log.Printf("🔍 User ID from context: %s", userID)
+		return userID
+	}
+
 	// Priority 1: Check for user ID in URL path for meta prefix pattern
 	path := req.URL.Path
 	if strings.HasPrefix(path, "/meta/") {

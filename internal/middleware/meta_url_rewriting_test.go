@@ -355,6 +355,42 @@ func TestMetaURLRewritingMiddleware_EmptyProviderManager(t *testing.T) {
 	}
 }
 
+func TestMetaURLRewritingMiddleware_UserIDContext(t *testing.T) {
+	// Create provider manager
+	manager := providers.NewProviderManager()
+	openAIProvider := providers.NewOpenAIProxy()
+	manager.RegisterProvider(openAIProvider)
+
+	// Create test handler that extracts user ID using ExtractUserIDFromRequest
+	var extractedUserID string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This simulates what the cost tracking callback does
+		provider := GetProviderFromRequest(manager, r)
+		extractedUserID = ExtractUserIDFromRequest(r, provider)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	// Wrap with meta URL rewriting middleware
+	rewritingHandler := MetaURLRewritingMiddleware(manager)(handler)
+
+	// Test with meta URL that should extract user ID
+	req := httptest.NewRequest("POST", "/meta/test-user-456/openai/v1/chat/completions", nil)
+	recorder := httptest.NewRecorder()
+
+	rewritingHandler.ServeHTTP(recorder, req)
+
+	// Verify URL was rewritten correctly
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	// Verify user ID was extracted and available via ExtractUserIDFromRequest
+	if extractedUserID != "test-user-456" {
+		t.Errorf("Expected user ID 'test-user-456' to be extracted from context, got '%s'", extractedUserID)
+	}
+}
+
 func TestMetaURLRewritingMiddleware_HandlerError(t *testing.T) {
 	// Create provider manager
 	manager := providers.NewProviderManager()
