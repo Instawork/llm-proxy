@@ -15,7 +15,6 @@ import (
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/providers"
-	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
 )
 
@@ -78,10 +77,6 @@ const (
 // Global provider manager instance
 var globalProviderManager *providers.ProviderManager
 
-// Global rate limiter instances
-var globalRateLimiter ratelimit.RateLimiter
-var globalRateLimitMiddleware *ratelimit.RateLimitMiddleware
-
 // Global cost tracker instance
 var globalCostTracker *cost.CostTracker
 
@@ -114,31 +109,6 @@ func init() {
 	}
 	
 	logger = slog.New(handler)
-}
-
-// convertYAMLToRateLimitProviderConfig converts YAML config to rate limiter provider config format
-func convertYAMLToRateLimitProviderConfig(yamlConfig *config.YAMLConfig) ratelimit.ProviderConfigMap {
-	rateLimitProviderConfig := make(ratelimit.ProviderConfigMap)
-	
-	for providerName, providerConfig := range yamlConfig.Providers {
-		if !providerConfig.Enabled {
-			continue
-		}
-		
-		models := make(map[string]ratelimit.ModelConfig)
-		for modelName, modelConfig := range providerConfig.Models {
-			models[modelName] = ratelimit.ModelConfig{
-				Enabled: modelConfig.Enabled,
-				Aliases: modelConfig.Aliases,
-			}
-		}
-		
-		rateLimitProviderConfig[providerName] = ratelimit.ProviderConfig{
-			Models: models,
-		}
-	}
-	
-	return rateLimitProviderConfig
 }
 
 // initializeCostTracker creates and configures the cost tracker with pricing data from config
@@ -312,7 +282,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp":   time.Now().Unix(),
 		"providers":   globalProviderManager.GetHealthStatus(),
 		"features": map[string]bool{
-			"rate_limiting": globalRateLimitMiddleware != nil && globalRateLimitMiddleware.IsEnabled(),
 			"cost_tracking": globalCostTracker != nil,
 		},
 	}
@@ -350,47 +319,6 @@ func main() {
 
 	// Initialize global provider manager
 	globalProviderManager = providers.NewProviderManager()
-
-	// Create rate limiter configuration
-	rateLimitConfig := &ratelimit.Config{
-		Enabled: false, // Will be set based on YAML config
-		Rules:   make([]*ratelimit.RateLimitRule, 0),
-	}
-
-	// Only configure rate limiting if enabled in YAML config
-	if yamlConfig.Enabled && yamlConfig.Features.RateLimiting.Enabled {
-		yamlRules := yamlConfig.ConvertToRateLimitRules()
-		logger.Info("Generated rate limiting rules from YAML config", "count", len(yamlRules))
-		
-		// Enable rate limiting since we're adding rules from YAML
-		rateLimitConfig.Enabled = true
-		
-		// Add YAML rules to the rate limit config, replacing existing rules with same names
-		for _, yamlRule := range yamlRules {
-			// Remove any existing rule with the same name
-			rateLimitConfig.RemoveRule(yamlRule.Name)
-			// Add the new YAML-based rule
-			if err := rateLimitConfig.AddRule(yamlRule); err != nil {
-				logger.Warn("Failed to add YAML rule", "rule_name", yamlRule.Name, "error", err)
-			} else {
-				logger.Info("Added rate limit rule", "name", yamlRule.Name, "description", yamlRule.Description)
-			}
-		}
-		
-		// Sort rules by priority
-		rateLimitConfig.SortRulesByPriority()
-	} else if yamlConfig.Enabled && !yamlConfig.Features.RateLimiting.Enabled {
-		logger.Info("Rate limiting is disabled in YAML config features")
-		rateLimitConfig.Enabled = false
-	}
-	
-	rateLimitStore := ratelimit.NewMemoryStore()
-	
-	// Convert YAML provider config to rate limiter provider config for alias resolution
-	rateLimitProviderConfig := convertYAMLToRateLimitProviderConfig(yamlConfig)
-	
-	globalRateLimiter = ratelimit.NewTokenBucketRateLimiterWithProviders(rateLimitConfig, rateLimitStore, rateLimitProviderConfig)
-	globalRateLimitMiddleware = ratelimit.NewRateLimitMiddlewareWithConfig(globalRateLimiter, globalProviderManager, rateLimitConfig.Enabled, "X-Rate-Limit-Bypass", &ratelimit.DefaultResponseHandler{})
 	
 	// Initialize cost tracker
 	globalCostTracker = initializeCostTracker(yamlConfig)
@@ -411,18 +339,9 @@ func main() {
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
-	r.Use(globalRateLimitMiddleware.Middleware())  // Add rate limiting before token parsing
 
-	// Create callbacks for rate limiting and cost tracking
+	// Create callbacks for cost tracking
 	var callbacks []middleware.MetadataCallback
-
-	// Add rate limiting callback if enabled
-	if globalRateLimitMiddleware != nil && globalRateLimitMiddleware.IsEnabled() {
-		rateLimitCallback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
-			globalRateLimitMiddleware.UpdateUsageFromMetadata(r, metadata)
-		}
-		callbacks = append(callbacks, rateLimitCallback)
-	}
 
 	// Add cost tracking callback if enabled
 	if globalCostTracker != nil {
@@ -455,22 +374,12 @@ func main() {
 	
 	// Log features
 	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
-	if globalRateLimitMiddleware != nil && globalRateLimitMiddleware.IsEnabled() {
-		features = append(features, "Rate limiting")
-	}
 	if globalCostTracker != nil {
 		features = append(features, "Cost tracking")
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 	
 	logger.Info("Health check available", "url", "http://localhost:"+port+"/health")
-	
-	// Log rate limiting status
-	if globalRateLimitMiddleware != nil && globalRateLimitMiddleware.IsEnabled() {
-		logger.Info("Rate limiting: ENABLED")
-	} else {
-		logger.Info("Rate limiting: DISABLED")
-	}
 	
 	// Log cost tracking status
 	if globalCostTracker != nil {
