@@ -13,17 +13,13 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control")
-			
-			// Add streaming-specific CORS headers
 			if providerManager.IsStreamingRequest(r) {
 				w.Header().Set("Access-Control-Expose-Headers", "Content-Type, Cache-Control")
 			}
-			
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
-			
 			next.ServeHTTP(w, r)
 		})
 	}

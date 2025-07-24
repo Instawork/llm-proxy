@@ -16,13 +16,33 @@ type MetadataCallback func(r *http.Request, metadata *providers.LLMResponseMetad
 
 // GetProviderFromRequest determines which provider to use based on the request path
 func GetProviderFromRequest(providerManager *providers.ProviderManager, req *http.Request) providers.Provider {
-	if strings.HasPrefix(req.URL.Path, "/openai/") {
+	path := req.URL.Path
+	
+	// Handle /meta/:userID/provider/ pattern first
+	if strings.HasPrefix(path, "/meta/") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 4 { // ["", "meta", "userID", "provider", ...]
+			providerName := parts[3]
+			switch providerName {
+			case "openai":
+				return providerManager.GetProvider("openai")
+			case "anthropic":
+				return providerManager.GetProvider("anthropic")
+			case "gemini":
+				return providerManager.GetProvider("gemini")
+			}
+		}
+	}
+	
+	// Handle direct provider paths (legacy support)
+	if strings.HasPrefix(path, "/openai/") {
 		return providerManager.GetProvider("openai")
-	} else if strings.HasPrefix(req.URL.Path, "/anthropic/") {
+	} else if strings.HasPrefix(path, "/anthropic/") {
 		return providerManager.GetProvider("anthropic")
-	} else if strings.HasPrefix(req.URL.Path, "/gemini/") {
+	} else if strings.HasPrefix(path, "/gemini/") {
 		return providerManager.GetProvider("gemini")
 	}
+	
 	return nil
 }
 
@@ -91,7 +111,7 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 						log.Printf("🔍 Debug: Response body preview: %s", string(captureWriter.body.Bytes()[:min(200, captureWriter.body.Len())]))
 					}
 				} else if metadata != nil {
-					// Log the metadata for cost tracking and rate limiting
+					// Log the metadata for cost tracking
 					log.Printf("🔢 LLM Response Metadata:\n"+
 						"   Provider: %s\n"+
 						"   Model: %s\n"+
@@ -196,15 +216,28 @@ func min(a, b int) int {
 } 
 
 // ExtractUserIDFromRequest extracts user ID from request headers, query parameters, or provider-specific methods
-// Follows the priority order: headers → query parameters → provider-specific extraction → fallback to IP
+// Follows the priority order: URL path → headers → query parameters → provider-specific extraction → fallback to IP
 func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) string {
-	// Priority 1: Check for custom user ID header
+	// Priority 1: Check for user ID in URL path for meta prefix pattern
+	path := req.URL.Path
+	if strings.HasPrefix(path, "/meta/") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 3 { // ["", "meta", "userID", ...]
+			userID := parts[2]
+			if userID != "" {
+				log.Printf("🔍 User ID from URL path: %s", userID)
+				return userID
+			}
+		}
+	}
+	
+	// Priority 2: Check for custom user ID header
 	if userID := req.Header.Get("X-User-ID"); userID != "" {
 		log.Printf("🔍 User ID from X-User-ID header: %s", userID)
 		return userID
 	}
 
-	// Priority 2: Provider-specific extraction from request body
+	// Priority 3: Provider-specific extraction from request body
 	if provider != nil {
 		if userID := provider.UserIDFromRequest(req); userID != "" {
 			log.Printf("🔍 User ID from provider-specific extraction: %s", userID)
@@ -212,13 +245,13 @@ func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) st
 		}
 	}
 	
-	// Priority 3: Check query parameters
+	// Priority 4: Check query parameters
 	if userID := req.URL.Query().Get("llm_user_id"); userID != "" {
 		log.Printf("🔍 User ID from query parameter: %s", userID)
 		return userID
 	}
 
-	// Priority 4: Check Authorization header for API key or JWT token
+	// Priority 5: Check Authorization header for API key or JWT token
 	if auth := req.Header.Get("Authorization"); auth != "" {
 		// For API keys, use a hash of the key as user ID (for privacy)
 		if strings.HasPrefix(auth, "Bearer ") {

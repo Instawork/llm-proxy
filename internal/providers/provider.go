@@ -2,42 +2,15 @@ package providers
 
 import (
 	"io"
+	"log"
 	"net"
 	"net/http"
-	"strconv"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 )
-
-// RateLimitInfo represents rate limit information extracted from response headers
-type RateLimitInfo struct {
-	// Requests per minute/day limits
-	RequestLimit     int           `json:"request_limit,omitempty"`
-	RequestRemaining int           `json:"request_remaining,omitempty"`
-	RequestReset     time.Duration `json:"request_reset,omitempty"`
-	
-	// Token limits (general)
-	TokenLimit       int           `json:"token_limit,omitempty"`
-	TokenRemaining   int           `json:"token_remaining,omitempty"`
-	TokenReset       time.Duration `json:"token_reset,omitempty"`
-	
-	// Input token limits (Anthropic specific)
-	InputTokenLimit     int           `json:"input_token_limit,omitempty"`
-	InputTokenRemaining int           `json:"input_token_remaining,omitempty"`
-	InputTokenReset     time.Duration `json:"input_token_reset,omitempty"`
-	
-	// Output token limits (Anthropic specific)
-	OutputTokenLimit     int           `json:"output_token_limit,omitempty"`
-	OutputTokenRemaining int           `json:"output_token_remaining,omitempty"`
-	OutputTokenReset     time.Duration `json:"output_token_reset,omitempty"`
-	
-	// Provider name
-	Provider string `json:"provider"`
-	
-	// Whether any rate limit info was found
-	HasRateLimitInfo bool `json:"has_rate_limit_info"`
-}
 
 // LLMResponseMetadata represents standardized response metadata across all providers
 type LLMResponseMetadata struct {
@@ -54,7 +27,7 @@ type LLMResponseMetadata struct {
 	Provider        string `json:"provider"`
 	RequestID       string `json:"request_id,omitempty"`
 	
-	// Additional metadata for cost calculation and rate limiting
+	// Additional metadata for cost calculation
 	IsStreaming     bool   `json:"is_streaming"`
 	FinishReason    string `json:"finish_reason,omitempty"`
 }
@@ -68,20 +41,12 @@ type Provider interface {
 	// This is provider-specific as different providers handle streaming differently
 	IsStreamingRequest(req *http.Request) bool
 	
-	// EstimateTokensFromRequest estimates the number of tokens for a request
-	// This allows each provider to implement their own token estimation logic
-	EstimateTokensFromRequest(req *http.Request) int64
-	
 	// ParseResponseMetadata extracts tokens and model information from a response
 	// Works for both streaming and non-streaming responses
 	ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error)
 	
-	// ParseRateLimitFromResponse extracts rate limit information from response headers
-	// Returns nil if the provider doesn't support rate limit headers
-	ParseRateLimitFromResponse(resp *http.Response) *RateLimitInfo
-	
-	// RegisterRoutes registers the provider's routes with the given router
-	RegisterRoutes(r *mux.Router)
+	// Proxy returns the HTTP handler for this provider (typically a reverse proxy)
+	Proxy() http.Handler
 	
 	// GetHealthStatus returns the health status of the provider
 	GetHealthStatus() map[string]interface{}
@@ -89,6 +54,10 @@ type Provider interface {
 	// UserIDFromRequest extracts user ID from request body in a provider-specific way
 	// Returns empty string if no user ID can be extracted
 	UserIDFromRequest(req *http.Request) string
+	
+	// RegisterExtraRoutes allows providers to register additional routes beyond the standard ones
+	// This is useful for provider-specific compatibility routes or special endpoints
+	RegisterExtraRoutes(router *mux.Router)
 }
 
 // ProviderManager manages multiple providers
@@ -137,37 +106,41 @@ func (pm *ProviderManager) GetHealthStatus() map[string]interface{} {
 	return status
 }
 
-// Helper functions for parsing rate limit values
-
-// parseDurationFromString parses duration strings like "1s", "6m0s", etc.
-func parseDurationFromString(durationStr string) time.Duration {
-	if durationStr == "" {
-		return 0
-	}
-	
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		// Try parsing as seconds if it's just a number
-		if seconds, err2 := strconv.Atoi(durationStr); err2 == nil {
-			return time.Duration(seconds) * time.Second
-		}
-		return 0
-	}
-	return duration
+// IsValidProvider checks if the given provider name is registered
+func (pm *ProviderManager) IsValidProvider(name string) bool {
+	_, exists := pm.providers[name]
+	return exists
 }
 
-// parseIntFromString parses integer strings, returns 0 if invalid
-func parseIntFromString(intStr string) int {
-	if intStr == "" {
-		return 0
+// CreateGenericDirector creates a generic director function for reverse proxy requests
+// This eliminates code duplication across all providers by handling the common logic:
+// - Setting the target host header
+// - Stripping the provider prefix from the path
+// - Logging the request with streaming detection
+func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request)) func(*http.Request) {
+	return func(req *http.Request) {
+		// Call the original director first
+		originalDirector(req)
+		
+		// Set the Host header to the target host
+		req.Host = targetURL.Host
+		
+		// Strip the provider prefix from the path before forwarding
+		// Note: mux PathPrefix matches but doesn't strip the prefix automatically  
+		// Note: URL rewriting for /meta/{userID}/provider/ is handled by URLRewritingMiddleware
+		providerPrefix := "/" + provider.GetName()
+		req.URL.Path = strings.TrimPrefix(req.URL.Path, providerPrefix)
+		
+		// Log the request, including streaming detection
+		isStreaming := provider.IsStreamingRequest(req)
+		if isStreaming {
+			log.Printf("Proxying %s streaming request: %s %s", provider.GetName(), req.Method, req.URL.Path)
+		} else {
+			log.Printf("Proxying %s request: %s %s", provider.GetName(), req.Method, req.URL.Path)
+		}
 	}
-	
-	value, err := strconv.Atoi(intStr)
-	if err != nil {
-		return 0
-	}
-	return value
-} 
+}
+
 
 // newProxyTransport creates a new http.Transport with optimized settings for proxying LLM requests.
 func newProxyTransport() *http.Transport {

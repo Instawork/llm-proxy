@@ -39,27 +39,9 @@ func NewOpenAIProxy() *OpenAIProxy {
 	// Create the OpenAI proxy instance
 	openAIProxy := &OpenAIProxy{proxy: proxy}
 
-	// Customize the director function to modify requests
+	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		
-		// Set the Host header to the target host
-		req.Host = targetURL.Host
-		
-		// Strip the /openai prefix from the path before forwarding to OpenAI
-		if strings.HasPrefix(req.URL.Path, "/openai/") {
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/openai")
-		}
-		
-		// Log the request, including streaming detection
-		isStreaming := openAIProxy.IsStreamingRequest(req)
-		if isStreaming {
-			log.Printf("Proxying OpenAI streaming request: %s %s", req.Method, req.URL.Path)
-		} else {
-			log.Printf("Proxying OpenAI request: %s %s", req.Method, req.URL.Path)
-		}
-	}
+	proxy.Director = CreateGenericDirector(openAIProxy, targetURL, originalDirector)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport()
@@ -200,15 +182,9 @@ func (o *OpenAIProxy) isStreamingResponse(resp *http.Response) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-// RegisterRoutes registers OpenAI-specific routes with the given router
-func (o *OpenAIProxy) RegisterRoutes(r *mux.Router) {
-	// Handle chat completions endpoint specifically (primary streaming endpoint)
-	r.PathPrefix("/openai/v1/chat/completions").Handler(o.proxy).Methods("POST", "OPTIONS")
-	// Handle completions endpoint (legacy, but also supports streaming)
-	r.PathPrefix("/openai/v1/completions").Handler(o.proxy).Methods("POST", "OPTIONS")
-	// Handle other OpenAI API endpoints
-	r.PathPrefix("/openai/v1/").Handler(o.proxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	log.Printf("OpenAI routes registered at /openai/v1/ with streaming support")
+// Proxy returns the HTTP handler for the OpenAI provider
+func (o *OpenAIProxy) Proxy() http.Handler {
+	return o.proxy
 }
 
 // GetHealthStatus returns the health status of the OpenAI proxy
@@ -222,10 +198,7 @@ func (o *OpenAIProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-// EstimateTokensFromRequest estimates tokens for OpenAI requests
-func (o *OpenAIProxy) EstimateTokensFromRequest(req *http.Request) int64 {
-	return 100	
-}
+
 
 
 // OpenAIResponse represents the structure of OpenAI API responses
@@ -409,87 +382,7 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-// ParseRateLimitFromResponse extracts rate limit information from OpenAI response headers
-func (o *OpenAIProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLimitInfo {
-	if resp == nil || resp.Header == nil {
-		log.Printf("🔄 OpenAI: Response or headers are nil")
-		return nil
-	}
-	
-	rateLimitInfo := &RateLimitInfo{
-		Provider: "openai",
-	}
-	
-	log.Printf("🔄 OpenAI: Parsing rate limit headers...")
-	
-	// Helper function to get header value - try both Get() and direct access
-	getHeaderValue := func(headerName string) string {
-		// First try the standard way
-		if value := resp.Header.Get(headerName); value != "" {
-			return value
-		}
-		
-		// If that fails, try direct access
-		if values, ok := resp.Header[headerName]; ok && len(values) > 0 {
-			return values[0]
-		}
-		
-		return ""
-	}
-	
-	// Parse OpenAI rate limit headers
-	// Request limits
-	if limitStr := getHeaderValue("x-ratelimit-limit-requests"); limitStr != "" {
-		log.Printf("🔄 OpenAI: Found request limit header: %s", limitStr)
-		rateLimitInfo.RequestLimit = parseIntFromString(limitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if remainingStr := getHeaderValue("x-ratelimit-remaining-requests"); remainingStr != "" {
-		log.Printf("🔄 OpenAI: Found request remaining header: %s", remainingStr)
-		rateLimitInfo.RequestRemaining = parseIntFromString(remainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if resetStr := getHeaderValue("x-ratelimit-reset-requests"); resetStr != "" {
-		log.Printf("🔄 OpenAI: Found request reset header: %s", resetStr)
-		rateLimitInfo.RequestReset = parseDurationFromString(resetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	// Token limits
-	if tokenLimitStr := getHeaderValue("x-ratelimit-limit-tokens"); tokenLimitStr != "" {
-		log.Printf("🔄 OpenAI: Found token limit header: %s", tokenLimitStr)
-		rateLimitInfo.TokenLimit = parseIntFromString(tokenLimitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if tokenRemainingStr := getHeaderValue("x-ratelimit-remaining-tokens"); tokenRemainingStr != "" {
-		log.Printf("🔄 OpenAI: Found token remaining header: %s", tokenRemainingStr)
-		rateLimitInfo.TokenRemaining = parseIntFromString(tokenRemainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if tokenResetStr := getHeaderValue("x-ratelimit-reset-tokens"); tokenResetStr != "" {
-		log.Printf("🔄 OpenAI: Found token reset header: %s", tokenResetStr)
-		rateLimitInfo.TokenReset = parseDurationFromString(tokenResetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	log.Printf("🔄 OpenAI: HasRateLimitInfo = %t", rateLimitInfo.HasRateLimitInfo)
-	
-	// If no rate limit info was found, return nil
-	if !rateLimitInfo.HasRateLimitInfo {
-		log.Printf("🔄 OpenAI: No rate limit info found, returning nil")
-		return nil
-	}
-	
-	log.Printf("🔄 OpenAI: Parsed rate limit info - Request: %d/%d, Token: %d/%d", 
-		rateLimitInfo.RequestRemaining, rateLimitInfo.RequestLimit,
-		rateLimitInfo.TokenRemaining, rateLimitInfo.TokenLimit)
-	
-	return rateLimitInfo
-}
+
 
 // UserIDFromRequest extracts user ID from OpenAI request body
 // OpenAI supports passing user ID in the "user" field for safety tracking
@@ -529,6 +422,11 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 	}
 	
 	return ""
+}
+
+// RegisterExtraRoutes is a no-op for OpenAI as it doesn't need extra routes
+func (o *OpenAIProxy) RegisterExtraRoutes(router *mux.Router) {
+	// No extra routes needed for OpenAI
 }
 
 // readRequestBodyForUserID safely reads the request body for user ID extraction

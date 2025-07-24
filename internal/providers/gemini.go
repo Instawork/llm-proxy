@@ -39,27 +39,9 @@ func NewGeminiProxy() *GeminiProxy {
 	// Create the Gemini proxy instance
 	geminiProxy := &GeminiProxy{proxy: proxy}
 
-	// Customize the director function to modify requests
+	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		
-		// Set the Host header to the target host
-		req.Host = targetURL.Host
-		
-		// Strip the /gemini prefix from the path before forwarding to Gemini
-		if strings.HasPrefix(req.URL.Path, "/gemini/") {
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/gemini")
-		}
-		
-		// Log the request, including streaming detection
-		isStreaming := geminiProxy.IsStreamingRequest(req)
-		if isStreaming {
-			log.Printf("Proxying Gemini streaming request: %s %s", req.Method, req.URL.Path)
-		} else {
-			log.Printf("Proxying Gemini request: %s %s", req.Method, req.URL.Path)
-		}
-	}
+	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport()
@@ -219,30 +201,9 @@ func (g *GeminiProxy) isStreamingResponse(resp *http.Response) bool {
 		   strings.Contains(contentType, "text/plain")
 }
 
-// RegisterRoutes registers Gemini-specific routes with the given router
-func (g *GeminiProxy) RegisterRoutes(r *mux.Router) {
-	// Handle generateContent endpoint (primary endpoint for Gemini)
-	r.PathPrefix("/gemini/v1/models/{model}:generateContent").Handler(g.proxy).Methods("POST", "OPTIONS")
-	
-	// Handle streamGenerateContent endpoint (explicit streaming endpoint)
-	r.PathPrefix("/gemini/v1/models/{model}:streamGenerateContent").Handler(g.proxy).Methods("POST", "OPTIONS")
-	
-	// Handle other Gemini API endpoints
-	r.PathPrefix("/gemini/v1/").Handler(g.proxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	
-	// Add specific compatibility routes for v1beta and v1 with gemini model paths
-	// These routes provide more specific matching for common Gemini usage patterns
-	
-	// v1beta routes for Gemini models
-	r.PathPrefix("/v1beta/models/gemini").Handler(g.proxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	
-	// v1 routes for Gemini models  
-	r.PathPrefix("/v1/models/gemini").Handler(g.proxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	
-	log.Printf("Gemini routes registered:")
-	log.Printf("  - /gemini/v1/ (original routes with streaming support)")
-	log.Printf("  - /v1beta/models/gemini* (compatibility routes)")
-	log.Printf("  - /v1/models/gemini* (compatibility routes)")
+// Proxy returns the HTTP handler for the Gemini provider
+func (g *GeminiProxy) Proxy() http.Handler {
+	return g.proxy
 }
 
 // GetHealthStatus returns the health status of the Gemini proxy
@@ -257,222 +218,7 @@ func (g *GeminiProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-// EstimateTokensFromRequest estimates tokens for Gemini requests
-func (g *GeminiProxy) EstimateTokensFromRequest(req *http.Request) int64 {
-	// Extract model from URL path (Gemini includes model in path)
-	model := g.extractModelFromPath(req.URL.Path)
-	
-	// Try to extract content from request body
-	bodyBytes, err := g.readRequestBody(req)
-	if err != nil {
-		log.Printf("Error reading request body for Gemini token estimation: %v", err)
-		return g.getDefaultTokenEstimate(req.URL.Path, model)
-	}
-	
-	if len(bodyBytes) == 0 {
-		return g.getDefaultTokenEstimate(req.URL.Path, model)
-	}
-	
-	// Parse JSON to extract contents
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		log.Printf("Error parsing Gemini request JSON for token estimation: %v", err)
-		return g.getDefaultTokenEstimate(req.URL.Path, model)
-	}
-	
-	// Estimate input tokens based on contents
-	inputTokens := int64(0)
-	
-	// Check for contents array (Gemini format)
-	if contents, ok := data["contents"].([]interface{}); ok {
-		inputTokens = g.estimateTokensFromContents(contents, model)
-	} else {
-		// Fallback to body size estimation
-		inputTokens = g.estimateTokensFromBodySize(len(bodyBytes), model)
-	}
-	
-	// Add system instruction tokens if present
-	if systemInstruction, ok := data["systemInstruction"].(map[string]interface{}); ok {
-		if parts, ok := systemInstruction["parts"].([]interface{}); ok {
-			inputTokens += g.estimateTokensFromParts(parts, model)
-		}
-	}
-	
-	// Estimate output tokens based on generation config
-	outputTokens := int64(0)
-	if generationConfig, ok := data["generationConfig"].(map[string]interface{}); ok {
-		if maxOutputTokens, ok := generationConfig["maxOutputTokens"].(float64); ok {
-			outputTokens = int64(maxOutputTokens * 0.5) // Estimate 50% of max will be used
-		}
-	}
-	
-	if outputTokens == 0 {
-		outputTokens = g.getDefaultOutputEstimate(model)
-	}
-	
-	totalTokens := inputTokens + outputTokens
-	
-	// Apply model-specific adjustments
-	totalTokens = g.applyModelAdjustments(totalTokens, model)
-	
-	log.Printf("🤖 Gemini token estimation: %d tokens (%d input + %d output) for model %s", 
-		totalTokens, inputTokens, outputTokens, model)
-	return totalTokens
-}
 
-// Helper methods for Gemini token estimation
-
-func (g *GeminiProxy) extractModelFromPath(path string) string {
-	// Extract model from path like /gemini/v1/models/{model}:generateContent
-	if strings.Contains(path, "/models/") {
-		parts := strings.Split(path, "/models/")
-		if len(parts) > 1 {
-			modelPart := strings.Split(parts[1], ":")[0]
-			return modelPart
-		}
-	}
-	return ""
-}
-
-func (g *GeminiProxy) readRequestBody(req *http.Request) ([]byte, error) {
-	if req.Body == nil {
-		return nil, nil
-	}
-	
-	if req.GetBody != nil {
-		bodyReader, err := req.GetBody()
-		if err != nil {
-			return nil, err
-		}
-		defer bodyReader.Close()
-		return io.ReadAll(bodyReader)
-	}
-	
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, err
-	}
-	
-	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
-	}
-	
-	return bodyBytes, nil
-}
-
-func (g *GeminiProxy) estimateTokensFromContents(contents []interface{}, model string) int64 {
-	totalTokens := int64(0)
-	
-	for _, content := range contents {
-		if contentMap, ok := content.(map[string]interface{}); ok {
-			if parts, ok := contentMap["parts"].([]interface{}); ok {
-				totalTokens += g.estimateTokensFromParts(parts, model)
-			}
-			// Add overhead for content structure (role, etc.)
-			totalTokens += 2
-		}
-	}
-	
-	// Add overhead for contents array format
-	totalTokens += int64(len(contents)) * 2
-	return totalTokens
-}
-
-func (g *GeminiProxy) estimateTokensFromParts(parts []interface{}, model string) int64 {
-	totalTokens := int64(0)
-	
-	for _, part := range parts {
-		if partMap, ok := part.(map[string]interface{}); ok {
-			if text, ok := partMap["text"].(string); ok {
-				totalTokens += g.estimateTokensFromText(text, model)
-			}
-			// Add overhead for other part types (images, files, etc.)
-			// Images and files typically require more tokens
-			if _, hasImage := partMap["inlineData"]; hasImage {
-				totalTokens += 100 // Base cost for image processing
-			}
-			if _, hasFile := partMap["fileData"]; hasFile {
-				totalTokens += 50 // Base cost for file processing
-			}
-		}
-	}
-	
-	return totalTokens
-}
-
-func (g *GeminiProxy) estimateTokensFromText(text string, model string) int64 {
-	// Gemini's general rule: ~3.8 characters per token (similar to GPT but varies by model)
-	charsPerToken := 3.8
-	
-	// Adjust for different Gemini models
-	if strings.Contains(model, "gemini-1.5-pro") {
-		charsPerToken = 3.6 // Pro is more efficient
-	} else if strings.Contains(model, "gemini-1.5-flash") {
-		charsPerToken = 4.0 // Flash optimizes for speed over token efficiency
-	} else if strings.Contains(model, "gemini-1.0-pro") {
-		charsPerToken = 3.9 // Original Pro model
-	}
-	
-	return int64(float64(len(text)) / charsPerToken)
-}
-
-func (g *GeminiProxy) estimateTokensFromBodySize(bodySize int, model string) int64 {
-	// Fallback estimation from body size
-	// Assume about 65% of body is actual content (Gemini has more nested structure)
-	estimatedContentSize := float64(bodySize) * 0.65
-	return int64(estimatedContentSize / 3.8)
-}
-
-func (g *GeminiProxy) getDefaultOutputEstimate(model string) int64 {
-	// Default output token estimates based on typical usage patterns
-	if strings.Contains(model, "gemini-1.5-pro") {
-		return 180 // Pro gives detailed responses
-	} else if strings.Contains(model, "gemini-1.5-flash") {
-		return 120 // Flash is more concise and faster
-	} else if strings.Contains(model, "gemini-1.0-pro") {
-		return 150 // Original model
-	}
-	return 130
-}
-
-func (g *GeminiProxy) getDefaultTokenEstimate(path string, model string) int64 {
-	// Endpoint-specific defaults
-	if strings.Contains(path, ":generateContent") || strings.Contains(path, ":streamGenerateContent") {
-		if strings.Contains(model, "gemini-1.5-pro") {
-			return 220
-		} else if strings.Contains(model, "gemini-1.5-flash") {
-			return 140
-		} else if strings.Contains(model, "gemini-1.0-pro") {
-			return 180
-		}
-		return 160
-	}
-	return 80
-}
-
-func (g *GeminiProxy) applyModelAdjustments(tokens int64, model string) int64 {
-	// Apply model-specific multipliers for accuracy
-	if strings.Contains(model, "gemini-1.5-pro") {
-		// Pro handles more complex requests and gives detailed responses
-		tokens = int64(float64(tokens) * 1.1)
-	} else if strings.Contains(model, "gemini-1.5-flash") {
-		// Flash is optimized for speed and efficiency
-		tokens = int64(float64(tokens) * 0.85)
-	}
-	
-	// Cap at reasonable maximum to prevent over-consumption
-	if tokens > 12000 {
-		tokens = 12000
-	}
-	
-	// Ensure reasonable minimum
-	if tokens < 10 {
-		tokens = 10
-	}
-	
-	return tokens
-}
 
 // GeminiResponse represents the structure of Gemini API responses
 type GeminiResponse struct {
@@ -652,18 +398,18 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-// ParseRateLimitFromResponse extracts rate limit information from Gemini response headers
-// Gemini doesn't currently provide rate limit headers, so this returns nil
-func (g *GeminiProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLimitInfo {
-	// Gemini API doesn't provide rate limit headers in their responses
-	// Return nil to indicate no rate limit information is available
-	log.Printf("🔄 Gemini: No rate limit headers available from Gemini API")
-	return nil
-}
+
 
 // UserIDFromRequest extracts user ID from Gemini request body
 // For Gemini, we only support passing user ID down, not extracting it
 func (g *GeminiProxy) UserIDFromRequest(req *http.Request) string {
 	// Gemini doesn't support user ID extraction, only passing it down
 	return ""
+}
+
+// RegisterExtraRoutes registers Gemini-specific compatibility routes
+func (g *GeminiProxy) RegisterExtraRoutes(router *mux.Router) {
+	// Special compatibility routes for Gemini (these were in the original Gemini RegisterRoutes)
+	router.PathPrefix("/v1beta/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+	router.PathPrefix("/v1/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 } 

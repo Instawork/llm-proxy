@@ -39,27 +39,9 @@ func NewAnthropicProxy() *AnthropicProxy {
 	// Create the Anthropic proxy instance
 	anthropicProxy := &AnthropicProxy{proxy: proxy}
 
-	// Customize the director function to modify requests
+	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		
-		// Set the Host header to the target host
-		req.Host = targetURL.Host
-		
-		// Strip the /anthropic prefix from the path before forwarding to Anthropic
-		if strings.HasPrefix(req.URL.Path, "/anthropic/") {
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/anthropic")
-		}
-		
-		// Log the request, including streaming detection
-		isStreaming := anthropicProxy.IsStreamingRequest(req)
-		if isStreaming {
-			log.Printf("Proxying Anthropic streaming request: %s %s", req.Method, req.URL.Path)
-		} else {
-			log.Printf("Proxying Anthropic request: %s %s", req.Method, req.URL.Path)
-		}
-	}
+	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport()
@@ -200,15 +182,9 @@ func (a *AnthropicProxy) isStreamingResponse(resp *http.Response) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-// RegisterRoutes registers Anthropic-specific routes with the given router
-func (a *AnthropicProxy) RegisterRoutes(r *mux.Router) {
-	// Handle messages endpoint (primary streaming endpoint for Anthropic)
-	r.PathPrefix("/anthropic/v1/messages").Handler(a.proxy).Methods("POST", "OPTIONS")
-	
-	// Handle other Anthropic API endpoints
-	r.PathPrefix("/anthropic/v1/").Handler(a.proxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	
-	log.Printf("Anthropic routes registered at /anthropic/v1/ with streaming support")
+// Proxy returns the HTTP handler for the Anthropic provider
+func (a *AnthropicProxy) Proxy() http.Handler {
+	return a.proxy
 }
 
 // GetHealthStatus returns the health status of the Anthropic proxy
@@ -222,185 +198,7 @@ func (a *AnthropicProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-// EstimateTokensFromRequest estimates tokens for Anthropic requests
-func (a *AnthropicProxy) EstimateTokensFromRequest(req *http.Request) int64 {
-	// Try to extract model and content from request body
-	bodyBytes, err := a.readRequestBody(req)
-	if err != nil {
-		log.Printf("Error reading request body for Anthropic token estimation: %v", err)
-		return a.getDefaultTokenEstimate(req.URL.Path, "")
-	}
-	
-	if len(bodyBytes) == 0 {
-		return a.getDefaultTokenEstimate(req.URL.Path, "")
-	}
-	
-	// Parse JSON to extract model and messages
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		log.Printf("Error parsing Anthropic request JSON for token estimation: %v", err)
-		return a.getDefaultTokenEstimate(req.URL.Path, "")
-	}
-	
-	// Extract model for model-specific estimation
-	model := ""
-	if modelValue, ok := data["model"].(string); ok {
-		model = modelValue
-	}
-	
-	// Estimate input tokens based on content
-	inputTokens := int64(0)
-	
-	// Check for messages array (Anthropic format)
-	if messages, ok := data["messages"].([]interface{}); ok {
-		inputTokens = a.estimateTokensFromMessages(messages, model)
-	} else {
-		// Fallback to body size estimation
-		inputTokens = a.estimateTokensFromBodySize(len(bodyBytes), model)
-	}
-	
-	// Add system message tokens if present
-	if system, ok := data["system"].(string); ok {
-		inputTokens += a.estimateTokensFromText(system, model)
-	}
-	
-	// Estimate output tokens based on max_tokens parameter
-	outputTokens := int64(0)
-	if maxTokens, ok := data["max_tokens"].(float64); ok {
-		outputTokens = int64(maxTokens * 0.6) // Estimate 60% of max will be used
-	} else {
-		outputTokens = a.getDefaultOutputEstimate(model)
-	}
-	
-	totalTokens := inputTokens + outputTokens
-	
-	// Apply model-specific adjustments
-	totalTokens = a.applyModelAdjustments(totalTokens, model)
-	
-	log.Printf("🤖 Anthropic token estimation: %d tokens (%d input + %d output) for model %s", 
-		totalTokens, inputTokens, outputTokens, model)
-	return totalTokens
-}
 
-// Helper methods for Anthropic token estimation
-
-func (a *AnthropicProxy) readRequestBody(req *http.Request) ([]byte, error) {
-	if req.Body == nil {
-		return nil, nil
-	}
-	
-	if req.GetBody != nil {
-		bodyReader, err := req.GetBody()
-		if err != nil {
-			return nil, err
-		}
-		defer bodyReader.Close()
-		return io.ReadAll(bodyReader)
-	}
-	
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, err
-	}
-	
-	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
-	}
-	
-	return bodyBytes, nil
-}
-
-func (a *AnthropicProxy) estimateTokensFromMessages(messages []interface{}, model string) int64 {
-	totalTokens := int64(0)
-	
-	for _, msg := range messages {
-		if msgMap, ok := msg.(map[string]interface{}); ok {
-			if content, ok := msgMap["content"].(string); ok {
-				totalTokens += a.estimateTokensFromText(content, model)
-			}
-			// Add overhead for message structure (role, etc.)
-			totalTokens += 3
-		}
-	}
-	
-	// Add overhead for messages format
-	totalTokens += int64(len(messages)) * 2
-	return totalTokens
-}
-
-func (a *AnthropicProxy) estimateTokensFromText(text string, model string) int64 {
-	// Anthropic's general rule: ~3.5 characters per token (slightly more efficient than OpenAI)
-	charsPerToken := 3.5
-	
-	// Adjust for different Claude models
-	if strings.Contains(model, "claude-3-opus") {
-		charsPerToken = 3.4 // Opus is slightly more efficient
-	} else if strings.Contains(model, "claude-3-sonnet") {
-		charsPerToken = 3.5
-	} else if strings.Contains(model, "claude-3-haiku") {
-		charsPerToken = 3.6 // Haiku is slightly less efficient but faster
-	}
-	
-	return int64(float64(len(text)) / charsPerToken)
-}
-
-func (a *AnthropicProxy) estimateTokensFromBodySize(bodySize int, model string) int64 {
-	// Fallback estimation from body size
-	// Assume about 75% of body is actual content for Anthropic's cleaner JSON structure
-	estimatedContentSize := float64(bodySize) * 0.75
-	return int64(estimatedContentSize / 3.5)
-}
-
-func (a *AnthropicProxy) getDefaultOutputEstimate(model string) int64 {
-	// Default output token estimates based on typical usage patterns
-	if strings.Contains(model, "claude-3-opus") {
-		return 200 // Opus tends to give more detailed responses
-	} else if strings.Contains(model, "claude-3-sonnet") {
-		return 150
-	} else if strings.Contains(model, "claude-3-haiku") {
-		return 100 // Haiku is more concise
-	}
-	return 125
-}
-
-func (a *AnthropicProxy) getDefaultTokenEstimate(path string, model string) int64 {
-	// Endpoint-specific defaults
-	if strings.Contains(path, "/messages") {
-		if strings.Contains(model, "claude-3-opus") {
-			return 250
-		} else if strings.Contains(model, "claude-3-sonnet") {
-			return 180
-		} else if strings.Contains(model, "claude-3-haiku") {
-			return 120
-		}
-		return 150
-	}
-	return 75
-}
-
-func (a *AnthropicProxy) applyModelAdjustments(tokens int64, model string) int64 {
-	// Apply model-specific multipliers for accuracy
-	if strings.Contains(model, "claude-3-opus") {
-		// Opus requests tend to be more complex and produce longer responses
-		tokens = int64(float64(tokens) * 1.15)
-	} else if strings.Contains(model, "claude-3-haiku") {
-		// Haiku is more efficient and concise
-		tokens = int64(float64(tokens) * 0.9)
-	}
-	
-	// Cap at reasonable maximum to prevent over-consumption
-	if tokens > 10000 {
-		tokens = 10000
-	}
-	
-	// Ensure reasonable minimum
-	if tokens < 10 {
-		tokens = 10
-	}
-	
-	return tokens
-}
 
 // AnthropicResponse represents the structure of Anthropic API responses
 type AnthropicResponse struct {
@@ -619,109 +417,7 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-// ParseRateLimitFromResponse extracts rate limit information from Anthropic response headers
-func (a *AnthropicProxy) ParseRateLimitFromResponse(resp *http.Response) *RateLimitInfo {
-	if resp == nil || resp.Header == nil {
-		return nil
-	}
-	
-	rateLimitInfo := &RateLimitInfo{
-		Provider: "anthropic",
-	}
-	
-	// Helper function to get header value - try both Get() and direct access
-	getHeaderValue := func(headerName string) string {
-		// First try the standard way
-		if value := resp.Header.Get(headerName); value != "" {
-			return value
-		}
-		
-		// If that fails, try direct access
-		if values, ok := resp.Header[headerName]; ok && len(values) > 0 {
-			return values[0]
-		}
-		
-		return ""
-	}
-	
-	// Parse Anthropic rate limit headers
-	// Request limits
-	if limitStr := getHeaderValue("anthropic-ratelimit-requests-limit"); limitStr != "" {
-		rateLimitInfo.RequestLimit = parseIntFromString(limitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if remainingStr := getHeaderValue("anthropic-ratelimit-requests-remaining"); remainingStr != "" {
-		rateLimitInfo.RequestRemaining = parseIntFromString(remainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if resetStr := getHeaderValue("anthropic-ratelimit-requests-reset"); resetStr != "" {
-		rateLimitInfo.RequestReset = parseDurationFromString(resetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	// General token limits
-	if limitStr := getHeaderValue("anthropic-ratelimit-tokens-limit"); limitStr != "" {
-		rateLimitInfo.TokenLimit = parseIntFromString(limitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if remainingStr := getHeaderValue("anthropic-ratelimit-tokens-remaining"); remainingStr != "" {
-		rateLimitInfo.TokenRemaining = parseIntFromString(remainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if resetStr := getHeaderValue("anthropic-ratelimit-tokens-reset"); resetStr != "" {
-		rateLimitInfo.TokenReset = parseDurationFromString(resetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	// Input token limits (Anthropic specific)
-	if limitStr := getHeaderValue("anthropic-ratelimit-input-tokens-limit"); limitStr != "" {
-		rateLimitInfo.InputTokenLimit = parseIntFromString(limitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if remainingStr := getHeaderValue("anthropic-ratelimit-input-tokens-remaining"); remainingStr != "" {
-		rateLimitInfo.InputTokenRemaining = parseIntFromString(remainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if resetStr := getHeaderValue("anthropic-ratelimit-input-tokens-reset"); resetStr != "" {
-		rateLimitInfo.InputTokenReset = parseDurationFromString(resetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	// Output token limits (Anthropic specific)
-	if limitStr := getHeaderValue("anthropic-ratelimit-output-tokens-limit"); limitStr != "" {
-		rateLimitInfo.OutputTokenLimit = parseIntFromString(limitStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if remainingStr := getHeaderValue("anthropic-ratelimit-output-tokens-remaining"); remainingStr != "" {
-		rateLimitInfo.OutputTokenRemaining = parseIntFromString(remainingStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	if resetStr := getHeaderValue("anthropic-ratelimit-output-tokens-reset"); resetStr != "" {
-		rateLimitInfo.OutputTokenReset = parseDurationFromString(resetStr)
-		rateLimitInfo.HasRateLimitInfo = true
-	}
-	
-	// If no rate limit info was found, return nil
-	if !rateLimitInfo.HasRateLimitInfo {
-		return nil
-	}
-	
-	log.Printf("🔄 Anthropic: Parsed rate limit info - Request: %d/%d, Token: %d/%d, Input: %d/%d, Output: %d/%d", 
-		rateLimitInfo.RequestRemaining, rateLimitInfo.RequestLimit,
-		rateLimitInfo.TokenRemaining, rateLimitInfo.TokenLimit,
-		rateLimitInfo.InputTokenRemaining, rateLimitInfo.InputTokenLimit,
-		rateLimitInfo.OutputTokenRemaining, rateLimitInfo.OutputTokenLimit)
-	
-	return rateLimitInfo
-}
+
 
 // UserIDFromRequest extracts user ID from Anthropic request body
 // Anthropic supports passing user ID in the "metadata.user_id" field
@@ -762,6 +458,11 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	}
 	
 	return ""
+}
+
+// RegisterExtraRoutes is a no-op for Anthropic as it doesn't need extra routes
+func (a *AnthropicProxy) RegisterExtraRoutes(router *mux.Router) {
+	// No extra routes needed for Anthropic
 }
 
 // readRequestBodyForUserID safely reads the request body for user ID extraction

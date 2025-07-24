@@ -339,6 +339,7 @@ func main() {
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
+	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // Add URL rewriting before providers handle requests
 
 	// Create callbacks for cost tracking
 	var callbacks []middleware.MetadataCallback
@@ -364,9 +365,24 @@ func main() {
 	// Health check endpoint
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 
-	// Register routes for all providers
-	for _, provider := range globalProviderManager.GetAllProviders() {
-		provider.RegisterRoutes(r)
+	// Register routes for all providers centrally
+	for name, provider := range globalProviderManager.GetAllProviders() {
+		// Direct provider routes
+		r.PathPrefix(fmt.Sprintf("/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+		
+		// Meta routes with user ID pattern: /meta/{userID}/provider/
+		// These are handled by URLRewritingMiddleware which rewrites them to /provider/ before reaching here
+		r.PathPrefix(fmt.Sprintf("/meta/{userID}/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+		
+		logger.Info("Registered provider routes", "provider", name, 
+			"direct_path", fmt.Sprintf("/%s/", name), 
+			"meta_path", fmt.Sprintf("/meta/{userID}/%s/", name))
+	}
+	
+	// Register extra routes for all providers (e.g., compatibility routes)
+	for name, provider := range globalProviderManager.GetAllProviders() {
+		provider.RegisterExtraRoutes(r)
+		logger.Info("Registered extra routes for provider", "provider", name)
 	}
 
 	// Start server
@@ -396,6 +412,7 @@ func main() {
 	logger.Info("OpenAI API endpoints available", "url", "http://localhost:"+port+"/openai/")
 	logger.Info("Anthropic API endpoints available", "url", "http://localhost:"+port+"/anthropic/")
 	logger.Info("Gemini API endpoints available", "url", "http://localhost:"+port+"/gemini/")
+	logger.Info("Meta routes with user ID available", "pattern", "http://localhost:"+port+"/meta/{userID}/{provider}/")
 	
 	server := &http.Server{
 		Addr:    "0.0.0.0:" + port,

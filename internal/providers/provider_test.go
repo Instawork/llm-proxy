@@ -6,148 +6,238 @@ import (
 	"time"
 )
 
-func TestParseRateLimitFromResponse_OpenAI(t *testing.T) {
-	// Create a mock response with OpenAI rate limit headers
-	resp := &http.Response{
-		Header: http.Header{
-			"x-ratelimit-limit-requests":     []string{"60"},
-			"x-ratelimit-remaining-requests": []string{"59"},
-			"x-ratelimit-reset-requests":     []string{"1s"},
-			"x-ratelimit-limit-tokens":       []string{"150000"},
-			"x-ratelimit-remaining-tokens":   []string{"149984"},
-			"x-ratelimit-reset-tokens":       []string{"6m0s"},
-		},
+// Test ProviderManager functionality
+func TestNewProviderManager(t *testing.T) {
+	manager := NewProviderManager()
+	if manager == nil {
+		t.Fatal("NewProviderManager() returned nil")
 	}
-
-	openAI := NewOpenAIProxy()
-	rateLimitInfo := openAI.ParseRateLimitFromResponse(resp)
-
-	if rateLimitInfo == nil {
-		t.Fatal("Expected rate limit info, got nil")
+	
+	if manager.providers == nil {
+		t.Fatal("ProviderManager.providers is nil")
 	}
-
-	// Verify parsed values
-	if rateLimitInfo.Provider != "openai" {
-		t.Errorf("Expected provider 'openai', got '%s'", rateLimitInfo.Provider)
-	}
-
-	if rateLimitInfo.RequestLimit != 60 {
-		t.Errorf("Expected request limit 60, got %d", rateLimitInfo.RequestLimit)
-	}
-
-	if rateLimitInfo.RequestRemaining != 59 {
-		t.Errorf("Expected request remaining 59, got %d", rateLimitInfo.RequestRemaining)
-	}
-
-	if rateLimitInfo.RequestReset != 1*time.Second {
-		t.Errorf("Expected request reset 1s, got %v", rateLimitInfo.RequestReset)
-	}
-
-	if rateLimitInfo.TokenLimit != 150000 {
-		t.Errorf("Expected token limit 150000, got %d", rateLimitInfo.TokenLimit)
-	}
-
-	if rateLimitInfo.TokenRemaining != 149984 {
-		t.Errorf("Expected token remaining 149984, got %d", rateLimitInfo.TokenRemaining)
-	}
-
-	if rateLimitInfo.TokenReset != 6*time.Minute {
-		t.Errorf("Expected token reset 6m0s, got %v", rateLimitInfo.TokenReset)
-	}
-
-	if !rateLimitInfo.HasRateLimitInfo {
-		t.Error("Expected HasRateLimitInfo to be true")
+	
+	if len(manager.providers) != 0 {
+		t.Errorf("Expected empty provider map, got %d providers", len(manager.providers))
 	}
 }
 
-func TestParseRateLimitFromResponse_Anthropic(t *testing.T) {
-	// Create a mock response with Anthropic rate limit headers
-	resp := &http.Response{
-		Header: http.Header{
-			"anthropic-ratelimit-requests-limit":           []string{"50"},
-			"anthropic-ratelimit-requests-remaining":       []string{"49"},
-			"anthropic-ratelimit-requests-reset":           []string{"60s"},
-			"anthropic-ratelimit-tokens-limit":             []string{"100000"},
-			"anthropic-ratelimit-tokens-remaining":         []string{"99950"},
-			"anthropic-ratelimit-tokens-reset":             []string{"300s"},
-			"anthropic-ratelimit-input-tokens-limit":       []string{"75000"},
-			"anthropic-ratelimit-input-tokens-remaining":   []string{"74980"},
-			"anthropic-ratelimit-input-tokens-reset":       []string{"120s"},
-			"anthropic-ratelimit-output-tokens-limit":      []string{"25000"},
-			"anthropic-ratelimit-output-tokens-remaining":  []string{"24970"},
-			"anthropic-ratelimit-output-tokens-reset":      []string{"180s"},
-		},
-	}
-
+func TestProviderManager_RegisterProvider(t *testing.T) {
+	manager := NewProviderManager()
+	
+	// Create mock providers using the test helpers
+	openAI := NewOpenAIProxy()
 	anthropic := NewAnthropicProxy()
-	rateLimitInfo := anthropic.ParseRateLimitFromResponse(resp)
-
-	if rateLimitInfo == nil {
-		t.Fatal("Expected rate limit info, got nil")
+	
+	// Register providers
+	manager.RegisterProvider(openAI)
+	manager.RegisterProvider(anthropic)
+	
+	// Verify registration
+	if len(manager.providers) != 2 {
+		t.Errorf("Expected 2 providers, got %d", len(manager.providers))
 	}
-
-	// Verify parsed values
-	if rateLimitInfo.Provider != "anthropic" {
-		t.Errorf("Expected provider 'anthropic', got '%s'", rateLimitInfo.Provider)
+	
+	if manager.providers[openAI.GetName()] != openAI {
+		t.Error("OpenAI provider not properly registered")
 	}
-
-	if rateLimitInfo.RequestLimit != 50 {
-		t.Errorf("Expected request limit 50, got %d", rateLimitInfo.RequestLimit)
-	}
-
-	if rateLimitInfo.InputTokenLimit != 75000 {
-		t.Errorf("Expected input token limit 75000, got %d", rateLimitInfo.InputTokenLimit)
-	}
-
-	if rateLimitInfo.OutputTokenLimit != 25000 {
-		t.Errorf("Expected output token limit 25000, got %d", rateLimitInfo.OutputTokenLimit)
-	}
-
-	if !rateLimitInfo.HasRateLimitInfo {
-		t.Error("Expected HasRateLimitInfo to be true")
+	
+	if manager.providers[anthropic.GetName()] != anthropic {
+		t.Error("Anthropic provider not properly registered")
 	}
 }
 
-func TestParseRateLimitFromResponse_Gemini(t *testing.T) {
-	// Create a mock response - Gemini doesn't provide rate limit headers
-	resp := &http.Response{
-		Header: http.Header{
-			"Content-Type": []string{"application/json"},
-		},
+func TestProviderManager_GetProvider(t *testing.T) {
+	manager := NewProviderManager()
+	openAI := NewOpenAIProxy()
+	
+	// Test getting non-existent provider
+	provider := manager.GetProvider("nonexistent")
+	if provider != nil {
+		t.Error("Expected nil for non-existent provider")
 	}
+	
+	// Register and test getting existing provider
+	manager.RegisterProvider(openAI)
+	provider = manager.GetProvider(openAI.GetName())
+	if provider != openAI {
+		t.Error("GetProvider returned wrong provider")
+	}
+}
 
+func TestProviderManager_GetAllProviders(t *testing.T) {
+	manager := NewProviderManager()
+	
+	// Test empty manager
+	providers := manager.GetAllProviders()
+	if len(providers) != 0 {
+		t.Errorf("Expected 0 providers, got %d", len(providers))
+	}
+	
+	// Add providers and test
+	openAI := NewOpenAIProxy()
+	anthropic := NewAnthropicProxy()
 	gemini := NewGeminiProxy()
-	rateLimitInfo := gemini.ParseRateLimitFromResponse(resp)
-
-	// Gemini should return nil since it doesn't provide rate limit headers
-	if rateLimitInfo != nil {
-		t.Errorf("Expected nil for Gemini rate limit info, got %v", rateLimitInfo)
+	
+	manager.RegisterProvider(openAI)
+	manager.RegisterProvider(anthropic)
+	manager.RegisterProvider(gemini)
+	
+	providers = manager.GetAllProviders()
+	if len(providers) != 3 {
+		t.Errorf("Expected 3 providers, got %d", len(providers))
+	}
+	
+	// Verify all providers are returned
+	expectedProviders := map[string]Provider{
+		openAI.GetName():    openAI,
+		anthropic.GetName(): anthropic,
+		gemini.GetName():    gemini,
+	}
+	
+	for name, expectedProvider := range expectedProviders {
+		if providers[name] != expectedProvider {
+			t.Errorf("Provider %s not found or incorrect", name)
+		}
 	}
 }
 
-func TestParseRateLimitFromResponse_NoHeaders(t *testing.T) {
-	// Test with response that has no rate limit headers
-	resp := &http.Response{
-		Header: http.Header{
-			"Content-Type": []string{"application/json"},
-		},
+func TestProviderManager_IsStreamingRequest(t *testing.T) {
+	manager := NewProviderManager()
+	
+	// Create a mock request
+	req, err := http.NewRequest("POST", "/test", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
 	}
-
+	
+	// Test with no providers
+	isStreaming := manager.IsStreamingRequest(req)
+	if isStreaming {
+		t.Error("Expected false for empty provider manager")
+	}
+	
+	// Add providers
 	openAI := NewOpenAIProxy()
-	rateLimitInfo := openAI.ParseRateLimitFromResponse(resp)
+	manager.RegisterProvider(openAI)
+	
+	// Test with providers (this will depend on the specific provider implementation)
+	// The method iterates through all providers and returns true if any says it's streaming
+	isStreaming = manager.IsStreamingRequest(req)
+	// We can't assert the specific value since it depends on provider implementation
+	// But we can verify the method doesn't panic and returns a boolean
+	_ = isStreaming
+}
 
-	// Should return nil when no rate limit headers are present
-	if rateLimitInfo != nil {
-		t.Errorf("Expected nil when no rate limit headers present, got %v", rateLimitInfo)
+func TestProviderManager_GetHealthStatus(t *testing.T) {
+	manager := NewProviderManager()
+	
+	// Test empty manager
+	status := manager.GetHealthStatus()
+	if len(status) != 0 {
+		t.Errorf("Expected empty health status, got %d entries", len(status))
+	}
+	
+	// Add providers
+	openAI := NewOpenAIProxy()
+	anthropic := NewAnthropicProxy()
+	
+	manager.RegisterProvider(openAI)
+	manager.RegisterProvider(anthropic)
+	
+	status = manager.GetHealthStatus()
+	if len(status) != 2 {
+		t.Errorf("Expected 2 health status entries, got %d", len(status))
+	}
+	
+	// Verify each provider's health status is included
+	if _, exists := status[openAI.GetName()]; !exists {
+		t.Error("OpenAI health status not found")
+	}
+	
+	if _, exists := status[anthropic.GetName()]; !exists {
+		t.Error("Anthropic health status not found")
 	}
 }
 
-func TestParseRateLimitFromResponse_NilResponse(t *testing.T) {
-	openAI := NewOpenAIProxy()
-	rateLimitInfo := openAI.ParseRateLimitFromResponse(nil)
-
-	// Should handle nil response gracefully
-	if rateLimitInfo != nil {
-		t.Errorf("Expected nil for nil response, got %v", rateLimitInfo)
+// Test newProxyTransport function
+func TestNewProxyTransport(t *testing.T) {
+	transport := newProxyTransport()
+	
+	if transport == nil {
+		t.Fatal("newProxyTransport() returned nil")
 	}
-} 
+	
+	// Verify key configuration settings
+	if transport.MaxIdleConns != 100 {
+		t.Errorf("Expected MaxIdleConns=100, got %d", transport.MaxIdleConns)
+	}
+	
+	if transport.IdleConnTimeout != 90*time.Second {
+		t.Errorf("Expected IdleConnTimeout=90s, got %v", transport.IdleConnTimeout)
+	}
+	
+	if transport.TLSHandshakeTimeout != 10*time.Second {
+		t.Errorf("Expected TLSHandshakeTimeout=10s, got %v", transport.TLSHandshakeTimeout)
+	}
+	
+	if transport.ExpectContinueTimeout != 1*time.Second {
+		t.Errorf("Expected ExpectContinueTimeout=1s, got %v", transport.ExpectContinueTimeout)
+	}
+	
+	if transport.ResponseHeaderTimeout != 3*time.Minute {
+		t.Errorf("Expected ResponseHeaderTimeout=3m, got %v", transport.ResponseHeaderTimeout)
+	}
+	
+	if !transport.ForceAttemptHTTP2 {
+		t.Error("Expected ForceAttemptHTTP2=true")
+	}
+	
+	if !transport.DisableCompression {
+		t.Error("Expected DisableCompression=true")
+	}
+	
+	// Verify DialContext is configured
+	if transport.DialContext == nil {
+		t.Error("Expected DialContext to be configured")
+	}
+	
+	// Verify Proxy is configured (should use environment)
+	if transport.Proxy == nil {
+		t.Error("Expected Proxy to be configured")
+	}
+}
+
+// Test data structures
+
+func TestLLMResponseMetadata_Struct(t *testing.T) {
+	// Test that the struct can be created and fields are accessible
+	metadata := &LLMResponseMetadata{
+		Model:           "gpt-4",
+		InputTokens:     100,
+		OutputTokens:    50,
+		TotalTokens:     150,
+		ThoughtTokens:   10,
+		Provider:        "openai",
+		RequestID:       "req-123",
+		IsStreaming:     false,
+		FinishReason:    "stop",
+	}
+	
+	// Verify all fields are set correctly
+	if metadata.Model != "gpt-4" {
+		t.Errorf("Expected Model='gpt-4', got '%s'", metadata.Model)
+	}
+	
+	if metadata.TotalTokens != 150 {
+		t.Errorf("Expected TotalTokens=150, got %d", metadata.TotalTokens)
+	}
+	
+	if metadata.Provider != "openai" {
+		t.Errorf("Expected Provider='openai', got '%s'", metadata.Provider)
+	}
+	
+	if metadata.IsStreaming {
+		t.Error("Expected IsStreaming=false")
+	}
+}
