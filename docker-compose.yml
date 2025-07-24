@@ -1,0 +1,55 @@
+services:
+  llm-proxy:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: llm-proxy-dev
+    ports:
+      - "9002:9002"
+    volumes:
+      - ./cmd:/app/cmd:ro
+      - ./internal:/app/internal:ro
+      - ./configs:/app/configs:ro
+      - ./logs:/app/logs
+    environment:
+      - PORT=9002
+      - LOG_LEVEL=debug
+      - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - llm-proxy-network
+  llm-proxy-dev:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+      target: builder
+    container_name: llm-proxy-dev-watch
+    profiles:
+      - dev
+    ports:
+      - "9003:9002"
+    volumes:
+      - .:/app
+      - /app/bin
+    working_dir: /app
+    command: ["go", "run", "./cmd/llm-proxy"]
+    environment:
+      - PORT=9002
+      - LOG_LEVEL=debug
+      - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
+      - CGO_ENABLED=0
+    restart: unless-stopped
+    networks:
+      - llm-proxy-network
+    depends_on:
+      - llm-proxy
+
+networks:
+  llm-proxy-network:
+    driver: bridge 

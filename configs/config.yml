@@ -1,0 +1,470 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# =============================================================================
+# GLOBAL SETTINGS
+# =============================================================================
+enabled: true
+
+# =============================================================================
+# FEATURE TOGGLES
+# =============================================================================
+
+features:
+  cost_tracking:
+    enabled: true
+  rate_limiting:
+    enabled: false
+
+# =============================================================================
+# PROVIDER CONFIGURATIONS
+# =============================================================================
+
+providers:
+  openai:
+    enabled: true
+    default_limits:
+      tokens_per_minute: 450_000
+      requests_per_minute: 5_000
+      tokens_per_hour: 27_000_000
+      tokens_per_day: 648_000_000
+      requests_per_day: 300_000
+      burst_tokens: 45_000
+      burst_requests: 500
+    models:
+      "gpt-4":
+        enabled: true
+        aliases: ["gpt-4-0613"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 30.00
+          output: 60.00
+      "gpt-4-turbo":
+        enabled: true
+        aliases: ["gpt-4-turbo-2024-04-09"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 10.00
+          output: 30.00
+      "gpt-4.1":
+        enabled: true
+        aliases: ["gpt-4.1-2025-04-14"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 2.00
+          output: 8.00
+      "gpt-4.1-mini":
+        enabled: true
+        aliases: ["gpt-4.1-mini-2025-04-14"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 0.40
+          output: 1.60
+      "gpt-4.1-nano":
+        enabled: true
+        aliases: ["gpt-4.1-nano-2025-04-14"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 0.10
+          output: 0.40
+      "gpt-4o":
+        enabled: true
+        aliases: ["gpt-4o-2024-05-13", "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 2.50
+          output: 10.00
+          overrides:
+            "gpt-4o-2024-05-13":
+              input: 5.00
+              output: 15.00
+      "gpt-4o-mini":
+        enabled: true
+        aliases: ["gpt-4o-mini-2024-07-18"]
+        limits:
+          tokens_per_minute: 2_000_000
+          requests_per_minute: 5_000
+          tokens_per_day: 48_000_000
+          requests_per_day: 7_200_000
+          burst_tokens: 200_000
+          burst_requests: 500
+        pricing:
+          input: 0.15
+          output: 0.60
+      "gpt-3.5-turbo":
+        enabled: true
+        aliases:
+          ["gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-16k"]
+        limits:
+          tokens_per_minute: 2_000_000
+          requests_per_minute: 5_000
+          tokens_per_day: 48_000_000
+          requests_per_day: 7_200_000
+          burst_tokens: 200_000
+          burst_requests: 500
+        pricing:
+          input: 0.50
+          output: 1.50
+      "o1":
+        enabled: true
+        aliases: ["o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 7.00
+          output: 21.00
+      "o1-mini":
+        enabled: true
+        aliases: ["o1-mini-2024-09-12"]
+        limits:
+          tokens_per_minute: 200_000
+          requests_per_minute: 2_000
+          tokens_per_day: 4_800_000
+          requests_per_day: 2_880_000
+          burst_tokens: 20_000
+          burst_requests: 200
+        pricing:
+          input: 0.50
+          output: 1.50
+      "o3-mini":
+        enabled: true
+        aliases: ["o3-mini-2025-01-31"]
+        limits:
+          tokens_per_minute: 200_000
+          requests_per_minute: 2_000
+          tokens_per_day: 4_800_000
+          requests_per_day: 2_880_000
+          burst_tokens: 20_000
+          burst_requests: 200
+        pricing:
+          input: 1.10
+          output: 4.40
+      "o4-mini":
+        enabled: true
+        aliases:
+          [
+            "o4-mini-2025-04-16",
+            "o4-mini-deep-research",
+            "o4-mini-deep-research-2025-06-26",
+          ]
+        limits:
+          tokens_per_minute: 200_000
+          requests_per_minute: 2_000
+          tokens_per_day: 4_800_000
+          requests_per_day: 2_880_000
+          burst_tokens: 20_000
+          burst_requests: 200
+        pricing:
+          input: 1.10
+          output: 4.40
+      "o3":
+        enabled: true
+        aliases:
+          ["o3-2025-04-16", "o3-deep-research", "o3-deep-research-2025-06-26"]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 40.00
+
+  # ---------------------------------------------------------------------------
+  # ANTHROPIC PROVIDER
+  # ---------------------------------------------------------------------------
+  anthropic:
+    enabled: true
+
+    default_limits:
+      tokens_per_minute: 80_000
+      requests_per_minute: 1_000
+      tokens_per_hour: 4_800_000
+      tokens_per_day: 115_200_000
+      requests_per_day: 1_440_000
+      burst_tokens: 8_000
+      burst_requests: 100
+
+    models:
+      "claude-opus-4-0":
+        enabled: true
+        aliases: ["claude-opus-4", "claude-opus-4-20250514"]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 0.25
+          output: 1.25
+      "claude-sonnet-4-0":
+        enabled: true
+        aliases: ["claude-sonnet-4", "claude-sonnet-4-20250514"]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          input: 3.00
+          output: 15.00
+      "claude-3-7-sonnet":
+        enabled: true
+        aliases:
+          [
+            "claude-3-7-sonnet-latest",
+            "claude-3.7-sonnet",
+            "claude-sonnet-3.7",
+            "claude-3-7-sonnet-20250219",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          input: 3.00
+          output: 15.00
+      "claude-3-5-sonnet":
+        enabled: true
+        aliases:
+          [
+            "claude-3-5-sonnet-latest",
+            "claude-3.5-sonnet",
+            "claude-sonnet-3.5",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-sonnet-20240628",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          input: 3.00
+          output: 15.00
+      "claude-3-5-haiku":
+        enabled: true
+        aliases:
+          [
+            "claude-3-5-haiku-latest",
+            "claude-3.5-haiku",
+            "claude-haiku-3.5",
+            "claude-3-5-haiku-20241022",
+          ]
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          input: 0.80
+          output: 4.00
+      "claude-3-haiku-20240307":
+        enabled: true
+        aliases: ["claude-3-haiku", "claude-haiku"]
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          input: 0.25
+          output: 1.25
+
+  # ---------------------------------------------------------------------------
+  # GOOGLE GEMINI PROVIDER
+  # ---------------------------------------------------------------------------
+  gemini:
+    enabled: true
+    default_limits:
+      tokens_per_minute: 5_000_000
+      requests_per_minute: 1_000
+      tokens_per_hour: 300_000_000
+      tokens_per_day: 7_200_000_000
+      requests_per_day: 1_440_000
+      burst_tokens: 500_000
+      burst_requests: 100
+
+    models:
+      "gemini-2.5-pro":
+        enabled: true
+        aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          - threshold: 200_000
+            input: 1.25
+            output: 10.00
+          - threshold: 0 # Fallback for prompts > 200k tokens
+            input: 2.50
+            output: 15.00
+      "gemini-2.5-pro-preview":
+        enabled: true
+        aliases: ["gemini-pro-2.5-preview"]
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 1.25
+          output: 10.00
+      "gemini-2.5-flash":
+        enabled: true
+        aliases: ["gemini-flash-2.5", "gemini-2-5-flash"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 0.30
+          output: 2.50
+      "gemini-2.5-flash-thinking":
+        enabled: true
+        aliases: ["gemini-flash-2.5-thinking"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 0.30
+          output: 2.50
+      "gemini-2.0-flash":
+        enabled: true
+        aliases: ["gemini-flash-2.0", "gemini-2-0-flash"]
+        limits:
+          tokens_per_minute: 10_000_000
+          requests_per_minute: 10_000
+          tokens_per_day: 240_000_000
+          requests_per_day: 14_400_000
+          burst_tokens: 1_000_000
+          burst_requests: 1_000
+        pricing:
+          input: 7.00
+          output: 21.00
+      "gemini-2.0-flash-lite":
+        enabled: true
+        aliases: ["gemini-flash-lite-2.0"]
+        limits:
+          tokens_per_minute: 10_000_000
+          requests_per_minute: 10_000
+          tokens_per_day: 240_000_000
+          requests_per_day: 14_400_000
+          burst_tokens: 1_000_000
+          burst_requests: 1_000
+        pricing:
+          input: 7.00
+          output: 21.00
+      "gemini-1.5-pro":
+        enabled: true
+        aliases: ["gemini-pro-1.5", "gemini-1-5-pro"]
+        limits:
+          tokens_per_minute: 4_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 96_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 400_000
+          burst_requests: 100
+        pricing:
+          input: 7.00
+          output: 21.00
+      "gemini-1.5-flash":
+        enabled: true
+        aliases: ["gemini-flash-1.5"]
+        limits:
+          tokens_per_minute: 4_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 96_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 400_000
+          burst_requests: 100
+        pricing:
+          input: 7.00
+          output: 21.00
+
+# =============================================================================
+# DEFAULT RATE LIMITS (FALLBACKS)
+# =============================================================================
+
+defaults:
+  user:
+    tokens_per_minute: 100_000
+    tokens_per_hour: 6_000_000
+    tokens_per_day: 144_000_000
+    requests_per_minute: 1_000
+    requests_per_hour: 60_000
+    requests_per_day: 1_440_000
+  global:
+    tokens_per_minute: 10_000_000
+    tokens_per_hour: 600_000_000
+    requests_per_minute: 50_000
+    requests_per_hour: 3_000_000
