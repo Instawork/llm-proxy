@@ -63,7 +63,6 @@ EOF
 SKIP_AWS_SETUP=false
 VERSION=""
 SHA=""
-CI=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -148,12 +147,6 @@ if [[ "$SKIP_AWS_SETUP" == false ]]; then
     
     # Login to AWS ECR
     print_info "Logging into AWS ECR..."
-    
-    # login to aws ecr for docker and create repo if it doesnt exist (only if CI is true)
-    if [ "$CI" == true ]; then
-        aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin ${ECR_URL_PREFIX}
-        aws ecr describe-repositories --region us-west-2 --repository-names ${AWS_ECR_REPOSITORY_NAME} || aws ecr create-repository --region us-west-2 --repository-name ${AWS_ECR_REPOSITORY_NAME}
-    fi
     
     if [[ $? -eq 0 ]]; then
         print_success "Successfully logged into ECR"

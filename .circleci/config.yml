@@ -12,7 +12,7 @@ commands:
     steps:
       - checkout
       - go/install:
-          version: "1.21.5"
+          version: "1.24.5"
       - go/load-cache
       - run:
           name: Download dependencies
@@ -41,15 +41,12 @@ commands:
 
 # Define jobs
 jobs:
-  test:
+  lint:
     docker:
-      - image: cimg/go:1.21.5
+      - image: cimg/go:1.24.5
     working_directory: ~/llm-proxy
     steps:
       - setup_go_environment
-      - run:
-          name: Run unit tests
-          command: make test
       - run:
           name: Run go vet
           command: go vet ./...
@@ -62,9 +59,19 @@ jobs:
               exit 1
             fi
 
+  test:
+    docker:
+      - image: cimg/go:1.24.5
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run unit tests
+          command: make test
+
   build-and-push:
     docker:
-      - image: cimg/go:1.21.5
+      - image: cimg/go:1.24.5
     working_directory: ~/llm-proxy
     steps:
       - checkout
@@ -74,33 +81,20 @@ jobs:
       - run:
           name: Build and push Docker image
           command: |
-            # Set variables
-            ECR_URL_PREFIX=${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-            SHA=$(echo ${CIRCLE_SHA1} | cut -c1-7)
-            BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            VERSION=dev-${SHA}
-            IMAGE_URL=${ECR_URL_PREFIX}/${AWS_ECR_REPOSITORY_NAME}
-
-            echo "Building image for SHA: ${SHA}"
-
-            # Build Docker image
-            docker build --progress=plain \
-              --build-arg BUILD_DATE=${BUILD_DATE} \
-              --build-arg VCS_REF=${SHA} \
-              --build-arg VERSION=${VERSION} \
-              -f build/Dockerfile.prod . \
-              -t ${IMAGE_URL}:${SHA} \
-              -t ${IMAGE_URL}:latest
-
-            # Push images
-            docker push ${IMAGE_URL}:${SHA}
-            docker push ${IMAGE_URL}:latest
+            ./scripts/build_for_ecr.sh
 
 # Define workflows
 workflows:
   version: 2
   test-and-deploy:
     jobs:
+      - lint:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
       - test:
           filters:
             branches:
@@ -110,6 +104,7 @@ workflows:
 
       - build-and-push:
           requires:
+            - lint
             - test
           filters:
             branches:
