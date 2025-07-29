@@ -14,18 +14,18 @@ func formatNumber(n int64) string {
 	if n < 1000 {
 		return fmt.Sprintf("%d", n)
 	}
-	
+
 	// Convert to string and add commas
 	str := fmt.Sprintf("%d", n)
 	result := ""
-	
+
 	for i, char := range str {
 		if i > 0 && (len(str)-i)%3 == 0 {
 			result += ","
 		}
 		result += string(char)
 	}
-	
+
 	return result
 }
 
@@ -33,17 +33,17 @@ func formatNumber(n int64) string {
 type YAMLConfig struct {
 	// Global settings
 	Enabled bool `yaml:"enabled"`
-	
+
 	// Features configuration
 	Features FeaturesConfig `yaml:"features"`
-	
+
 	// Providers configuration
 	Providers map[string]ProviderConfig `yaml:"providers"`
 }
 
 // FeaturesConfig represents feature toggle configuration
 type FeaturesConfig struct {
-	CostTracking  CostTrackingConfig `yaml:"cost_tracking"`
+	CostTracking CostTrackingConfig `yaml:"cost_tracking"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration
@@ -54,7 +54,7 @@ type CostTrackingConfig struct {
 
 // TransportConfig represents cost tracking transport configuration
 type TransportConfig struct {
-	Type     string          `yaml:"type"` // "file" or "dynamodb"
+	Type     string                   `yaml:"type"` // "file" or "dynamodb"
 	File     *FileTransportConfig     `yaml:"file,omitempty"`
 	DynamoDB *DynamoDBTransportConfig `yaml:"dynamodb,omitempty"`
 }
@@ -72,14 +72,14 @@ type DynamoDBTransportConfig struct {
 
 // ProviderConfig represents configuration for a specific provider
 type ProviderConfig struct {
-	Enabled bool                  `yaml:"enabled"`
+	Enabled bool                   `yaml:"enabled"`
 	Models  map[string]ModelConfig `yaml:"models"`
 }
 
 // ModelConfig represents configuration for a specific model
 type ModelConfig struct {
-	Enabled bool        `yaml:"enabled"`
-	Aliases []string    `yaml:"aliases,omitempty"` // Alternative model names
+	Enabled bool     `yaml:"enabled"`
+	Aliases []string `yaml:"aliases,omitempty"` // Alternative model names
 	// Pricing can be a single price, or a list of tiers.
 	Pricing interface{} `yaml:"pricing,omitempty"`
 }
@@ -99,7 +99,7 @@ type PricingTier struct {
 
 // ModelPricing represents pricing information for a model, with optional overrides for aliases.
 type ModelPricing struct {
-	Tiers     []PricingTier        `yaml:"tiers,omitempty"`
+	Tiers     []PricingTier      `yaml:"tiers,omitempty"`
 	Overrides map[string]Pricing `yaml:"overrides,omitempty"` // Pricing for specific model aliases
 }
 
@@ -109,19 +109,19 @@ func LoadYAMLConfig(filename string) (*YAMLConfig, error) {
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		return GetDefaultYAMLConfig(), nil
 	}
-	
+
 	// Read the file
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
 	}
-	
+
 	// Parse YAML
 	var config YAMLConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
 	}
-	
+
 	// Validate and fill in calculated fields
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -141,11 +141,11 @@ func (c *YAMLConfig) SaveYAMLConfig(filename string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	
+
 	if err := os.WriteFile(filename, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -154,21 +154,21 @@ func (c *YAMLConfig) Validate() error {
 	if c.Providers == nil {
 		return fmt.Errorf("providers configuration is required")
 	}
-	
+
 	// Validate transport configuration if cost tracking is enabled
 	if c.Features.CostTracking.Enabled {
 		if err := c.validateTransportConfig(); err != nil {
 			return fmt.Errorf("invalid transport configuration: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 
 // validateTransportConfig validates the transport configuration
 func (c *YAMLConfig) validateTransportConfig() error {
 	transport := c.Features.CostTracking.Transport
-	
+
 	switch transport.Type {
 	case "file":
 		if transport.File == nil {
@@ -192,7 +192,7 @@ func (c *YAMLConfig) validateTransportConfig() error {
 	default:
 		return fmt.Errorf("unsupported transport type: %s (supported: file, dynamodb)", transport.Type)
 	}
-	
+
 	return nil
 }
 
@@ -201,7 +201,7 @@ func (c *YAMLConfig) GetTransportConfig() (*TransportConfig, error) {
 	if !c.Features.CostTracking.Enabled {
 		return nil, fmt.Errorf("cost tracking is disabled")
 	}
-	
+
 	return &c.Features.CostTracking.Transport, nil
 }
 
@@ -383,18 +383,18 @@ func (c *YAMLConfig) LogConfiguration(logger *slog.Logger) {
 		logger.Warn("Configuration is disabled")
 		return
 	}
-	
+
 	logger.Info("📋 Configuration Summary:", "enabled", c.Enabled, "providers_configured", len(c.Providers))
-	
+
 	// Log provider and model details
 	for providerName, provider := range c.Providers {
 		if !provider.Enabled {
 			logger.Info("Provider disabled", "provider", strings.ToUpper(providerName))
 			continue
 		}
-		
+
 		logger.Info("Provider enabled", "provider", strings.ToUpper(providerName))
-		
+
 		// Log model-specific configurations
 		if len(provider.Models) > 0 {
 			logger.Info("Models configured", "provider", providerName, "count", len(provider.Models))
@@ -403,14 +403,14 @@ func (c *YAMLConfig) LogConfiguration(logger *slog.Logger) {
 				if !model.Enabled {
 					status = "DISABLED"
 				}
-				
+
 				logger.Info("Model status", "provider", providerName, "model", modelName, "status", status)
-				
+
 				// Log aliases if they exist
 				if len(model.Aliases) > 0 {
 					logger.Info("Model aliases", "provider", providerName, "model", modelName, "aliases", strings.Join(model.Aliases, ", "))
 				}
-				
+
 				// Log pricing information for enabled models
 				if model.Enabled && model.Pricing != nil {
 					modelPricing, ok := model.Pricing.(*ModelPricing)
@@ -443,4 +443,4 @@ func (c *YAMLConfig) LogConfiguration(logger *slog.Logger) {
 			logger.Info("No models specifically configured", "provider", providerName)
 		}
 	}
-} 
+}

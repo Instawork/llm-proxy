@@ -16,45 +16,45 @@ import (
 type LLMResponseMetadata struct {
 	// Model used for the request
 	Model string `json:"model"`
-	
+
 	// Token usage information
-	InputTokens     int `json:"input_tokens"`
-	OutputTokens    int `json:"output_tokens"`
-	TotalTokens     int `json:"total_tokens"`
-	ThoughtTokens   int `json:"thought_tokens,omitempty"`  // Added for Gemini thought tokens
-	
+	InputTokens   int `json:"input_tokens"`
+	OutputTokens  int `json:"output_tokens"`
+	TotalTokens   int `json:"total_tokens"`
+	ThoughtTokens int `json:"thought_tokens,omitempty"` // Added for Gemini thought tokens
+
 	// Provider-specific information
-	Provider        string `json:"provider"`
-	RequestID       string `json:"request_id,omitempty"`
-	
+	Provider  string `json:"provider"`
+	RequestID string `json:"request_id,omitempty"`
+
 	// Additional metadata for cost calculation
-	IsStreaming     bool   `json:"is_streaming"`
-	FinishReason    string `json:"finish_reason,omitempty"`
+	IsStreaming  bool   `json:"is_streaming"`
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // Provider defines the interface that all LLM providers must implement
 type Provider interface {
 	// GetName returns the name of the provider (e.g., "openai", "anthropic")
 	GetName() string
-	
+
 	// IsStreamingRequest checks if the given request is a streaming request
 	// This is provider-specific as different providers handle streaming differently
 	IsStreamingRequest(req *http.Request) bool
-	
+
 	// ParseResponseMetadata extracts tokens and model information from a response
 	// Works for both streaming and non-streaming responses
 	ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error)
-	
+
 	// Proxy returns the HTTP handler for this provider (typically a reverse proxy)
 	Proxy() http.Handler
-	
+
 	// GetHealthStatus returns the health status of the provider
 	GetHealthStatus() map[string]interface{}
-	
+
 	// UserIDFromRequest extracts user ID from request body in a provider-specific way
 	// Returns empty string if no user ID can be extracted
 	UserIDFromRequest(req *http.Request) string
-	
+
 	// RegisterExtraRoutes allows providers to register additional routes beyond the standard ones
 	// This is useful for provider-specific compatibility routes or special endpoints
 	RegisterExtraRoutes(router *mux.Router)
@@ -121,16 +121,16 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 	return func(req *http.Request) {
 		// Call the original director first
 		originalDirector(req)
-		
+
 		// Set the Host header to the target host
 		req.Host = targetURL.Host
-		
+
 		// Strip the provider prefix from the path before forwarding
-		// Note: mux PathPrefix matches but doesn't strip the prefix automatically  
+		// Note: mux PathPrefix matches but doesn't strip the prefix automatically
 		// Note: URL rewriting for /meta/{userID}/provider/ is handled by URLRewritingMiddleware
 		providerPrefix := "/" + provider.GetName()
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, providerPrefix)
-		
+
 		// Log the request, including streaming detection
 		isStreaming := provider.IsStreamingRequest(req)
 		if isStreaming {
@@ -140,7 +140,6 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 		}
 	}
 }
-
 
 // newProxyTransport creates a new http.Transport with optimized settings for proxying LLM requests.
 func newProxyTransport() *http.Transport {
@@ -163,4 +162,4 @@ func newProxyTransport() *http.Transport {
 		// issues with streaming responses.
 		DisableCompression: true,
 	}
-} 
+}

@@ -43,4 +43,4 @@ func (sw *streamingResponseWriter) Write(b []byte) (int, error) {
 	// Flush immediately for streaming responses
 	sw.flusher.Flush()
 	return n, err
-} 
+}

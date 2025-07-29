@@ -30,16 +30,16 @@ type DynamoDBTransport struct {
 
 // DynamoDBCostRecord represents a cost record as stored in DynamoDB
 type DynamoDBCostRecord struct {
-	PK           string  `dynamodbav:"pk"`           // Partition key: "COST#YYYY-MM-DD"
-	SK           string  `dynamodbav:"sk"`           // Sort key: "TIMESTAMP#requestId"
-	GSI1PK       string  `dynamodbav:"gsi1pk"`       // ProviderModelIndex partition key: "PROVIDER#providerName"
-	GSI1SK       string  `dynamodbav:"gsi1sk"`       // ProviderModelIndex sort key: "MODEL#modelName#TIMESTAMP"
-	GSI2PK       string  `dynamodbav:"gsi2pk"`       // UserProviderIndex partition key: "USER#userID"
-	GSI2SK       string  `dynamodbav:"gsi2sk"`       // UserProviderIndex sort key: "PROVIDER#providerName#TIMESTAMP"
-	GSI3PK       string  `dynamodbav:"gsi3pk"`       // ModelProviderIndex partition key: "MODEL#modelName"
-	GSI3SK       string  `dynamodbav:"gsi3sk"`       // ModelProviderIndex sort key: "PROVIDER#providerName#TIMESTAMP"
-	TTL          int64   `dynamodbav:"ttl"`          // TTL for automatic cleanup (optional)
-	Timestamp    int64   `dynamodbav:"timestamp"`    // Unix timestamp for easier queries
+	PK           string  `dynamodbav:"pk"`        // Partition key: "COST#YYYY-MM-DD"
+	SK           string  `dynamodbav:"sk"`        // Sort key: "TIMESTAMP#requestId"
+	GSI1PK       string  `dynamodbav:"gsi1pk"`    // ProviderModelIndex partition key: "PROVIDER#providerName"
+	GSI1SK       string  `dynamodbav:"gsi1sk"`    // ProviderModelIndex sort key: "MODEL#modelName#TIMESTAMP"
+	GSI2PK       string  `dynamodbav:"gsi2pk"`    // UserProviderIndex partition key: "USER#userID"
+	GSI2SK       string  `dynamodbav:"gsi2sk"`    // UserProviderIndex sort key: "PROVIDER#providerName#TIMESTAMP"
+	GSI3PK       string  `dynamodbav:"gsi3pk"`    // ModelProviderIndex partition key: "MODEL#modelName"
+	GSI3SK       string  `dynamodbav:"gsi3sk"`    // ModelProviderIndex sort key: "PROVIDER#providerName#TIMESTAMP"
+	TTL          int64   `dynamodbav:"ttl"`       // TTL for automatic cleanup (optional)
+	Timestamp    int64   `dynamodbav:"timestamp"` // Unix timestamp for easier queries
 	RequestID    string  `dynamodbav:"request_id,omitempty"`
 	UserID       string  `dynamodbav:"user_id,omitempty"`
 	IPAddress    string  `dynamodbav:"ip_address,omitempty"`
@@ -241,7 +241,7 @@ func (dt *DynamoDBTransport) WriteRecord(record *CostRecord) error {
 		return fmt.Errorf("failed to write record to DynamoDB: %w", err)
 	}
 
-	dt.logger.Debug("Cost record written to DynamoDB", 
+	dt.logger.Debug("Cost record written to DynamoDB",
 		"table", dt.tableName,
 		"provider", record.Provider,
 		"model", record.Model,
@@ -300,7 +300,7 @@ func (dt *DynamoDBTransport) ReadRecords(since time.Time) ([]CostRecord, error) 
 			}
 
 			costRecord := dt.fromDynamoDBRecord(&dynamoRecord)
-			
+
 			// Apply time filter for precision
 			if costRecord.Timestamp.After(since) || costRecord.Timestamp.Equal(since) {
 				records = append(records, *costRecord)
@@ -310,7 +310,7 @@ func (dt *DynamoDBTransport) ReadRecords(since time.Time) ([]CostRecord, error) 
 		current = current.AddDate(0, 0, 1)
 	}
 
-	dt.logger.Debug("Retrieved cost records from DynamoDB", 
+	dt.logger.Debug("Retrieved cost records from DynamoDB",
 		"table", dt.tableName,
 		"count", len(records),
 		"since", since)
@@ -322,7 +322,7 @@ func (dt *DynamoDBTransport) ReadRecords(since time.Time) ([]CostRecord, error) 
 func (dt *DynamoDBTransport) toDynamoDBRecord(record *CostRecord) *DynamoDBCostRecord {
 	dateStr := record.Timestamp.Format("2006-01-02")
 	timestampStr := record.Timestamp.Format("2006-01-02T15:04:05.000Z")
-	
+
 	return &DynamoDBCostRecord{
 		PK:           fmt.Sprintf("COST#%s", dateStr),
 		SK:           fmt.Sprintf("TIMESTAMP#%s#%s", timestampStr, record.RequestID),
@@ -370,4 +370,4 @@ func (dt *DynamoDBTransport) fromDynamoDBRecord(dynamoRecord *DynamoDBCostRecord
 		TotalCost:    dynamoRecord.TotalCost,
 		FinishReason: dynamoRecord.FinishReason,
 	}
-} 
+}

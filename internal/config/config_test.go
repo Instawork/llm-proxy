@@ -10,7 +10,7 @@ import (
 func TestYAMLConfigLoading(t *testing.T) {
 	// Test loading the actual config.yml file
 	configPath := "../../configs/config.yml"
-	
+
 	// Check if file exists (try different paths)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		configPath = "../configs/config.yml"
@@ -21,34 +21,34 @@ func TestYAMLConfigLoading(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// Load the YAML configuration
 	config, err := LoadYAMLConfig(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load YAML config: %v", err)
 	}
-	
+
 	// Test that configuration is loaded
 	if config == nil {
 		t.Fatal("Config is nil")
 	}
-	
+
 	// Test that config is enabled
 	if !config.Enabled {
 		t.Error("Expected config to be enabled")
 	}
-	
+
 	// Test that providers exist
 	if len(config.Providers) == 0 {
 		t.Error("Expected at least one provider")
 	}
-	
+
 	// Test OpenAI provider exists
 	openaiProvider, exists := config.Providers["openai"]
 	if !exists {
 		t.Fatal("OpenAI provider not found")
 	}
-	
+
 	if !openaiProvider.Enabled {
 		t.Error("Expected OpenAI provider to be enabled")
 	}
@@ -56,7 +56,7 @@ func TestYAMLConfigLoading(t *testing.T) {
 
 func TestModelAliases(t *testing.T) {
 	configPath := "../../configs/config.yml"
-	
+
 	// Check if file exists (try different paths)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		configPath = "../configs/config.yml"
@@ -67,18 +67,18 @@ func TestModelAliases(t *testing.T) {
 			}
 		}
 	}
-	
+
 	config, err := LoadYAMLConfig(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load YAML config: %v", err)
 	}
-	
+
 	// Test that aliases are loaded correctly for OpenAI
 	openaiProvider, exists := config.Providers["openai"]
 	if !exists {
 		t.Fatal("OpenAI provider not found")
 	}
-	
+
 	// Check that models with aliases exist and have them loaded
 	for modelName, model := range openaiProvider.Models {
 		if len(model.Aliases) > 0 {
@@ -91,7 +91,7 @@ func TestModelAliases(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// Test Anthropic aliases if provider exists
 	if anthropicProvider, exists := config.Providers["anthropic"]; exists {
 		for modelName, model := range anthropicProvider.Models {
@@ -104,7 +104,7 @@ func TestModelAliases(t *testing.T) {
 
 func TestBasicConfigValidation(t *testing.T) {
 	configPath := "../../configs/config.yml"
-	
+
 	// Check if file exists (try different paths)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		configPath = "../configs/config.yml"
@@ -115,23 +115,23 @@ func TestBasicConfigValidation(t *testing.T) {
 			}
 		}
 	}
-	
+
 	config, err := LoadYAMLConfig(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load YAML config: %v", err)
 	}
-	
+
 	// Test configuration validation
 	err = config.Validate()
 	if err != nil {
 		t.Errorf("Configuration validation failed: %v", err)
 	}
-	
+
 	// Test that all enabled providers have models
 	for providerName, provider := range config.Providers {
 		if provider.Enabled {
 			t.Logf("Provider %s is enabled with %d models", providerName, len(provider.Models))
-			
+
 			// Check that enabled models are properly configured
 			for modelName, model := range provider.Models {
 				if model.Enabled {
@@ -153,20 +153,20 @@ test_values:
   very_large_number: 7_200_000_000
   decimal_number: 2_500.50
 `
-	
+
 	// Create a temporary file
 	tmpFile, err := os.CreateTemp("", "test_config_*.yml")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer os.Remove(tmpFile.Name())
-	
+
 	// Write test YAML content
 	if _, err := tmpFile.Write([]byte(testYAML)); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
 	tmpFile.Close()
-	
+
 	// Define a struct to unmarshal the test YAML
 	type TestConfig struct {
 		Enabled    bool `yaml:"enabled"`
@@ -178,18 +178,18 @@ test_values:
 			DecimalNumber   float64 `yaml:"decimal_number"`
 		} `yaml:"test_values"`
 	}
-	
+
 	// Read and parse the file
 	data, err := os.ReadFile(tmpFile.Name())
 	if err != nil {
 		t.Fatalf("Failed to read temp file: %v", err)
 	}
-	
+
 	var testConfig TestConfig
 	if err := yaml.Unmarshal(data, &testConfig); err != nil {
 		t.Fatalf("Failed to unmarshal YAML: %v", err)
 	}
-	
+
 	// Test that underscored numbers are parsed correctly
 	testCases := []struct {
 		name     string
@@ -201,7 +201,7 @@ test_values:
 		{"Large Number", testConfig.TestValues.LargeNumber, 10_000_000},
 		{"Very Large Number", testConfig.TestValues.VeryLargeNumber, 7_200_000_000},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.actual != tc.expected {
@@ -209,13 +209,13 @@ test_values:
 			}
 		})
 	}
-	
+
 	// Test decimal number with underscores
 	expectedDecimal := 2500.50
 	if testConfig.TestValues.DecimalNumber != expectedDecimal {
 		t.Errorf("Expected decimal number to be %f, got %f", expectedDecimal, testConfig.TestValues.DecimalNumber)
 	}
-	
+
 	// Test that config is enabled
 	if !testConfig.Enabled {
 		t.Error("Expected config to be enabled")
@@ -235,26 +235,26 @@ func TestRealWorldNumbers(t *testing.T) {
 		{"Daily requests", "1_440_000", 1440000},
 		{"Very large limit", "7_200_000_000", 7200000000},
 	}
-	
+
 	for _, example := range examples {
 		t.Run(example.description, func(t *testing.T) {
 			// Create a simple YAML to test this specific number
 			testYAML := "test_value: " + example.yamlValue
-			
+
 			var result struct {
 				TestValue int64 `yaml:"test_value"`
 			}
-			
+
 			if err := yaml.Unmarshal([]byte(testYAML), &result); err != nil {
 				t.Fatalf("Failed to parse YAML for %s: %v", example.description, err)
 			}
-			
+
 			if result.TestValue != example.expected {
 				t.Errorf("For %s, expected %d, got %d", example.description, example.expected, result.TestValue)
 			}
 		})
 	}
-} 
+}
 
 func TestGetModelPricing(t *testing.T) {
 	// Create a temporary YAML file with tiered and alias pricing
@@ -356,15 +356,15 @@ providers:
 func TestDefaultConfig(t *testing.T) {
 	// Test that GetDefaultYAMLConfig returns a valid configuration
 	config := GetDefaultYAMLConfig()
-	
+
 	if config == nil {
 		t.Fatal("Default config is nil")
 	}
-	
+
 	if !config.Enabled {
 		t.Error("Expected default config to be enabled")
 	}
-	
+
 	// Test that default providers exist
 	expectedProviders := []string{"openai", "anthropic", "gemini"}
 	for _, providerName := range expectedProviders {
@@ -375,9 +375,9 @@ func TestDefaultConfig(t *testing.T) {
 			t.Errorf("Expected provider %s to be enabled in default config", providerName)
 		}
 	}
-	
+
 	// Test cost tracking is enabled by default
 	if !config.Features.CostTracking.Enabled {
 		t.Error("Expected cost tracking to be enabled in default config")
 	}
-} 
+}

@@ -41,23 +41,23 @@ type CostRecord struct {
 	RequestID string    `json:"request_id,omitempty"`
 	UserID    string    `json:"user_id,omitempty"`
 	IPAddress string    `json:"ip_address,omitempty"`
-	
+
 	// Request details
 	Provider    string `json:"provider"`
 	Model       string `json:"model"`
 	Endpoint    string `json:"endpoint"`
 	IsStreaming bool   `json:"is_streaming"`
-	
+
 	// Token usage
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-	
+
 	// Cost calculation
 	InputCost  float64 `json:"input_cost"`  // Cost for input tokens in USD
 	OutputCost float64 `json:"output_cost"` // Cost for output tokens in USD
 	TotalCost  float64 `json:"total_cost"`  // Total cost in USD
-	
+
 	// Additional metadata
 	FinishReason string `json:"finish_reason,omitempty"`
 }
@@ -149,9 +149,9 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, userID, ipAddress, endpoint string) error {
 	// Calculate costs
 	inputCost, outputCost, totalCost, err := ct.CalculateCost(
-		metadata.Provider, 
-		metadata.Model, 
-		metadata.InputTokens, 
+		metadata.Provider,
+		metadata.Model,
+		metadata.InputTokens,
 		metadata.OutputTokens,
 	)
 	if err != nil {
@@ -159,7 +159,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		// Continue with zero costs rather than failing
 		inputCost, outputCost, totalCost = 0, 0, 0
 	}
-	
+
 	// Create cost record
 	record := &CostRecord{
 		Timestamp:    time.Now(),
@@ -178,10 +178,10 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		TotalCost:    totalCost,
 		FinishReason: metadata.FinishReason,
 	}
-	
+
 	// Log the cost information
 	if totalCost > 0 {
-		ct.logger.Debug("💵 Cost Tracking: Request processed", 
+		ct.logger.Debug("💵 Cost Tracking: Request processed",
 			"provider", metadata.Provider,
 			"model", metadata.Model,
 			"total_tokens", metadata.TotalTokens,
@@ -191,14 +191,14 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			"input_cost", inputCost,
 			"output_cost", outputCost)
 	} else {
-		ct.logger.Debug("💵 Cost Tracking: Request processed (no pricing configured)", 
+		ct.logger.Debug("💵 Cost Tracking: Request processed (no pricing configured)",
 			"provider", metadata.Provider,
 			"model", metadata.Model,
 			"total_tokens", metadata.TotalTokens,
 			"input_tokens", metadata.InputTokens,
 			"output_tokens", metadata.OutputTokens)
 	}
-	
+
 	// Write to file
 	return ct.transport.WriteRecord(record)
 }
@@ -209,9 +209,9 @@ func (ct *CostTracker) GetTotalCosts(since time.Time) (map[string]float64, error
 	if err != nil {
 		return nil, err
 	}
-	
+
 	totals := make(map[string]float64)
-	
+
 	for _, record := range records {
 		// Aggregate costs by provider/model
 		key := fmt.Sprintf("%s/%s", record.Provider, record.Model)
@@ -219,7 +219,7 @@ func (ct *CostTracker) GetTotalCosts(since time.Time) (map[string]float64, error
 		totals["total"] += record.TotalCost
 		totals[record.Provider] += record.TotalCost
 	}
-	
+
 	return totals, nil
 }
 
@@ -229,17 +229,17 @@ func (ct *CostTracker) GetStats(since time.Time) (map[string]interface{}, error)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	stats := make(map[string]interface{})
 	stats["total_cost"] = totals["total"]
 	stats["provider_costs"] = make(map[string]float64)
 	stats["model_costs"] = make(map[string]float64)
-	
+
 	for key, cost := range totals {
 		if key == "total" {
 			continue
 		}
-		
+
 		// Separate provider costs from model costs
 		if !strings.Contains(key, "/") {
 			// It's a provider total
@@ -249,9 +249,9 @@ func (ct *CostTracker) GetStats(since time.Time) (map[string]interface{}, error)
 			stats["model_costs"].(map[string]float64)[key] = cost
 		}
 	}
-	
+
 	return stats, nil
-} 
+}
 
 // CreateTransportFromConfig creates a transport based on the provided configuration
 func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
@@ -267,36 +267,36 @@ func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger)
 			}
 			logger.Debug("💰 Cost Tracker: Creating file transport", "path", cfg.File.Path)
 			return NewFileTransport(cfg.File.Path), nil
-			
+
 		case "dynamodb":
 			if cfg.DynamoDB == nil {
 				return nil, fmt.Errorf("dynamodb transport configuration not found")
 			}
-			
-			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport", 
-				"table_name", cfg.DynamoDB.TableName, 
+
+			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport",
+				"table_name", cfg.DynamoDB.TableName,
 				"region", cfg.DynamoDB.Region)
-			
+
 			config := DynamoDBTransportConfig{
 				TableName: cfg.DynamoDB.TableName,
 				Region:    cfg.DynamoDB.Region,
 				Logger:    logger,
 			}
 			return NewDynamoDBTransport(config)
-			
+
 		default:
 			return nil, fmt.Errorf("unsupported transport type: %s", cfg.Type)
 		}
-		
+
 	case map[string]interface{}:
 		// Handle generic map interface (from YAML parsing)
 		transportType, ok := cfg["type"].(string)
 		if !ok {
 			return nil, fmt.Errorf("transport type not specified")
 		}
-		
+
 		logger.Debug("💰 Cost Tracker: Processing map-based transport config", "type", transportType)
-		
+
 		switch transportType {
 		case "file":
 			fileConfig, ok := cfg["file"].(map[string]interface{})
@@ -309,7 +309,7 @@ func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger)
 			}
 			logger.Debug("💰 Cost Tracker: Creating file transport from map", "path", path)
 			return NewFileTransport(path), nil
-			
+
 		case "dynamodb":
 			dynamoConfig, ok := cfg["dynamodb"].(map[string]interface{})
 			if !ok {
@@ -323,22 +323,22 @@ func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger)
 			if !ok {
 				return nil, fmt.Errorf("dynamodb region not specified")
 			}
-			
-			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport from map", 
-				"table_name", tableName, 
+
+			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport from map",
+				"table_name", tableName,
 				"region", region)
-			
+
 			config := DynamoDBTransportConfig{
 				TableName: tableName,
 				Region:    region,
 				Logger:    logger,
 			}
 			return NewDynamoDBTransport(config)
-			
+
 		default:
 			return nil, fmt.Errorf("unsupported transport type: %s", transportType)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported transport config type: %T", transportConfig)
 	}
-} 
+}

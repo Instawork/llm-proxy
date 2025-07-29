@@ -404,7 +404,7 @@ func TestMetaURLRewritingMiddleware_HandlerError(t *testing.T) {
 		if r.URL.Path != expectedURL {
 			t.Errorf("Expected URL '%s', got '%s'", expectedURL, r.URL.Path)
 		}
-		
+
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("internal error"))
 	})
@@ -457,7 +457,7 @@ func TestMetaURLRewritingMiddleware_ComplexPaths(t *testing.T) {
 			expectedURL: "/gemini/v1/models/gemini-pro:generateContent",
 		},
 		{
-			name:        "Path with query parameters", 
+			name:        "Path with query parameters",
 			requestURL:  "/meta/user456/openai/v1/chat/completions?stream=true",
 			expectedURL: "/openai/v1/chat/completions",
 		},
@@ -489,4 +489,4 @@ func TestMetaURLRewritingMiddleware_ComplexPaths(t *testing.T) {
 			}
 		})
 	}
-} 
+}

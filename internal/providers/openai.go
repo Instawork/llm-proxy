@@ -51,29 +51,29 @@ func NewOpenAIProxy() *OpenAIProxy {
 		// Handle streaming responses
 		if openAIProxy.isStreamingResponse(resp) {
 			log.Printf("Detected streaming response from OpenAI")
-			
+
 			// Ensure proper headers for streaming
 			resp.Header.Set("Cache-Control", "no-cache")
 			resp.Header.Set("Connection", "keep-alive")
 			resp.Header.Set("X-Accel-Buffering", "no") // Disable nginx buffering if used
-			
+
 			// Remove content-length header for streaming
 			resp.Header.Del("Content-Length")
 		}
-		
+
 		return nil
 	}
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("OpenAI proxy error: %v", err)
-		
+
 		// For streaming requests, we need to handle errors differently
 		if openAIProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
 			log.Printf("Error occurred during streaming request")
-			
+
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -106,17 +106,17 @@ func (o *OpenAIProxy) IsStreamingRequest(req *http.Request) bool {
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
 	}
-	
+
 	// Only check OpenAI-specific endpoints
 	if !strings.HasPrefix(req.URL.Path, "/openai/") {
 		return false
 	}
-	
+
 	// For completion endpoints, check the request body for stream: true
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/chat/completions") || strings.Contains(req.URL.Path, "/completions")) {
 		return o.checkStreamingInBody(req)
 	}
-	
+
 	return false
 }
 
@@ -125,11 +125,11 @@ func (o *OpenAIProxy) checkStreamingInBody(req *http.Request) bool {
 	if req.Body == nil {
 		return false
 	}
-	
+
 	// Use GetBody if available (body was already read and cached)
 	var bodyBytes []byte
 	var err error
-	
+
 	if req.GetBody != nil {
 		// Body was already cached, use GetBody to get a fresh reader
 		bodyReader, err := req.GetBody()
@@ -150,31 +150,30 @@ func (o *OpenAIProxy) checkStreamingInBody(req *http.Request) bool {
 			log.Printf("Error reading request body for streaming check: %v", err)
 			return false
 		}
-		
+
 		// Restore the body and create GetBody for future use
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		req.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
 		}
 	}
-	
+
 	// Parse the JSON to check for stream field
 	var requestData map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
 		log.Printf("Error parsing request body JSON for streaming check: %v", err)
 		return false
 	}
-	
+
 	// Check if stream is set to true
 	if streamValue, exists := requestData["stream"]; exists {
 		if streamBool, ok := streamValue.(bool); ok {
 			return streamBool
 		}
 	}
-	
+
 	return false
 }
-
 
 // isStreamingResponse checks if the response is a streaming response
 func (o *OpenAIProxy) isStreamingResponse(resp *http.Response) bool {
@@ -198,17 +197,14 @@ func (o *OpenAIProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-
-
-
 // OpenAIResponse represents the structure of OpenAI API responses
 type OpenAIResponse struct {
-	ID      string             `json:"id"`
-	Object  string             `json:"object"`
-	Created int64              `json:"created"`
-	Model   string             `json:"model"`
-	Usage   OpenAIUsage        `json:"usage"`
-	Choices []OpenAIChoice     `json:"choices"`
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Usage   OpenAIUsage    `json:"usage"`
+	Choices []OpenAIChoice `json:"choices"`
 }
 
 // OpenAIUsage represents token usage in OpenAI responses
@@ -220,10 +216,10 @@ type OpenAIUsage struct {
 
 // OpenAIChoice represents a choice in OpenAI responses
 type OpenAIChoice struct {
-	Index        int                    `json:"index"`
-	Message      OpenAIMessage          `json:"message,omitempty"`
-	Delta        OpenAIMessage          `json:"delta,omitempty"`
-	FinishReason string                 `json:"finish_reason"`
+	Index        int           `json:"index"`
+	Message      OpenAIMessage `json:"message,omitempty"`
+	Delta        OpenAIMessage `json:"delta,omitempty"`
+	FinishReason string        `json:"finish_reason"`
 }
 
 // OpenAIMessage represents a message in OpenAI responses
@@ -294,31 +290,31 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Skip empty lines and non-data lines
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		// Extract JSON data
 		jsonData := strings.TrimPrefix(line, "data: ")
-		
+
 		// Skip [DONE] marker
 		if strings.TrimSpace(jsonData) == "[DONE]" {
 			log.Printf("🔄 OpenAI: Found [DONE] marker, ending stream parse")
 			break
 		}
-		
+
 		hasData = true
 		chunkCount++
-		
+
 		var streamResponse OpenAIStreamResponse
 		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 			// Log error but continue processing other chunks
 			log.Printf("Warning: failed to parse streaming chunk: %v", err)
 			continue
 		}
-		
+
 		// Capture model and request ID from any chunk
 		if model == "" && streamResponse.Model != "" {
 			model = streamResponse.Model
@@ -328,16 +324,16 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 			requestID = streamResponse.ID
 			log.Printf("🔄 OpenAI: Captured request ID: %s", requestID)
 		}
-		
+
 		// Extract finish reason from choices
 		if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].FinishReason != "" {
 			finishReason = streamResponse.Choices[0].FinishReason
 			log.Printf("🔄 OpenAI: Captured finish reason: %s", finishReason)
 		}
-		
+
 		// The usage information is typically in the last chunk
 		if streamResponse.Usage != nil {
-			log.Printf("🔄 OpenAI: Found usage data! Input: %d, Output: %d, Total: %d", 
+			log.Printf("🔄 OpenAI: Found usage data! Input: %d, Output: %d, Total: %d",
 				streamResponse.Usage.PromptTokens, streamResponse.Usage.CompletionTokens, streamResponse.Usage.TotalTokens)
 			metadata = &LLMResponseMetadata{
 				Model:        model,
@@ -369,9 +365,9 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		log.Printf("🔄 OpenAI: Returning partial metadata - usage data not yet available")
 		return &LLMResponseMetadata{
 			Model:        model,
-			InputTokens:  0,  // Unknown at this point
-			OutputTokens: 0,  // Unknown at this point
-			TotalTokens:  0,  // Unknown at this point
+			InputTokens:  0, // Unknown at this point
+			OutputTokens: 0, // Unknown at this point
+			TotalTokens:  0, // Unknown at this point
 			Provider:     "openai",
 			RequestID:    requestID,
 			IsStreaming:  true,
@@ -382,8 +378,6 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-
-
 // UserIDFromRequest extracts user ID from OpenAI request body
 // OpenAI supports passing user ID in the "user" field for safety tracking
 // See: https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids
@@ -391,36 +385,36 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 	if req.Body == nil || req.Method != "POST" {
 		return ""
 	}
-	
+
 	// Only check OpenAI-specific endpoints
 	if !strings.HasPrefix(req.URL.Path, "/openai/") {
 		return ""
 	}
-	
+
 	// Read request body
 	bodyBytes, err := o.readRequestBodyForUserID(req)
 	if err != nil {
 		log.Printf("Error reading OpenAI request body for user ID extraction: %v", err)
 		return ""
 	}
-	
+
 	if len(bodyBytes) == 0 {
 		return ""
 	}
-	
+
 	// Parse JSON to extract user field
 	var data map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		log.Printf("Error parsing OpenAI request JSON for user ID extraction: %v", err)
 		return ""
 	}
-	
+
 	// Extract user ID from the "user" field
 	if userValue, ok := data["user"].(string); ok && userValue != "" {
 		log.Printf("🔍 OpenAI: Extracted user ID: %s", userValue)
 		return userValue
 	}
-	
+
 	return ""
 }
 
@@ -440,18 +434,18 @@ func (o *OpenAIProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error
 		defer bodyReader.Close()
 		return io.ReadAll(bodyReader)
 	}
-	
+
 	// Read the body for the first time
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Restore the body and create GetBody for future use
 	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
 	}
-	
+
 	return bodyBytes, nil
-} 
+}

@@ -23,4 +23,4 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 			next.ServeHTTP(w, r)
 		})
 	}
-} 
+}

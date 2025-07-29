@@ -41,26 +41,26 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			
+
 			// Detect if this might be a streaming request using the provider manager
 			isStreaming := providerManager.IsStreamingRequest(r)
-			
+
 			// Check if this is a provider route
 			isProvRoute := isProviderRoute(r.URL.Path)
 			isAPIEndpt := isAPIEndpoint(r.URL.Path)
 			provider := GetProviderFromRequest(providerManager, r)
 			providerName := getProviderFromPath(r.URL.Path)
-			
+
 			// Determine if this request will be cost tracked
 			willBeTracked := isProvRoute && isAPIEndpt && provider != nil
-			
+
 			// Log the request with additional context for provider routes
 			if isStreaming {
 				log.Printf("Started streaming %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			} else {
 				log.Printf("Started %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			}
-			
+
 			// Log non-tracked provider routes for production monitoring
 			if isProvRoute && !willBeTracked {
 				logMessage := ""
@@ -71,14 +71,14 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 				} else {
 					logMessage = "⚠️  NON-TRACKED PROVIDER ROUTE: Unknown reason"
 				}
-				
-				log.Printf("%s - %s %s (provider: %s, api_endpoint: %t, provider_found: %t)", 
+
+				log.Printf("%s - %s %s (provider: %s, api_endpoint: %t, provider_found: %t)",
 					logMessage, r.Method, r.URL.Path, providerName, isAPIEndpt, provider != nil)
 			}
-			
+
 			// Call the next handler
 			next.ServeHTTP(w, r)
-			
+
 			// Log the completion with cost tracking status
 			duration := time.Since(start)
 			if isStreaming {
@@ -86,7 +86,7 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 			} else {
 				log.Printf("Completed %s %s in %v", r.Method, r.URL.Path, duration)
 			}
-			
+
 			// Summary log for provider routes
 			if isProvRoute {
 				if willBeTracked {
@@ -97,4 +97,4 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 			}
 		})
 	}
-} 
+}

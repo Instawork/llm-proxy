@@ -36,8 +36,8 @@ func TestDynamoDBTransportIntegration(t *testing.T) {
 		Tiers: []PricingTier{
 			{
 				Threshold: 0,
-				Input:     0.5,  // $0.50 per 1M input tokens
-				Output:    1.5,  // $1.50 per 1M output tokens
+				Input:     0.5, // $0.50 per 1M input tokens
+				Output:    1.5, // $1.50 per 1M output tokens
 			},
 		},
 	}
@@ -140,8 +140,8 @@ func ExampleNewDynamoDBTransport() {
 		Tiers: []PricingTier{
 			{
 				Threshold: 0,
-				Input:     0.5,  // $0.50 per 1M input tokens
-				Output:    1.5,  // $1.50 per 1M output tokens
+				Input:     0.5, // $0.50 per 1M input tokens
+				Output:    1.5, // $1.50 per 1M output tokens
 			},
 		},
 	}
@@ -149,7 +149,7 @@ func ExampleNewDynamoDBTransport() {
 
 	// Now you can use the tracker in your LLM proxy handlers
 	// tracker.TrackRequest(metadata, userID, ipAddress, endpoint)
-	
+
 	// Output: DynamoDB transport configured successfully
 	println("DynamoDB transport configured successfully")
-} 
+}

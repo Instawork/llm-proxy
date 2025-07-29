@@ -38,11 +38,11 @@ func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool 
 
 func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
 	timeStr := r.Time.Format("15:04:05")
-	
+
 	// Build the message with key context information
 	message := r.Message
 	var contextParts []string
-	
+
 	r.Attrs(func(a slog.Attr) bool {
 		// Include important context attributes
 		switch a.Key {
@@ -51,11 +51,11 @@ func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
 		}
 		return true
 	})
-	
+
 	if len(contextParts) > 0 {
 		message = fmt.Sprintf("%s (%s)", message, strings.Join(contextParts, ", "))
 	}
-	
+
 	_, err := fmt.Fprintf(h.w, "%s [%s] %s\n", r.Level.String(), timeStr, message)
 	return err
 }
@@ -73,7 +73,7 @@ var logger *slog.Logger
 const (
 	// Version of the LLM Proxy
 	version = "1.0.0"
-	
+
 	// Default port for the proxy server
 	defaultPort = "9002"
 )
@@ -97,11 +97,11 @@ func init() {
 	default:
 		level = slog.LevelInfo
 	}
-	
+
 	// Use pretty text format for local development, JSON for production
 	logFormat := os.Getenv("LOG_FORMAT")
 	var handler slog.Handler
-	
+
 	if logFormat == "json" {
 		// JSON format for production/machine parsing
 		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -111,7 +111,7 @@ func init() {
 		// Custom pretty format for local development (default)
 		handler = NewCustomPrettyHandler(os.Stderr, level)
 	}
-	
+
 	logger = slog.New(handler)
 }
 
@@ -122,23 +122,23 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
 		return nil
 	}
-	
+
 	// Get transport configuration
 	transportConfig, err := yamlConfig.GetTransportConfig()
 	if err != nil {
 		logger.Error("💰 Cost Tracker: Failed to get transport config", "error", err)
 		return nil
 	}
-	
+
 	// Create transport based on configuration
 	logger.Info("💰 Cost Tracker: Creating transport", "configured_type", transportConfig.Type)
-	
+
 	// Log additional transport config details
 	switch transportConfig.Type {
 	case "dynamodb":
 		if transportConfig.DynamoDB != nil {
-			logger.Info("💰 Cost Tracker: DynamoDB configuration", 
-				"table_name", transportConfig.DynamoDB.TableName, 
+			logger.Info("💰 Cost Tracker: DynamoDB configuration",
+				"table_name", transportConfig.DynamoDB.TableName,
 				"region", transportConfig.DynamoDB.Region)
 		}
 	case "file":
@@ -146,18 +146,18 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
 		}
 	}
-	
+
 	transport, err := cost.CreateTransportFromConfig(transportConfig, logger)
-	
+
 	var costTracker *cost.CostTracker
 	if err != nil {
 		// Log the failed config details
 		switch transportConfig.Type {
 		case "dynamodb":
 			if transportConfig.DynamoDB != nil {
-				logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport", 
+				logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
 					"configured_type", transportConfig.Type,
-					"table_name", transportConfig.DynamoDB.TableName, 
+					"table_name", transportConfig.DynamoDB.TableName,
 					"region", transportConfig.DynamoDB.Region,
 					"error", err)
 			} else {
@@ -165,7 +165,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			}
 		case "file":
 			if transportConfig.File != nil {
-				logger.Error("💰 Cost Tracker: Failed to create file transport", 
+				logger.Error("💰 Cost Tracker: Failed to create file transport",
 					"configured_type", transportConfig.Type,
 					"path", transportConfig.File.Path,
 					"error", err)
@@ -175,7 +175,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		default:
 			logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 		}
-		
+
 		// Fallback to file transport with env var or default
 		outputFile := os.Getenv("COST_TRACKING_FILE")
 		if outputFile == "" {
@@ -183,30 +183,30 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		}
 		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
 		transport = cost.NewFileTransport(outputFile)
-		
+
 		// Create cost tracker with fallback transport
 		costTracker = cost.NewCostTracker(transport)
 		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
 	} else {
 		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
-		
+
 		// Create cost tracker with the configured transport
 		costTracker = cost.NewCostTracker(transport)
-		
+
 		// Log initialization with config details
 		switch transportConfig.Type {
 		case "dynamodb":
 			if transportConfig.DynamoDB != nil {
-				logger.Info("💰 Cost Tracker: Initialized with DynamoDB", 
+				logger.Info("💰 Cost Tracker: Initialized with DynamoDB",
 					"transport_type", "dynamodb",
-					"table_name", transportConfig.DynamoDB.TableName, 
+					"table_name", transportConfig.DynamoDB.TableName,
 					"region", transportConfig.DynamoDB.Region)
 			} else {
 				logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
 			}
 		case "file":
 			if transportConfig.File != nil {
-				logger.Info("💰 Cost Tracker: Initialized with file transport", 
+				logger.Info("💰 Cost Tracker: Initialized with file transport",
 					"transport_type", "file",
 					"path", transportConfig.File.Path)
 			} else {
@@ -216,20 +216,20 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
 		}
 	}
-	
+
 	// Load pricing data from config for each provider and model
 	totalModelsConfigured := 0
-	
+
 	for providerName, providerConfig := range yamlConfig.Providers {
 		if !providerConfig.Enabled {
 			continue
 		}
-		
+
 		for modelName, modelConfig := range providerConfig.Models {
 			if !modelConfig.Enabled {
 				continue
 			}
-			
+
 			if modelConfig.Pricing != nil {
 				// Convert YAML pricing to cost tracker format
 				modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
@@ -274,7 +274,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			}
 		}
 	}
-	
+
 	logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
 	return costTracker
 }
@@ -282,21 +282,21 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 // healthHandler provides a simple health check endpoint
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
-		"status":      "healthy",
-		"timestamp":   time.Now().Unix(),
-		"providers":   globalProviderManager.GetHealthStatus(),
+		"status":    "healthy",
+		"timestamp": time.Now().Unix(),
+		"providers": globalProviderManager.GetHealthStatus(),
 		"features": map[string]bool{
 			"cost_tracking": globalCostTracker != nil,
 		},
 	}
-	
+
 	// Add cost tracking stats if available
 	if globalCostTracker != nil {
 		if stats, err := globalCostTracker.GetStats(time.Now().Add(-24 * time.Hour)); err == nil {
 			health["cost_stats_24h"] = stats
 		}
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(health)
 }
@@ -318,12 +318,12 @@ func main() {
 	if showVersion {
 		fmt.Printf("LLM Proxy version %s\n", version)
 		fmt.Println("Configuration:")
-		
+
 		// Print configuration to stdout in a readable format
 		yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})))
-		
+
 		// Also print as JSON for machine parsing
 		fmt.Println("\nConfiguration JSON:")
 		configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
@@ -332,7 +332,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(string(configJSON))
-		
+
 		fmt.Println("Build successful - configuration loaded without errors")
 		os.Exit(0)
 	}
@@ -351,13 +351,13 @@ func main() {
 
 	// Initialize global provider manager
 	globalProviderManager = providers.NewProviderManager()
-	
+
 	// Initialize cost tracker
 	globalCostTracker = initializeCostTracker(yamlConfig)
 	if globalCostTracker != nil {
 		globalCostTracker.SetLogger(logger)
 	}
-	
+
 	// Register providers
 	openAIProvider := providers.NewOpenAIProxy()
 	globalProviderManager.RegisterProvider(openAIProvider)
@@ -401,16 +401,16 @@ func main() {
 	for name, provider := range globalProviderManager.GetAllProviders() {
 		// Direct provider routes
 		r.PathPrefix(fmt.Sprintf("/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-		
+
 		// Meta routes with user ID pattern: /meta/{userID}/provider/
 		// These are handled by URLRewritingMiddleware which rewrites them to /provider/ before reaching here
 		r.PathPrefix(fmt.Sprintf("/meta/{userID}/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-		
-		logger.Info("Registered provider routes", "provider", name, 
-			"direct_path", fmt.Sprintf("/%s/", name), 
+
+		logger.Info("Registered provider routes", "provider", name,
+			"direct_path", fmt.Sprintf("/%s/", name),
 			"meta_path", fmt.Sprintf("/meta/{userID}/%s/", name))
 	}
-	
+
 	// Register extra routes for all providers (e.g., compatibility routes)
 	for name, provider := range globalProviderManager.GetAllProviders() {
 		provider.RegisterExtraRoutes(r)
@@ -419,33 +419,33 @@ func main() {
 
 	// Start server
 	logger.Info("Starting LLM Proxy server", "port", port)
-	
+
 	// Log features
 	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
 	if globalCostTracker != nil {
 		features = append(features, "Cost tracking")
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
-	
+
 	logger.Info("Health check available", "url", "http://localhost:"+port+"/health")
-	
+
 	// Log cost tracking status
 	if globalCostTracker != nil {
 		logger.Info("Cost tracking: ENABLED")
 	} else {
 		logger.Info("Cost tracking: DISABLED")
 	}
-	
+
 	// Log registered providers
 	for name := range globalProviderManager.GetAllProviders() {
 		logger.Info("Registered provider", "provider", name)
 	}
-	
+
 	logger.Info("OpenAI API endpoints available", "url", "http://localhost:"+port+"/openai/")
 	logger.Info("Anthropic API endpoints available", "url", "http://localhost:"+port+"/anthropic/")
 	logger.Info("Gemini API endpoints available", "url", "http://localhost:"+port+"/gemini/")
 	logger.Info("Meta routes with user ID available", "pattern", "http://localhost:"+port+"/meta/{userID}/{provider}/")
-	
+
 	server := &http.Server{
 		Addr:    "0.0.0.0:" + port,
 		Handler: r,

@@ -51,29 +51,29 @@ func NewGeminiProxy() *GeminiProxy {
 		// Handle streaming responses
 		if geminiProxy.isStreamingResponse(resp) {
 			log.Printf("Detected streaming response from Gemini")
-			
+
 			// Ensure proper headers for streaming
 			resp.Header.Set("Cache-Control", "no-cache")
 			resp.Header.Set("Connection", "keep-alive")
 			resp.Header.Set("X-Accel-Buffering", "no") // Disable nginx buffering if used
-			
+
 			// Remove content-length header for streaming
 			resp.Header.Del("Content-Length")
 		}
-		
+
 		return nil
 	}
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("Gemini proxy error: %v", err)
-		
+
 		// For streaming requests, we need to handle errors differently
 		if geminiProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
 			log.Printf("Error occurred during streaming request")
-			
+
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -106,35 +106,35 @@ func (g *GeminiProxy) IsStreamingRequest(req *http.Request) bool {
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
 	}
-	
+
 	// Check if this is a Gemini-related endpoint (original or compatibility routes)
 	isGeminiEndpoint := strings.HasPrefix(req.URL.Path, "/gemini/") ||
 		strings.HasPrefix(req.URL.Path, "/v1beta/models/gemini") ||
 		strings.HasPrefix(req.URL.Path, "/v1/models/gemini")
-	
+
 	if !isGeminiEndpoint {
 		return false
 	}
-	
+
 	// Check for alt=sse query parameter (Gemini SSE streaming format)
 	if req.URL.Query().Get("alt") == "sse" {
 		return true
 	}
-	
+
 	// For Gemini generateContent endpoints, check the request body for stream: true
 	// Also check for streamGenerateContent in the URL (alternative streaming endpoint)
-	if req.Method == "POST" && (strings.Contains(req.URL.Path, ":generateContent") || 
+	if req.Method == "POST" && (strings.Contains(req.URL.Path, ":generateContent") ||
 		strings.Contains(req.URL.Path, ":streamGenerateContent")) {
-		
+
 		// Check if it's the explicit streaming endpoint
 		if strings.Contains(req.URL.Path, ":streamGenerateContent") {
 			return true
 		}
-		
+
 		// For generateContent, check the request body for stream parameter
 		return g.checkStreamingInBody(req)
 	}
-	
+
 	return false
 }
 
@@ -143,11 +143,11 @@ func (g *GeminiProxy) checkStreamingInBody(req *http.Request) bool {
 	if req.Body == nil {
 		return false
 	}
-	
+
 	// Use GetBody if available (body was already read and cached)
 	var bodyBytes []byte
 	var err error
-	
+
 	if req.GetBody != nil {
 		// Body was already cached, use GetBody to get a fresh reader
 		bodyReader, err := req.GetBody()
@@ -168,37 +168,37 @@ func (g *GeminiProxy) checkStreamingInBody(req *http.Request) bool {
 			log.Printf("Error reading request body for streaming check: %v", err)
 			return false
 		}
-		
+
 		// Restore the body and create GetBody for future use
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		req.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
 		}
 	}
-	
+
 	// Parse the JSON to check for stream field
 	var requestData map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
 		log.Printf("Error parsing request body JSON for streaming check: %v", err)
 		return false
 	}
-	
+
 	// Check if stream is set to true
 	if streamValue, exists := requestData["stream"]; exists {
 		if streamBool, ok := streamValue.(bool); ok {
 			return streamBool
 		}
 	}
-	
+
 	return false
 }
 
 // isStreamingResponse checks if the response is a streaming response
 func (g *GeminiProxy) isStreamingResponse(resp *http.Response) bool {
 	contentType := resp.Header.Get("Content-Type")
-	return strings.Contains(contentType, "text/event-stream") || 
-		   strings.Contains(contentType, "application/x-ndjson") ||
-		   strings.Contains(contentType, "text/plain")
+	return strings.Contains(contentType, "text/event-stream") ||
+		strings.Contains(contentType, "application/x-ndjson") ||
+		strings.Contains(contentType, "text/plain")
 }
 
 // Proxy returns the HTTP handler for the Gemini provider
@@ -217,8 +217,6 @@ func (g *GeminiProxy) GetHealthStatus() map[string]interface{} {
 		"sse_support":       true,
 	}
 }
-
-
 
 // GeminiResponse represents the structure of Gemini API responses
 type GeminiResponse struct {
@@ -316,39 +314,39 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Skip empty lines and non-data lines
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		// Extract JSON data
 		jsonData := strings.TrimPrefix(line, "data: ")
-		
+
 		// Skip [DONE] marker
 		if strings.TrimSpace(jsonData) == "[DONE]" {
 			break
 		}
-		
+
 		hasData = true
-		
+
 		var streamResponse GeminiStreamResponse
 		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 			// Log error but continue processing other chunks
 			log.Printf("Warning: failed to parse Gemini streaming chunk: %v", err)
 			continue
 		}
-		
+
 		// Capture model information
 		if model == "" && streamResponse.ModelVersion != "" {
 			model = streamResponse.ModelVersion
 		}
-		
+
 		// Extract finish reason from candidates
 		if len(streamResponse.Candidates) > 0 && streamResponse.Candidates[0].FinishReason != "" {
 			finishReason = streamResponse.Candidates[0].FinishReason
 		}
-		
+
 		// The usage information is typically in the final chunk
 		if streamResponse.UsageMetadata != nil {
 			metadata = &LLMResponseMetadata{
@@ -386,9 +384,9 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		}
 		return &LLMResponseMetadata{
 			Model:        model,
-			InputTokens:  0,  // Unknown at this point
-			OutputTokens: 0,  // Unknown at this point
-			TotalTokens:  0,  // Unknown at this point
+			InputTokens:  0, // Unknown at this point
+			OutputTokens: 0, // Unknown at this point
+			TotalTokens:  0, // Unknown at this point
 			Provider:     "gemini",
 			IsStreaming:  true,
 			FinishReason: finishReason,
@@ -397,8 +395,6 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
-
-
 
 // UserIDFromRequest extracts user ID from Gemini request body
 // For Gemini, we only support passing user ID down, not extracting it
@@ -412,4 +408,4 @@ func (g *GeminiProxy) RegisterExtraRoutes(router *mux.Router) {
 	// Special compatibility routes for Gemini (these were in the original Gemini RegisterRoutes)
 	router.PathPrefix("/v1beta/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 	router.PathPrefix("/v1/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-} 
+}

@@ -28,13 +28,13 @@ func MetaURLRewritingMiddleware(providerManager *providers.ProviderManager) func
 				if len(parts) >= 4 { // ["", "meta", "userID", "provider", ...]
 					userID := parts[2]
 					providerName := parts[3]
-					
+
 					// Store user ID in context for later middleware to use
 					if userID != "" {
 						ctx := context.WithValue(r.Context(), userIDContextKey, userID)
 						r = r.WithContext(ctx)
 					}
-					
+
 					if providerManager.IsValidProvider(providerName) {
 						// Rewrite path: /meta/{userID}/provider/rest -> /provider/rest
 						providerPath := "/" + providerName + "/"
@@ -47,9 +47,9 @@ func MetaURLRewritingMiddleware(providerManager *providers.ProviderManager) func
 					}
 				}
 			}
-			
+
 			// Continue to next handler (which will include the provider's reverse proxy)
 			next.ServeHTTP(w, r)
 		})
 	}
-} 
+}

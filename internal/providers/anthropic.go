@@ -51,29 +51,29 @@ func NewAnthropicProxy() *AnthropicProxy {
 		// Handle streaming responses
 		if anthropicProxy.isStreamingResponse(resp) {
 			log.Printf("Detected streaming response from Anthropic")
-			
+
 			// Ensure proper headers for streaming
 			resp.Header.Set("Cache-Control", "no-cache")
 			resp.Header.Set("Connection", "keep-alive")
 			resp.Header.Set("X-Accel-Buffering", "no") // Disable nginx buffering if used
-			
+
 			// Remove content-length header for streaming
 			resp.Header.Del("Content-Length")
 		}
-		
+
 		return nil
 	}
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("Anthropic proxy error: %v", err)
-		
+
 		// For streaming requests, we need to handle errors differently
 		if anthropicProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
 			log.Printf("Error occurred during streaming request")
-			
+
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -106,17 +106,17 @@ func (a *AnthropicProxy) IsStreamingRequest(req *http.Request) bool {
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
 	}
-	
+
 	// Only check Anthropic-specific endpoints
 	if !strings.HasPrefix(req.URL.Path, "/anthropic/") {
 		return false
 	}
-	
+
 	// For Anthropic messages endpoint, check the request body for stream: true
 	if req.Method == "POST" && strings.Contains(req.URL.Path, "/messages") {
 		return a.checkStreamingInBody(req)
 	}
-	
+
 	return false
 }
 
@@ -126,11 +126,11 @@ func (a *AnthropicProxy) checkStreamingInBody(req *http.Request) bool {
 	if req.Body == nil {
 		return false
 	}
-	
+
 	// Use GetBody if available (body was already read and cached)
 	var bodyBytes []byte
 	var err error
-	
+
 	if req.GetBody != nil {
 		// Body was already cached, use GetBody to get a fresh reader
 		bodyReader, err := req.GetBody()
@@ -151,28 +151,28 @@ func (a *AnthropicProxy) checkStreamingInBody(req *http.Request) bool {
 			log.Printf("Error reading request body for streaming check: %v", err)
 			return false
 		}
-		
+
 		// Restore the body and create GetBody for future use
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		req.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
 		}
 	}
-	
+
 	// Parse the JSON to check for stream field
 	var requestData map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
 		log.Printf("Error parsing request body JSON for streaming check: %v", err)
 		return false
 	}
-	
+
 	// Check if stream is set to true
 	if streamValue, exists := requestData["stream"]; exists {
 		if streamBool, ok := streamValue.(bool); ok {
 			return streamBool
 		}
 	}
-	
+
 	return false
 }
 
@@ -198,18 +198,16 @@ func (a *AnthropicProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-
-
 // AnthropicResponse represents the structure of Anthropic API responses
 type AnthropicResponse struct {
-	ID           string            `json:"id"`
-	Type         string            `json:"type"`
-	Role         string            `json:"role"`
+	ID           string             `json:"id"`
+	Type         string             `json:"type"`
+	Role         string             `json:"role"`
 	Content      []AnthropicContent `json:"content"`
-	Model        string            `json:"model"`
-	StopReason   string            `json:"stop_reason"`
-	StopSequence *string           `json:"stop_sequence"`
-	Usage        AnthropicUsage    `json:"usage"`
+	Model        string             `json:"model"`
+	StopReason   string             `json:"stop_reason"`
+	StopSequence *string            `json:"stop_sequence"`
+	Usage        AnthropicUsage     `json:"usage"`
 }
 
 // AnthropicUsage represents token usage in Anthropic responses
@@ -226,24 +224,24 @@ type AnthropicContent struct {
 
 // AnthropicStreamResponse represents streaming response chunks
 type AnthropicStreamResponse struct {
-	Type         string             `json:"type"`
-	Message      *AnthropicMessage  `json:"message,omitempty"`
-	Index        int                `json:"index,omitempty"`
-	ContentBlock *AnthropicContent  `json:"content_block,omitempty"`
-	Delta        *AnthropicDelta    `json:"delta,omitempty"`
-	Usage        *AnthropicUsage    `json:"usage,omitempty"`
+	Type         string            `json:"type"`
+	Message      *AnthropicMessage `json:"message,omitempty"`
+	Index        int               `json:"index,omitempty"`
+	ContentBlock *AnthropicContent `json:"content_block,omitempty"`
+	Delta        *AnthropicDelta   `json:"delta,omitempty"`
+	Usage        *AnthropicUsage   `json:"usage,omitempty"`
 }
 
 // AnthropicMessage represents a message in streaming responses
 type AnthropicMessage struct {
-	ID           string            `json:"id"`
-	Type         string            `json:"type"`
-	Role         string            `json:"role"`
+	ID           string             `json:"id"`
+	Type         string             `json:"type"`
+	Role         string             `json:"role"`
 	Content      []AnthropicContent `json:"content"`
-	Model        string            `json:"model"`
-	StopReason   string            `json:"stop_reason"`
-	StopSequence *string           `json:"stop_sequence"`
-	Usage        AnthropicUsage    `json:"usage"`
+	Model        string             `json:"model"`
+	StopReason   string             `json:"stop_reason"`
+	StopSequence *string            `json:"stop_sequence"`
+	Usage        AnthropicUsage     `json:"usage"`
 }
 
 // AnthropicDelta represents delta changes in streaming responses
@@ -296,36 +294,36 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	var requestID string
 	var finishReason string
 	var hasData bool
-	
+
 	// Track token usage as we accumulate it from different events
 	var inputTokens int = 0
 	var outputTokens int = 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Skip empty lines and non-data lines
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		// Extract JSON data
 		jsonData := strings.TrimPrefix(line, "data: ")
-		
+
 		// Skip [DONE] marker
 		if strings.TrimSpace(jsonData) == "[DONE]" {
 			break
 		}
-		
+
 		hasData = true
-		
+
 		var streamResponse AnthropicStreamResponse
 		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 			// Log error but continue processing other chunks
 			log.Printf("Warning: failed to parse Anthropic streaming chunk: %v", err)
 			continue
 		}
-		
+
 		// Handle different event types
 		switch streamResponse.Type {
 		case "message_start":
@@ -339,7 +337,7 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 				if streamResponse.Message.Usage.OutputTokens > 0 {
 					outputTokens = streamResponse.Message.Usage.OutputTokens
 				}
-				log.Printf("🔍 Anthropic: message_start - Input: %d, Output: %d", 
+				log.Printf("🔍 Anthropic: message_start - Input: %d, Output: %d",
 					inputTokens, outputTokens)
 			}
 		case "message_delta":
@@ -351,7 +349,7 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 				if streamResponse.Usage.OutputTokens > 0 {
 					// For delta events, add the additional output tokens
 					outputTokens += streamResponse.Usage.OutputTokens
-					log.Printf("🔍 Anthropic: message_delta - Added %d output tokens, total output: %d", 
+					log.Printf("🔍 Anthropic: message_delta - Added %d output tokens, total output: %d",
 						streamResponse.Usage.OutputTokens, outputTokens)
 				}
 			}
@@ -368,8 +366,8 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 					IsStreaming:  true,
 					FinishReason: finishReason,
 				}
-				log.Printf("🔍 Anthropic: message_stop - Final tokens - Input: %d, Output: %d, Total: %d", 
-					inputTokens, outputTokens, inputTokens + outputTokens)
+				log.Printf("🔍 Anthropic: message_stop - Final tokens - Input: %d, Output: %d, Total: %d",
+					inputTokens, outputTokens, inputTokens+outputTokens)
 			}
 		}
 	}
@@ -382,10 +380,10 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	if metadata != nil {
 		return metadata, nil
 	}
-	
+
 	// If we have accumulated token counts even without message_stop, create metadata
 	if hasData && (inputTokens > 0 || outputTokens > 0) && (model != "" || requestID != "") {
-		log.Printf("🔍 Anthropic: Creating metadata from accumulated usage - Input: %d, Output: %d", 
+		log.Printf("🔍 Anthropic: Creating metadata from accumulated usage - Input: %d, Output: %d",
 			inputTokens, outputTokens)
 		return &LLMResponseMetadata{
 			Model:        model,
@@ -404,9 +402,9 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	if hasData && (model != "" || requestID != "") {
 		return &LLMResponseMetadata{
 			Model:        model,
-			InputTokens:  0,  // Unknown at this point
-			OutputTokens: 0,  // Unknown at this point
-			TotalTokens:  0,  // Unknown at this point
+			InputTokens:  0, // Unknown at this point
+			OutputTokens: 0, // Unknown at this point
+			TotalTokens:  0, // Unknown at this point
 			Provider:     "anthropic",
 			RequestID:    requestID,
 			IsStreaming:  true,
@@ -417,38 +415,36 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-
-
 // UserIDFromRequest extracts user ID from Anthropic request body
 // Anthropic supports passing user ID in the "metadata.user_id" field
 func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	if req.Body == nil || req.Method != "POST" {
 		return ""
 	}
-	
+
 	// Only check Anthropic-specific endpoints
 	if !strings.HasPrefix(req.URL.Path, "/anthropic/") {
 		return ""
 	}
-	
+
 	// Read request body
 	bodyBytes, err := a.readRequestBodyForUserID(req)
 	if err != nil {
 		log.Printf("Error reading Anthropic request body for user ID extraction: %v", err)
 		return ""
 	}
-	
+
 	if len(bodyBytes) == 0 {
 		return ""
 	}
-	
+
 	// Parse JSON to extract metadata.user_id field
 	var data map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		log.Printf("Error parsing Anthropic request JSON for user ID extraction: %v", err)
 		return ""
 	}
-	
+
 	// Extract user ID from the "metadata.user_id" field
 	if metadata, ok := data["metadata"].(map[string]interface{}); ok {
 		if userValue, ok := metadata["user_id"].(string); ok && userValue != "" {
@@ -456,7 +452,7 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 			return userValue
 		}
 	}
-	
+
 	return ""
 }
 
@@ -476,18 +472,18 @@ func (a *AnthropicProxy) readRequestBodyForUserID(req *http.Request) ([]byte, er
 		defer bodyReader.Close()
 		return io.ReadAll(bodyReader)
 	}
-	
+
 	// Read the body for the first time
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Restore the body and create GetBody for future use
 	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
 	}
-	
+
 	return bodyBytes, nil
-} 
+}
