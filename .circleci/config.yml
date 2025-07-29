@@ -2,7 +2,7 @@ version: 2.1
 
 # Define orbs for easier configuration
 orbs:
-  go: circleci/go@1.11.0
+  go: circleci/go@3.0.2
   docker: circleci/docker@2.4.0
 
 # Define reusable commands
