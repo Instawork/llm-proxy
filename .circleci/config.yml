@@ -2,7 +2,7 @@ version: 2.1
 
 # Define orbs for easier configuration
 orbs:
-  go: circleci/go@3.0.2
+  go: circleci/go@3.0.1
   docker: circleci/docker@2.4.0
 
 # Define reusable commands
@@ -13,11 +13,10 @@ commands:
       - checkout
       - go/install:
           version: "1.24.5"
-      - go/load-cache
+          cache-key: 'go-mod-{{ .Environment.CACHE_VERSION }}-{{ checksum "go.mod" }}'
       - run:
           name: Download dependencies
           command: make install
-      - go/save-cache
 
   setup_aws_and_docker:
     description: "Setup AWS CLI and Docker for ECR operations"
@@ -43,7 +42,7 @@ commands:
 jobs:
   lint:
     docker:
-      - image: cimg/go:1.24.5
+      - image: cimg/base:stable
     working_directory: ~/llm-proxy
     steps:
       - setup_go_environment
@@ -61,7 +60,7 @@ jobs:
 
   test:
     docker:
-      - image: cimg/go:1.24.5
+      - image: cimg/base:stable
     working_directory: ~/llm-proxy
     steps:
       - setup_go_environment
@@ -71,7 +70,7 @@ jobs:
 
   build-and-push:
     docker:
-      - image: cimg/go:1.24.5
+      - image: cimg/base:stable
     working_directory: ~/llm-proxy
     steps:
       - checkout
