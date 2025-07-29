@@ -33,11 +33,11 @@ commands:
       - run:
           name: Login to AWS ECR
           command: |
-            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+            aws ecr get-login-password --region us-west-2  | docker login --username AWS --password-stdin 183605072238.dkr.ecr.us-west-2.amazonaws.com
       - run:
           name: Create ECR repository if it doesn't exist
           command: |
-            aws ecr describe-repositories --region ${AWS_DEFAULT_REGION} --repository-names ${AWS_ECR_REPOSITORY_NAME} || aws ecr create-repository --region ${AWS_DEFAULT_REGION} --repository-name ${AWS_ECR_REPOSITORY_NAME}
+            aws ecr describe-repositories --region us-west-2 --repository-names llm-proxy || aws ecr create-repository --region us-west-2 --repository-name llm-proxy
 
 # Define jobs
 jobs:
