@@ -1,0 +1,118 @@
+version: 2.1
+
+# Define orbs for easier configuration
+orbs:
+  go: circleci/go@1.11.0
+  aws-ecr: circleci/aws-ecr@9.0.4
+  docker: circleci/docker@2.4.0
+
+# Define reusable commands
+commands:
+  setup_go_environment:
+    description: "Set up Go environment and dependencies"
+    steps:
+      - checkout
+      - go/install:
+          version: "1.21.5"
+      - go/load-cache
+      - run:
+          name: Download dependencies
+          command: make install
+      - go/save-cache
+
+# Define jobs
+jobs:
+  test:
+    docker:
+      - image: cimg/go:1.21.5
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run unit tests
+          command: make test
+      - run:
+          name: Run go vet
+          command: go vet ./...
+      - run:
+          name: Run go fmt check
+          command: |
+            if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+              echo "Go code is not formatted:"
+              gofmt -s -l .
+              exit 1
+            fi
+
+  build-and-push:
+    docker:
+      - image: cimg/go:1.21.5
+    working_directory: ~/llm-proxy
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - aws-ecr/build-and-push-image:
+          dockerfile: build/Dockerfile.prod
+          registry-id: AWS_ECR_REGISTRY_ID
+          region: $AWS_DEFAULT_REGION
+          repo: $AWS_ECR_REPOSITORY_NAME
+          tag: "${CIRCLE_SHA1:0:7},latest"
+          build-args: |
+            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            --build-arg VCS_REF=${CIRCLE_SHA1:0:7}
+            --build-arg VERSION=${CIRCLE_TAG:-dev-${CIRCLE_SHA1:0:7}}
+
+  build-and-push-tagged:
+    docker:
+      - image: cimg/go:1.21.5
+    working_directory: ~/llm-proxy
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - aws-ecr/build-and-push-image:
+          dockerfile: build/Dockerfile.prod
+          registry-id: AWS_ECR_REGISTRY_ID
+          region: $AWS_DEFAULT_REGION
+          repo: $AWS_ECR_REPOSITORY_NAME
+          tag: "${CIRCLE_TAG},latest"
+          build-args: |
+            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            --build-arg VCS_REF=${CIRCLE_SHA1:0:7}
+            --build-arg VERSION=${CIRCLE_TAG}
+
+# Define workflows
+workflows:
+  version: 2
+  test-and-deploy:
+    jobs:
+      - test:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
+      - build-and-push:
+          requires:
+            - test
+          filters:
+            branches:
+              only:
+                - main
+                - develop
+            tags:
+              ignore: /.*/
+          context:
+            - aws-ecr-context
+
+      - build-and-push-tagged:
+          requires:
+            - test
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+          context:
+            - aws-ecr-context

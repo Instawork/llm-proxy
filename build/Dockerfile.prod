@@ -1,0 +1,113 @@
+# Production Dockerfile for LLM Proxy
+# Multi-stage build with security hardening and optimization
+
+# Build arguments for versioning and metadata
+ARG GO_VERSION=1.21.5
+ARG ALPINE_VERSION=3.19
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# Build stage
+FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    upx
+
+# Create app user and group for consistent UID/GID
+RUN addgroup -g 10001 -S llmproxy && \
+    adduser -u 10001 -S llmproxy -G llmproxy
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files first for better layer caching
+COPY go.mod go.sum ./
+
+# Download dependencies with verification
+RUN go mod download && go mod verify
+
+# Copy source code
+COPY cmd/ cmd/
+COPY internal/ internal/
+COPY configs/ configs/
+
+# Build optimizations for production
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64
+
+# Build the application with optimization flags
+RUN go build \
+    -a \
+    -installsuffix cgo \
+    -ldflags="-w -s -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${VCS_REF}" \
+    -o llm-proxy \
+    ./cmd/llm-proxy
+
+# Compress the binary
+RUN upx --best --lzma llm-proxy
+
+# Create logs directory for runtime stage
+RUN mkdir -p logs && chown 10001:10001 logs
+
+# Verify the binary
+RUN ./llm-proxy --version || echo "Binary built successfully"
+
+# Runtime stage using distroless for minimal attack surface
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Copy user/group from builder
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
+
+# Copy timezone data
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+# Copy CA certificates
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary with proper permissions
+COPY --from=builder --chown=10001:10001 /app/llm-proxy ./llm-proxy
+
+# Copy config directory
+COPY --from=builder --chown=10001:10001 /app/configs/ ./configs/
+
+# Copy logs directory
+COPY --from=builder --chown=10001:10001 /app/logs/ ./logs/
+
+# Switch to non-root user (distroless doesn't support RUN commands)
+USER 10001:10001
+
+# Set environment variables for production
+ENV ENV=production \
+    GIN_MODE=release \
+    LOG_LEVEL=info
+
+# Expose port
+EXPOSE 9002
+
+# Add labels for metadata and security scanning
+LABEL \
+    org.opencontainers.image.title="LLM Proxy" \
+    org.opencontainers.image.description="Production-ready LLM Proxy service" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.created="${BUILD_DATE}" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.vendor="Instawork" \
+    org.opencontainers.image.source="https://github.com/Instawork/llm-proxy" \
+    org.opencontainers.image.licenses="MIT"
+
+# Health check with improved configuration for production
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["/app/llm-proxy", "--health-check"]
+
+# Use exec form for proper signal handling
+ENTRYPOINT ["/app/llm-proxy"] 

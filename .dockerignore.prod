@@ -1,0 +1,84 @@
+# Production Docker ignore file
+# Optimize build context and exclude sensitive/unnecessary files
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+bin/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+llm-proxy
+!configs/
+
+# Logs and runtime data
+logs/
+*.log
+*.jsonl
+
+# Test files and coverage
+*_test.go
+*.out
+coverage.html
+coverage.out
+
+# Documentation (if not needed in container)
+README.md
+*.md
+docs/
+
+# Docker files (except production)
+Dockerfile
+docker-compose.yml
+!Dockerfile.prod
+
+# Scripts (unless needed)
+scripts/
+*.sh
+*.py
+
+# Environment and config files that shouldn't be in image
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-*
+*~
+*.swp
+*.swo
+
+# Package manager
+node_modules/
+vendor/ 
