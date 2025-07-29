@@ -80,6 +80,7 @@ USER llmproxy:llmproxy
 ENV ENV=production \
     GIN_MODE=release \
     LOG_LEVEL=info \
+    LOG_FORMAT=json \
     PORT=80
 
 # Expose port

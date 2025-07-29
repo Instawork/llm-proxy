@@ -39,21 +39,18 @@ func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool 
 func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
 	timeStr := r.Time.Format("15:04:05")
 
-	// Build the message with key context information
+	// Build the message with all attributes inline
 	message := r.Message
-	var contextParts []string
+	var allAttrs []string
 
 	r.Attrs(func(a slog.Attr) bool {
-		// Include important context attributes
-		switch a.Key {
-		case "provider", "model", "user", "error", "count", "status":
-			contextParts = append(contextParts, fmt.Sprintf("%s=%v", a.Key, a.Value))
-		}
+		allAttrs = append(allAttrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
 		return true
 	})
 
-	if len(contextParts) > 0 {
-		message = fmt.Sprintf("%s (%s)", message, strings.Join(contextParts, ", "))
+	// Add attributes to the message if any exist
+	if len(allAttrs) > 0 {
+		message = fmt.Sprintf("%s; %s", message, strings.Join(allAttrs, ", "))
 	}
 
 	_, err := fmt.Fprintf(h.w, "%s [%s] %s\n", r.Level.String(), timeStr, message)
@@ -427,7 +424,7 @@ func main() {
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 
-	logger.Info("Health check available", "url", "http://localhost:"+port+"/health")
+	logger.Info("Health check available", "url", "http://0.0.0.0:"+port+"/health")
 
 	// Log cost tracking status
 	if globalCostTracker != nil {
@@ -441,10 +438,10 @@ func main() {
 		logger.Info("Registered provider", "provider", name)
 	}
 
-	logger.Info("OpenAI API endpoints available", "url", "http://localhost:"+port+"/openai/")
-	logger.Info("Anthropic API endpoints available", "url", "http://localhost:"+port+"/anthropic/")
-	logger.Info("Gemini API endpoints available", "url", "http://localhost:"+port+"/gemini/")
-	logger.Info("Meta routes with user ID available", "pattern", "http://localhost:"+port+"/meta/{userID}/{provider}/")
+	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
+	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
+	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
+	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
 
 	server := &http.Server{
 		Addr:    "0.0.0.0:" + port,
