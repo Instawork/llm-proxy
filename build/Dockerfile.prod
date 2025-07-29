@@ -2,8 +2,8 @@
 # Multi-stage build with security hardening and optimization
 
 # Build arguments for versioning and metadata
-ARG GO_VERSION=1.21.5
-ARG ALPINE_VERSION=3.19
+ARG GO_VERSION=1.24.5
+ARG ALPINE_VERSION=3.22
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
@@ -15,12 +15,7 @@ FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 RUN apk add --no-cache \
     git \
     ca-certificates \
-    tzdata \
-    upx
-
-# Create app user and group for consistent UID/GID
-RUN addgroup -g 10001 -S llmproxy && \
-    adduser -u 10001 -S llmproxy -G llmproxy
+    tzdata
 
 # Set working directory
 WORKDIR /app
@@ -49,50 +44,46 @@ RUN go build \
     -o llm-proxy \
     ./cmd/llm-proxy
 
-# Compress the binary
-RUN upx --best --lzma llm-proxy
-
-# Create logs directory for runtime stage
-RUN mkdir -p logs && chown 10001:10001 logs
-
 # Verify the binary
 RUN ./llm-proxy --version || echo "Binary built successfully"
 
-# Runtime stage using distroless for minimal attack surface
-FROM gcr.io/distroless/static-debian12:nonroot
+# Runtime stage using Alpine for simplicity
+FROM alpine:${ALPINE_VERSION}
 
-# Copy user/group from builder
-COPY --from=builder /etc/passwd /etc/passwd
-COPY --from=builder /etc/group /etc/group
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    wget \
+    && rm -rf /var/cache/apk/*
 
-# Copy timezone data
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
-
-# Copy CA certificates
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Create app user and group
+RUN addgroup -g 10001 -S llmproxy && \
+    adduser -u 10001 -S llmproxy -G llmproxy
 
 # Set working directory
 WORKDIR /app
 
+# Create logs directory
+RUN mkdir -p logs && chown llmproxy:llmproxy logs
+
 # Copy binary with proper permissions
-COPY --from=builder --chown=10001:10001 /app/llm-proxy ./llm-proxy
+COPY --from=builder --chown=llmproxy:llmproxy /app/llm-proxy ./llm-proxy
 
 # Copy config directory
-COPY --from=builder --chown=10001:10001 /app/configs/ ./configs/
+COPY --from=builder --chown=llmproxy:llmproxy /app/configs/ ./configs/
 
-# Copy logs directory
-COPY --from=builder --chown=10001:10001 /app/logs/ ./logs/
-
-# Switch to non-root user (distroless doesn't support RUN commands)
-USER 10001:10001
+# Switch to non-root user
+USER llmproxy:llmproxy
 
 # Set environment variables for production
 ENV ENV=production \
     GIN_MODE=release \
-    LOG_LEVEL=info
+    LOG_LEVEL=info \
+    PORT=80
 
 # Expose port
-EXPOSE 9002
+EXPOSE 80
 
 # Add labels for metadata and security scanning
 LABEL \
@@ -107,7 +98,7 @@ LABEL \
 
 # Health check with improved configuration for production
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD ["/app/llm-proxy", "--health-check"]
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
 # Use exec form for proper signal handling
 ENTRYPOINT ["/app/llm-proxy"] 

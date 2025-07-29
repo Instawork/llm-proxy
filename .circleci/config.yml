@@ -3,7 +3,6 @@ version: 2.1
 # Define orbs for easier configuration
 orbs:
   go: circleci/go@1.11.0
-  aws-ecr: circleci/aws-ecr@9.0.4
   docker: circleci/docker@2.4.0
 
 # Define reusable commands
@@ -19,6 +18,26 @@ commands:
           name: Download dependencies
           command: make install
       - go/save-cache
+
+  setup_aws_and_docker:
+    description: "Setup AWS CLI and Docker for ECR operations"
+    steps:
+      - run:
+          name: Install AWS CLI
+          command: |
+            if ! command -v aws &> /dev/null; then
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              sudo ./aws/install
+            fi
+      - run:
+          name: Login to AWS ECR
+          command: |
+            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+      - run:
+          name: Create ECR repository if it doesn't exist
+          command: |
+            aws ecr describe-repositories --region ${AWS_DEFAULT_REGION} --repository-names ${AWS_ECR_REPOSITORY_NAME} || aws ecr create-repository --region ${AWS_DEFAULT_REGION} --repository-name ${AWS_ECR_REPOSITORY_NAME}
 
 # Define jobs
 jobs:
@@ -51,35 +70,31 @@ jobs:
       - checkout
       - setup_remote_docker:
           docker_layer_caching: true
-      - aws-ecr/build-and-push-image:
-          dockerfile: build/Dockerfile.prod
-          registry-id: AWS_ECR_REGISTRY_ID
-          region: $AWS_DEFAULT_REGION
-          repo: $AWS_ECR_REPOSITORY_NAME
-          tag: "${CIRCLE_SHA1:0:7},latest"
-          build-args: |
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            --build-arg VCS_REF=${CIRCLE_SHA1:0:7}
-            --build-arg VERSION=${CIRCLE_TAG:-dev-${CIRCLE_SHA1:0:7}}
+      - setup_aws_and_docker
+      - run:
+          name: Build and push Docker image
+          command: |
+            # Set variables
+            ECR_URL_PREFIX=${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+            SHA=$(echo ${CIRCLE_SHA1} | cut -c1-7)
+            BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            VERSION=dev-${SHA}
+            IMAGE_URL=${ECR_URL_PREFIX}/${AWS_ECR_REPOSITORY_NAME}
 
-  build-and-push-tagged:
-    docker:
-      - image: cimg/go:1.21.5
-    working_directory: ~/llm-proxy
-    steps:
-      - checkout
-      - setup_remote_docker:
-          docker_layer_caching: true
-      - aws-ecr/build-and-push-image:
-          dockerfile: build/Dockerfile.prod
-          registry-id: AWS_ECR_REGISTRY_ID
-          region: $AWS_DEFAULT_REGION
-          repo: $AWS_ECR_REPOSITORY_NAME
-          tag: "${CIRCLE_TAG},latest"
-          build-args: |
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            --build-arg VCS_REF=${CIRCLE_SHA1:0:7}
-            --build-arg VERSION=${CIRCLE_TAG}
+            echo "Building image for SHA: ${SHA}"
+
+            # Build Docker image
+            docker build --progress=plain \
+              --build-arg BUILD_DATE=${BUILD_DATE} \
+              --build-arg VCS_REF=${SHA} \
+              --build-arg VERSION=${VERSION} \
+              -f build/Dockerfile.prod . \
+              -t ${IMAGE_URL}:${SHA} \
+              -t ${IMAGE_URL}:latest
+
+            # Push images
+            docker push ${IMAGE_URL}:${SHA}
+            docker push ${IMAGE_URL}:latest
 
 # Define workflows
 workflows:
@@ -104,15 +119,4 @@ workflows:
             tags:
               ignore: /.*/
           context:
-            - aws-ecr-context
-
-      - build-and-push-tagged:
-          requires:
-            - test
-          filters:
-            branches:
-              ignore: /.*/
-            tags:
-              only: /^v.*/
-          context:
-            - aws-ecr-context
+            - AWS

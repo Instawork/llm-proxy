@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -70,6 +71,9 @@ func (h *CustomPrettyHandler) WithGroup(name string) slog.Handler {
 var logger *slog.Logger
 
 const (
+	// Version of the LLM Proxy
+	version = "1.0.0"
+	
 	// Default port for the proxy server
 	defaultPort = "9002"
 )
@@ -298,17 +302,45 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Get port from environment variable or use default
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
+	// Parse command line flags
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
+	flag.Parse()
 
 	// Load YAML configuration
 	yamlConfig, err := config.LoadYAMLConfig("configs/config.yml")
 	if err != nil {
 		logger.Warn("Failed to load YAML config, using defaults", "error", err)
 		yamlConfig = config.GetDefaultYAMLConfig()
+	}
+
+	// If version flag is set, print version and config then exit
+	if showVersion {
+		fmt.Printf("LLM Proxy version %s\n", version)
+		fmt.Println("Configuration:")
+		
+		// Print configuration to stdout in a readable format
+		yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})))
+		
+		// Also print as JSON for machine parsing
+		fmt.Println("\nConfiguration JSON:")
+		configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
+		if err != nil {
+			fmt.Printf("Error marshaling config to JSON: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(configJSON))
+		
+		fmt.Println("Build successful - configuration loaded without errors")
+		os.Exit(0)
+	}
+
+	// Get port from environment variable or use default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = defaultPort
 	}
 
 	// Log configuration
