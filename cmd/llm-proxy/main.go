@@ -344,9 +344,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			"cost_tracking": globalCostTracker != nil,
 		},
 	}
-
-	// Cost tracking is write-only, no stats available
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(health)
 }
@@ -476,7 +473,7 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	r.Use(middleware.StreamingMiddleware(globalProviderManager))
 
 	// Health check endpoint
-	r.HandleFunc("/health", healthHandler).Methods("GET")
+	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
 
 	// Register routes for all providers centrally
 	for name, provider := range globalProviderManager.GetAllProviders() {
