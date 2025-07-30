@@ -3,10 +3,12 @@ package cost
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
+
+	"github.com/Instawork/llm-proxy/internal/config"
 )
 
 // FileTransport implements Transport interface for file-based cost tracking
@@ -22,6 +24,39 @@ func NewFileTransport(outputFile string) *FileTransport {
 	}
 }
 
+// FromConfig creates a FileTransport from configuration
+func (ft *FileTransport) FromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+	switch cfg := transportConfig.(type) {
+	case *config.TransportConfig:
+		if cfg.File == nil {
+			return nil, fmt.Errorf("file transport configuration not found")
+		}
+		logger.Debug("💰 File Transport: Creating from structured config", "path", cfg.File.Path)
+		return NewFileTransport(cfg.File.Path), nil
+
+	case map[string]interface{}:
+		fileConfig, ok := cfg["file"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("file transport configuration not found")
+		}
+		path, ok := fileConfig["path"].(string)
+		if !ok {
+			return nil, fmt.Errorf("file path not specified")
+		}
+		logger.Debug("💰 File Transport: Creating from map config", "path", path)
+		return NewFileTransport(path), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported config type for file transport: %T", transportConfig)
+	}
+}
+
+// NewFileTransportFromConfig creates a FileTransport from configuration (convenience function)
+func NewFileTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+	ft := &FileTransport{}
+	return ft.FromConfig(transportConfig, logger)
+}
+
 // WriteRecord writes a cost record to the file
 func (ft *FileTransport) WriteRecord(record *CostRecord) error {
 	ft.fileMutex.Lock()
@@ -29,12 +64,12 @@ func (ft *FileTransport) WriteRecord(record *CostRecord) error {
 
 	// Ensure output directory exists
 	dir := filepath.Dir(ft.outputFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Open file in append mode
-	file, err := os.OpenFile(ft.outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(ft.outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open cost tracking file: %w", err)
 	}
@@ -47,35 +82,4 @@ func (ft *FileTransport) WriteRecord(record *CostRecord) error {
 	}
 
 	return nil
-}
-
-// ReadRecords reads cost records from the file since the given time
-func (ft *FileTransport) ReadRecords(since time.Time) ([]CostRecord, error) {
-	ft.fileMutex.Lock()
-	defer ft.fileMutex.Unlock()
-
-	file, err := os.Open(ft.outputFile)
-	if os.IsNotExist(err) {
-		return []CostRecord{}, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to open cost file: %w", err)
-	}
-	defer file.Close()
-
-	var records []CostRecord
-	decoder := json.NewDecoder(file)
-
-	for decoder.More() {
-		var record CostRecord
-		if err := decoder.Decode(&record); err != nil {
-			// Log warning but continue processing other records
-			continue
-		}
-		// Skip records older than the since time
-		if record.Timestamp.Before(since) {
-			continue
-		}
-		records = append(records, record)
-	}
-	return records, nil
 }

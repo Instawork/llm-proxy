@@ -8,10 +8,18 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
-    transport:
-      type: "dynamodb" # dynamodb or file
-      dynamodb:
-        table_name: "llm-proxy-cost-tracking"
-        region: "us-west-2"
+    # Staging: Test both DynamoDB and Datadog transports
+    transports:
+      - type: "dynamodb"
+        dynamodb:
+          table_name: "llm-proxy-cost-tracking-staging"
+          region: "us-west-2"
+      - type: "datadog"
+        datadog:
+          host: "localhost"
+          port: "8125"
+          namespace: "llm_proxy"
+          tags: ["env:staging", "service:llm-proxy"]
+          sample_rate: 1.0
   rate_limiting:
     enabled: false

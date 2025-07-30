@@ -1,9 +1,10 @@
 package cost
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -14,8 +15,6 @@ import (
 type Transport interface {
 	// WriteRecord writes a cost record to the transport
 	WriteRecord(record *CostRecord) error
-	// ReadRecords reads cost records from the transport since the given time
-	ReadRecords(since time.Time) ([]CostRecord, error)
 }
 
 // PricingTier represents a pricing tier with a token threshold.
@@ -65,16 +64,33 @@ type CostRecord struct {
 // CostTracker manages cost tracking and output through transports
 type CostTracker struct {
 	pricingConfig map[string]map[string]*ModelPricing // provider -> model -> pricing
-	transport     Transport
+	transports    []Transport                         // Multiple transports for parallel writes
 	logger        *slog.Logger
+
+	// Async tracking support
+	async         bool               // Whether to use async tracking
+	queue         chan *CostRecord   // Queue for async tracking
+	workers       int                // Number of worker goroutines
+	flushInterval time.Duration      // Interval for periodic flushing
+	ctx           context.Context    // Context for cancelling workers
+	cancel        context.CancelFunc // Cancel function for workers
+	wg            sync.WaitGroup     // WaitGroup for tracking workers
+	started       bool               // Whether async workers have been started
+	mu            sync.RWMutex       // Mutex for protecting async state
 }
 
-// NewCostTracker creates a new cost tracker with the specified transport
-func NewCostTracker(transport Transport) *CostTracker {
+// NewCostTracker creates a new cost tracker with the specified transports
+func NewCostTracker(transports ...Transport) *CostTracker {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &CostTracker{
 		pricingConfig: make(map[string]map[string]*ModelPricing),
-		transport:     transport,
-		logger:        slog.Default(), // Use default logger initially
+		transports:    transports,
+		logger:        slog.Default(),   // Use default logger initially
+		async:         false,            // Default to sync mode
+		workers:       5,                // Default number of workers
+		flushInterval: 15 * time.Second, // Default flush interval
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -96,9 +112,212 @@ func NewDynamoDBBasedCostTracker(tableName, region string) (*CostTracker, error)
 	return NewCostTracker(transport), nil
 }
 
+// NewDatadogBasedCostTracker creates a new cost tracker with Datadog transport (convenience function)
+func NewDatadogBasedCostTracker(host, port string) (*CostTracker, error) {
+	config := DatadogTransportConfig{
+		Host: host,
+		Port: port,
+	}
+	transport, err := NewDatadogTransport(config)
+	if err != nil {
+		return nil, err
+	}
+	return NewCostTracker(transport), nil
+}
+
+// AddTransport adds a transport to the cost tracker
+func (ct *CostTracker) AddTransport(transport Transport) {
+	ct.transports = append(ct.transports, transport)
+}
+
 // SetLogger sets the logger for the cost tracker
 func (ct *CostTracker) SetLogger(logger *slog.Logger) {
 	ct.logger = logger
+}
+
+// ConfigureAsync configures the cost tracker for async tracking with the specified parameters
+func (ct *CostTracker) ConfigureAsync(workers, queueSize, flushIntervalSeconds int) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	if ct.started {
+		ct.logger.Warn("Cannot reconfigure async settings while workers are running")
+		return
+	}
+
+	ct.async = true
+	ct.workers = workers
+	if workers <= 0 {
+		ct.workers = 5 // Default
+	}
+	if queueSize <= 0 {
+		queueSize = 1000 // Default
+	}
+	if flushIntervalSeconds <= 0 {
+		flushIntervalSeconds = 15 // Default
+	}
+	ct.queue = make(chan *CostRecord, queueSize)
+	ct.flushInterval = time.Duration(flushIntervalSeconds) * time.Second
+
+	ct.logger.Info("💰 Cost Tracker: Configured for async tracking",
+		"workers", ct.workers,
+		"queue_size", queueSize,
+		"flush_interval_seconds", flushIntervalSeconds)
+}
+
+// SetSyncMode sets the cost tracker to synchronous mode
+func (ct *CostTracker) SetSyncMode() {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	if ct.started {
+		ct.logger.Warn("Cannot switch to sync mode while async workers are running")
+		return
+	}
+
+	ct.async = false
+	ct.logger.Info("💰 Cost Tracker: Set to synchronous mode")
+}
+
+// StartAsyncWorkers starts the async worker goroutines (must be called before using async tracking)
+func (ct *CostTracker) StartAsyncWorkers() error {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	if !ct.async {
+		return fmt.Errorf("cost tracker is not configured for async mode")
+	}
+
+	if ct.started {
+		return fmt.Errorf("async workers are already started")
+	}
+
+	if ct.queue == nil {
+		return fmt.Errorf("async queue is not initialized")
+	}
+
+	ct.logger.Info("💰 Cost Tracker: Starting async workers", "worker_count", ct.workers)
+
+	for i := 0; i < ct.workers; i++ {
+		ct.wg.Add(1)
+		go ct.asyncWorker(i)
+	}
+
+	ct.started = true
+	ct.logger.Info("💰 Cost Tracker: All async workers started successfully")
+	return nil
+}
+
+// StopAsyncWorkers stops all async workers and waits for them to finish processing
+func (ct *CostTracker) StopAsyncWorkers() {
+	ct.mu.Lock()
+	if !ct.started || !ct.async {
+		ct.mu.Unlock()
+		return
+	}
+
+	ct.logger.Info("💰 Cost Tracker: Stopping async workers...")
+	ct.cancel()     // Signal workers to stop
+	close(ct.queue) // Close the queue to signal no more records
+	ct.mu.Unlock()
+
+	ct.wg.Wait() // Wait for all workers to finish
+
+	ct.mu.Lock()
+	ct.started = false
+	ct.mu.Unlock()
+
+	ct.logger.Info("💰 Cost Tracker: All async workers stopped")
+}
+
+// asyncWorker is the worker goroutine that processes cost records from the queue
+func (ct *CostTracker) asyncWorker(workerID int) {
+	defer ct.wg.Done()
+
+	ct.logger.Debug("💰 Cost Tracker: Async worker started", "worker_id", workerID, "flush_interval", ct.flushInterval)
+
+	// Create a ticker for periodic flushing
+	flushTicker := time.NewTicker(ct.flushInterval)
+	defer flushTicker.Stop()
+
+	for {
+		select {
+		case record, ok := <-ct.queue:
+			if !ok {
+				// Queue is closed, process any remaining records and exit
+				ct.logger.Debug("💰 Cost Tracker: Async worker exiting (queue closed)", "worker_id", workerID)
+				ct.processRemainingRecords(workerID)
+				return
+			}
+
+			// Process the record by writing to all transports
+			if err := ct.writeRecordToTransports(record); err != nil {
+				ct.logger.Debug("💰 Cost Tracker: Async worker failed to process record", "worker_id", workerID, "request_id", record.RequestID, "error", err)
+			} else {
+				ct.logger.Debug("💰 Cost Tracker: Async worker processed record successfully", "worker_id", workerID, "request_id", record.RequestID)
+			}
+
+		case <-flushTicker.C:
+			// Periodic flush - process any queued records
+			ct.logger.Debug("💰 Cost Tracker: Periodic flush triggered", "worker_id", workerID)
+			ct.flushQueuedRecords(workerID)
+
+		case <-ct.ctx.Done():
+			// Context cancelled, process any remaining records and exit
+			ct.logger.Debug("💰 Cost Tracker: Async worker exiting (context cancelled)", "worker_id", workerID)
+			ct.processRemainingRecords(workerID)
+			return
+		}
+	}
+}
+
+// flushQueuedRecords processes a batch of queued records without blocking
+func (ct *CostTracker) flushQueuedRecords(workerID int) {
+	processed := 0
+	for {
+		select {
+		case record, ok := <-ct.queue:
+			if !ok {
+				return // Queue is closed
+			}
+			if err := ct.writeRecordToTransports(record); err != nil {
+				ct.logger.Debug("💰 Cost Tracker: Flush failed to process record", "worker_id", workerID, "request_id", record.RequestID, "error", err)
+			}
+			processed++
+		default:
+			// No more records to process
+			if processed > 0 {
+				ct.logger.Debug("💰 Cost Tracker: Flush processed records", "worker_id", workerID, "records_processed", processed)
+			}
+			return
+		}
+	}
+}
+
+// processRemainingRecords processes any remaining records in the queue during shutdown
+func (ct *CostTracker) processRemainingRecords(workerID int) {
+	processed := 0
+	for {
+		select {
+		case record, ok := <-ct.queue:
+			if !ok {
+				if processed > 0 {
+					ct.logger.Info("💰 Cost Tracker: Shutdown processed remaining records", "worker_id", workerID, "records_processed", processed)
+				}
+				return // Queue is closed
+			}
+			if err := ct.writeRecordToTransports(record); err != nil {
+				ct.logger.Warn("💰 Cost Tracker: Shutdown failed to process record", "worker_id", workerID, "request_id", record.RequestID, "error", err)
+			}
+			processed++
+		default:
+			// No more records to process
+			if processed > 0 {
+				ct.logger.Info("💰 Cost Tracker: Shutdown processed remaining records", "worker_id", workerID, "records_processed", processed)
+			}
+			return
+		}
+	}
 }
 
 // SetPricingForModel sets pricing information for a specific provider and model
@@ -145,7 +364,7 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 	return inputCost, outputCost, totalCost, nil
 }
 
-// TrackRequest processes a request and writes cost information to file
+// TrackRequest processes a request and writes cost information to transports (sync or async based on configuration)
 func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, userID, ipAddress, endpoint string) error {
 	// Calculate costs
 	inputCost, outputCost, totalCost, err := ct.CalculateCost(
@@ -199,146 +418,92 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			"output_tokens", metadata.OutputTokens)
 	}
 
-	// Write to file
-	return ct.transport.WriteRecord(record)
-}
+	// Handle sync vs async processing
+	ct.mu.RLock()
+	async := ct.async
+	started := ct.started
+	ct.mu.RUnlock()
 
-// GetTotalCosts reads the cost file and calculates total costs
-func (ct *CostTracker) GetTotalCosts(since time.Time) (map[string]float64, error) {
-	records, err := ct.transport.ReadRecords(since)
-	if err != nil {
-		return nil, err
-	}
-
-	totals := make(map[string]float64)
-
-	for _, record := range records {
-		// Aggregate costs by provider/model
-		key := fmt.Sprintf("%s/%s", record.Provider, record.Model)
-		totals[key] += record.TotalCost
-		totals["total"] += record.TotalCost
-		totals[record.Provider] += record.TotalCost
-	}
-
-	return totals, nil
-}
-
-// GetStats returns cost statistics from the file
-func (ct *CostTracker) GetStats(since time.Time) (map[string]interface{}, error) {
-	totals, err := ct.GetTotalCosts(since)
-	if err != nil {
-		return nil, err
-	}
-
-	stats := make(map[string]interface{})
-	stats["total_cost"] = totals["total"]
-	stats["provider_costs"] = make(map[string]float64)
-	stats["model_costs"] = make(map[string]float64)
-
-	for key, cost := range totals {
-		if key == "total" {
-			continue
-		}
-
-		// Separate provider costs from model costs
-		if !strings.Contains(key, "/") {
-			// It's a provider total
-			stats["provider_costs"].(map[string]float64)[key] = cost
-		} else {
-			// It's a model total
-			stats["model_costs"].(map[string]float64)[key] = cost
+	if async && started {
+		// Async mode - queue the record for processing
+		select {
+		case ct.queue <- record:
+			// Successfully queued
+			return nil
+		default:
+			// Queue is full, log warning and fall back to sync processing
+			ct.logger.Warn("💵 Cost Tracking: Async queue is full, falling back to sync processing",
+				"request_id", metadata.RequestID)
+			return ct.writeRecordToTransports(record)
 		}
 	}
 
-	return stats, nil
+	// Sync mode - process immediately
+	return ct.writeRecordToTransports(record)
+}
+
+// writeRecordToTransports writes a record to all configured transports and returns any error
+func (ct *CostTracker) writeRecordToTransports(record *CostRecord) error {
+	var lastErr error
+	for _, transport := range ct.transports {
+		if err := transport.WriteRecord(record); err != nil {
+			ct.logger.Warn("Failed to write record to transport", "error", err)
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+// TransportFactory defines a function type for creating transports from configuration
+type TransportFactory func(transportConfig interface{}, logger *slog.Logger) (Transport, error)
+
+// transportRegistry holds registered transport factories
+var transportRegistry = map[string]TransportFactory{
+	"file":     NewFileTransportFromConfig,
+	"dynamodb": NewDynamoDBTransportFromConfig,
+	"datadog":  NewDatadogTransportFromConfig,
+}
+
+// RegisterTransportFactory registers a new transport factory
+func RegisterTransportFactory(transportType string, factory TransportFactory) {
+	transportRegistry[transportType] = factory
 }
 
 // CreateTransportFromConfig creates a transport based on the provided configuration
 func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
-	// Use type assertion to work with different config types
+	var transportType string
+
+	// Extract transport type from different config formats
 	switch cfg := transportConfig.(type) {
 	case *config.TransportConfig:
-		// Handle structured config (from yamlConfig.GetTransportConfig())
-		logger.Debug("💰 Cost Tracker: Processing structured transport config", "type", cfg.Type)
-		switch cfg.Type {
-		case "file":
-			if cfg.File == nil {
-				return nil, fmt.Errorf("file transport configuration not found")
-			}
-			logger.Debug("💰 Cost Tracker: Creating file transport", "path", cfg.File.Path)
-			return NewFileTransport(cfg.File.Path), nil
-
-		case "dynamodb":
-			if cfg.DynamoDB == nil {
-				return nil, fmt.Errorf("dynamodb transport configuration not found")
-			}
-
-			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport",
-				"table_name", cfg.DynamoDB.TableName,
-				"region", cfg.DynamoDB.Region)
-
-			config := DynamoDBTransportConfig{
-				TableName: cfg.DynamoDB.TableName,
-				Region:    cfg.DynamoDB.Region,
-				Logger:    logger,
-			}
-			return NewDynamoDBTransport(config)
-
-		default:
-			return nil, fmt.Errorf("unsupported transport type: %s", cfg.Type)
-		}
-
+		transportType = cfg.Type
+		logger.Debug("💰 Cost Tracker: Processing structured transport config", "type", transportType)
 	case map[string]interface{}:
-		// Handle generic map interface (from YAML parsing)
-		transportType, ok := cfg["type"].(string)
+		var ok bool
+		transportType, ok = cfg["type"].(string)
 		if !ok {
 			return nil, fmt.Errorf("transport type not specified")
 		}
-
 		logger.Debug("💰 Cost Tracker: Processing map-based transport config", "type", transportType)
-
-		switch transportType {
-		case "file":
-			fileConfig, ok := cfg["file"].(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("file transport configuration not found")
-			}
-			path, ok := fileConfig["path"].(string)
-			if !ok {
-				return nil, fmt.Errorf("file path not specified")
-			}
-			logger.Debug("💰 Cost Tracker: Creating file transport from map", "path", path)
-			return NewFileTransport(path), nil
-
-		case "dynamodb":
-			dynamoConfig, ok := cfg["dynamodb"].(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("dynamodb transport configuration not found")
-			}
-			tableName, ok := dynamoConfig["table_name"].(string)
-			if !ok {
-				return nil, fmt.Errorf("dynamodb table_name not specified")
-			}
-			region, ok := dynamoConfig["region"].(string)
-			if !ok {
-				return nil, fmt.Errorf("dynamodb region not specified")
-			}
-
-			logger.Debug("💰 Cost Tracker: Creating DynamoDB transport from map",
-				"table_name", tableName,
-				"region", region)
-
-			config := DynamoDBTransportConfig{
-				TableName: tableName,
-				Region:    region,
-				Logger:    logger,
-			}
-			return NewDynamoDBTransport(config)
-
-		default:
-			return nil, fmt.Errorf("unsupported transport type: %s", transportType)
-		}
 	default:
 		return nil, fmt.Errorf("unsupported transport config type: %T", transportConfig)
 	}
+
+	// Look up the transport factory
+	factory, exists := transportRegistry[transportType]
+	if !exists {
+		return nil, fmt.Errorf("unsupported transport type: %s (supported: %v)", transportType, getSupportedTransportTypes())
+	}
+
+	// Create the transport using the registered factory
+	return factory(transportConfig, logger)
+}
+
+// getSupportedTransportTypes returns a list of supported transport types
+func getSupportedTransportTypes() []string {
+	types := make([]string, 0, len(transportRegistry))
+	for transportType := range transportRegistry {
+		types = append(types, transportType)
+	}
+	return types
 }

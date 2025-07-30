@@ -8,10 +8,26 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
-    transport:
-      type: "dynamodb" # dynamodb or file
-      dynamodb:
-        table_name: "llm-proxy-cost-tracking"
-        region: "us-west-2"
+    # Enable async processing for production performance
+    async: true
+    workers: 8 # More workers for production load
+    queue_size: 2000 # Larger queue for production traffic
+    flush_interval: 30 # Longer flush interval for production (30 seconds)
+    # Production: Multiple transports for redundancy and monitoring
+    transports:
+      - type: "dynamodb"
+        dynamodb:
+          table_name: "llm-proxy-cost-tracking-prod"
+          region: "us-west-2"
+      - type: "datadog"
+        datadog:
+          host: "localhost"
+          port: "8125"
+          namespace: "llm_proxy"
+          tags: ["env:production", "service:llm-proxy", "team:platform"]
+          sample_rate: 1.0
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking-backup.jsonl"
   rate_limiting:
     enabled: false

@@ -8,9 +8,21 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
-    transport:
-      type: "file"
-      file:
-        path: "./logs/cost-tracking.jsonl"
+    # Enable async processing for better performance in development
+    async: true
+    workers: 3 # Use fewer workers in dev environment
+    queue_size: 500 # Smaller queue size for development
+    flush_interval: 10 # Shorter flush interval for development (10 seconds)
+    transports:
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking.jsonl"
+      - type: "datadog"
+        datadog:
+          host: "localhost"
+          port: "8125"
+          namespace: "llm_proxy"
+          tags: ["env:dev", "service:llm-proxy"]
+          sample_rate: 1.0
   rate_limiting:
     enabled: false

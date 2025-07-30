@@ -49,15 +49,20 @@ type FeaturesConfig struct {
 
 // CostTrackingConfig represents cost tracking feature configuration
 type CostTrackingConfig struct {
-	Enabled   bool            `yaml:"enabled"`
-	Transport TransportConfig `yaml:"transport"`
+	Enabled       bool              `yaml:"enabled"`
+	Async         bool              `yaml:"async,omitempty"`          // Enable async tracking with workers (default: false - sync)
+	Workers       int               `yaml:"workers,omitempty"`        // Number of worker goroutines for async tracking (default: 5)
+	QueueSize     int               `yaml:"queue_size,omitempty"`     // Size of the async tracking queue (default: 1000)
+	FlushInterval int               `yaml:"flush_interval,omitempty"` // Interval in seconds to flush pending records (default: 15)
+	Transports    []TransportConfig `yaml:"transports,omitempty"`     // Multiple transport configs
 }
 
 // TransportConfig represents cost tracking transport configuration
 type TransportConfig struct {
-	Type     string                   `yaml:"type"` // "file" or "dynamodb"
+	Type     string                   `yaml:"type"` // "file", "dynamodb", or "datadog"
 	File     *FileTransportConfig     `yaml:"file,omitempty"`
 	DynamoDB *DynamoDBTransportConfig `yaml:"dynamodb,omitempty"`
+	Datadog  *DatadogTransportConfig  `yaml:"datadog,omitempty"`
 }
 
 // FileTransportConfig represents file-based transport configuration
@@ -69,6 +74,15 @@ type FileTransportConfig struct {
 type DynamoDBTransportConfig struct {
 	TableName string `yaml:"table_name"`
 	Region    string `yaml:"region"`
+}
+
+// DatadogTransportConfig represents Datadog transport configuration
+type DatadogTransportConfig struct {
+	Host       string   `yaml:"host"`        // DogStatsD host (default: localhost)
+	Port       string   `yaml:"port"`        // DogStatsD port (default: 8125)
+	Namespace  string   `yaml:"namespace"`   // Namespace to prefix metrics (default: "llm_proxy")
+	Tags       []string `yaml:"tags"`        // Global tags to apply to all metrics
+	SampleRate float64  `yaml:"sample_rate"` // Global sample rate (default: 1.0)
 }
 
 // ProviderConfig represents configuration for a specific provider
@@ -279,6 +293,42 @@ func deepMerge(a, b map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+// LoadAndMergeConfigs loads multiple configuration files and merges them in order
+func LoadAndMergeConfigs(filePaths []string) (*YAMLConfig, error) {
+	if len(filePaths) == 0 {
+		return nil, fmt.Errorf("no configuration files provided")
+	}
+
+	// Load the first config as the base
+	baseConfig, err := LoadYAMLConfig(filePaths[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to load base config from %s: %w", filePaths[0], err)
+	}
+
+	// If only one file, return it
+	if len(filePaths) == 1 {
+		return baseConfig, nil
+	}
+
+	// Merge additional configs in order
+	mergedConfig := baseConfig
+	for i := 1; i < len(filePaths); i++ {
+		// Load the overlay config without validation (like environment configs)
+		overlayConfig, err := loadYAMLConfigWithoutValidation(filePaths[i])
+		if err != nil {
+			return nil, fmt.Errorf("failed to load overlay config from %s: %w", filePaths[i], err)
+		}
+
+		// Merge the overlay into the current merged config
+		mergedConfig, err = mergeConfigs(mergedConfig, overlayConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge config from %s: %w", filePaths[i], err)
+		}
+	}
+
+	return mergedConfig, nil
+}
+
 // SaveYAMLConfig saves configuration to a YAML file
 func (c *YAMLConfig) SaveYAMLConfig(filename string) error {
 	data, err := yaml.Marshal(c)
@@ -286,7 +336,7 @@ func (c *YAMLConfig) SaveYAMLConfig(filename string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	if err := os.WriteFile(filename, data, 0o644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -311,8 +361,22 @@ func (c *YAMLConfig) Validate() error {
 
 // validateTransportConfig validates the transport configuration
 func (c *YAMLConfig) validateTransportConfig() error {
-	transport := c.Features.CostTracking.Transport
+	transports := c.GetAllTransports()
+	if len(transports) == 0 {
+		return fmt.Errorf("at least one transport configuration is required")
+	}
 
+	for i, transport := range transports {
+		if err := c.validateSingleTransport(transport); err != nil {
+			return fmt.Errorf("transport %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// validateSingleTransport validates a single transport configuration
+func (c *YAMLConfig) validateSingleTransport(transport TransportConfig) error {
 	switch transport.Type {
 	case "file":
 		if transport.File == nil {
@@ -331,22 +395,27 @@ func (c *YAMLConfig) validateTransportConfig() error {
 		if transport.DynamoDB.Region == "" {
 			return fmt.Errorf("region is required for dynamodb transport")
 		}
+	case "datadog":
+		if transport.Datadog == nil {
+			return fmt.Errorf("datadog transport configuration is required when type is 'datadog'")
+		}
+		// Host and Port have defaults, so no validation needed
 	case "":
 		return fmt.Errorf("transport type is required")
 	default:
-		return fmt.Errorf("unsupported transport type: %s (supported: file, dynamodb)", transport.Type)
+		return fmt.Errorf("unsupported transport type: %s (supported: file, dynamodb, datadog)", transport.Type)
 	}
 
 	return nil
 }
 
-// GetTransportConfig returns the transport configuration
-func (c *YAMLConfig) GetTransportConfig() (*TransportConfig, error) {
+// GetAllTransports returns all configured transports
+func (c *YAMLConfig) GetAllTransports() []TransportConfig {
 	if !c.Features.CostTracking.Enabled {
-		return nil, fmt.Errorf("cost tracking is disabled")
+		return nil
 	}
 
-	return &c.Features.CostTracking.Transport, nil
+	return c.Features.CostTracking.Transports
 }
 
 // ParsePricing iterates through all models and parses the flexible `Pricing` field
@@ -513,10 +582,12 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 		Features: FeaturesConfig{
 			CostTracking: CostTrackingConfig{
 				Enabled: true,
-				Transport: TransportConfig{
-					Type: "file",
-					File: &FileTransportConfig{
-						Path: "./cost_tracking.json",
+				Transports: []TransportConfig{
+					{
+						Type: "file",
+						File: &FileTransportConfig{
+							Path: "./cost_tracking.json",
+						},
 					},
 				},
 			},

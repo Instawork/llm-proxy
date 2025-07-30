@@ -1,9 +1,9 @@
 package cost
 
 import (
+	"fmt"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
@@ -61,60 +61,8 @@ func TestDynamoDBTransportIntegration(t *testing.T) {
 		t.Errorf("Failed to track request: %v", err)
 	}
 
-	// Wait a moment for eventual consistency
-	time.Sleep(1 * time.Second)
-
-	// Read records back
-	since := time.Now().Add(-1 * time.Hour)
-	records, err := transport.ReadRecords(since)
-	if err != nil {
-		t.Errorf("Failed to read records: %v", err)
-	}
-
-	// Verify we got at least one record
-	if len(records) == 0 {
-		t.Error("Expected at least one cost record, got none")
-	}
-
-	// Verify the record content
-	found := false
-	for _, record := range records {
-		if record.RequestID == "test-request-123" {
-			found = true
-			if record.Provider != "openai" {
-				t.Errorf("Expected provider 'openai', got '%s'", record.Provider)
-			}
-			if record.Model != "gpt-3.5-turbo" {
-				t.Errorf("Expected model 'gpt-3.5-turbo', got '%s'", record.Model)
-			}
-			if record.InputTokens != 1000 {
-				t.Errorf("Expected 1000 input tokens, got %d", record.InputTokens)
-			}
-			if record.OutputTokens != 500 {
-				t.Errorf("Expected 500 output tokens, got %d", record.OutputTokens)
-			}
-			if record.TotalCost <= 0 {
-				t.Errorf("Expected positive total cost, got %f", record.TotalCost)
-			}
-			break
-		}
-	}
-
-	if !found {
-		t.Error("Could not find the test record in the retrieved records")
-	}
-
-	// Test cost calculation
-	totals, err := tracker.GetTotalCosts(since)
-	if err != nil {
-		t.Errorf("Failed to get total costs: %v", err)
-	}
-
-	if totals["total"] <= 0 {
-		t.Errorf("Expected positive total cost, got %f", totals["total"])
-	}
-
-	t.Logf("Successfully tracked and retrieved cost records. Total cost: $%.6f", totals["total"])
+	// Test passed - successfully wrote cost record to DynamoDB
+	t.Log("Successfully tracked cost record to DynamoDB (write-only)")
 }
 
 // Example function showing how to create a DynamoDB-based cost tracker
@@ -150,6 +98,7 @@ func ExampleNewDynamoDBTransport() {
 	// Now you can use the tracker in your LLM proxy handlers
 	// tracker.TrackRequest(metadata, userID, ipAddress, endpoint)
 
-	// Output: DynamoDB transport configured successfully
-	println("DynamoDB transport configured successfully")
+	// Output:
+	// DynamoDB transport configured successfully
+	fmt.Println("DynamoDB transport configured successfully")
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	configPkg "github.com/Instawork/llm-proxy/internal/config"
 )
 
 // DynamoDBTransportConfig holds configuration for the DynamoDB transport
@@ -86,6 +87,61 @@ func NewDynamoDBTransport(cfg DynamoDBTransportConfig) (*DynamoDBTransport, erro
 	}
 
 	return transport, nil
+}
+
+// FromConfig creates a DynamoDBTransport from configuration
+func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+	switch cfg := transportConfig.(type) {
+	case *configPkg.TransportConfig:
+		if cfg.DynamoDB == nil {
+			return nil, fmt.Errorf("dynamodb transport configuration not found")
+		}
+
+		logger.Debug("💰 DynamoDB Transport: Creating from structured config",
+			"table_name", cfg.DynamoDB.TableName,
+			"region", cfg.DynamoDB.Region)
+
+		config := DynamoDBTransportConfig{
+			TableName: cfg.DynamoDB.TableName,
+			Region:    cfg.DynamoDB.Region,
+			Logger:    logger,
+		}
+		return NewDynamoDBTransport(config)
+
+	case map[string]interface{}:
+		dynamoConfig, ok := cfg["dynamodb"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("dynamodb transport configuration not found")
+		}
+		tableName, ok := dynamoConfig["table_name"].(string)
+		if !ok {
+			return nil, fmt.Errorf("dynamodb table_name not specified")
+		}
+		region, ok := dynamoConfig["region"].(string)
+		if !ok {
+			return nil, fmt.Errorf("dynamodb region not specified")
+		}
+
+		logger.Debug("💰 DynamoDB Transport: Creating from map config",
+			"table_name", tableName,
+			"region", region)
+
+		config := DynamoDBTransportConfig{
+			TableName: tableName,
+			Region:    region,
+			Logger:    logger,
+		}
+		return NewDynamoDBTransport(config)
+
+	default:
+		return nil, fmt.Errorf("unsupported config type for dynamodb transport: %T", transportConfig)
+	}
+}
+
+// NewDynamoDBTransportFromConfig creates a DynamoDBTransport from configuration (convenience function)
+func NewDynamoDBTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+	dt := &DynamoDBTransport{}
+	return dt.FromConfig(transportConfig, logger)
 }
 
 // ensureTableExists creates the DynamoDB table if it doesn't exist
@@ -248,74 +304,6 @@ func (dt *DynamoDBTransport) WriteRecord(record *CostRecord) error {
 		"cost", record.TotalCost)
 
 	return nil
-}
-
-// ReadRecords reads cost records from DynamoDB since the given time
-func (dt *DynamoDBTransport) ReadRecords(since time.Time) ([]CostRecord, error) {
-	ctx := context.TODO()
-	var records []CostRecord
-
-	// Calculate the start date for efficient querying
-	startDate := since.Format("2006-01-02")
-
-	// Generate all dates between startDate and endDate
-	current := since
-	for current.Before(time.Now().AddDate(0, 0, 1)) {
-		dateStr := current.Format("2006-01-02")
-		pk := fmt.Sprintf("COST#%s", dateStr)
-
-		// Query items for this date
-		queryInput := &dynamodb.QueryInput{
-			TableName:              aws.String(dt.tableName),
-			KeyConditionExpression: aws.String("pk = :pk"),
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":pk": &types.AttributeValueMemberS{Value: pk},
-			},
-		}
-
-		// Add timestamp filter if we're querying the start date
-		if current.Format("2006-01-02") == startDate {
-			queryInput.FilterExpression = aws.String("#ts >= :since")
-			queryInput.ExpressionAttributeNames = map[string]string{
-				"#ts": "timestamp",
-			}
-			queryInput.ExpressionAttributeValues[":since"] = &types.AttributeValueMemberN{
-				Value: strconv.FormatInt(since.Unix(), 10),
-			}
-		}
-
-		result, err := dt.client.Query(ctx, queryInput)
-		if err != nil {
-			dt.logger.Error("Failed to query DynamoDB", "error", err, "date", dateStr)
-			current = current.AddDate(0, 0, 1)
-			continue
-		}
-
-		// Convert DynamoDB items to CostRecord
-		for _, item := range result.Items {
-			var dynamoRecord DynamoDBCostRecord
-			if err := attributevalue.UnmarshalMap(item, &dynamoRecord); err != nil {
-				dt.logger.Warn("Failed to unmarshal DynamoDB item", "error", err)
-				continue
-			}
-
-			costRecord := dt.fromDynamoDBRecord(&dynamoRecord)
-
-			// Apply time filter for precision
-			if costRecord.Timestamp.After(since) || costRecord.Timestamp.Equal(since) {
-				records = append(records, *costRecord)
-			}
-		}
-
-		current = current.AddDate(0, 0, 1)
-	}
-
-	dt.logger.Debug("Retrieved cost records from DynamoDB",
-		"table", dt.tableName,
-		"count", len(records),
-		"since", since)
-
-	return records, nil
 }
 
 // toDynamoDBRecord converts a CostRecord to DynamoDBCostRecord

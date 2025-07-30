@@ -12,12 +12,13 @@ enabled: true
 
 features:
   cost_tracking:
-    enabled: true
-    transport:
-      type: "dynamodb" # dynamodb or file
-      dynamodb:
-        table_name: "llm-proxy-cost-tracking"
-        region: "us-west-2"
+    enabled: false
+    # Async mode enables background workers to process cost records
+    # This improves request latency by not blocking on transport writes
+    async: false # Enable async processing (default: false - synchronous)
+    workers: 5 # Number of worker goroutines for async processing (default: 5)
+    queue_size: 1000 # Size of the async processing queue (default: 1000)
+    flush_interval: 15 # Interval in seconds to flush pending records (default: 15)
   rate_limiting:
     enabled: false
 

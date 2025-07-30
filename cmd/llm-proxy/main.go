@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -120,98 +122,154 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		return nil
 	}
 
-	// Get transport configuration
-	transportConfig, err := yamlConfig.GetTransportConfig()
-	if err != nil {
-		logger.Error("💰 Cost Tracker: Failed to get transport config", "error", err)
+	// Get all transport configurations
+	transportConfigs := yamlConfig.GetAllTransports()
+	if len(transportConfigs) == 0 {
+		logger.Error("💰 Cost Tracker: No transport configurations found")
 		return nil
 	}
 
-	// Create transport based on configuration
-	logger.Info("💰 Cost Tracker: Creating transport", "configured_type", transportConfig.Type)
+	logger.Info("💰 Cost Tracker: Initializing transports", "transport_count", len(transportConfigs))
 
-	// Log additional transport config details
-	switch transportConfig.Type {
-	case "dynamodb":
-		if transportConfig.DynamoDB != nil {
-			logger.Info("💰 Cost Tracker: DynamoDB configuration",
-				"table_name", transportConfig.DynamoDB.TableName,
-				"region", transportConfig.DynamoDB.Region)
-		}
-	case "file":
-		if transportConfig.File != nil {
-			logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
-		}
-	}
+	// Create all configured transports
+	var transports []cost.Transport
+	var failedTransports []string
 
-	transport, err := cost.CreateTransportFromConfig(transportConfig, logger)
+	for i, transportConfig := range transportConfigs {
+		logger.Info("💰 Cost Tracker: Creating transport", "transport_index", i+1, "configured_type", transportConfig.Type)
 
-	var costTracker *cost.CostTracker
-	if err != nil {
-		// Log the failed config details
+		// Log additional transport config details
 		switch transportConfig.Type {
 		case "dynamodb":
 			if transportConfig.DynamoDB != nil {
-				logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
-					"configured_type", transportConfig.Type,
+				logger.Info("💰 Cost Tracker: DynamoDB configuration",
 					"table_name", transportConfig.DynamoDB.TableName,
-					"region", transportConfig.DynamoDB.Region,
-					"error", err)
-			} else {
-				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+					"region", transportConfig.DynamoDB.Region)
 			}
 		case "file":
 			if transportConfig.File != nil {
-				logger.Error("💰 Cost Tracker: Failed to create file transport",
-					"configured_type", transportConfig.Type,
-					"path", transportConfig.File.Path,
-					"error", err)
-			} else {
+				logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
+			}
+		case "datadog":
+			if transportConfig.Datadog != nil {
+				logger.Info("💰 Cost Tracker: Datadog configuration",
+					"host", transportConfig.Datadog.Host,
+					"port", transportConfig.Datadog.Port,
+					"namespace", transportConfig.Datadog.Namespace)
+			}
+		}
+
+		transport, err := cost.CreateTransportFromConfig(&transportConfig, logger)
+		if err != nil {
+			// Log the failed config details
+			switch transportConfig.Type {
+			case "dynamodb":
+				if transportConfig.DynamoDB != nil {
+					logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
+						"configured_type", transportConfig.Type,
+						"table_name", transportConfig.DynamoDB.TableName,
+						"region", transportConfig.DynamoDB.Region,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			case "file":
+				if transportConfig.File != nil {
+					logger.Error("💰 Cost Tracker: Failed to create file transport",
+						"configured_type", transportConfig.Type,
+						"path", transportConfig.File.Path,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			case "datadog":
+				if transportConfig.Datadog != nil {
+					logger.Error("💰 Cost Tracker: Failed to create Datadog transport",
+						"configured_type", transportConfig.Type,
+						"host", transportConfig.Datadog.Host,
+						"port", transportConfig.Datadog.Port,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			default:
 				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 			}
-		default:
-			logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+			failedTransports = append(failedTransports, transportConfig.Type)
+			continue
 		}
+
+		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
+		transports = append(transports, transport)
+	}
+
+	// Check if we have at least one working transport
+	if len(transports) == 0 {
+		logger.Error("💰 Cost Tracker: No transports could be created, falling back to file transport")
 
 		// Fallback to file transport with env var or default
 		outputFile := os.Getenv("COST_TRACKING_FILE")
 		if outputFile == "" {
 			outputFile = "logs/cost-tracking.jsonl"
 		}
+
 		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
-		transport = cost.NewFileTransport(outputFile)
-
-		// Create cost tracker with fallback transport
-		costTracker = cost.NewCostTracker(transport)
+		transport := cost.NewFileTransport(outputFile)
+		transports = append(transports, transport)
 		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
-	} else {
-		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
+	}
 
-		// Create cost tracker with the configured transport
-		costTracker = cost.NewCostTracker(transport)
+	// Create cost tracker with all working transports
+	costTracker := cost.NewCostTracker(transports...)
 
-		// Log initialization with config details
-		switch transportConfig.Type {
-		case "dynamodb":
-			if transportConfig.DynamoDB != nil {
-				logger.Info("💰 Cost Tracker: Initialized with DynamoDB",
-					"transport_type", "dynamodb",
-					"table_name", transportConfig.DynamoDB.TableName,
-					"region", transportConfig.DynamoDB.Region)
-			} else {
-				logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
-			}
-		case "file":
-			if transportConfig.File != nil {
-				logger.Info("💰 Cost Tracker: Initialized with file transport",
-					"transport_type", "file",
-					"path", transportConfig.File.Path)
-			} else {
-				logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
-			}
-		default:
-			logger.Info("💰 Cost Tracker: Initialized", "transport_type", transportConfig.Type)
+	// Log successful initialization
+	transportTypes := make([]string, len(transports))
+	for i := range transports {
+		if i < len(transportConfigs) {
+			transportTypes[i] = transportConfigs[i].Type
 		}
+	}
+
+	if len(failedTransports) > 0 {
+		logger.Warn("💰 Cost Tracker: Initialized with some transport failures",
+			"successful_transports", transportTypes,
+			"failed_transports", failedTransports)
+	} else {
+		logger.Info("💰 Cost Tracker: Initialized successfully",
+			"transport_types", transportTypes,
+			"transport_count", len(transports))
+	}
+
+	// Set up logger for the cost tracker
+	costTracker.SetLogger(logger)
+
+	// Configure async mode if enabled
+	if yamlConfig.Features.CostTracking.Async {
+		workers := yamlConfig.Features.CostTracking.Workers
+		if workers <= 0 {
+			workers = 5 // Default
+		}
+		queueSize := yamlConfig.Features.CostTracking.QueueSize
+		if queueSize <= 0 {
+			queueSize = 1000 // Default
+		}
+		flushInterval := yamlConfig.Features.CostTracking.FlushInterval
+		if flushInterval <= 0 {
+			flushInterval = 15 // Default
+		}
+
+		costTracker.ConfigureAsync(workers, queueSize, flushInterval)
+
+		// Start the async workers
+		if err := costTracker.StartAsyncWorkers(); err != nil {
+			logger.Error("💰 Cost Tracker: Failed to start async workers", "error", err)
+			logger.Warn("💰 Cost Tracker: Falling back to synchronous mode")
+			costTracker.SetSyncMode()
+		} else {
+			logger.Info("💰 Cost Tracker: Async mode enabled", "workers", workers, "queue_size", queueSize, "flush_interval_seconds", flushInterval)
+		}
+	} else {
+		logger.Info("💰 Cost Tracker: Synchronous mode enabled")
 	}
 
 	// Load pricing data from config for each provider and model
@@ -287,53 +345,79 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Add cost tracking stats if available
-	if globalCostTracker != nil {
-		if stats, err := globalCostTracker.GetStats(time.Now().Add(-24 * time.Hour)); err == nil {
-			health["cost_stats_24h"] = stats
-		}
-	}
+	// Cost tracking is write-only, no stats available
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(health)
 }
 
-func main() {
-	// Parse command line flags
-	var showVersion bool
-	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
-	flag.Parse()
+// handleConfigValidation handles the --validate-config flag functionality
+func handleConfigValidation(validateConfigArg string) {
+	// Parse comma-separated file paths
+	filePaths := strings.Split(validateConfigArg, ",")
+	for i, path := range filePaths {
+		filePaths[i] = strings.TrimSpace(path)
+	}
 
-	// Load environment-based configuration (base.yml + environment-specific config)
-	yamlConfig, err := config.LoadEnvironmentConfig()
+	fmt.Printf("Validating configuration files: %s\n", strings.Join(filePaths, ", "))
+
+	// Load and merge the configuration files using config package function
+	mergedConfig, err := config.LoadAndMergeConfigs(filePaths)
 	if err != nil {
-		logger.Warn("Failed to load environment config, using defaults", "error", err)
-		yamlConfig = config.GetDefaultYAMLConfig()
+		fmt.Fprintf(os.Stderr, "❌ Configuration validation failed: %v\n", err)
+		os.Exit(1)
 	}
 
-	// If version flag is set, print version and config then exit
-	if showVersion {
-		fmt.Printf("LLM Proxy version %s\n", version)
-		fmt.Println("Configuration:")
+	// Print success message with summary
+	fmt.Printf("✅ Configuration validation successful!\n")
+	fmt.Printf("📊 Configuration summary:\n")
+	fmt.Printf("   - Enabled: %v\n", mergedConfig.Enabled)
+	fmt.Printf("   - Cost tracking: %v\n", mergedConfig.Features.CostTracking.Enabled)
 
-		// Print configuration to stdout in a readable format
-		yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		})))
-
-		// Also print as JSON for machine parsing
-		fmt.Println("\nConfiguration JSON:")
-		configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
-		if err != nil {
-			fmt.Printf("Error marshaling config to JSON: %v\n", err)
-			os.Exit(1)
+	if mergedConfig.Features.CostTracking.Enabled {
+		transports := mergedConfig.GetAllTransports()
+		fmt.Printf("   - Transports: %d configured\n", len(transports))
+		for i, transport := range transports {
+			fmt.Printf("     %d. Type: %s\n", i+1, transport.Type)
 		}
-		fmt.Println(string(configJSON))
-
-		fmt.Println("Build successful - configuration loaded without errors")
-		os.Exit(0)
 	}
 
+	fmt.Printf("   - Providers: %d configured\n", len(mergedConfig.Providers))
+	for providerName, provider := range mergedConfig.Providers {
+		if provider.Enabled {
+			fmt.Printf("     - %s: %d models\n", providerName, len(provider.Models))
+		}
+	}
+
+	fmt.Printf("🎉 All configuration files are valid and merged successfully!\n")
+	os.Exit(0)
+}
+
+// handleVersionFlag handles the --version flag functionality
+func handleVersionFlag(yamlConfig *config.YAMLConfig) {
+	fmt.Printf("LLM Proxy version %s\n", version)
+	fmt.Println("Configuration:")
+
+	// Print configuration to stdout in a readable format
+	yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
+	// Also print as JSON for machine parsing
+	fmt.Println("\nConfiguration JSON:")
+	configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
+	if err != nil {
+		fmt.Printf("Error marshaling config to JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(configJSON))
+
+	fmt.Println("Build successful - configuration loaded without errors")
+	os.Exit(0)
+}
+
+// runServer starts and runs the LLM proxy server
+func runServer(yamlConfig *config.YAMLConfig) {
 	// Get port from environment variable or use default
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -448,7 +532,69 @@ func main() {
 		Handler: r,
 	}
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("Server failed to start", "error", err)
+	// Set up graceful shutdown
+	go func() {
+		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("Server failed to start", "error", err)
+		}
+	}()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Wait for shutdown signal
+	sig := <-sigChan
+	logger.Info("🛑 Received shutdown signal", "signal", sig.String())
+
+	// Create a context with timeout for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Shutdown the HTTP server
+	logger.Info("🔄 Shutting down HTTP server...")
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Error("HTTP server shutdown failed", "error", err)
+	} else {
+		logger.Info("✅ HTTP server shut down successfully")
 	}
+
+	// Stop async cost tracking workers and flush remaining records
+	if globalCostTracker != nil {
+		logger.Info("🔄 Stopping cost tracking workers and flushing queue...")
+		globalCostTracker.StopAsyncWorkers()
+		logger.Info("✅ Cost tracking workers stopped and queue flushed")
+	}
+
+	logger.Info("👋 Server shutdown complete")
+}
+
+func main() {
+	// Parse command line flags
+	var showVersion bool
+	var validateConfig string
+	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
+	flag.StringVar(&validateConfig, "validate-config", "", "Validate configuration files (comma-separated paths) and exit")
+	flag.Parse()
+
+	// Handle config validation if requested
+	if validateConfig != "" {
+		handleConfigValidation(validateConfig)
+	}
+
+	// Load environment-based configuration (base.yml + environment-specific config)
+	yamlConfig, err := config.LoadEnvironmentConfig()
+	if err != nil {
+		logger.Warn("Failed to load environment config, using defaults", "error", err)
+		yamlConfig = config.GetDefaultYAMLConfig()
+	}
+
+	// Handle version flag if requested
+	if showVersion {
+		handleVersionFlag(yamlConfig)
+	}
+
+	// Start the server
+	runServer(yamlConfig)
 }
