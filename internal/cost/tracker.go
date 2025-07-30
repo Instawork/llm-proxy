@@ -4,12 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
+
+// roundUpTo4Decimals rounds a float64 value up to the nearest 4th decimal place
+// For example: 0.1234555555 becomes 0.1235, 0.1234000000 remains 0.1234
+func roundUpTo4Decimals(value float64) float64 {
+	multiplier := 10000.0 // 10^4 for 4 decimal places
+	return math.Ceil(value*multiplier) / multiplier
+}
 
 // Transport defines the interface for cost tracking transports
 type Transport interface {
@@ -361,6 +369,12 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 	inputCost := (float64(inputTokens) / 1_000_000.0) * pricing.Input
 	outputCost := (float64(outputTokens) / 1_000_000.0) * pricing.Output
 	totalCost := inputCost + outputCost
+
+	// Round up all costs to the nearest 4th decimal place
+	inputCost = roundUpTo4Decimals(inputCost)
+	outputCost = roundUpTo4Decimals(outputCost)
+	totalCost = roundUpTo4Decimals(totalCost)
+
 	return inputCost, outputCost, totalCost, nil
 }
 
