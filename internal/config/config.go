@@ -165,7 +165,7 @@ func loadYAMLConfigWithoutValidation(filename string) (*YAMLConfig, error) {
 // based on the ENVIRONMENT variable (defaults to "dev")
 func LoadEnvironmentConfig() (*YAMLConfig, error) {
 	configDir := "configs"
-	
+
 	// Load base configuration
 	baseConfig, err := LoadYAMLConfig(filepath.Join(configDir, "base.yml"))
 	if err != nil {
@@ -255,7 +255,7 @@ func mergeConfigs(base, env *YAMLConfig) (*YAMLConfig, error) {
 // Values in b override values in a
 func deepMerge(a, b map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
-	
+
 	// Copy all values from a
 	for k, v := range a {
 		result[k] = v
