@@ -417,7 +417,7 @@ func TestGemini_FlashModel(t *testing.T) {
 		t.Fatalf("Failed to marshal request body: %v", err)
 	}
 
-	url := fmt.Sprintf("%s/gemini/v1/models/gemini-1.5-flash:generateContent?key=%s", server.URL, apiKey)
+	url := fmt.Sprintf("%s/gemini/v1/models/gemini-2.0-flash:generateContent?key=%s", server.URL, apiKey)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
