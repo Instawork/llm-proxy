@@ -161,15 +161,15 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 
 	// Send token metrics
 	if err := dt.client.Count("tokens.input", int64(record.InputTokens), tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send input tokens metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send input tokens metric to Datadog", "error", err)
 	}
 
 	if err := dt.client.Count("tokens.output", int64(record.OutputTokens), tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send output tokens metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send output tokens metric to Datadog", "error", err)
 	}
 
 	if err := dt.client.Count("tokens.total", int64(record.TotalTokens), tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send total tokens metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send total tokens metric to Datadog", "error", err)
 	}
 
 	// Send cost metrics (convert to cents to avoid floating point precision issues)
@@ -178,20 +178,20 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 	totalCostCents := int64(record.TotalCost * 100000)
 
 	if err := dt.client.Count("cost.input_cents", inputCostCents, tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send input cost metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send input cost metric to Datadog", "error", err)
 	}
 
 	if err := dt.client.Count("cost.output_cents", outputCostCents, tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send output cost metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send output cost metric to Datadog", "error", err)
 	}
 
 	if err := dt.client.Count("cost.total_cents", totalCostCents, tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send total cost metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send total cost metric to Datadog", "error", err)
 	}
 
 	// Send request count metric
 	if err := dt.client.Incr("requests.count", tags, 1.0); err != nil {
-		dt.logger.Warn("Failed to send request count metric to Datadog", "error", err)
+		dt.logger.Warn("💹 Failed to send request count metric to Datadog", "error", err)
 	}
 
 	dt.logger.Debug("💹 Datadog Transport: Metrics sent successfully",
