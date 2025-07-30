@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	claude35HaikuModel  = "claude-3-5-haiku-latest"
+	claude37SonnetModel = "claude-3-7-sonnet-latest"
+)
+
 // validateMetadata is a helper function to validate metadata parsing
 func validateAnthropicMetadata(t *testing.T, metadata *LLMResponseMetadata, expectedProvider string, isStreaming bool) {
 	if metadata == nil {
@@ -86,7 +91,7 @@ func TestAnthropic_NonStreaming(t *testing.T) {
 	defer server.Close()
 
 	requestBody := map[string]interface{}{
-		"model":      "claude-3-sonnet-20240229",
+		"model":      claude37SonnetModel,
 		"max_tokens": 100,
 		"messages": []map[string]string{
 			{
@@ -172,7 +177,7 @@ func TestAnthropic_Streaming(t *testing.T) {
 	defer server.Close()
 
 	requestBody := map[string]interface{}{
-		"model":      "claude-3-sonnet-20240229",
+		"model":      claude37SonnetModel,
 		"max_tokens": 100,
 		"messages": []map[string]string{
 			{
@@ -292,7 +297,7 @@ func TestAnthropic_HaikuModel(t *testing.T) {
 	defer server.Close()
 
 	requestBody := map[string]interface{}{
-		"model":      "claude-3-haiku-20240307",
+		"model":      claude35HaikuModel,
 		"max_tokens": 50,
 		"messages": []map[string]string{
 			{
