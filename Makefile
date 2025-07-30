@@ -50,8 +50,11 @@ help:
 	@echo "  fmt            - Format Go code"
 	@echo ""
 	@echo "$(GREEN)Docker:$(NC)"
-	@echo "  docker-build         - Build Docker image"
-	@echo "  docker-run           - Run Docker container"
+	@echo "  docker-build         - Build Docker image (dev environment)"
+	@echo "  docker-build-dev     - Build Docker image for development"
+	@echo "  docker-build-prod    - Build Docker image for production"
+	@echo "  docker-run           - Run Docker container (dev environment)"
+	@echo "  docker-run-prod      - Run Docker container (production)"
 	@echo "  docker-compose-up    - Start services with docker-compose"
 	@echo "  docker-compose-dev   - Start development services"
 	@echo "  docker-compose-down  - Stop services"
@@ -188,18 +191,29 @@ vet:
 check: fmt vet lint
 	@echo "$(GREEN)✓ All code quality checks completed$(NC)"
 
-# Build Docker image
+# Build Docker image for development (default)
 .PHONY: docker-build
-docker-build:
-	@echo "$(BLUE)Building Docker image...$(NC)"
-	@docker build -t llm-proxy:latest .
-	@echo "$(GREEN)✓ Docker image built$(NC)"
+docker-build: docker-build-dev
 
-# Run in Docker container
+# Build Docker image for development
+.PHONY: docker-build-dev
+docker-build-dev:
+	@echo "$(BLUE)Building Docker image for development...$(NC)"
+	@docker build -f build/Dockerfile -t llm-proxy:dev .
+	@echo "$(GREEN)✓ Docker image built: llm-proxy:dev$(NC)"
+
+# Build Docker image for production
+.PHONY: docker-build-prod
+docker-build-prod:
+	@echo "$(BLUE)Building Docker image for production...$(NC)"
+	@docker build -f build/Dockerfile.prod -t llm-proxy:production .
+	@echo "$(GREEN)✓ Docker image built: llm-proxy:production$(NC)"
+
+# Run in Docker container (dev environment)
 .PHONY: docker-run
 docker-run:
-	@echo "$(BLUE)Running Docker container...$(NC)"
-	@docker run -p 9002:9002 -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:latest
+	@echo "$(BLUE)Running Docker container (dev)...$(NC)"
+	@docker run -p 9002:9002 -e ENVIRONMENT=dev -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:dev
 
 # Check dependencies
 .PHONY: deps
@@ -267,18 +281,12 @@ status:
 	@echo "Go version: $(GO_VERSION)"
 	@echo "Git commit: $(GIT_COMMIT)"
 
-# Docker targets
-.PHONY: docker-build
-docker-build:
-	@echo "$(BLUE)Building Docker image...$(NC)"
-	@docker build -f build/Dockerfile -t llm-proxy:latest .
-	@echo "$(GREEN)✓ Docker image built: llm-proxy:latest$(NC)"
-
-.PHONY: docker-run
-docker-run:
-	@echo "$(BLUE)Running Docker container...$(NC)"
-	@docker run --rm -p 9002:9002 -v $(PWD)/configs:/app/configs:ro -v $(PWD)/logs:/app/logs llm-proxy:latest
-	@echo "$(GREEN)✓ Docker container started$(NC)"
+# Run Docker containers for different environments
+.PHONY: docker-run-prod
+docker-run-prod:
+	@echo "$(BLUE)Running Docker container (production)...$(NC)"
+	@docker run --rm -p 80:80 -e ENVIRONMENT=production -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:production
+	@echo "$(GREEN)✓ Docker container started (production)$(NC)"
 
 .PHONY: docker-compose-up
 docker-compose-up:
@@ -306,5 +314,5 @@ docker-compose-logs:
 docker-clean:
 	@echo "$(YELLOW)Cleaning Docker artifacts...$(NC)"
 	@docker compose down --rmi all --volumes --remove-orphans || true
-	@docker image rm llm-proxy:latest || true
+	@docker image rm llm-proxy:dev llm-proxy:production || true
 	@echo "$(GREEN)✓ Docker cleanup completed$(NC)"

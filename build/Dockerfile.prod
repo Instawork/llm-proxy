@@ -76,9 +76,8 @@ COPY --from=builder --chown=llmproxy:llmproxy /app/configs/ ./configs/
 # Switch to non-root user
 USER llmproxy:llmproxy
 
-# Set environment variables for production
-ENV ENV=production \
-    GIN_MODE=release \
+# Set environment variables for production (ENVIRONMENT can be overridden at runtime)
+ENV GIN_MODE=release \
     LOG_LEVEL=info \
     LOG_FORMAT=json \
     PORT=80

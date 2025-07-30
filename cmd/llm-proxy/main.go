@@ -304,10 +304,10 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
 	flag.Parse()
 
-	// Load YAML configuration
-	yamlConfig, err := config.LoadYAMLConfig("configs/config.yml")
+	// Load environment-based configuration (base.yml + environment-specific config)
+	yamlConfig, err := config.LoadEnvironmentConfig()
 	if err != nil {
-		logger.Warn("Failed to load YAML config, using defaults", "error", err)
+		logger.Warn("Failed to load environment config, using defaults", "error", err)
 		yamlConfig = config.GetDefaultYAMLConfig()
 	}
 

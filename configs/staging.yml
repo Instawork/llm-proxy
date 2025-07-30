@@ -1,0 +1,17 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# Staging configuration
+
+enabled: true
+
+features:
+  cost_tracking:
+    enabled: true
+    transport:
+      type: "dynamodb" # dynamodb or file
+      dynamodb:
+        table_name: "llm-proxy-cost-tracking"
+        region: "us-west-2"
+  rate_limiting:
+    enabled: false

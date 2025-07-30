@@ -55,5 +55,7 @@ EXPOSE 9002
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1
 
+# Environment variable ENVIRONMENT can be set at runtime (defaults to dev)
+
 # Set entrypoint
 ENTRYPOINT ["./llm-proxy"] 

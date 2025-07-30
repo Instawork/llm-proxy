@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -135,6 +136,149 @@ func LoadYAMLConfig(filename string) (*YAMLConfig, error) {
 	return &config, nil
 }
 
+// loadYAMLConfigWithoutValidation loads configuration from a YAML file without validation
+// This is used for environment-specific configs that may only contain partial overrides
+func loadYAMLConfigWithoutValidation(filename string) (*YAMLConfig, error) {
+	// Check if file exists
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		return &YAMLConfig{}, nil // Return empty config if file doesn't exist
+	}
+
+	// Read the file
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
+	}
+
+	// Parse YAML
+	var config YAMLConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
+	}
+
+	// Note: We intentionally skip validation and pricing parsing here
+	// since this is just for environment overrides
+	return &config, nil
+}
+
+// LoadEnvironmentConfig loads base configuration and overlays environment-specific configuration
+// based on the ENVIRONMENT variable (defaults to "dev")
+func LoadEnvironmentConfig() (*YAMLConfig, error) {
+	configDir := "configs"
+	
+	// Load base configuration
+	baseConfig, err := LoadYAMLConfig(filepath.Join(configDir, "base.yml"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load base configuration: %w", err)
+	}
+
+	// Get environment from environment variable, default to "dev"
+	env := os.Getenv("ENVIRONMENT")
+	if env == "" {
+		env = "dev"
+	}
+	slog.Info("Loading environment configuration", "environment", env)
+
+	// Load environment-specific configuration (skip validation since it's just overrides)
+	envConfigPath := filepath.Join(configDir, fmt.Sprintf("%s.yml", env))
+	envConfig, err := loadYAMLConfigWithoutValidation(envConfigPath)
+	if err != nil {
+		// If environment config doesn't exist, just use base config
+		if os.IsNotExist(err) {
+			return baseConfig, nil
+		}
+		return nil, fmt.Errorf("failed to load environment configuration for %s: %w", env, err)
+	}
+
+	// Merge environment config into base config
+	mergedConfig, err := mergeConfigs(baseConfig, envConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to merge configurations: %w", err)
+	}
+
+	return mergedConfig, nil
+}
+
+// mergeConfigs merges the environment config into the base config
+// Environment config values override base config values
+func mergeConfigs(base, env *YAMLConfig) (*YAMLConfig, error) {
+	// Convert both configs to YAML bytes
+	baseBytes, err := yaml.Marshal(base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal base config: %w", err)
+	}
+
+	envBytes, err := yaml.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal environment config: %w", err)
+	}
+
+	// Parse both as generic maps for merging
+	var baseMap map[string]interface{}
+	if err := yaml.Unmarshal(baseBytes, &baseMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal base config to map: %w", err)
+	}
+
+	var envMap map[string]interface{}
+	if err := yaml.Unmarshal(envBytes, &envMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal environment config to map: %w", err)
+	}
+
+	// Deep merge environment config into base config
+	mergedMap := deepMerge(baseMap, envMap)
+
+	// Convert merged map back to YAML bytes
+	mergedBytes, err := yaml.Marshal(mergedMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged config: %w", err)
+	}
+
+	// Parse back into YAMLConfig struct
+	var mergedConfig YAMLConfig
+	if err := yaml.Unmarshal(mergedBytes, &mergedConfig); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal merged config: %w", err)
+	}
+
+	// Validate and parse pricing
+	if err := mergedConfig.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid merged configuration: %w", err)
+	}
+
+	if err := mergedConfig.ParsePricing(); err != nil {
+		return nil, fmt.Errorf("failed to parse pricing in merged configuration: %w", err)
+	}
+
+	return &mergedConfig, nil
+}
+
+// deepMerge recursively merges map b into map a
+// Values in b override values in a
+func deepMerge(a, b map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	
+	// Copy all values from a
+	for k, v := range a {
+		result[k] = v
+	}
+
+	// Merge values from b
+	for k, v := range b {
+		if existingValue, exists := result[k]; exists {
+			// If both values are maps, merge them recursively
+			if existingMap, ok := existingValue.(map[string]interface{}); ok {
+				if newMap, ok := v.(map[string]interface{}); ok {
+					result[k] = deepMerge(existingMap, newMap)
+					continue
+				}
+			}
+		}
+		// Otherwise, override with the new value
+		result[k] = v
+	}
+
+	return result
+}
+
 // SaveYAMLConfig saves configuration to a YAML file
 func (c *YAMLConfig) SaveYAMLConfig(filename string) error {
 	data, err := yaml.Marshal(c)
@@ -243,9 +387,13 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 			}
 			if in, ok := tierMap["input"].(float64); ok {
 				tier.Input = in
+			} else if in, ok := tierMap["input"].(int); ok {
+				tier.Input = float64(in)
 			}
 			if out, ok := tierMap["output"].(float64); ok {
 				tier.Output = out
+			} else if out, ok := tierMap["output"].(int); ok {
+				tier.Output = float64(out)
 			}
 			mp.Tiers = append(mp.Tiers, tier)
 		}
@@ -253,23 +401,36 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 		// It's a simple price or has overrides.
 		if _, ok := v["input"]; ok {
 			// Simple pricing.
-			mp.Tiers = []PricingTier{
-				{
-					Threshold: 0,
-					Input:     v["input"].(float64),
-					Output:    v["output"].(float64),
-				},
+			tier := PricingTier{Threshold: 0}
+			if in, ok := v["input"].(float64); ok {
+				tier.Input = in
+			} else if in, ok := v["input"].(int); ok {
+				tier.Input = float64(in)
 			}
+			if out, ok := v["output"].(float64); ok {
+				tier.Output = out
+			} else if out, ok := v["output"].(int); ok {
+				tier.Output = float64(out)
+			}
+			mp.Tiers = []PricingTier{tier}
 		}
 
 		if overrides, ok := v["overrides"].(map[string]interface{}); ok {
 			mp.Overrides = make(map[string]Pricing)
 			for alias, overrideData := range overrides {
 				overrideMap := overrideData.(map[string]interface{})
-				mp.Overrides[alias] = Pricing{
-					Input:  overrideMap["input"].(float64),
-					Output: overrideMap["output"].(float64),
+				pricing := Pricing{}
+				if in, ok := overrideMap["input"].(float64); ok {
+					pricing.Input = in
+				} else if in, ok := overrideMap["input"].(int); ok {
+					pricing.Input = float64(in)
 				}
+				if out, ok := overrideMap["output"].(float64); ok {
+					pricing.Output = out
+				} else if out, ok := overrideMap["output"].(int); ok {
+					pricing.Output = float64(out)
+				}
+				mp.Overrides[alias] = pricing
 			}
 		}
 	default:

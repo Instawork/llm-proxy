@@ -1,0 +1,16 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# Development configuration
+
+enabled: true
+
+features:
+  cost_tracking:
+    enabled: true
+    transport:
+      type: "file"
+      file:
+        path: "./logs/cost-tracking.jsonl"
+  rate_limiting:
+    enabled: false
