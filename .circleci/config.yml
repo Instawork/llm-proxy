@@ -58,7 +58,7 @@ jobs:
               exit 1
             fi
 
-  test:
+  unit-tests:
     docker:
       - image: cimg/base:stable
     working_directory: ~/llm-proxy
@@ -67,6 +67,16 @@ jobs:
       - run:
           name: Run unit tests
           command: make test
+
+  integration-tests:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run integration tests
+          command: make test-integration
 
   build-and-push:
     docker:
@@ -94,7 +104,16 @@ workflows:
             tags:
               only: /.*/
 
-      - test:
+      - unit-tests:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
+      - integration-tests:
+          context:
+            - LLMs
           filters:
             branches:
               only: /.*/
@@ -104,7 +123,8 @@ workflows:
       - build-and-push:
           requires:
             - lint
-            - test
+            - unit-tests
+            - integration-tests
           filters:
             branches:
               only:
