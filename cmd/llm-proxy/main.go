@@ -102,9 +102,17 @@ func init() {
 	var handler slog.Handler
 
 	if logFormat == "json" {
-		// JSON format for production/machine parsing
+		// JSON format for production/machine parsing with AWS CloudWatch compatible timestamp
 		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 			Level: level,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				// Format time with consistent RFC3339 format for better log parsing
+				// This is more precise and timezone-aware than the basic AWS format
+				if a.Key == slog.TimeKey && len(groups) == 0 {
+					return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05,"))
+				}
+				return a
+			},
 		})
 	} else {
 		// Custom pretty format for local development (default)
@@ -112,6 +120,10 @@ func init() {
 	}
 
 	logger = slog.New(handler)
+
+	// Set our custom logger as the default slog logger
+	// This ensures that any slog.Info() calls throughout the codebase use our configured logger
+	slog.SetDefault(logger)
 }
 
 // initializeCostTracker creates and configures the cost tracker with pricing data from config

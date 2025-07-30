@@ -1,7 +1,6 @@
 package cost
 
 import (
-	"fmt"
 	"log/slog"
 	"testing"
 
@@ -63,42 +62,4 @@ func TestDynamoDBTransportIntegration(t *testing.T) {
 
 	// Test passed - successfully wrote cost record to DynamoDB
 	t.Log("Successfully tracked cost record to DynamoDB (write-only)")
-}
-
-// Example function showing how to create a DynamoDB-based cost tracker
-func ExampleNewDynamoDBTransport() {
-	// Configure DynamoDB transport
-	config := DynamoDBTransportConfig{
-		TableName: "llm-proxy-cost-tracking",
-		Region:    "us-west-2",
-		Logger:    slog.Default(),
-	}
-
-	// Create DynamoDB transport
-	transport, err := NewDynamoDBTransport(config)
-	if err != nil {
-		panic(err)
-	}
-
-	// Create cost tracker with DynamoDB transport
-	tracker := NewCostTracker(transport)
-
-	// Set up pricing for your models
-	openaiPricing := &ModelPricing{
-		Tiers: []PricingTier{
-			{
-				Threshold: 0,
-				Input:     0.5, // $0.50 per 1M input tokens
-				Output:    1.5, // $1.50 per 1M output tokens
-			},
-		},
-	}
-	tracker.SetPricingForModel("openai", "gpt-3.5-turbo", openaiPricing)
-
-	// Now you can use the tracker in your LLM proxy handlers
-	// tracker.TrackRequest(metadata, userID, ipAddress, endpoint)
-
-	// Output:
-	// DynamoDB transport configured successfully
-	fmt.Println("DynamoDB transport configured successfully")
 }
