@@ -95,20 +95,27 @@ help:
 	@echo "  docker-build-prod    - Build Docker image for production"
 	@echo "  docker-run           - Run Docker container (dev environment)"
 	@echo "  docker-run-prod      - Run Docker container (production)"
-	@echo "  docker-compose-up    - Start services with docker-compose"
-	@echo "  docker-compose-dev   - Start development services"
-	@echo "  docker-compose-down  - Stop services"
-	@echo "  docker-compose-logs  - View service logs"
-	@echo "  docker-clean         - Clean Docker artifacts"
+	@echo "  docker-compose-up      - Start services with docker-compose (dev mode)"
+	@echo "  docker-compose-dev     - Start in development mode (live reload)"
+	@echo "  docker-compose-prod    - Start production container (port 80)"
+	@echo "  docker-compose-monitoring - Start services with Datadog monitoring"
+	@echo "  docker-compose-datadog - Start services with Datadog agent (alias)"
+	@echo "  docker-compose-down    - Stop development services"
+	@echo "  docker-stop-prod       - Stop production container"
+	@echo "  docker-compose-logs    - View development service logs"
+	@echo "  docker-logs-prod       - View production container logs"
+	@echo "  docker-pull-datadog    - Pull the Datadog agent image"
+	@echo "  docker-clean           - Clean Docker artifacts"
 	@echo "  vet            - Run go vet"
 	@echo "  check          - Run all code quality checks"
 	@echo ""
 
 	@echo "$(GREEN)Utilities:$(NC)"
-	@echo "  deps           - Check dependencies"
-	@echo "  mod-tidy       - Clean up go.mod"
-	@echo "  version        - Show version information"
-	@echo "  env-check      - Check required environment variables"
+	@echo "  deps             - Check dependencies"
+	@echo "  mod-tidy         - Clean up go.mod"
+	@echo "  version          - Show version information"
+	@echo "  env-check        - Check required environment variables"
+	@echo "  datadog-env-check - Check Datadog environment variables"
 
 # Build the binary
 .PHONY: build
@@ -209,21 +216,21 @@ dev:
 .PHONY: lint
 lint:
 	@echo "$(BLUE)Running golint...$(NC)"
-	@golint ./src/... || echo "$(YELLOW)golint not installed, skipping...$(NC)"
+	@golint ./cmd/... ./internal/... || echo "$(YELLOW)golint not installed, skipping...$(NC)"
 	@echo "$(GREEN)✓ Lint completed$(NC)"
 
 # Format Go code
 .PHONY: fmt
 fmt:
 	@echo "$(BLUE)Formatting Go code...$(NC)"
-	@go fmt ./src/...
+	@go fmt ./cmd/... ./internal/...
 	@echo "$(GREEN)✓ Format completed$(NC)"
 
 # Run go vet
 .PHONY: vet
 vet:
 	@echo "$(BLUE)Running go vet...$(NC)"
-	@go vet ./src/...
+	@go vet ./cmd/... ./internal/...
 	@echo "$(GREEN)✓ Vet completed$(NC)"
 
 # Run all code quality checks
@@ -300,6 +307,25 @@ env-check:
 		echo "$(GREEN)✓ All environment variables are set$(NC)"; \
 	fi
 
+# Check Datadog environment variables
+.PHONY: datadog-env-check
+datadog-env-check:
+	@echo "$(BLUE)Checking Datadog environment variables...$(NC)"
+	@if [ -z "$$DD_API_KEY" ]; then \
+		echo "$(RED)✗ Missing: DD_API_KEY$(NC)"; \
+		echo "$(YELLOW)⚠️  DD_API_KEY is required for Datadog monitoring.$(NC)"; \
+		echo "$(YELLOW)   Get your API key from: https://app.datadoghq.com/organization-settings/api-keys$(NC)"; \
+		echo "$(YELLOW)   Set it with: export DD_API_KEY=your_datadog_api_key$(NC)"; \
+		exit 1; \
+	else \
+		echo "$(GREEN)✓ Found: DD_API_KEY$(NC)"; \
+	fi; \
+	if [ -n "$$DD_SITE" ]; then \
+		echo "$(GREEN)✓ Using DD_SITE: $$DD_SITE$(NC)"; \
+	else \
+		echo "$(YELLOW)ℹ  Using default DD_SITE: datadoghq.com$(NC)"; \
+	fi
+
 # Quick start target
 .PHONY: quick-start
 quick-start: install build
@@ -329,16 +355,51 @@ docker-run-prod:
 	@echo "$(GREEN)✓ Docker container started (production)$(NC)"
 
 .PHONY: docker-compose-up
-docker-compose-up:
-	@echo "$(BLUE)Starting services with docker-compose...$(NC)"
-	@docker compose up -d
-	@echo "$(GREEN)✓ Services started$(NC)"
+docker-compose-up: docker-compose-dev
 
 .PHONY: docker-compose-dev
 docker-compose-dev:
-	@echo "$(BLUE)Starting development services with docker-compose...$(NC)"
-	@docker compose --profile dev up -d
+	@echo "$(BLUE)Starting services in development mode (live reload)...$(NC)"
+	@ENVIRONMENT=dev LLM_PROXY_PORT=9002 docker compose up -d
 	@echo "$(GREEN)✓ Development services started$(NC)"
+	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:9002$(NC)"
+	@echo "$(YELLOW)📂 Source files are mounted for live development$(NC)"
+
+.PHONY: docker-compose-prod
+docker-compose-prod:
+	@echo "$(BLUE)Starting services in production mode...$(NC)"
+	@echo "$(YELLOW)Building production image first...$(NC)"
+	@docker build -f build/Dockerfile.prod -t llm-proxy:production .
+	@ENVIRONMENT=production LLM_PROXY_PORT=80 docker run -d \
+		--name llm-proxy-production \
+		-p 80:80 \
+		-e ENVIRONMENT=production \
+		-e OPENAI_API_KEY \
+		-e ANTHROPIC_API_KEY \
+		-e GEMINI_API_KEY \
+		-e DD_API_KEY \
+		llm-proxy:production
+	@echo "$(GREEN)✓ Production service started$(NC)"
+	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:80$(NC)"
+
+.PHONY: docker-compose-monitoring
+docker-compose-monitoring: datadog-env-check docker-pull-datadog
+	@echo "$(BLUE)Starting services with Datadog monitoring...$(NC)"
+	@ENVIRONMENT=${ENVIRONMENT:-dev} LLM_PROXY_PORT=${LLM_PROXY_PORT:-9002} docker compose --profile monitoring up -d
+	@echo "$(GREEN)✓ Services with monitoring started$(NC)"
+	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:${LLM_PROXY_PORT:-9002}$(NC)"
+	@echo "$(YELLOW)📊 Datadog agent running on:$(NC)"
+	@echo "$(YELLOW)   - DogStatsD: localhost:8125$(NC)"
+	@echo "$(YELLOW)   - APM: localhost:8126$(NC)"
+
+.PHONY: docker-compose-datadog
+docker-compose-datadog: docker-compose-monitoring
+
+.PHONY: docker-pull-datadog
+docker-pull-datadog:
+	@echo "$(BLUE)Pulling Datadog agent image...$(NC)"
+	@docker pull datadog/agent:latest
+	@echo "$(GREEN)✓ Datadog agent image pulled$(NC)"
 
 .PHONY: docker-compose-down
 docker-compose-down:
@@ -346,13 +407,27 @@ docker-compose-down:
 	@docker compose down
 	@echo "$(GREEN)✓ Services stopped$(NC)"
 
+.PHONY: docker-stop-prod
+docker-stop-prod:
+	@echo "$(BLUE)Stopping production service...$(NC)"
+	@docker stop llm-proxy-production || true
+	@docker rm llm-proxy-production || true
+	@echo "$(GREEN)✓ Production service stopped$(NC)"
+
 .PHONY: docker-compose-logs
 docker-compose-logs:
 	@docker compose logs -f
+
+.PHONY: docker-logs-prod
+docker-logs-prod:
+	@echo "$(BLUE)Viewing production container logs...$(NC)"
+	@docker logs -f llm-proxy-production
 
 .PHONY: docker-clean
 docker-clean:
 	@echo "$(YELLOW)Cleaning Docker artifacts...$(NC)"
 	@docker compose down --rmi all --volumes --remove-orphans || true
+	@docker stop llm-proxy-production || true
+	@docker rm llm-proxy-production || true
 	@docker image rm llm-proxy:dev llm-proxy:production || true
 	@echo "$(GREEN)✓ Docker cleanup completed$(NC)"

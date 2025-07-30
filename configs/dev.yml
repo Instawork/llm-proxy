@@ -19,7 +19,7 @@ features:
           path: "./logs/cost-tracking.jsonl"
       - type: "datadog"
         datadog:
-          host: "localhost"
+          host: "datadog-agent"
           port: "8125"
           namespace: "llm_proxy"
           tags: ["env:dev", "service:llm-proxy"]

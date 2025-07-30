@@ -3,18 +3,22 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile
-    container_name: llm-proxy-dev
+    container_name: llm-proxy-${ENVIRONMENT:-dev}
     ports:
-      - "9002:9002"
+      - "${LLM_PROXY_PORT:-9002}:9002"
     volumes:
-      - ./cmd:/app/cmd:ro
-      - ./internal:/app/internal:ro
-      - ./configs:/app/configs:ro
-      - ./logs:/app/logs
+      # Always mount source files for live development
+      - .:/app
+      - /app/bin  # Exclude bin directory to avoid conflicts
+      - ./logs:/app/logs  # Ensure logs directory is writable
+    working_dir: /app
+    command: ["go", "run", "./cmd/llm-proxy"]
     environment:
       - PORT=9002
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
       - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
+      - CGO_ENABLED=0
+      - ENVIRONMENT=${ENVIRONMENT:-dev}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health"]
@@ -24,31 +28,44 @@ services:
       start_period: 40s
     networks:
       - llm-proxy-network
-  llm-proxy-dev:
-    build:
-      context: .
-      dockerfile: build/Dockerfile
-      target: builder
-    container_name: llm-proxy-dev-watch
+
+  # Datadog Agent for monitoring and metrics collection
+  datadog-agent:
+    image: datadog/agent:latest
+    container_name: llm-proxy-datadog-agent
     profiles:
-      - dev
-    ports:
-      - "9003:9002"
-    volumes:
-      - .:/app
-      - /app/bin
-    working_dir: /app
-    command: ["go", "run", "./cmd/llm-proxy"]
+      - monitoring
+      - datadog
     environment:
-      - PORT=9002
-      - LOG_LEVEL=debug
-      - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
-      - CGO_ENABLED=0
-    restart: unless-stopped
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-datadoghq.com}
+      - DD_HOSTNAME=llm-proxy-${ENVIRONMENT:-dev}
+      - DD_TAGS=environment:${ENVIRONMENT:-dev},service:llm-proxy
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_LOG_LEVEL=INFO
+      - DD_APM_ENABLED=true
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+    ports:
+      - "8125:8125/udp"  # DogStatsD
+      - "8126:8126"      # APM
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./logs:/var/log/llm-proxy:ro
     networks:
       - llm-proxy-network
-    depends_on:
-      - llm-proxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "agent", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   llm-proxy-network:

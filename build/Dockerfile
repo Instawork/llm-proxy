@@ -1,8 +1,14 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
+# Development Dockerfile for LLM Proxy
+# This is for development use with `go run` - does not build binaries
+FROM golang:1.24-alpine
 
-# Install git and ca-certificates (needed for fetching dependencies)
-RUN apk add --no-cache git ca-certificates tzdata
+# Install development dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    curl \
+    wget
 
 # Set working directory
 WORKDIR /app
@@ -13,49 +19,22 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
-# Copy source code
+# Copy source code (this will be mounted as volume in development)
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY configs/ configs/
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o llm-proxy ./cmd/llm-proxy
-
-# Runtime stage
-FROM alpine:latest
-
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates tzdata
-
-# Create non-root user
-RUN adduser -D -s /bin/sh llmproxy
-
-# Set working directory
-WORKDIR /app
-
-# Copy binary from builder stage
-COPY --from=builder /app/llm-proxy .
-
-# Copy config directory
-COPY --from=builder /app/configs/ configs/
-
 # Create logs directory
-RUN mkdir -p logs && chown llmproxy:llmproxy logs
+RUN mkdir -p logs
 
-# Change ownership of app directory
-RUN chown -R llmproxy:llmproxy /app
-
-# Switch to non-root user
-USER llmproxy
+# Set development environment variables
+ENV GIN_MODE=debug \
+    LOG_LEVEL=debug \
+    LOG_FORMAT=text \
+    ENVIRONMENT=dev
 
 # Expose port
 EXPOSE 9002
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1
-
-# Environment variable ENVIRONMENT can be set at runtime (defaults to dev)
-
-# Set entrypoint
-ENTRYPOINT ["./llm-proxy"] 
+# Default command runs the application with go run for development
+CMD ["go", "run", "./cmd/llm-proxy"]

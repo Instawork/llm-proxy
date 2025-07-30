@@ -24,7 +24,7 @@ features:
           host: "localhost"
           port: "8125"
           namespace: "llm_proxy"
-          tags: ["env:production", "service:llm-proxy", "team:platform"]
+          tags: ["env:prod", "service:llm-proxy", "team:platform"]
           sample_rate: 1.0
       - type: "file"
         file:
