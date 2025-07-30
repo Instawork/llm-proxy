@@ -8,16 +8,14 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
-    # Enable async processing for production performance
     async: true
-    workers: 8 # More workers for production load
-    queue_size: 2000 # Larger queue for production traffic
-    flush_interval: 30 # Longer flush interval for production (30 seconds)
-    # Production: Multiple transports for redundancy and monitoring
+    workers: 8
+    queue_size: 500
+    flush_interval: 15
     transports:
       - type: "dynamodb"
         dynamodb:
-          table_name: "llm-proxy-cost-tracking-prod"
+          table_name: "llm-proxy-cost-tracking"
           region: "us-west-2"
       - type: "datadog"
         datadog:
