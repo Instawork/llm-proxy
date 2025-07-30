@@ -114,6 +114,7 @@ type PricingTier struct {
 
 // ModelPricing represents pricing information for a model, with optional overrides for aliases.
 type ModelPricing struct {
+	Default   Pricing            `yaml:"default,omitempty"`
 	Tiers     []PricingTier      `yaml:"tiers,omitempty"`
 	Overrides map[string]Pricing `yaml:"overrides,omitempty"` // Pricing for specific model aliases
 }
@@ -467,8 +468,34 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 			mp.Tiers = append(mp.Tiers, tier)
 		}
 	case map[string]interface{}:
-		// It's a simple price or has overrides.
-		if _, ok := v["input"]; ok {
+		// It's a simple price, has overrides, or already processed tiers.
+
+		// Check if it has already-processed tiers (from config merging)
+		if tiers, ok := v["tiers"].([]interface{}); ok {
+			for _, tierData := range tiers {
+				tierMap, ok := tierData.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid pricing tier format in tiers array")
+				}
+				tier := PricingTier{}
+				if th, ok := tierMap["threshold"].(int); ok {
+					tier.Threshold = th
+				} else if th, ok := tierMap["threshold"].(float64); ok {
+					tier.Threshold = int(th)
+				}
+				if in, ok := tierMap["input"].(float64); ok {
+					tier.Input = in
+				} else if in, ok := tierMap["input"].(int); ok {
+					tier.Input = float64(in)
+				}
+				if out, ok := tierMap["output"].(float64); ok {
+					tier.Output = out
+				} else if out, ok := tierMap["output"].(int); ok {
+					tier.Output = float64(out)
+				}
+				mp.Tiers = append(mp.Tiers, tier)
+			}
+		} else if _, ok := v["input"]; ok {
 			// Simple pricing.
 			tier := PricingTier{Threshold: 0}
 			if in, ok := v["input"].(float64); ok {

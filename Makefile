@@ -195,7 +195,7 @@ run: build
 	@echo "$(YELLOW)Server will be available at: http://localhost:9002$(NC)"
 	@echo "$(YELLOW)Health check: http://localhost:9002/health$(NC)"
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
-	@$(BINARY_PATH)
+	@LOG_LEVEL=debug $(BINARY_PATH)
 
 # Run in development mode
 .PHONY: dev
@@ -203,7 +203,7 @@ dev:
 	@echo "$(BLUE)Starting development server...$(NC)"
 	@echo "$(YELLOW)Server will be available at: http://localhost:9002$(NC)"
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
-	@go run $(MAIN_PATH)
+	@LOG_LEVEL=debug go run $(MAIN_PATH)
 
 # Run golint
 .PHONY: lint
@@ -253,7 +253,7 @@ docker-build-prod:
 .PHONY: docker-run
 docker-run:
 	@echo "$(BLUE)Running Docker container (dev)...$(NC)"
-	@docker run -p 9002:9002 -e ENVIRONMENT=dev -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:dev
+	@docker run -p 9002:9002 -e ENVIRONMENT=dev -e LOG_LEVEL=debug -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:dev
 
 # Check dependencies
 .PHONY: deps
