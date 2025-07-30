@@ -1,5 +1,13 @@
 # LLM Proxy Makefile
 # ==================
+#
+# Color support:
+#   - Auto-detects terminal color support
+#   - Respects NO_COLOR environment variable
+#   - Use FORCE_COLOR=1 to force colors in non-interactive environments
+
+# Force bash shell for compatibility with indirect parameter expansion
+SHELL := /bin/bash
 
 # Variables
 BINARY_NAME=llm-proxy
@@ -9,12 +17,44 @@ GO_VERSION=$(shell go version | cut -d' ' -f3)
 GIT_COMMIT=$(shell git rev-parse --short HEAD || echo "unknown")
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Colors for output
-RED=\033[0;31m
-GREEN=\033[0;32m
-YELLOW=\033[0;33m
-BLUE=\033[0;34m
-NC=\033[0m # No Color
+# Colors for output (auto-detect or force with FORCE_COLOR=1)
+ifdef FORCE_COLOR
+	RED=\033[0;31m
+	GREEN=\033[0;32m
+	YELLOW=\033[0;33m
+	BLUE=\033[0;34m
+	NC=\033[0m
+else
+ifeq ($(shell test -t 1 && echo true),true)
+ifndef NO_COLOR
+ifneq ($(TERM),dumb)
+	RED=\033[0;31m
+	GREEN=\033[0;32m
+	YELLOW=\033[0;33m
+	BLUE=\033[0;34m
+	NC=\033[0m
+else
+	RED=
+	GREEN=
+	YELLOW=
+	BLUE=
+	NC=
+endif
+else
+	RED=
+	GREEN=
+	YELLOW=
+	BLUE=
+	NC=
+endif
+else
+	RED=
+	GREEN=
+	YELLOW=
+	BLUE=
+	NC=
+endif
+endif
 
 # Default target
 .PHONY: all
