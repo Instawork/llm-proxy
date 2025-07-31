@@ -38,7 +38,7 @@ func NewDatadogTransport(cfg DatadogTransportConfig) (*DatadogTransport, error) 
 		cfg.Port = "8125"
 	}
 	if cfg.Namespace == "" {
-		cfg.Namespace = "llm_proxy"
+		cfg.Namespace = "llm"
 	}
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = 1.0

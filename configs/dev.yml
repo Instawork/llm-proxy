@@ -21,7 +21,7 @@ features:
         datadog:
           host: "datadog-agent"
           port: "8125"
-          namespace: "llm_proxy"
+          namespace: "llm"
           tags: ["env:dev", "service:llm-proxy"]
           sample_rate: 1.0
   rate_limiting:
