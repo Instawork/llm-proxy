@@ -1,6 +1,10 @@
 package providers
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -162,4 +166,36 @@ func newProxyTransport() *http.Transport {
 		// issues with streaming responses.
 		DisableCompression: true,
 	}
+}
+
+// DecompressResponseIfNeeded checks if the response is gzip compressed and decompresses it.
+// This is a shared utility function that all providers can use to handle gzip-compressed responses
+// when DisableCompression is set to true in the transport.
+func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
+	// Read the first few bytes to check for gzip magic number
+	buffer := make([]byte, 2)
+	peekReader := bufio.NewReader(reader)
+	n, err := peekReader.Read(buffer)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to peek at response: %w", err)
+	}
+
+	// Check if this looks like gzip (magic number 0x1f, 0x8b)
+	if n >= 2 && buffer[0] == 0x1f && buffer[1] == 0x8b {
+		log.Printf("🔍 Debug: Detected gzip compressed response, decompressing...")
+
+		// Create a new reader that includes the peeked bytes
+		combinedReader := io.MultiReader(bytes.NewReader(buffer[:n]), peekReader)
+
+		// Create gzip reader
+		gzipReader, err := gzip.NewReader(combinedReader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+
+		return gzipReader, nil
+	}
+
+	// Not gzipped, return the original reader with peeked bytes restored
+	return io.MultiReader(bytes.NewReader(buffer[:n]), peekReader), nil
 }

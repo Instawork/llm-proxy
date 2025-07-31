@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -262,10 +263,24 @@ func (a *AnthropicProxy) ParseResponseMetadata(responseBody io.Reader, isStreami
 
 // parseNonStreamingResponse handles standard Anthropic JSON responses
 func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	bodyBytes, err := io.ReadAll(responseBody)
+	// Handle potential gzip compression
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+
+	// If we got a gzip reader, make sure to close it
+	if gzipReader, ok := decompressedReader.(*gzip.Reader); ok {
+		defer gzipReader.Close()
+	}
+
+	bodyBytes, err := io.ReadAll(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+
+	// Log the response body preview for debugging
+	log.Printf("🔍 Debug: Response body preview: %s", string(bodyBytes[:min(100, len(bodyBytes))]))
 
 	var response AnthropicResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
@@ -288,7 +303,18 @@ func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLM
 
 // parseStreamingResponse handles Anthropic server-sent events
 func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	scanner := bufio.NewScanner(responseBody)
+	// Handle potential gzip compression
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress streaming response: %w", err)
+	}
+
+	// If we got a gzip reader, make sure to close it
+	if gzipReader, ok := decompressedReader.(*gzip.Reader); ok {
+		defer gzipReader.Close()
+	}
+
+	scanner := bufio.NewScanner(decompressedReader)
 	var metadata *LLMResponseMetadata
 	var model string
 	var requestID string

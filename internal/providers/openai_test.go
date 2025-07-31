@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -516,4 +517,138 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 	validateOpenAIMetadata(t, metadata, "openai", true)
 
 	t.Logf("OpenAI stream_options injection test passed. Received %d chunks, usage included: %v", chunkCount, hasUsage)
+}
+
+// TestOpenAIGzipDecompression tests the gzip decompression functionality
+func TestOpenAIGzipDecompression(t *testing.T) {
+	proxy := NewOpenAIProxy()
+
+	// Create a sample JSON response
+	originalResponse := `{
+		"id": "chatcmpl-9qKIpEXfmqkMbaMUhPCpnhWh3VRdU",
+		"object": "chat.completion",
+		"created": 1722445671,
+		"model": "gpt-4o-mini-2024-07-18",
+		"choices": [
+			{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "Hello! How can I assist you today?"
+				},
+				"finish_reason": "stop"
+			}
+		],
+		"usage": {
+			"prompt_tokens": 12,
+			"completion_tokens": 9,
+			"total_tokens": 21
+		}
+	}`
+
+	// Test 1: Uncompressed response should work as before
+	t.Run("uncompressed", func(t *testing.T) {
+		reader := strings.NewReader(originalResponse)
+		metadata, err := proxy.parseNonStreamingResponse(reader)
+		if err != nil {
+			t.Fatalf("Failed to parse uncompressed response: %v", err)
+		}
+
+		if metadata.Model != "gpt-4o-mini-2024-07-18" {
+			t.Errorf("Expected model gpt-4o-mini-2024-07-18, got %s", metadata.Model)
+		}
+		if metadata.InputTokens != 12 {
+			t.Errorf("Expected 12 input tokens, got %d", metadata.InputTokens)
+		}
+		if metadata.OutputTokens != 9 {
+			t.Errorf("Expected 9 output tokens, got %d", metadata.OutputTokens)
+		}
+		if metadata.TotalTokens != 21 {
+			t.Errorf("Expected 21 total tokens, got %d", metadata.TotalTokens)
+		}
+	})
+
+	// Test 2: Gzip compressed response should be decompressed and parsed correctly
+	t.Run("gzip_compressed", func(t *testing.T) {
+		// Compress the response using gzip
+		var compressedBuf bytes.Buffer
+		gzipWriter := gzip.NewWriter(&compressedBuf)
+		_, err := gzipWriter.Write([]byte(originalResponse))
+		if err != nil {
+			t.Fatalf("Failed to write to gzip writer: %v", err)
+		}
+		err = gzipWriter.Close()
+		if err != nil {
+			t.Fatalf("Failed to close gzip writer: %v", err)
+		}
+
+		// Parse the compressed response
+		reader := bytes.NewReader(compressedBuf.Bytes())
+		metadata, err := proxy.parseNonStreamingResponse(reader)
+		if err != nil {
+			t.Fatalf("Failed to parse gzip compressed response: %v", err)
+		}
+
+		if metadata.Model != "gpt-4o-mini-2024-07-18" {
+			t.Errorf("Expected model gpt-4o-mini-2024-07-18, got %s", metadata.Model)
+		}
+		if metadata.InputTokens != 12 {
+			t.Errorf("Expected 12 input tokens, got %d", metadata.InputTokens)
+		}
+		if metadata.OutputTokens != 9 {
+			t.Errorf("Expected 9 output tokens, got %d", metadata.OutputTokens)
+		}
+		if metadata.TotalTokens != 21 {
+			t.Errorf("Expected 21 total tokens, got %d", metadata.TotalTokens)
+		}
+	})
+
+	// Test 3: Test the shared decompression helper function directly with OpenAI
+	t.Run("shared_decompression_helper", func(t *testing.T) {
+		// Test with uncompressed data
+		uncompressedReader := strings.NewReader("test data")
+		result, err := DecompressResponseIfNeeded(uncompressedReader)
+		if err != nil {
+			t.Fatalf("Failed to process uncompressed data: %v", err)
+		}
+
+		data, err := io.ReadAll(result)
+		if err != nil {
+			t.Fatalf("Failed to read result: %v", err)
+		}
+		if string(data) != "test data" {
+			t.Errorf("Expected 'test data', got '%s'", string(data))
+		}
+
+		// Test with compressed data
+		var compressedBuf bytes.Buffer
+		gzipWriter := gzip.NewWriter(&compressedBuf)
+		_, err = gzipWriter.Write([]byte("compressed test data"))
+		if err != nil {
+			t.Fatalf("Failed to write compressed data: %v", err)
+		}
+		err = gzipWriter.Close()
+		if err != nil {
+			t.Fatalf("Failed to close gzip writer: %v", err)
+		}
+
+		compressedReader := bytes.NewReader(compressedBuf.Bytes())
+		result, err = DecompressResponseIfNeeded(compressedReader)
+		if err != nil {
+			t.Fatalf("Failed to process compressed data: %v", err)
+		}
+
+		// Close the gzip reader if it was created
+		if gzipReader, ok := result.(*gzip.Reader); ok {
+			defer gzipReader.Close()
+		}
+
+		data, err = io.ReadAll(result)
+		if err != nil {
+			t.Fatalf("Failed to read decompressed result: %v", err)
+		}
+		if string(data) != "compressed test data" {
+			t.Errorf("Expected 'compressed test data', got '%s'", string(data))
+		}
+	})
 }
