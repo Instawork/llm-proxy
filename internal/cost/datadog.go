@@ -161,32 +161,32 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 	}
 
 	// Send token metrics
-	if err := dt.client.Count("tokens.input", int64(record.InputTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.input", float64(record.InputTokens), tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send input tokens metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Count("tokens.output", int64(record.OutputTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.output", float64(record.OutputTokens), tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send output tokens metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Count("tokens.total", int64(record.TotalTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.total", float64(record.TotalTokens), tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send total tokens metric to Datadog", "error", err)
 	}
 
 	// Send cost metrics (convert to cents to avoid floating point precision issues in Datadog)
-	inputCostCents := int64(math.Ceil(record.InputCost * 100))
-	outputCostCents := int64(math.Ceil(record.OutputCost * 100))
-	totalCostCents := int64(math.Ceil(record.TotalCost * 100))
+	inputCostCents := float64(math.Ceil(record.InputCost * 100))
+	outputCostCents := float64(math.Ceil(record.OutputCost * 100))
+	totalCostCents := float64(math.Ceil(record.TotalCost * 100))
 
-	if err := dt.client.Count("cost.input_cents", inputCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.input_cents", inputCostCents, tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send input cost metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Count("cost.output_cents", outputCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.output_cents", outputCostCents, tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send output cost metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Count("cost.total_cents", totalCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.total_cents", totalCostCents, tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send total cost metric to Datadog", "error", err)
 	}
 
