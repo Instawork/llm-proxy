@@ -3,6 +3,7 @@ package cost
 import (
 	"fmt"
 	"log/slog"
+	"math"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
 
@@ -172,10 +173,10 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 		dt.logger.Warn("💹 Failed to send total tokens metric to Datadog", "error", err)
 	}
 
-	// Send cost metrics (convert to cents to avoid floating point precision issues)
-	inputCostCents := int64(record.InputCost * 100000) // Convert to 0.001 cent precision
-	outputCostCents := int64(record.OutputCost * 100000)
-	totalCostCents := int64(record.TotalCost * 100000)
+	// Send cost metrics (convert to cents to avoid floating point precision issues in Datadog)
+	inputCostCents := int64(math.Ceil(record.InputCost * 100))
+	outputCostCents := int64(math.Ceil(record.OutputCost * 100))
+	totalCostCents := int64(math.Ceil(record.TotalCost * 100))
 
 	if err := dt.client.Count("cost.input_cents", inputCostCents, tags, 1.0); err != nil {
 		dt.logger.Warn("💹 Failed to send input cost metric to Datadog", "error", err)

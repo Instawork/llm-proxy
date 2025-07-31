@@ -338,24 +338,3 @@ func (dt *DynamoDBTransport) toDynamoDBRecord(record *CostRecord) *DynamoDBCostR
 		FinishReason: record.FinishReason,
 	}
 }
-
-// fromDynamoDBRecord converts a DynamoDBCostRecord to CostRecord
-func (dt *DynamoDBTransport) fromDynamoDBRecord(dynamoRecord *DynamoDBCostRecord) *CostRecord {
-	return &CostRecord{
-		Timestamp:    time.Unix(dynamoRecord.Timestamp, 0),
-		RequestID:    dynamoRecord.RequestID,
-		UserID:       dynamoRecord.UserID,
-		IPAddress:    dynamoRecord.IPAddress,
-		Provider:     dynamoRecord.Provider,
-		Model:        dynamoRecord.Model,
-		Endpoint:     dynamoRecord.Endpoint,
-		IsStreaming:  dynamoRecord.IsStreaming,
-		InputTokens:  dynamoRecord.InputTokens,
-		OutputTokens: dynamoRecord.OutputTokens,
-		TotalTokens:  dynamoRecord.TotalTokens,
-		InputCost:    dynamoRecord.InputCost,
-		OutputCost:   dynamoRecord.OutputCost,
-		TotalCost:    dynamoRecord.TotalCost,
-		FinishReason: dynamoRecord.FinishReason,
-	}
-}

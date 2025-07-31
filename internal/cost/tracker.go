@@ -365,7 +365,7 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 		return 0, 0, 0, err
 	}
 
-	// Calculate costs (pricing is per 1M tokens)
+	// Calculate costs (pricing is per 1M tokens and in dollars)
 	inputCost := (float64(inputTokens) / 1_000_000.0) * pricing.Input
 	outputCost := (float64(outputTokens) / 1_000_000.0) * pricing.Output
 	totalCost := inputCost + outputCost
@@ -374,7 +374,6 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 	inputCost = roundUpTo4Decimals(inputCost)
 	outputCost = roundUpTo4Decimals(outputCost)
 	totalCost = roundUpTo4Decimals(totalCost)
-
 	return inputCost, outputCost, totalCost, nil
 }
 

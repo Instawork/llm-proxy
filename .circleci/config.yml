@@ -17,6 +17,9 @@ commands:
       - run:
           name: Download dependencies
           command: make install
+      - run:
+          name: Install gofumpt
+          command: go install mvdan.cc/gofumpt@latest
 
   setup_aws_and_docker:
     description: "Setup AWS CLI and Docker for ECR operations"
@@ -55,6 +58,14 @@ jobs:
             if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
               echo "Go code is not formatted:"
               gofmt -s -l .
+              exit 1
+            fi
+      - run:
+          name: Run gofumpt check
+          command: |
+            if [ "$(gofumpt -l . | wc -l)" -gt 0 ]; then
+              echo "Go code is not formatted with gofumpt:"
+              gofumpt -l .
               exit 1
             fi
 

@@ -87,7 +87,6 @@ func TestStreamingResponseWriter_Write(t *testing.T) {
 	// Write data
 	testData := []byte("test streaming data")
 	n, err := streamingWriter.Write(testData)
-
 	// Check write result
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
