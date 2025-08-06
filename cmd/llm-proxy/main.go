@@ -459,9 +459,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	globalProviderManager.RegisterProvider(geminiProvider)
 
 	// Add middleware (order matters for streaming)
+	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
-	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // Add URL rewriting before providers handle requests
 
 	// Create callbacks for cost tracking
 	var callbacks []middleware.MetadataCallback

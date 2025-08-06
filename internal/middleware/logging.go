@@ -22,7 +22,8 @@ func isAPIEndpoint(path string) bool {
 	return strings.Contains(path, "/chat/completions") ||
 		strings.Contains(path, "/completions") ||
 		strings.Contains(path, "/messages") ||
-		strings.Contains(path, ":generateContent")
+		strings.Contains(path, ":generateContent") ||
+		strings.Contains(path, ":streamGenerateContent")
 }
 
 // getProviderFromPath extracts provider name from the request path
@@ -98,6 +99,9 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 
 			// Log the completion with cost tracking status
 			duration := time.Since(start)
+
+			// Use the original streaming detection for consistency
+			// The issue might be elsewhere in the streaming detection logic
 			if isStreaming {
 				slog.Info("Completed streaming request",
 					slog.String("method", r.Method),

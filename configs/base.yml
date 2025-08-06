@@ -380,7 +380,12 @@ providers:
           output: 10.00
       "gemini-2.5-flash":
         enabled: true
-        aliases: ["gemini-flash-2.5", "gemini-2-5-flash"]
+        aliases:
+          [
+            "gemini-flash-2.5",
+            "gemini-2-5-flash",
+            "gemini-2.5-flash-preview-05-20",
+          ]
         limits:
           tokens_per_minute: 3_000_000
           requests_per_minute: 2_000
@@ -391,6 +396,24 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
+      "gemini-2.5-flash-lite":
+        enabled: true
+        aliases:
+          [
+            "gemini-flash-lite-2.5",
+            "gemini-2-5-flash-lite",
+            "gemini-2.5-flash-lite-preview",
+          ]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 0.10
+          output: 0.40
       "gemini-2.5-flash-thinking":
         enabled: true
         aliases: ["gemini-flash-2.5-thinking"]
@@ -406,7 +429,13 @@ providers:
           output: 2.50
       "gemini-2.0-flash":
         enabled: true
-        aliases: ["gemini-flash-2.0", "gemini-2-0-flash"]
+        aliases:
+          [
+            "gemini-flash-2.0",
+            "gemini-2-0-flash",
+            "gemini-2.0-flash-001",
+            "gemini-2.0-flash-exp",
+          ]
         limits:
           tokens_per_minute: 10_000_000
           requests_per_minute: 10_000
@@ -415,11 +444,16 @@ providers:
           burst_tokens: 1_000_000
           burst_requests: 1_000
         pricing:
-          input: 7.00
-          output: 21.00
+          input: 0.10
+          output: 0.40
       "gemini-2.0-flash-lite":
         enabled: true
-        aliases: ["gemini-flash-lite-2.0"]
+        aliases:
+          [
+            "gemini-flash-lite-2.0",
+            "gemini-2.0-flash-lite-001",
+            "gemini-2.0-flash-lite-exp",
+          ]
         limits:
           tokens_per_minute: 10_000_000
           requests_per_minute: 10_000
@@ -428,11 +462,18 @@ providers:
           burst_tokens: 1_000_000
           burst_requests: 1_000
         pricing:
-          input: 7.00
-          output: 21.00
+          input: 0.075
+          output: 0.30
       "gemini-1.5-pro":
         enabled: true
-        aliases: ["gemini-pro-1.5", "gemini-1-5-pro"]
+        aliases:
+          [
+            "gemini-pro-1.5",
+            "gemini-1-5-pro",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro-001",
+            "gemini-1.5-pro-002",
+          ]
         limits:
           tokens_per_minute: 4_000_000
           requests_per_minute: 1_000
@@ -441,11 +482,21 @@ providers:
           burst_tokens: 400_000
           burst_requests: 100
         pricing:
-          input: 7.00
-          output: 21.00
+          - threshold: 128_000
+            input: 1.25
+            output: 5.00
+          - threshold: 0 # Fallback for prompts > 128k tokens
+            input: 2.50
+            output: 10.00
       "gemini-1.5-flash":
         enabled: true
-        aliases: ["gemini-flash-1.5"]
+        aliases:
+          [
+            "gemini-flash-1.5",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-flash-002",
+          ]
         limits:
           tokens_per_minute: 4_000_000
           requests_per_minute: 1_000
@@ -454,8 +505,34 @@ providers:
           burst_tokens: 400_000
           burst_requests: 100
         pricing:
-          input: 7.00
-          output: 21.00
+          - threshold: 128_000
+            input: 0.075
+            output: 0.30
+          - threshold: 0 # Fallback for prompts > 128k tokens
+            input: 0.15
+            output: 0.60
+      "gemini-1.5-flash-8b":
+        enabled: true
+        aliases:
+          [
+            "gemini-flash-1.5-8b",
+            "gemini-1.5-flash-8b-latest",
+            "gemini-1.5-flash-8b-001",
+          ]
+        limits:
+          tokens_per_minute: 4_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 96_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 400_000
+          burst_requests: 100
+        pricing:
+          - threshold: 128_000
+            input: 0.0375
+            output: 0.15
+          - threshold: 0 # Fallback for prompts > 128k tokens
+            input: 0.075
+            output: 0.30
 
 # =============================================================================
 # DEFAULT RATE LIMITS (FALLBACKS)

@@ -382,6 +382,7 @@ func TestLoggingMiddleware_ProviderHelperFunctions(t *testing.T) {
 		{"Completions endpoint", "/openai/v1/completions", true, isAPIEndpoint},
 		{"Messages endpoint", "/anthropic/v1/messages", true, isAPIEndpoint},
 		{"Generate content endpoint", "/gemini/v1/models/test:generateContent", true, isAPIEndpoint},
+		{"Stream generate content endpoint", "/gemini/v1/models/test:streamGenerateContent", true, isAPIEndpoint},
 		{"Models endpoint", "/openai/v1/models", false, isAPIEndpoint},
 		{"Health endpoint", "/health", false, isAPIEndpoint},
 	}

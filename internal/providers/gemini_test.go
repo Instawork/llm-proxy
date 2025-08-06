@@ -603,3 +603,68 @@ func TestGemini_SSEStreaming(t *testing.T) {
 		t.Logf("Last chunk received: %s", lastChunk)
 	}
 }
+
+func TestGemini_ModelNameStripping(t *testing.T) {
+	// Test non-streaming response with models/ prefix
+	nonStreamingResponse := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "Hello"}]},
+			"finishReason": "STOP"
+		}],
+		"usageMetadata": {
+			"promptTokenCount": 10,
+			"candidatesTokenCount": 5,
+			"totalTokenCount": 15
+		},
+		"modelVersion": "models/gemini-2.5-flash-preview-05-20"
+	}`
+
+	geminiProvider := NewGeminiProxy()
+	metadata, err := geminiProvider.ParseResponseMetadata(strings.NewReader(nonStreamingResponse), false)
+	if err != nil {
+		t.Fatalf("Failed to parse non-streaming response: %v", err)
+	}
+
+	expectedModel := "gemini-2.5-flash-preview-05-20"
+	if metadata.Model != expectedModel {
+		t.Errorf("Expected model name '%s', got '%s'", expectedModel, metadata.Model)
+	}
+
+	// Test streaming response with models/ prefix
+	streamingResponse := `data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15},"modelVersion":"models/gemini-2.5-flash-preview-05-20"}
+
+data: [DONE]
+`
+
+	metadata, err = geminiProvider.ParseResponseMetadata(strings.NewReader(streamingResponse), true)
+	if err != nil {
+		t.Fatalf("Failed to parse streaming response: %v", err)
+	}
+
+	if metadata.Model != expectedModel {
+		t.Errorf("Expected model name '%s', got '%s'", expectedModel, metadata.Model)
+	}
+
+	// Test model name without models/ prefix (should remain unchanged)
+	nonStreamingResponseNoPrefix := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "Hello"}]},
+			"finishReason": "STOP"
+		}],
+		"usageMetadata": {
+			"promptTokenCount": 10,
+			"candidatesTokenCount": 5,
+			"totalTokenCount": 15
+		},
+		"modelVersion": "gemini-2.5-flash-preview-05-20"
+	}`
+
+	metadata, err = geminiProvider.ParseResponseMetadata(strings.NewReader(nonStreamingResponseNoPrefix), false)
+	if err != nil {
+		t.Fatalf("Failed to parse non-streaming response without prefix: %v", err)
+	}
+
+	if metadata.Model != expectedModel {
+		t.Errorf("Expected model name '%s', got '%s'", expectedModel, metadata.Model)
+	}
+}

@@ -283,6 +283,9 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 	model := response.ModelVersion
 	if model == "" {
 		model = "gemini" // fallback if model version is not provided
+	} else {
+		// Strip the "models/" prefix from the model name for consistency with configuration
+		model = strings.TrimPrefix(model, "models/")
 	}
 
 	metadata := &LLMResponseMetadata{
@@ -339,7 +342,7 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 
 		// Capture model information
 		if model == "" && streamResponse.ModelVersion != "" {
-			model = streamResponse.ModelVersion
+			model = strings.TrimPrefix(streamResponse.ModelVersion, "models/")
 		}
 
 		// Extract finish reason from candidates

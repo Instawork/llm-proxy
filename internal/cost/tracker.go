@@ -10,6 +10,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/hbollon/go-edlib"
 )
 
 // roundUpTo4Decimals rounds a float64 value up to the nearest 4th decimal place
@@ -64,9 +65,11 @@ type CostRecord struct {
 	InputCost  float64 `json:"input_cost"`  // Cost for input tokens in USD
 	OutputCost float64 `json:"output_cost"` // Cost for output tokens in USD
 	TotalCost  float64 `json:"total_cost"`  // Total cost in USD
+	IsEstimate bool    `json:"is_estimate"` // Whether this cost is an estimate based on fuzzy matching
 
 	// Additional metadata
 	FinishReason string `json:"finish_reason,omitempty"`
+	MatchedModel string `json:"matched_model,omitempty"` // The actual model used for pricing (if different from requested model)
 }
 
 // CostTracker manages cost tracking and output through transports
@@ -358,6 +361,69 @@ func (ct *CostTracker) GetPricingForModel(provider, model string, inputTokens in
 	return nil, fmt.Errorf("no pricing configured for provider %s model %s", provider, model)
 }
 
+// findClosestModelMatch uses fuzzy string matching to find the closest model name
+func (ct *CostTracker) findClosestModelMatch(provider, model string) (string, float64, error) {
+	providerPricing, exists := ct.pricingConfig[provider]
+	if !exists {
+		return "", 0, fmt.Errorf("provider %s not found", provider)
+	}
+
+	var bestMatch string
+	var bestScore float32
+	var bestScoreFound bool
+
+	// Check all available models for this provider
+	for availableModel := range providerPricing {
+		score, err := edlib.StringsSimilarity(model, availableModel, edlib.Levenshtein)
+		if err != nil {
+			ct.logger.Debug("Failed to calculate similarity", "model", model, "available_model", availableModel, "error", err)
+			continue
+		}
+
+		if !bestScoreFound || score > bestScore {
+			bestScore = score
+			bestMatch = availableModel
+			bestScoreFound = true
+		}
+	}
+
+	// Only return a match if the similarity score is above a threshold (e.g., 70%)
+	const similarityThreshold = 0.7
+	if bestScoreFound && bestScore >= similarityThreshold {
+		return bestMatch, float64(bestScore), nil
+	}
+
+	return "", 0, fmt.Errorf("no close match found for model %s (best score: %.2f%%, threshold: %.2f%%)", model, bestScore*100, similarityThreshold*100)
+}
+
+// GetPricingForModelWithFuzzyMatch retrieves pricing information with fuzzy matching fallback
+func (ct *CostTracker) GetPricingForModelWithFuzzyMatch(provider, model string, inputTokens int) (*PricingTier, string, bool, error) {
+	// First try exact match
+	pricing, err := ct.GetPricingForModel(provider, model, inputTokens)
+	if err == nil {
+		return pricing, model, false, nil // Exact match found
+	}
+
+	// If exact match fails, try fuzzy matching
+	closestModel, similarity, err := ct.findClosestModelMatch(provider, model)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("no pricing found for model %s and no close match available: %w", model, err)
+	}
+
+	// Get pricing for the closest match
+	pricing, err = ct.GetPricingForModel(provider, closestModel, inputTokens)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("found close match %s (%.2f%% similarity) but no pricing available: %w", closestModel, similarity, err)
+	}
+
+	ct.logger.Debug("💰 Cost Tracker: Using fuzzy match for pricing",
+		"requested_model", model,
+		"matched_model", closestModel,
+		"similarity_score", similarity)
+
+	return pricing, closestModel, true, nil // Fuzzy match found
+}
+
 // CalculateCost calculates the cost for a request based on token usage
 func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, outputTokens int) (float64, float64, float64, error) {
 	pricing, err := ct.GetPricingForModel(provider, model, inputTokens)
@@ -377,10 +443,31 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 	return inputCost, outputCost, totalCost, nil
 }
 
+// CalculateCostWithFuzzyMatch calculates the cost for a request with fuzzy matching fallback
+func (ct *CostTracker) CalculateCostWithFuzzyMatch(provider, model string, inputTokens, outputTokens int) (float64, float64, float64, string, bool, error) {
+	// Try to get pricing with fuzzy matching
+	pricing, matchedModel, isEstimate, err := ct.GetPricingForModelWithFuzzyMatch(provider, model, inputTokens)
+	if err != nil {
+		return 0, 0, 0, "", false, err
+	}
+
+	// Calculate costs (pricing is per 1M tokens and in dollars)
+	inputCost := (float64(inputTokens) / 1_000_000.0) * pricing.Input
+	outputCost := (float64(outputTokens) / 1_000_000.0) * pricing.Output
+	totalCost := inputCost + outputCost
+
+	// Round up all costs to the nearest 4th decimal place
+	inputCost = roundUpTo4Decimals(inputCost)
+	outputCost = roundUpTo4Decimals(outputCost)
+	totalCost = roundUpTo4Decimals(totalCost)
+
+	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
+}
+
 // TrackRequest processes a request and writes cost information to transports (sync or async based on configuration)
 func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, userID, ipAddress, endpoint string) error {
-	// Calculate costs
-	inputCost, outputCost, totalCost, err := ct.CalculateCost(
+	// Calculate costs with fuzzy matching fallback
+	inputCost, outputCost, totalCost, matchedModel, isEstimate, err := ct.CalculateCostWithFuzzyMatch(
 		metadata.Provider,
 		metadata.Model,
 		metadata.InputTokens,
@@ -390,6 +477,8 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		ct.logger.Debug("Could not calculate cost for request", "provider", metadata.Provider, "model", metadata.Model, "error", err)
 		// Continue with zero costs rather than failing
 		inputCost, outputCost, totalCost = 0, 0, 0
+		isEstimate = false
+		matchedModel = ""
 	}
 
 	// Create cost record
@@ -408,20 +497,35 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		InputCost:    inputCost,
 		OutputCost:   outputCost,
 		TotalCost:    totalCost,
+		IsEstimate:   isEstimate,
 		FinishReason: metadata.FinishReason,
+		MatchedModel: matchedModel,
 	}
 
 	// Log the cost information
 	if totalCost > 0 {
-		ct.logger.Debug("💵 Cost Tracking: Request processed",
-			"provider", metadata.Provider,
-			"model", metadata.Model,
-			"total_tokens", metadata.TotalTokens,
-			"input_tokens", metadata.InputTokens,
-			"output_tokens", metadata.OutputTokens,
-			"total_cost", totalCost,
-			"input_cost", inputCost,
-			"output_cost", outputCost)
+		if isEstimate {
+			ct.logger.Warn("💵 Cost Tracking: Request processed (Fuzzy Match)",
+				"provider", metadata.Provider,
+				"requested_model", metadata.Model,
+				"matched_model", matchedModel,
+				"total_tokens", metadata.TotalTokens,
+				"input_tokens", metadata.InputTokens,
+				"output_tokens", metadata.OutputTokens,
+				"total_cost", totalCost,
+				"input_cost", inputCost,
+				"output_cost", outputCost)
+		} else {
+			ct.logger.Debug("💵 Cost Tracking: Request processed",
+				"provider", metadata.Provider,
+				"model", metadata.Model,
+				"total_tokens", metadata.TotalTokens,
+				"input_tokens", metadata.InputTokens,
+				"output_tokens", metadata.OutputTokens,
+				"total_cost", totalCost,
+				"input_cost", inputCost,
+				"output_cost", outputCost)
+		}
 	} else {
 		ct.logger.Debug("💵 Cost Tracking: Request processed (no pricing configured)",
 			"provider", metadata.Provider,

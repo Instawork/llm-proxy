@@ -74,7 +74,8 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
 				strings.Contains(r.URL.Path, "/completions") ||
 				strings.Contains(r.URL.Path, "/messages") ||
-				strings.Contains(r.URL.Path, ":generateContent")
+				strings.Contains(r.URL.Path, ":generateContent") ||
+				strings.Contains(r.URL.Path, ":streamGenerateContent")
 
 			log.Printf("🔍 Debug: Provider: %v, API endpoint: %v, Response body length: %d",
 				provider != nil, isAPIEndpoint, captureWriter.body.Len())
