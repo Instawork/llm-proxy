@@ -147,6 +147,7 @@ if [[ "$SKIP_AWS_SETUP" == false ]]; then
     
     # Login to AWS ECR
     print_info "Logging into AWS ECR..."
+    aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_URL_PREFIX}
     
     if [[ $? -eq 0 ]]; then
         print_success "Successfully logged into ECR"

@@ -101,7 +101,49 @@ jobs:
       - run:
           name: Build and push Docker image
           command: |
-            ./scripts/build_for_ecr.sh
+            # Get the short SHA for tagging
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            echo "Building image with SHA: ${GIT_SHA}"
+            ./scripts/build_for_ecr.sh -s ${GIT_SHA}
+            # Save the SHA for the deployment job
+            echo ${GIT_SHA} > /tmp/git_sha.txt
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - git_sha.txt
+
+  deploy-prod:
+    docker:
+      - image: cimg/python:3.11.8
+    steps:
+      - checkout
+      - add_ssh_keys
+      - attach_workspace:
+          at: /tmp
+      - run:
+          name: Install dependencies
+          command: |
+            pip install awscli
+      - run:
+          name: Deploy to production
+          command: |
+            export GIT_SHA=$(cat /tmp/git_sha.txt)
+            echo "Deploying SHA: ${GIT_SHA} to production"
+            ./scripts/deploy.sh production ${GIT_SHA}
+      - run:
+          name: Ping Slack Success
+          command: |
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":white_check_mark: *production* deployment of *llm-proxy* has successfully deployed with SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_success
+      - run:
+          name: Ping Slack Failure
+          command: |
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":red_circle: *production* deployment of *llm-proxy* has failed for SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_fail
 
 # Define workflows
 workflows:
@@ -140,8 +182,25 @@ workflows:
             branches:
               only:
                 - main
-                - develop
             tags:
               ignore: /.*/
           context:
             - AWS
+
+      - deploy-prod-hold:
+          type: approval
+          requires:
+            - build-and-push
+          filters:
+            branches:
+              only: main
+
+      - deploy-prod:
+          requires:
+            - deploy-prod-hold
+          filters:
+            branches:
+              only: main
+          context:
+            - AWS
+            - Slack
