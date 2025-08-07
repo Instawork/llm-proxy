@@ -55,8 +55,7 @@ echo "==========================================="
 
 # Clone infrastructure repository
 echo "Cloning infrastructure repository..."
-git clone git@github.com:Instawork/infrastructure.git
-git checkout eric/llm-proxy-service
+git clone --branch eric/llm-proxy-service git@github.com:Instawork/infrastructure.git
 
 # Navigate to the correct Terraform directory
 cd infrastructure/live/production/services/llm-proxy/ecs
