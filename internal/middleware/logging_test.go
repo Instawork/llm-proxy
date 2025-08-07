@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,58 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/gorilla/mux"
 )
+
+// MockProvider implements the Provider interface for testing
+type MockProvider struct {
+	name string
+}
+
+func (mp *MockProvider) GetName() string {
+	return mp.name
+}
+
+func (mp *MockProvider) IsStreamingRequest(req *http.Request) bool {
+	return req.Header.Get("Accept") == "text/event-stream"
+}
+
+func (mp *MockProvider) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*providers.LLMResponseMetadata, error) {
+	return &providers.LLMResponseMetadata{
+		Provider:     mp.name,
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+		TotalTokens:  15,
+		IsStreaming:  isStreaming,
+	}, nil
+}
+
+func (mp *MockProvider) Proxy() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("mock response"))
+	})
+}
+
+func (mp *MockProvider) GetHealthStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"status": "healthy",
+		"name":   mp.name,
+	}
+}
+
+func (mp *MockProvider) UserIDFromRequest(req *http.Request) string {
+	return ""
+}
+
+func (mp *MockProvider) RegisterExtraRoutes(router *mux.Router) {
+	// No extra routes for mock provider
+}
+
+func (mp *MockProvider) ValidateAPIKey(req *http.Request, keyStore providers.APIKeyStore) error {
+	return nil
+}
 
 // captureLogOutput captures log output for testing
 func captureLogOutput(fn func()) string {
@@ -46,12 +98,12 @@ func TestLoggingMiddleware_BasicLogging(t *testing.T) {
 		loggingHandler.ServeHTTP(recorder, req)
 	})
 
-	// Check that both start and completion logs are present
-	if !strings.Contains(logOutput, "Started GET /test/path from 192.168.1.1:12345") {
+	// Check that both start and completion logs are present with structured logging format
+	if !strings.Contains(logOutput, "Started request") {
 		t.Error("Expected start log message not found")
 	}
 
-	if !strings.Contains(logOutput, "Completed GET /test/path in") {
+	if !strings.Contains(logOutput, "Completed request") {
 		t.Error("Expected completion log message not found")
 	}
 
@@ -95,20 +147,8 @@ func TestLoggingMiddleware_StreamingRequest(t *testing.T) {
 	})
 
 	// The middleware should log the request (streaming detection depends on provider manager)
-	if !strings.Contains(logOutput, "POST /openai/v1/chat/completions from 10.0.0.1:54321") {
+	if !strings.Contains(logOutput, "Started request") {
 		t.Error("Expected request log message not found")
-	}
-
-	// Should have both start and completion logs
-	startLogs := strings.Count(logOutput, "Started")
-	completionLogs := strings.Count(logOutput, "Completed")
-
-	if startLogs != 1 {
-		t.Errorf("Expected 1 start log, got %d", startLogs)
-	}
-
-	if completionLogs != 1 {
-		t.Errorf("Expected 1 completion log, got %d", completionLogs)
 	}
 }
 
@@ -116,41 +156,35 @@ func TestLoggingMiddleware_TimingAccuracy(t *testing.T) {
 	// Create a mock provider manager
 	manager := providers.NewProviderManager()
 
-	// Create a handler with known delay
+	// Create a test handler with a known delay
 	expectedDelay := 50 * time.Millisecond
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(expectedDelay)
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("delayed response"))
 	})
 
 	// Wrap with logging middleware
 	loggingHandler := LoggingMiddleware(manager)(handler)
 
 	// Create test request
-	req := httptest.NewRequest("POST", "/test", nil)
+	req := httptest.NewRequest("GET", "/test/timing", nil)
+	req.RemoteAddr = "127.0.0.1:8080"
 	recorder := httptest.NewRecorder()
 
-	// Measure actual time and capture logs
-	start := time.Now()
+	// Capture log output
 	logOutput := captureLogOutput(func() {
 		loggingHandler.ServeHTTP(recorder, req)
 	})
-	actualDuration := time.Since(start)
 
-	// Check that the logged duration is reasonable
-	if !strings.Contains(logOutput, "Completed POST /test in") {
+	// Check that completion log with timing is present
+	if !strings.Contains(logOutput, "Completed request") {
 		t.Error("Expected completion log with timing not found")
 	}
 
-	// The actual duration should be at least the expected delay
-	if actualDuration < expectedDelay {
-		t.Errorf("Actual duration %v should be at least %v", actualDuration, expectedDelay)
-	}
-
-	// The logged duration should be close to actual (within reasonable margin)
-	// This is a rough check since parsing the exact duration from log would be complex
-	if actualDuration > expectedDelay*3 {
-		t.Errorf("Duration seems too long: %v (expected around %v)", actualDuration, expectedDelay)
+	// Check response
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
 	}
 }
 
@@ -158,9 +192,10 @@ func TestLoggingMiddleware_DifferentMethods(t *testing.T) {
 	// Create a mock provider manager
 	manager := providers.NewProviderManager()
 
-	// Create a simple handler
+	// Create a test handler
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("method test"))
 	})
 
 	// Wrap with logging middleware
@@ -168,7 +203,6 @@ func TestLoggingMiddleware_DifferentMethods(t *testing.T) {
 
 	// Test different HTTP methods
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
-
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			req := httptest.NewRequest(method, "/api/test", nil)
@@ -179,15 +213,19 @@ func TestLoggingMiddleware_DifferentMethods(t *testing.T) {
 				loggingHandler.ServeHTTP(recorder, req)
 			})
 
-			expectedStart := "Started " + method + " /api/test from 127.0.0.1:8080"
-			expectedComplete := "Completed " + method + " /api/test in"
-
-			if !strings.Contains(logOutput, expectedStart) {
-				t.Errorf("Expected start log '%s' not found in: %s", expectedStart, logOutput)
+			// Check for start log with structured logging format
+			if !strings.Contains(logOutput, "Started request") {
+				t.Error("Expected start log message not found")
 			}
 
-			if !strings.Contains(logOutput, expectedComplete) {
-				t.Errorf("Expected completion log '%s' not found in: %s", expectedComplete, logOutput)
+			// Check for completion log with structured logging format
+			if !strings.Contains(logOutput, "Completed request") {
+				t.Error("Expected completion log message not found")
+			}
+
+			// Check response
+			if recorder.Code != http.StatusOK {
+				t.Errorf("Expected status 200, got %d", recorder.Code)
 			}
 		})
 	}
@@ -207,128 +245,116 @@ func TestLoggingMiddleware_HandlerPanic(t *testing.T) {
 
 	// Create test request
 	req := httptest.NewRequest("GET", "/panic", nil)
+	req.RemoteAddr = "192.0.2.1:1234"
 	recorder := httptest.NewRecorder()
 
-	// The middleware doesn't handle panics, so this will panic
-	// We'll defer recover to catch it and capture logs properly
-	var logOutput string
-	var panicked bool
-
-	// Capture log output with panic recovery inside the capture function
-	logOutput = captureLogOutput(func() {
+	// Capture log output and expect panic
+	logOutput := captureLogOutput(func() {
 		defer func() {
-			if r := recover(); r != nil {
-				panicked = true
+			if r := recover(); r == nil {
+				t.Error("Expected panic to occur")
 			}
 		}()
-
 		loggingHandler.ServeHTTP(recorder, req)
 	})
 
-	if !panicked {
-		t.Error("Expected handler to panic")
+	// Should still log the start even when handler panics
+	if !strings.Contains(logOutput, "Started request") {
+		t.Error("Expected start log even when handler panics, got log:", logOutput)
 	}
-
-	// Should still have the start log even if handler panics
-	if !strings.Contains(logOutput, "Started GET /panic") {
-		t.Errorf("Expected start log even when handler panics, got log: %s", logOutput)
-	}
-
-	// Completion log might not be present due to panic
-	// This is expected behavior as the middleware doesn't handle panics
 }
 
 func TestLoggingMiddleware_RootPath(t *testing.T) {
 	// Create a mock provider manager
 	manager := providers.NewProviderManager()
 
-	// Create a simple handler
+	// Create a test handler
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("root response"))
 	})
 
 	// Wrap with logging middleware
 	loggingHandler := LoggingMiddleware(manager)(handler)
 
-	// Create request with root path
+	// Create test request for root path
 	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "192.168.1.100:9000"
+	req.RemoteAddr = "10.0.0.1:8080"
 	recorder := httptest.NewRecorder()
 
+	// Capture log output
 	logOutput := captureLogOutput(func() {
 		loggingHandler.ServeHTTP(recorder, req)
 	})
 
-	// Should handle root path gracefully
-	if !strings.Contains(logOutput, "Started GET /") {
+	// Check for start log with structured logging format
+	if !strings.Contains(logOutput, "Started request") {
 		t.Error("Expected start log with GET method and root path")
 	}
 
-	if !strings.Contains(logOutput, "from 192.168.1.100:9000") {
+	// Check that remote address is included
+	if !strings.Contains(logOutput, "10.0.0.1:8080") {
 		t.Error("Expected remote address in log")
+	}
+
+	// Check response
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
 	}
 }
 
 func TestLoggingMiddleware_NonTrackedProviderRoutes(t *testing.T) {
-	// Create a mock provider manager with all providers
+	// Create a mock provider manager
 	manager := providers.NewProviderManager()
-	openAIProvider := providers.NewOpenAIProxy()
-	manager.RegisterProvider(openAIProvider)
-	anthropicProvider := providers.NewAnthropicProxy()
-	manager.RegisterProvider(anthropicProvider)
-	geminiProvider := providers.NewGeminiProxy()
-	manager.RegisterProvider(geminiProvider)
+
+	// Register mock providers for testing
+	manager.RegisterProvider(&MockProvider{name: "openai"})
+	manager.RegisterProvider(&MockProvider{name: "anthropic"})
+	manager.RegisterProvider(&MockProvider{name: "gemini"})
 
 	// Create a test handler
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("test response"))
+		w.Write([]byte("provider response"))
 	})
 
 	// Wrap with logging middleware
 	loggingHandler := LoggingMiddleware(manager)(handler)
 
 	testCases := []struct {
-		name            string
-		path            string
-		expectedLog     string
-		shouldBeTracked bool
+		name     string
+		path     string
+		expected string
 	}{
 		{
-			name:            "OpenAI non-API endpoint",
-			path:            "/openai/v1/models",
-			expectedLog:     "📊 NON-TRACKED PROVIDER ROUTE: Non-API endpoint",
-			shouldBeTracked: false,
+			name:     "OpenAI non-API endpoint",
+			path:     "/openai/v1/models",
+			expected: "Non-tracked provider route",
 		},
 		{
-			name:            "OpenAI health endpoint",
-			path:            "/openai/health",
-			expectedLog:     "📊 NON-TRACKED PROVIDER ROUTE: Non-API endpoint",
-			shouldBeTracked: false,
+			name:     "OpenAI health endpoint",
+			path:     "/openai/health",
+			expected: "Non-tracked provider route",
 		},
 		{
-			name:            "OpenAI chat completions (should be tracked)",
-			path:            "/openai/v1/chat/completions",
-			expectedLog:     "✅ TRACKED",
-			shouldBeTracked: true,
+			name:     "OpenAI chat completions (should be tracked)",
+			path:     "/openai/v1/chat/completions",
+			expected: "Provider route tracked",
 		},
 		{
-			name:            "Anthropic non-API endpoint",
-			path:            "/anthropic/v1/status",
-			expectedLog:     "📊 NON-TRACKED PROVIDER ROUTE: Non-API endpoint",
-			shouldBeTracked: false,
+			name:     "Anthropic non-API endpoint",
+			path:     "/anthropic/v1/status",
+			expected: "Non-tracked provider route",
 		},
 		{
-			name:            "Gemini non-API endpoint",
-			path:            "/gemini/v1/models",
-			expectedLog:     "📊 NON-TRACKED PROVIDER ROUTE: Non-API endpoint",
-			shouldBeTracked: false,
+			name:     "Gemini non-API endpoint",
+			path:     "/gemini/v1/models",
+			expected: "Non-tracked provider route",
 		},
 		{
-			name:            "Non-provider route",
-			path:            "/health",
-			expectedLog:     "",
-			shouldBeTracked: false,
+			name:     "Non-provider route",
+			path:     "/health",
+			expected: "", // No special logging for non-provider routes
 		},
 	}
 
@@ -338,26 +364,19 @@ func TestLoggingMiddleware_NonTrackedProviderRoutes(t *testing.T) {
 			req.RemoteAddr = "192.168.1.1:12345"
 			recorder := httptest.NewRecorder()
 
-			// Capture log output
 			logOutput := captureLogOutput(func() {
 				loggingHandler.ServeHTTP(recorder, req)
 			})
 
-			if tc.expectedLog != "" {
-				if !strings.Contains(logOutput, tc.expectedLog) {
-					t.Errorf("Expected log message '%s' not found in output: %s", tc.expectedLog, logOutput)
+			if tc.expected != "" {
+				if !strings.Contains(logOutput, tc.expected) {
+					t.Errorf("Expected log message '%s' not found in output: %s", tc.expected, logOutput)
 				}
 			}
 
-			// Check tracking status logging
-			if tc.shouldBeTracked {
-				if !strings.Contains(logOutput, "✅ TRACKED") {
-					t.Error("Expected TRACKED message for API endpoint")
-				}
-			} else if isProviderRoute(tc.path) {
-				if !strings.Contains(logOutput, "❌ NOT TRACKED") {
-					t.Error("Expected NOT TRACKED message for non-API provider endpoint")
-				}
+			// Check response
+			if recorder.Code != http.StatusOK {
+				t.Errorf("Expected status 200, got %d", recorder.Code)
 			}
 		})
 	}

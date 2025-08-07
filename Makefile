@@ -163,42 +163,42 @@ install:
 .PHONY: test
 test:
 	@echo "$(BLUE)Running unit tests...$(NC)"
-	@go test -v ./internal/providers -run "^Test(Health|Environment)" -short
+	@go test -v ./internal/... -short -skip "Integration"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
 # Run unit tests with verbose output
 .PHONY: test-verbose
 test-verbose:
 	@echo "$(BLUE)Running unit tests (verbose)...$(NC)"
-	@go test -v ./internal/providers -run "^Test(Health|Environment)" -short
+	@go test -v ./internal/... -short -skip "Integration"
 	@echo "$(GREEN)✓ Verbose unit tests completed$(NC)"
 
 # Run integration tests (requires API keys)
 .PHONY: test-integration
 test-integration: env-check
 	@echo "$(BLUE)Running integration tests...$(NC)"
-	@go test -v ./internal/providers -run "^Test.*_(NonStreaming|Streaming|LegacyCompletions|HaikuModel|StreamGenerateContent|FlashModel)$$" -timeout 180s
+	@go test -v ./internal/providers -run "Test(OpenAI|Anthropic|Gemini)Integration" -timeout 180s
 	@echo "$(GREEN)✓ Integration tests completed$(NC)"
 
 # Run OpenAI tests only
 .PHONY: test-openai
 test-openai:
 	@echo "$(BLUE)Running OpenAI tests...$(NC)"
-	@go test -v ./internal/providers -run "^TestOpenAI" -timeout 90s
+	@go test -v ./internal/providers -run "TestOpenAIIntegration" -timeout 90s
 	@echo "$(GREEN)✓ OpenAI tests completed$(NC)"
 
 # Run Anthropic tests only
 .PHONY: test-anthropic
 test-anthropic:
 	@echo "$(BLUE)Running Anthropic tests...$(NC)"
-	@go test -v ./internal/providers -run "^TestAnthropic" -timeout 90s
+	@go test -v ./internal/providers -run "TestAnthropicIntegration" -timeout 90s
 	@echo "$(GREEN)✓ Anthropic tests completed$(NC)"
 
 # Run Gemini tests only
 .PHONY: test-gemini
 test-gemini:
 	@echo "$(BLUE)Running Gemini tests...$(NC)"
-	@go test -v ./internal/providers -run "^TestGemini" -timeout 90s
+	@go test -v ./internal/providers -run "TestGeminiIntegration" -timeout 90s
 	@echo "$(GREEN)✓ Gemini tests completed$(NC)"
 
 # Run health check tests

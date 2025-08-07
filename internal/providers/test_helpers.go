@@ -147,10 +147,9 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 		r.PathPrefix("/meta/{userID}/"+name+"/").Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 	}
 
-	// Special compatibility routes for Gemini
-	if geminiProvider := manager.GetProvider("gemini"); geminiProvider != nil {
-		r.PathPrefix("/v1beta/models/gemini").Handler(geminiProvider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-		r.PathPrefix("/v1/models/gemini").Handler(geminiProvider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+	// Register extra routes for all providers (e.g., compatibility routes)
+	for _, provider := range manager.GetAllProviders() {
+		provider.RegisterExtraRoutes(r)
 	}
 
 	// Health check endpoint

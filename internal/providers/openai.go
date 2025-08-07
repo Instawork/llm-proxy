@@ -114,8 +114,10 @@ func (o *OpenAIProxy) IsStreamingRequest(req *http.Request) bool {
 		return false
 	}
 
-	// For completion endpoints, check the request body for stream: true
-	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/chat/completions") || strings.Contains(req.URL.Path, "/completions")) {
+	// For completion endpoints and responses API, check the request body for stream: true
+	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/chat/completions") ||
+		strings.Contains(req.URL.Path, "/completions") ||
+		strings.Contains(req.URL.Path, "/responses")) {
 		return o.checkStreamingInBody(req)
 	}
 
@@ -240,12 +242,103 @@ type OpenAIStreamResponse struct {
 	Choices []OpenAIChoice `json:"choices"`
 }
 
+// OpenAIResponsesAPIResponse represents the Responses API response structure
+type OpenAIResponsesAPIResponse struct {
+	ID                 string                 `json:"id"`
+	CreatedAt          float64                `json:"created_at"`
+	Model              string                 `json:"model"`
+	Object             string                 `json:"object"`
+	Output             []OpenAIResponseOutput `json:"output"`
+	Usage              OpenAIResponsesUsage   `json:"usage"`
+	Status             string                 `json:"status"`
+	Temperature        float64                `json:"temperature"`
+	TopP               float64                `json:"top_p"`
+	MaxOutputTokens    *int                   `json:"max_output_tokens"`
+	PreviousResponseID *string                `json:"previous_response_id"`
+	Store              bool                   `json:"store"`
+}
+
+// OpenAIResponseOutput represents an output item in the Responses API
+type OpenAIResponseOutput struct {
+	ID      string                  `json:"id"`
+	Type    string                  `json:"type"`
+	Role    string                  `json:"role,omitempty"`
+	Content []OpenAIResponseContent `json:"content,omitempty"`
+	Status  string                  `json:"status,omitempty"`
+}
+
+// OpenAIResponseContent represents content in a Responses API output
+type OpenAIResponseContent struct {
+	Type        string        `json:"type"`
+	Text        string        `json:"text,omitempty"`
+	Annotations []interface{} `json:"annotations,omitempty"`
+}
+
+// OpenAIResponsesUsage represents usage data for Responses API
+type OpenAIResponsesUsage struct {
+	InputTokens         int                         `json:"input_tokens"`
+	OutputTokens        int                         `json:"output_tokens"`
+	TotalTokens         int                         `json:"total_tokens"`
+	InputTokensDetails  *OpenAITokenDetails         `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *OpenAIResponseTokenDetails `json:"output_tokens_details,omitempty"`
+}
+
+// OpenAITokenDetails represents token details
+type OpenAITokenDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// OpenAIResponseTokenDetails represents output token details for responses API
+type OpenAIResponseTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// OpenAIResponsesStreamChunk represents a streaming chunk from Responses API
+type OpenAIResponsesStreamChunk struct {
+	Type  string               `json:"type"`
+	Delta string               `json:"delta,omitempty"`
+	Event OpenAIResponsesEvent `json:"event,omitempty"`
+}
+
+// OpenAIResponsesEvent represents an event in Responses API streaming
+type OpenAIResponsesEvent struct {
+	ID        string                 `json:"id,omitempty"`
+	Object    string                 `json:"object,omitempty"`
+	CreatedAt float64                `json:"created_at,omitempty"`
+	Model     string                 `json:"model,omitempty"`
+	Usage     *OpenAIResponsesUsage  `json:"usage,omitempty"`
+	Output    []OpenAIResponseOutput `json:"output,omitempty"`
+	Status    string                 `json:"status,omitempty"`
+}
+
 // ParseResponseMetadata extracts tokens and model information from OpenAI responses
 func (o *OpenAIProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error) {
-	if isStreaming {
-		return o.parseStreamingResponse(responseBody)
+	// Create a buffer to read the response body
+	bodyBytes, err := io.ReadAll(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	return o.parseNonStreamingResponse(responseBody)
+
+	// For streaming responses, use unified parsing
+	if isStreaming {
+		reader := bytes.NewReader(bodyBytes)
+		return o.parseUnifiedStreamingResponse(reader)
+	}
+
+	// For non-streaming, check the structure
+	// Responses API has "output" field while Chat Completions has "choices"
+	var checkResponse map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &checkResponse); err == nil {
+		if _, hasOutput := checkResponse["output"]; hasOutput {
+			// This is a Responses API response
+			reader := bytes.NewReader(bodyBytes)
+			return o.parseResponsesNonStreamingResponse(reader)
+		}
+	}
+
+	// Traditional Chat Completions API response
+	reader := bytes.NewReader(bodyBytes)
+	return o.parseNonStreamingResponse(reader)
 }
 
 // parseNonStreamingResponse handles standard OpenAI JSON responses
@@ -292,8 +385,9 @@ func (o *OpenAIProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 	return metadata, nil
 }
 
-// parseStreamingResponse handles OpenAI server-sent events
-func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+// parseUnifiedStreamingResponse handles both Responses API and Chat Completions API streaming responses
+// by determining the API type on the first data line and processing accordingly
+func (o *OpenAIProxy) parseUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {
@@ -312,8 +406,10 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	var finishReason string
 	var hasData bool
 	var chunkCount int
+	var apiType string // "responses" or "completions"
+	var thoughtTokens int
 
-	log.Printf("🔄 OpenAI: Starting to parse streaming response")
+	log.Printf("🔄 OpenAI: Starting to parse unified streaming response")
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -335,43 +431,16 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		hasData = true
 		chunkCount++
 
-		var streamResponse OpenAIStreamResponse
-		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
-			// Log error but continue processing other chunks
-			log.Printf("Warning: failed to parse streaming chunk: %v", err)
-			continue
+		// Determine API type on the first data line if not already determined
+		if apiType == "" {
+			apiType = o.detectAPIType(jsonData)
 		}
 
-		// Capture model and request ID from any chunk
-		if model == "" && streamResponse.Model != "" {
-			model = streamResponse.Model
-			log.Printf("🔄 OpenAI: Captured model: %s", model)
-		}
-		if requestID == "" && streamResponse.ID != "" {
-			requestID = streamResponse.ID
-			log.Printf("🔄 OpenAI: Captured request ID: %s", requestID)
-		}
-
-		// Extract finish reason from choices
-		if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].FinishReason != "" {
-			finishReason = streamResponse.Choices[0].FinishReason
-			log.Printf("🔄 OpenAI: Captured finish reason: %s", finishReason)
-		}
-
-		// The usage information is typically in the last chunk
-		if streamResponse.Usage != nil {
-			log.Printf("🔄 OpenAI: Found usage data! Input: %d, Output: %d, Total: %d",
-				streamResponse.Usage.PromptTokens, streamResponse.Usage.CompletionTokens, streamResponse.Usage.TotalTokens)
-			metadata = &LLMResponseMetadata{
-				Model:        model,
-				InputTokens:  streamResponse.Usage.PromptTokens,
-				OutputTokens: streamResponse.Usage.CompletionTokens,
-				TotalTokens:  streamResponse.Usage.TotalTokens,
-				Provider:     "openai",
-				RequestID:    requestID,
-				IsStreaming:  true,
-				FinishReason: finishReason,
-			}
+		// Process based on determined API type
+		if apiType == "responses" {
+			metadata, model, requestID, finishReason, thoughtTokens = o.parseResponsesStreamingChunk(jsonData, model, requestID, finishReason, thoughtTokens)
+		} else {
+			metadata, model, requestID, finishReason = o.parseCompletionsStreamingChunk(jsonData, model, requestID, finishReason)
 		}
 	}
 
@@ -379,7 +448,7 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		return nil, fmt.Errorf("error reading streaming response: %w", err)
 	}
 
-	log.Printf("🔄 OpenAI: Processed %d chunks, hasData: %v, hasUsage: %v", chunkCount, hasData, metadata != nil)
+	log.Printf("🔄 OpenAI: Processed %d chunks, hasData: %v, hasUsage: %v, API Type: %s", chunkCount, hasData, metadata != nil, apiType)
 
 	// If we have usage metadata, return it
 	if metadata != nil {
@@ -391,18 +460,293 @@ func (o *OpenAIProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	if hasData && (model != "" || requestID != "") {
 		log.Printf("🔄 OpenAI: Returning partial metadata - usage data not yet available")
 		return &LLMResponseMetadata{
-			Model:        model,
-			InputTokens:  0, // Unknown at this point
-			OutputTokens: 0, // Unknown at this point
-			TotalTokens:  0, // Unknown at this point
-			Provider:     "openai",
-			RequestID:    requestID,
-			IsStreaming:  true,
-			FinishReason: finishReason,
+			Model:         model,
+			InputTokens:   0, // Unknown at this point
+			OutputTokens:  0, // Unknown at this point
+			TotalTokens:   0, // Unknown at this point
+			Provider:      "openai",
+			RequestID:     requestID,
+			IsStreaming:   true,
+			FinishReason:  finishReason,
+			ThoughtTokens: thoughtTokens,
 		}, nil
 	}
 
 	return nil, fmt.Errorf("no usage information found in streaming response")
+}
+
+// detectAPIType determines whether the streaming response is from Responses API or Chat Completions API
+func (o *OpenAIProxy) detectAPIType(jsonData string) string {
+	var checkData map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonData), &checkData); err == nil {
+		// Responses API streaming has "type" field (e.g., "response.output_text.delta")
+		// or has "output" field in the event
+		if typeField, hasType := checkData["type"].(string); hasType &&
+			strings.HasPrefix(typeField, "response.") {
+			log.Printf("🔄 OpenAI: Detected Responses API based on type field: %s", typeField)
+			return "responses"
+		} else if _, hasOutput := checkData["output"]; hasOutput {
+			log.Printf("🔄 OpenAI: Detected Responses API based on output field")
+			return "responses"
+		} else if _, hasChoices := checkData["choices"]; hasChoices {
+			log.Printf("🔄 OpenAI: Detected Chat Completions API based on choices field")
+			return "completions"
+		}
+	}
+	return ""
+}
+
+// parseResponsesStreamingChunk processes a single streaming chunk from the Responses API
+func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
+	// Try to parse the chunk - could be an event or a delta
+	var chunkData map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
+		// Log error but continue processing other chunks
+		log.Printf("Warning: failed to parse Responses API streaming chunk: %v", err)
+		return nil, model, requestID, finishReason, thoughtTokens
+	}
+
+	// Check the type field to understand what kind of chunk this is
+	typeField, hasType := chunkData["type"].(string)
+	if hasType {
+		// Handle different types of Responses API streaming chunks
+		if typeField == "response.created" {
+			// This is the final event with usage information
+			log.Printf("🔄 OpenAI Responses API: Found response.created event")
+			log.Printf("🔄 OpenAI Responses API: Full chunk data: %+v", chunkData)
+
+			// Extract usage information from the response field
+			if responseField, hasResponse := chunkData["response"].(map[string]interface{}); hasResponse {
+				log.Printf("🔄 OpenAI Responses API: Response field found: %+v", responseField)
+				// Capture model and request ID
+				if model == "" {
+					if modelVal, ok := responseField["model"].(string); ok {
+						model = modelVal
+						log.Printf("🔄 OpenAI Responses API: Captured model: %s", model)
+					}
+				}
+				if requestID == "" {
+					if idVal, ok := responseField["id"].(string); ok {
+						requestID = idVal
+						log.Printf("🔄 OpenAI Responses API: Captured request ID: %s", requestID)
+					}
+				}
+
+				// Extract usage information
+				if usageField, hasUsage := responseField["usage"].(map[string]interface{}); hasUsage {
+					inputTokens := 0
+					outputTokens := 0
+					totalTokens := 0
+					reasoningTokens := 0
+
+					if inputVal, ok := usageField["input_tokens"].(float64); ok {
+						inputTokens = int(inputVal)
+					}
+					if outputVal, ok := usageField["output_tokens"].(float64); ok {
+						outputTokens = int(outputVal)
+					}
+					if totalVal, ok := usageField["total_tokens"].(float64); ok {
+						totalTokens = int(totalVal)
+					}
+					if outputDetails, ok := usageField["output_tokens_details"].(map[string]interface{}); ok {
+						if reasoningVal, ok := outputDetails["reasoning_tokens"].(float64); ok {
+							reasoningTokens = int(reasoningVal)
+						}
+					}
+
+					if inputTokens > 0 || outputTokens > 0 || totalTokens > 0 {
+						log.Printf("🔄 OpenAI Responses API: Found usage data in response.created! Input: %d, Output: %d, Total: %d, Reasoning: %d",
+							inputTokens, outputTokens, totalTokens, reasoningTokens)
+
+						// Extract finish reason from output if available
+						if outputField, hasOutput := responseField["output"].([]interface{}); hasOutput {
+							for _, output := range outputField {
+								if outputMap, ok := output.(map[string]interface{}); ok {
+									if status, ok := outputMap["status"].(string); ok && status != "" && status != "in_progress" {
+										finishReason = status
+										log.Printf("🔄 OpenAI Responses API: Captured finish reason: %s", finishReason)
+										break
+									}
+								}
+							}
+						}
+
+						metadata := &LLMResponseMetadata{
+							Model:         model,
+							InputTokens:   inputTokens,
+							OutputTokens:  outputTokens,
+							TotalTokens:   totalTokens,
+							Provider:      "openai",
+							RequestID:     requestID,
+							IsStreaming:   true,
+							FinishReason:  finishReason,
+							ThoughtTokens: reasoningTokens,
+						}
+						thoughtTokens = reasoningTokens
+						return metadata, model, requestID, finishReason, thoughtTokens
+					}
+				}
+			}
+		} else if strings.HasPrefix(typeField, "response.") {
+			// This is a delta chunk (e.g., "response.output_text.delta")
+			// Skip these for metadata extraction as they don't contain usage info
+			return nil, model, requestID, finishReason, thoughtTokens
+		}
+	}
+
+	// Try to parse as a full event with usage data (fallback for other event types)
+	var event OpenAIResponsesEvent
+	if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+		// Not a full event, continue
+		return nil, model, requestID, finishReason, thoughtTokens
+	}
+
+	// Capture model and request ID from any chunk
+	if model == "" && event.Model != "" {
+		model = event.Model
+		log.Printf("🔄 OpenAI Responses API: Captured model: %s", model)
+	}
+	if requestID == "" && event.ID != "" {
+		requestID = event.ID
+		log.Printf("🔄 OpenAI Responses API: Captured request ID: %s", requestID)
+	}
+
+	// Extract finish reason from output
+	for _, output := range event.Output {
+		if output.Status != "" && output.Status != "in_progress" {
+			finishReason = output.Status
+			log.Printf("🔄 OpenAI Responses API: Captured finish reason: %s", finishReason)
+		}
+	}
+
+	var metadata *LLMResponseMetadata
+
+	// The usage information is typically in the final event
+	if event.Usage != nil {
+		reasoningTokens := 0
+		if event.Usage.OutputTokensDetails != nil {
+			reasoningTokens = event.Usage.OutputTokensDetails.ReasoningTokens
+		}
+
+		log.Printf("🔄 OpenAI Responses API: Found usage data! Input: %d, Output: %d, Total: %d, Reasoning: %d",
+			event.Usage.InputTokens, event.Usage.OutputTokens, event.Usage.TotalTokens, reasoningTokens)
+
+		metadata = &LLMResponseMetadata{
+			Model:         model,
+			InputTokens:   event.Usage.InputTokens,
+			OutputTokens:  event.Usage.OutputTokens,
+			TotalTokens:   event.Usage.TotalTokens,
+			Provider:      "openai",
+			RequestID:     requestID,
+			IsStreaming:   true,
+			FinishReason:  finishReason,
+			ThoughtTokens: reasoningTokens,
+		}
+		thoughtTokens = reasoningTokens
+	}
+
+	return metadata, model, requestID, finishReason, thoughtTokens
+}
+
+// parseCompletionsStreamingChunk processes a single streaming chunk from the Chat Completions API
+func (o *OpenAIProxy) parseCompletionsStreamingChunk(jsonData string, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
+	var streamResponse OpenAIStreamResponse
+	if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
+		// Log error but continue processing other chunks
+		log.Printf("Warning: failed to parse streaming chunk: %v", err)
+		return nil, model, requestID, finishReason
+	}
+
+	// Capture model and request ID from any chunk
+	if model == "" && streamResponse.Model != "" {
+		model = streamResponse.Model
+		log.Printf("🔄 OpenAI: Captured model: %s", model)
+	}
+	if requestID == "" && streamResponse.ID != "" {
+		requestID = streamResponse.ID
+		log.Printf("🔄 OpenAI: Captured request ID: %s", requestID)
+	}
+
+	// Extract finish reason from choices
+	if len(streamResponse.Choices) > 0 && streamResponse.Choices[0].FinishReason != "" {
+		finishReason = streamResponse.Choices[0].FinishReason
+		log.Printf("🔄 OpenAI: Captured finish reason: %s", finishReason)
+	}
+
+	var metadata *LLMResponseMetadata
+
+	// The usage information is typically in the last chunk
+	if streamResponse.Usage != nil {
+		log.Printf("🔄 OpenAI: Found usage data! Input: %d, Output: %d, Total: %d",
+			streamResponse.Usage.PromptTokens, streamResponse.Usage.CompletionTokens, streamResponse.Usage.TotalTokens)
+		metadata = &LLMResponseMetadata{
+			Model:        model,
+			InputTokens:  streamResponse.Usage.PromptTokens,
+			OutputTokens: streamResponse.Usage.CompletionTokens,
+			TotalTokens:  streamResponse.Usage.TotalTokens,
+			Provider:     "openai",
+			RequestID:    requestID,
+			IsStreaming:  true,
+			FinishReason: finishReason,
+		}
+	}
+
+	return metadata, model, requestID, finishReason
+}
+
+// parseResponsesNonStreamingResponse handles Responses API non-streaming responses
+func (o *OpenAIProxy) parseResponsesNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+	// Handle potential gzip compression
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+
+	// If we got a gzip reader, make sure to close it
+	if gzipReader, ok := decompressedReader.(*gzip.Reader); ok {
+		defer gzipReader.Close()
+	}
+
+	bodyBytes, err := io.ReadAll(decompressedReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Log the response body preview for debugging
+	log.Printf("🔍 Debug: OpenAI Responses API response body preview: %s", string(bodyBytes[:min(100, len(bodyBytes))]))
+
+	var response OpenAIResponsesAPIResponse
+	if err := json.Unmarshal(bodyBytes, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse OpenAI Responses API response: %w", err)
+	}
+
+	// Calculate output tokens including reasoning tokens if present
+	outputTokens := response.Usage.OutputTokens
+	reasoningTokens := 0
+	if response.Usage.OutputTokensDetails != nil {
+		reasoningTokens = response.Usage.OutputTokensDetails.ReasoningTokens
+	}
+
+	metadata := &LLMResponseMetadata{
+		Model:         response.Model,
+		InputTokens:   response.Usage.InputTokens,
+		OutputTokens:  outputTokens,
+		TotalTokens:   response.Usage.TotalTokens,
+		Provider:      "openai",
+		RequestID:     response.ID,
+		IsStreaming:   false,
+		ThoughtTokens: reasoningTokens,
+	}
+
+	// Extract finish reason from the output if available
+	for _, output := range response.Output {
+		if output.Type == "message" && output.Status != "" {
+			metadata.FinishReason = output.Status
+			break
+		}
+	}
+
+	return metadata, nil
 }
 
 // UserIDFromRequest extracts user ID from OpenAI request body

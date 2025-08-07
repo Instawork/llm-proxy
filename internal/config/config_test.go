@@ -263,10 +263,10 @@ enabled: true
 features:
   cost_tracking:
     enabled: true
-    transport:
-      type: "file"
-      file:
-        path: "./test_cost_tracking.json"
+    transports:
+      - type: "file"
+        file:
+          path: "./test_cost_tracking.json"
 providers:
   gemini:
     enabled: true

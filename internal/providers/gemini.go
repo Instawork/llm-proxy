@@ -409,9 +409,7 @@ func (g *GeminiProxy) UserIDFromRequest(req *http.Request) string {
 
 // RegisterExtraRoutes registers Gemini-specific compatibility routes
 func (g *GeminiProxy) RegisterExtraRoutes(router *mux.Router) {
-	// Special compatibility routes for Gemini (these were in the original Gemini RegisterRoutes)
-	router.PathPrefix("/v1beta/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-	router.PathPrefix("/v1/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+	// None needed now with `google-genai` package
 }
 
 // ValidateAPIKey validates and potentially replaces the API key in the request

@@ -26,7 +26,7 @@ type LLMResponseMetadata struct {
 	InputTokens   int `json:"input_tokens"`
 	OutputTokens  int `json:"output_tokens"`
 	TotalTokens   int `json:"total_tokens"`
-	ThoughtTokens int `json:"thought_tokens,omitempty"` // Added for Gemini thought tokens
+	ThoughtTokens int `json:"thought_tokens,omitempty"`
 
 	// Provider-specific information
 	Provider  string `json:"provider"`

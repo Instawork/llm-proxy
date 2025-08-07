@@ -38,6 +38,45 @@ providers:
       burst_tokens: 45_000
       burst_requests: 500
     models:
+      "gpt-5":
+        enabled: true
+        aliases: ["gpt-5-2025-08-07"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 1.25
+          output: 10.00
+      "gpt-5-mini":
+        enabled: true
+        aliases: ["gpt-5-mini-2025-08-07"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 0.25
+          output: 2.00
+      "gpt-5-nano":
+        enabled: true
+        aliases: ["gpt-5-nano-2025-08-07"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 0.05
+          output: 0.40
       "gpt-4":
         enabled: true
         aliases: ["gpt-4-0613"]

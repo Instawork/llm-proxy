@@ -2,11 +2,14 @@ package middleware
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/gorilla/mux"
 )
 
 func TestGetProviderFromRequest_OpenAI(t *testing.T) {
@@ -426,5 +429,238 @@ func TestTokenParsingMiddleware_NilCallback(t *testing.T) {
 	// Check response
 	if recorder.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+}
+
+// FailingMockProvider implements the Provider interface for testing parsing failures
+type FailingMockProvider struct {
+	name            string
+	parseShouldFail bool
+	parseError      error
+	isStreaming     bool
+}
+
+func NewFailingMockProvider(name string) *FailingMockProvider {
+	return &FailingMockProvider{
+		name: name,
+	}
+}
+
+func (fmp *FailingMockProvider) GetName() string {
+	return fmp.name
+}
+
+func (fmp *FailingMockProvider) IsStreamingRequest(req *http.Request) bool {
+	return fmp.isStreaming
+}
+
+func (fmp *FailingMockProvider) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*providers.LLMResponseMetadata, error) {
+	if fmp.parseShouldFail {
+		return nil, fmp.parseError
+	}
+	// Return a valid metadata for successful parsing
+	return &providers.LLMResponseMetadata{
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+		TotalTokens:  15,
+		Provider:     fmp.name,
+		IsStreaming:  isStreaming,
+	}, nil
+}
+
+func (fmp *FailingMockProvider) Proxy() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("mock proxy response"))
+	})
+}
+
+func (fmp *FailingMockProvider) GetHealthStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"status": "healthy",
+	}
+}
+
+func (fmp *FailingMockProvider) UserIDFromRequest(req *http.Request) string {
+	return ""
+}
+
+func (fmp *FailingMockProvider) RegisterExtraRoutes(router *mux.Router) {
+	// No extra routes for mock provider
+}
+
+func (fmp *FailingMockProvider) ValidateAPIKey(req *http.Request, keyStore providers.APIKeyStore) error {
+	return nil
+}
+
+func TestTokenParsingMiddleware_ParsingFailureContinuesProxy(t *testing.T) {
+	manager := providers.NewProviderManager()
+
+	// Create a mock provider that will fail to parse tokens
+	mockProvider := NewFailingMockProvider("openai")
+	mockProvider.parseShouldFail = true
+	mockProvider.parseError = fmt.Errorf("simulated parsing error")
+	manager.RegisterProvider(mockProvider)
+
+	// Track if callback was called
+	var callbackCalled bool
+	var receivedMetadata *providers.LLMResponseMetadata
+
+	callback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
+		callbackCalled = true
+		receivedMetadata = metadata
+	}
+
+	// Create a test handler that simulates an API response
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Write a response that the mock provider will fail to parse
+		w.Write([]byte(`{"invalid": "json", "that": "will", "fail": "parsing"}`))
+	})
+
+	// Wrap with token parsing middleware
+	tokenHandler := TokenParsingMiddleware(manager, callback)(handler)
+
+	// Create test request for an API endpoint
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	recorder := httptest.NewRecorder()
+
+	// Execute request
+	tokenHandler.ServeHTTP(recorder, req)
+
+	// Verify that the request was still proxied successfully despite parsing failure
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	expectedBody := `{"invalid": "json", "that": "will", "fail": "parsing"}`
+	if recorder.Body.String() != expectedBody {
+		t.Errorf("Expected body '%s', got '%s'", expectedBody, recorder.Body.String())
+	}
+
+	// Verify that callback was not called since parsing failed
+	if callbackCalled {
+		t.Error("Callback should not be called when parsing fails")
+	}
+
+	if receivedMetadata != nil {
+		t.Error("No metadata should be received when parsing fails")
+	}
+}
+
+func TestTokenParsingMiddleware_ParsingFailureWithStreaming(t *testing.T) {
+	manager := providers.NewProviderManager()
+
+	// Create a custom streaming mock provider that will fail to parse tokens
+	streamingMockProvider := &FailingMockProvider{
+		name:            "openai",
+		parseShouldFail: true,
+		parseError:      fmt.Errorf("simulated streaming parsing error"),
+		isStreaming:     true,
+	}
+
+	manager.RegisterProvider(streamingMockProvider)
+
+	// Track if callback was called
+	var callbackCalled bool
+	var receivedMetadata *providers.LLMResponseMetadata
+
+	callback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
+		callbackCalled = true
+		receivedMetadata = metadata
+	}
+
+	// Create a test handler that simulates a streaming API response
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Write streaming response data that will fail to parse
+		w.Write([]byte("data: {\"invalid\": \"streaming\", \"data\": \"that fails\"}\n\n"))
+		w.Write([]byte("data: {\"more\": \"invalid\", \"streaming\": \"data\"}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+	})
+
+	// Wrap with token parsing middleware
+	tokenHandler := TokenParsingMiddleware(manager, callback)(handler)
+
+	// Create test request for a streaming API endpoint
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	recorder := httptest.NewRecorder()
+
+	// Execute request
+	tokenHandler.ServeHTTP(recorder, req)
+
+	// Verify that the request was still proxied successfully despite parsing failure
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	expectedBody := "data: {\"invalid\": \"streaming\", \"data\": \"that fails\"}\n\ndata: {\"more\": \"invalid\", \"streaming\": \"data\"}\n\ndata: [DONE]\n\n"
+	if recorder.Body.String() != expectedBody {
+		t.Errorf("Expected body '%s', got '%s'", expectedBody, recorder.Body.String())
+	}
+
+	// Verify that callback was not called since parsing failed
+	if callbackCalled {
+		t.Error("Callback should not be called when streaming parsing fails")
+	}
+
+	if receivedMetadata != nil {
+		t.Error("No metadata should be received when streaming parsing fails")
+	}
+}
+
+func TestTokenParsingMiddleware_ParsingFailureWithValidResponse(t *testing.T) {
+	manager := providers.NewProviderManager()
+
+	// Create a mock provider that will fail to parse tokens
+	mockProvider := NewFailingMockProvider("openai")
+	mockProvider.parseShouldFail = true
+	mockProvider.parseError = fmt.Errorf("simulated parsing error")
+	manager.RegisterProvider(mockProvider)
+
+	// Track if callback was called
+	var callbackCalled bool
+	var receivedMetadata *providers.LLMResponseMetadata
+
+	callback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
+		callbackCalled = true
+		receivedMetadata = metadata
+	}
+
+	// Create a test handler that returns a valid response
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Write a valid JSON response (but mock provider will still fail to parse)
+		w.Write([]byte(`{"choices":[{"message":{"content":"Hello"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`))
+	})
+
+	// Wrap with token parsing middleware
+	tokenHandler := TokenParsingMiddleware(manager, callback)(handler)
+
+	// Create test request for an API endpoint
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	recorder := httptest.NewRecorder()
+
+	// Execute request
+	tokenHandler.ServeHTTP(recorder, req)
+
+	// Verify that the request was still proxied successfully despite parsing failure
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	expectedBody := `{"choices":[{"message":{"content":"Hello"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
+	if recorder.Body.String() != expectedBody {
+		t.Errorf("Expected body '%s', got '%s'", expectedBody, recorder.Body.String())
+	}
+
+	// Verify that callback was not called since parsing failed
+	if callbackCalled {
+		t.Error("Callback should not be called when parsing fails")
+	}
+
+	if receivedMetadata != nil {
+		t.Error("No metadata should be received when parsing fails")
 	}
 }
