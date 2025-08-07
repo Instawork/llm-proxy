@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -474,4 +475,42 @@ func (o *OpenAIProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error
 	}
 
 	return bodyBytes, nil
+}
+
+// ValidateAPIKey validates and potentially replaces the API key in the request
+func (o *OpenAIProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
+	// Get the API key from the Authorization header
+	authHeader := req.Header.Get("Authorization")
+	if authHeader == "" {
+		// No API key provided, let the provider handle the error
+		return nil
+	}
+
+	// Extract the API key from "Bearer <key>" format
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		// Not in expected format, let it through as-is
+		return nil
+	}
+
+	apiKey := strings.TrimPrefix(authHeader, bearerPrefix)
+
+	// Validate and potentially replace the key
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	if err != nil {
+		return fmt.Errorf("API key validation failed: %w", err)
+	}
+
+	// If a provider was returned, verify it matches
+	if provider != "" && provider != "openai" {
+		return fmt.Errorf("API key is for provider %s, not openai", provider)
+	}
+
+	// Replace the key in the request header if it was translated
+	if actualKey != apiKey {
+		req.Header.Set("Authorization", bearerPrefix+actualKey)
+		log.Printf("🔑 OpenAI: Translated API key from iw: format")
+	}
+
+	return nil
 }

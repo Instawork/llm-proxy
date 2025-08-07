@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -62,6 +63,19 @@ type Provider interface {
 	// RegisterExtraRoutes allows providers to register additional routes beyond the standard ones
 	// This is useful for provider-specific compatibility routes or special endpoints
 	RegisterExtraRoutes(router *mux.Router)
+
+	// ValidateAPIKey validates and potentially replaces the API key in the request
+	// If the key starts with "iw:", it looks it up in the key store and replaces it with the actual key
+	// Returns an error if the key is invalid or disabled
+	ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error
+}
+
+// APIKeyStore defines the interface for API key storage operations
+type APIKeyStore interface {
+	// ValidateAndGetActualKey validates a key and returns the actual provider key
+	// If the key doesn't start with "iw:", it returns the key as-is
+	// Returns (actualKey, provider, error)
+	ValidateAndGetActualKey(ctx context.Context, key string) (string, string, error)
 }
 
 // ProviderManager manages multiple providers

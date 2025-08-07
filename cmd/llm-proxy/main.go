@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/middleware"
@@ -82,6 +83,9 @@ var globalProviderManager *providers.ProviderManager
 
 // Global cost tracker instance
 var globalCostTracker *cost.CostTracker
+
+// Global API key store instance
+var globalAPIKeyStore providers.APIKeyStore
 
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -346,6 +350,40 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	return costTracker
 }
 
+// initializeAPIKeyStore creates and configures the API key store from config
+func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
+	// Check if API key management is enabled
+	if !yamlConfig.Features.APIKeyManagement.Enabled {
+		logger.Info("🔑 API Key Store: API key management is disabled in config")
+		return nil
+	}
+
+	// Get API key management configuration
+	apiKeyConfig := yamlConfig.Features.APIKeyManagement
+	if apiKeyConfig.TableName == "" || apiKeyConfig.Region == "" {
+		logger.Error("🔑 API Key Store: Missing required configuration (table_name or region)")
+		return nil
+	}
+
+	logger.Info("🔑 API Key Store: Initializing API key store",
+		"table_name", apiKeyConfig.TableName,
+		"region", apiKeyConfig.Region)
+
+	// Create the API key store
+	store, err := apikeys.NewStore(apikeys.StoreConfig{
+		TableName: apiKeyConfig.TableName,
+		Region:    apiKeyConfig.Region,
+		Logger:    logger,
+	})
+	if err != nil {
+		logger.Error("🔑 API Key Store: Failed to create API key store", "error", err)
+		return nil
+	}
+
+	logger.Info("🔑 API Key Store: Successfully initialized API key store")
+	return store
+}
+
 // healthHandler provides a simple health check endpoint
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
@@ -448,6 +486,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 		globalCostTracker.SetLogger(logger)
 	}
 
+	// Initialize API key store if enabled
+	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
+
 	// Register providers
 	openAIProvider := providers.NewOpenAIProxy()
 	globalProviderManager.RegisterProvider(openAIProvider)
@@ -460,6 +501,12 @@ func runServer(yamlConfig *config.YAMLConfig) {
 
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
+
+	// Add API key validation middleware if API key management is enabled
+	if globalAPIKeyStore != nil {
+		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore))
+	}
+
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
 

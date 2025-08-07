@@ -27,5 +27,9 @@ features:
       - type: "file"
         file:
           path: "./logs/cost-tracking-backup.jsonl"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys"
+    region: "us-west-2"
   rate_limiting:
     enabled: false

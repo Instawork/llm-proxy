@@ -14,5 +14,9 @@ features:
         dynamodb:
           table_name: "llm-proxy-cost-tracking"
           region: "us-west-2"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys-staging"
+    region: "us-west-2"
   rate_limiting:
     enabled: false

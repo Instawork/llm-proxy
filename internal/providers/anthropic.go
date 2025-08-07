@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -512,4 +513,33 @@ func (a *AnthropicProxy) readRequestBodyForUserID(req *http.Request) ([]byte, er
 	}
 
 	return bodyBytes, nil
+}
+
+// ValidateAPIKey validates and potentially replaces the API key in the request
+func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
+	// Get the API key from the x-api-key header (Anthropic uses this header)
+	apiKey := req.Header.Get("x-api-key")
+	if apiKey == "" {
+		// No API key provided, let the provider handle the error
+		return nil
+	}
+
+	// Validate and potentially replace the key
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	if err != nil {
+		return fmt.Errorf("API key validation failed: %w", err)
+	}
+
+	// If a provider was returned, verify it matches
+	if provider != "" && provider != "anthropic" {
+		return fmt.Errorf("API key is for provider %s, not anthropic", provider)
+	}
+
+	// Replace the key in the request header if it was translated
+	if actualKey != apiKey {
+		req.Header.Set("x-api-key", actualKey)
+		log.Printf("🔑 Anthropic: Translated API key from iw: format")
+	}
+
+	return nil
 }

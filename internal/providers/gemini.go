@@ -3,6 +3,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -411,4 +412,55 @@ func (g *GeminiProxy) RegisterExtraRoutes(router *mux.Router) {
 	// Special compatibility routes for Gemini (these were in the original Gemini RegisterRoutes)
 	router.PathPrefix("/v1beta/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
 	router.PathPrefix("/v1/models/gemini").Handler(g.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+}
+
+// ValidateAPIKey validates and potentially replaces the API key in the request
+func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
+	// Gemini uses API keys in two ways:
+	// 1. In the URL query parameter as "key"
+	// 2. In the x-goog-api-key header
+
+	// Check query parameter first
+	query := req.URL.Query()
+	apiKeyFromQuery := query.Get("key")
+
+	// Check header if no query parameter
+	apiKeyFromHeader := req.Header.Get("x-goog-api-key")
+
+	// Use whichever is present (query takes precedence)
+	apiKey := apiKeyFromQuery
+	if apiKey == "" {
+		apiKey = apiKeyFromHeader
+	}
+
+	if apiKey == "" {
+		// No API key provided, let the provider handle the error
+		return nil
+	}
+
+	// Validate and potentially replace the key
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	if err != nil {
+		return fmt.Errorf("API key validation failed: %w", err)
+	}
+
+	// If a provider was returned, verify it matches
+	if provider != "" && provider != "gemini" {
+		return fmt.Errorf("API key is for provider %s, not gemini", provider)
+	}
+
+	// Replace the key in the appropriate location if it was translated
+	if actualKey != apiKey {
+		if apiKeyFromQuery != "" {
+			// Replace in query parameter
+			query.Set("key", actualKey)
+			req.URL.RawQuery = query.Encode()
+		} else if apiKeyFromHeader != "" {
+			// Replace in header
+			req.Header.Set("x-goog-api-key", actualKey)
+		}
+		log.Printf("🔑 Gemini: Translated API key from iw: format")
+	}
+
+	return nil
 }

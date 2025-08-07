@@ -44,7 +44,8 @@ type YAMLConfig struct {
 
 // FeaturesConfig represents feature toggle configuration
 type FeaturesConfig struct {
-	CostTracking CostTrackingConfig `yaml:"cost_tracking"`
+	CostTracking     CostTrackingConfig     `yaml:"cost_tracking"`
+	APIKeyManagement APIKeyManagementConfig `yaml:"api_key_management"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration
@@ -83,6 +84,13 @@ type DatadogTransportConfig struct {
 	Namespace  string   `yaml:"namespace"`   // Namespace to prefix metrics (default: "llm_proxy")
 	Tags       []string `yaml:"tags"`        // Global tags to apply to all metrics
 	SampleRate float64  `yaml:"sample_rate"` // Global sample rate (default: 1.0)
+}
+
+// APIKeyManagementConfig represents API key management configuration
+type APIKeyManagementConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	TableName string `yaml:"table_name"`
+	Region    string `yaml:"region"`
 }
 
 // ProviderConfig represents configuration for a specific provider
