@@ -510,30 +510,44 @@ func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, reque
 	typeField, hasType := chunkData["type"].(string)
 	if hasType {
 		// Handle different types of Responses API streaming chunks
-		if typeField == "response.created" {
-			// This is the final event with usage information
-			log.Printf("🔄 OpenAI Responses API: Found response.created event")
+		if typeField == "response.created" || typeField == "response.done" {
+			// These events may contain usage information
+			log.Printf("🔄 OpenAI Responses API: Found %s event", typeField)
 			log.Printf("🔄 OpenAI Responses API: Full chunk data: %+v", chunkData)
 
-			// Extract usage information from the response field
+			// Try to extract usage information from either response or event field
+			var dataField map[string]interface{}
+			var fieldName string
+
+			// Check for response field first (actual API format)
 			if responseField, hasResponse := chunkData["response"].(map[string]interface{}); hasResponse {
+				dataField = responseField
+				fieldName = "response"
 				log.Printf("🔄 OpenAI Responses API: Response field found: %+v", responseField)
+			} else if eventField, hasEvent := chunkData["event"].(map[string]interface{}); hasEvent {
+				// Fallback to event field (test data format)
+				dataField = eventField
+				fieldName = "event"
+				log.Printf("🔄 OpenAI Responses API: Event field found: %+v", eventField)
+			}
+
+			if dataField != nil {
 				// Capture model and request ID
 				if model == "" {
-					if modelVal, ok := responseField["model"].(string); ok {
+					if modelVal, ok := dataField["model"].(string); ok {
 						model = modelVal
 						log.Printf("🔄 OpenAI Responses API: Captured model: %s", model)
 					}
 				}
 				if requestID == "" {
-					if idVal, ok := responseField["id"].(string); ok {
+					if idVal, ok := dataField["id"].(string); ok {
 						requestID = idVal
 						log.Printf("🔄 OpenAI Responses API: Captured request ID: %s", requestID)
 					}
 				}
 
 				// Extract usage information
-				if usageField, hasUsage := responseField["usage"].(map[string]interface{}); hasUsage {
+				if usageField, hasUsage := dataField["usage"].(map[string]interface{}); hasUsage {
 					inputTokens := 0
 					outputTokens := 0
 					totalTokens := 0
@@ -555,11 +569,11 @@ func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, reque
 					}
 
 					if inputTokens > 0 || outputTokens > 0 || totalTokens > 0 {
-						log.Printf("🔄 OpenAI Responses API: Found usage data in response.created! Input: %d, Output: %d, Total: %d, Reasoning: %d",
-							inputTokens, outputTokens, totalTokens, reasoningTokens)
+						log.Printf("🔄 OpenAI Responses API: Found usage data in %s (%s field)! Input: %d, Output: %d, Total: %d, Reasoning: %d",
+							typeField, fieldName, inputTokens, outputTokens, totalTokens, reasoningTokens)
 
 						// Extract finish reason from output if available
-						if outputField, hasOutput := responseField["output"].([]interface{}); hasOutput {
+						if outputField, hasOutput := dataField["output"].([]interface{}); hasOutput {
 							for _, output := range outputField {
 								if outputMap, ok := output.(map[string]interface{}); ok {
 									if status, ok := outputMap["status"].(string); ok && status != "" && status != "in_progress" {
