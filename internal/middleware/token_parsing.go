@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -109,7 +111,21 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 					}
 					// Add debug logging for response body if parsing fails
 					if captureWriter.body.Len() > 0 {
-						log.Printf("🔍 Debug: Response body preview: %s", string(captureWriter.body.Bytes()[:min(200, captureWriter.body.Len())]))
+						bodyBytes := captureWriter.body.Bytes()
+						previewBytes := bodyBytes[:min(200, len(bodyBytes))]
+
+						// Check for gzip magic number (0x1f, 0x8b)
+						if len(previewBytes) >= 2 && previewBytes[0] == 0x1f && previewBytes[1] == 0x8b {
+							// Try to decompress for preview
+							if decompressed, err := decompressForPreview(bodyBytes); err == nil {
+								previewLen := min(200, len(decompressed))
+								log.Printf("🔍 Debug: Response body is gzip compressed, decompressed preview: %s", string(decompressed[:previewLen]))
+							} else {
+								log.Printf("🔍 Debug: Response body is gzip compressed (failed to decompress for preview): %v", err)
+							}
+						} else {
+							log.Printf("🔍 Debug: Response body preview: %s", string(previewBytes))
+						}
 					}
 				} else if metadata != nil {
 					// Log the metadata for cost tracking
@@ -293,4 +309,28 @@ func ExtractIPAddressFromRequest(req *http.Request) string {
 	}
 
 	return req.RemoteAddr
+}
+
+// decompressForPreview safely decompresses gzip data for debug preview purposes
+func decompressForPreview(data []byte) ([]byte, error) {
+	// Check for gzip magic number
+	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
+		return nil, fmt.Errorf("not gzip compressed")
+	}
+
+	// Create a gzip reader
+	reader := bytes.NewReader(data)
+	gzipReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
+
+	// Read the decompressed data
+	decompressed, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress data: %w", err)
+	}
+
+	return decompressed, nil
 }

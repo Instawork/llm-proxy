@@ -270,7 +270,13 @@ func (g *GeminiProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming 
 
 // parseNonStreamingResponse handles standard Gemini JSON responses
 func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	bodyBytes, err := io.ReadAll(responseBody)
+	// Handle potential gzip compression
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+
+	bodyBytes, err := io.ReadAll(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -310,7 +316,13 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 
 // parseStreamingResponse handles Gemini server-sent events
 func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	scanner := bufio.NewScanner(responseBody)
+	// Handle potential gzip compression
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+
+	scanner := bufio.NewScanner(decompressedReader)
 	var metadata *LLMResponseMetadata
 	var model string
 	var finishReason string
