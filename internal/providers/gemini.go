@@ -1,8 +1,13 @@
+// Gemini provider implementation
+// EXTREMELY IMPORTANT:
+// DO NOT USE THE BODY PARSING FEATURE OF THE PROXY FOR GEMINI.
+// We do not need to parse the body for Gemini since they use ?alt=sse to indicate streaming.
+// If we do, then video uploads will cause massive memory usage (max upload is 315MB for Gemini)
+
 package providers
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -122,77 +127,24 @@ func (g *GeminiProxy) IsStreamingRequest(req *http.Request) bool {
 		return true
 	}
 
-	// For Gemini generateContent endpoints, check the request body for stream: true
-	// Also check for streamGenerateContent in the URL (alternative streaming endpoint)
+	// For Gemini generateContent endpoints, rely on explicit streaming indicators
+	// via the URL path (streamGenerateContent) rather than inspecting the body.
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, ":generateContent") ||
 		strings.Contains(req.URL.Path, ":streamGenerateContent")) {
 
-		// Check if it's the explicit streaming endpoint
+		// Explicit streaming endpoint
 		if strings.Contains(req.URL.Path, ":streamGenerateContent") {
 			return true
 		}
 
-		// For generateContent, check the request body for stream parameter
-		return g.checkStreamingInBody(req)
+		// For :generateContent without explicit streaming indicators, treat as non-streaming
+		return false
 	}
 
 	return false
 }
 
-// checkStreamingInBody reads the request body to check for "stream": true
-func (g *GeminiProxy) checkStreamingInBody(req *http.Request) bool {
-	if req.Body == nil {
-		return false
-	}
-
-	// Use GetBody if available (body was already read and cached)
-	var bodyBytes []byte
-	var err error
-
-	if req.GetBody != nil {
-		// Body was already cached, use GetBody to get a fresh reader
-		bodyReader, err := req.GetBody()
-		if err != nil {
-			log.Printf("Error getting cached request body for streaming check: %v", err)
-			return false
-		}
-		defer bodyReader.Close()
-		bodyBytes, err = io.ReadAll(bodyReader)
-		if err != nil {
-			log.Printf("Error reading cached request body for streaming check: %v", err)
-			return false
-		}
-	} else {
-		// Read the body for the first time
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			log.Printf("Error reading request body for streaming check: %v", err)
-			return false
-		}
-
-		// Restore the body and create GetBody for future use
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
-		}
-	}
-
-	// Parse the JSON to check for stream field
-	var requestData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
-		log.Printf("Error parsing request body JSON for streaming check: %v", err)
-		return false
-	}
-
-	// Check if stream is set to true
-	if streamValue, exists := requestData["stream"]; exists {
-		if streamBool, ok := streamValue.(bool); ok {
-			return streamBool
-		}
-	}
-
-	return false
-}
+// Body inspection for streaming detection removed to preserve upload streaming
 
 // isStreamingResponse checks if the response is a streaming response
 func (g *GeminiProxy) isStreamingResponse(resp *http.Response) bool {
@@ -214,7 +166,7 @@ func (g *GeminiProxy) GetHealthStatus() map[string]interface{} {
 		"status":            "healthy",
 		"baseURL":           geminiBaseURL,
 		"streaming_support": true,
-		"body_parsing":      true,
+		"body_parsing":      false,
 		"sse_support":       true,
 	}
 }
