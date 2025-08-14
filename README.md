@@ -1,6 +1,6 @@
 # LLM Proxy
 
-<img width="400" alt="logo" src="https://github.com/user-attachments/assets/a76b9419-3707-474b-8095-ae3d41d5afb8" />
+<img width="400" height="400" alt="logo" src="https://github.com/user-attachments/assets/5270b120-7906-49e8-ab64-402ae9251da3" />
 
 A simple, Go-based alternative to the `litellm` proxy, without all the extra stuff you don't need! A modular reverse proxy that forwards requests to various LLM providers (OpenAI, Anthropic, Gemini) using Go and the Gorilla web toolkit.
 
