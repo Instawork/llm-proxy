@@ -1,8 +1,13 @@
 package providers
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 )
 
 // validateMetadata is a helper function to validate metadata parsing
@@ -149,3 +154,115 @@ data: [DONE]
 		t.Errorf("Expected model name '%s', got '%s'", expectedModel, metadata.Model)
 	}
 }
+
+// Token-based limiter behavior scoped by API key and user for Gemini
+func TestGemini_TokenRateLimit_ByKeyAndUser(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 30}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 30}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "gemini", Model: "gemini-2.5-flash-preview-05-20", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 20, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation to be rate limited, but allowed")
+	}
+}
+
+// Key has enough tokens but user hits limit
+func TestGemini_TokenRateLimit_UserLimited_KeyOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 100}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 30}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "gemini", Model: "gemini-2.5-flash-preview-05-20", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 20, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	// total 35 (>30 user limit), key still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation denied by user limit, but allowed")
+	}
+}
+
+// User has enough tokens but key hits limit
+func TestGemini_TokenRateLimit_KeyLimited_UserOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 30}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 100}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "gemini", Model: "gemini-2.5-flash-preview-05-20", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 20, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	// total 35 (>30 key limit), user still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation denied by key limit, but allowed")
+	}
+}
+
+// Header verification via middleware is covered in middleware-specific tests to avoid package import cycles.

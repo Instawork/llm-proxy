@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -212,4 +213,73 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 
 	// Not gzipped, return the original reader with peeked bytes restored
 	return io.MultiReader(bytes.NewReader(buffer[:n]), peekReader), nil
+}
+
+// EstimateRequestTokens provides a generic, provider-agnostic estimation of request tokens.
+// It avoids reading the full body by default; if the body is small (per config), it samples
+// the body to attempt to extract the model and then restores the body for downstream handlers.
+// Estimation primarily uses Content-Length divided by BytesPerToken.
+type estimationConfig interface {
+	// Adapter to decouple from config package to avoid import cycles in tests
+	GetMaxSampleBytes() int
+	GetBytesPerToken() int
+}
+
+// YAMLConfigEstimationAdapter adapts config.EstimationConfig
+type YAMLConfigEstimationAdapter struct {
+	MaxSampleBytes int
+	BytesPerToken  int
+}
+
+func (a YAMLConfigEstimationAdapter) GetMaxSampleBytes() int { return a.MaxSampleBytes }
+func (a YAMLConfigEstimationAdapter) GetBytesPerToken() int  { return a.BytesPerToken }
+
+// EstimateRequestTokens returns (estimatedTokens, model)
+func EstimateRequestTokens(req *http.Request, cfg estimationConfig) (int, string) {
+	if cfg == nil {
+		return 0, ""
+	}
+	bytesPerToken := cfg.GetBytesPerToken()
+	if bytesPerToken <= 0 {
+		bytesPerToken = 4
+	}
+
+	var model string
+	// Primary: use Content-Length
+	est := 0
+	if req.ContentLength > 0 {
+		est = int(req.ContentLength) / bytesPerToken
+	}
+
+	// Optional sampling: only if small and JSON
+	maxSample := cfg.GetMaxSampleBytes()
+	if maxSample >= 0 {
+		ct := req.Header.Get("Content-Type")
+		if strings.Contains(ct, "application/json") {
+			if req.ContentLength >= 0 && req.ContentLength <= int64(maxSample) {
+				// Read and restore body
+				buf := &bytes.Buffer{}
+				if req.Body != nil {
+					_, _ = io.CopyN(buf, req.Body, int64(maxSample))
+				}
+				// Restore body for downstream
+				req.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
+				// Try to parse minimal JSON to extract model
+				var tmp map[string]interface{}
+				if err := json.Unmarshal(buf.Bytes(), &tmp); err == nil {
+					if mv, ok := tmp["model"].(string); ok {
+						model = mv
+					}
+				}
+				// If no Content-Length, estimate from buffer length
+				if est == 0 && buf.Len() > 0 {
+					est = buf.Len() / bytesPerToken
+				}
+			}
+		}
+	}
+	if est < 0 {
+		est = 0
+	}
+	return est, model
 }

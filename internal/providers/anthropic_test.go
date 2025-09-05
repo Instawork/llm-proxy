@@ -3,9 +3,14 @@ package providers
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 )
 
 // validateMetadata is a helper function to validate metadata parsing
@@ -259,3 +264,119 @@ func TestAnthropicGzipDecompression(t *testing.T) {
 		}
 	})
 }
+
+// Token-based limiter behavior scoped by API key and user for Anthropic
+func TestAnthropic_TokenRateLimit_ByKeyAndUser(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	// 20 tokens/min per key and per user
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 20}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 20}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "anthropic", Model: "claude-test", APIKey: "devkey", UserID: "example-user"}
+
+	// First reservation: 10 tokens -> allowed
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 10, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	// Second reservation: +15 tokens -> should be denied (total 25 > 20)
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation to be rate limited, but allowed")
+	}
+}
+
+// Key has enough tokens but user hits limit
+func TestAnthropic_TokenRateLimit_UserLimited_KeyOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 100}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 20}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "anthropic", Model: "claude-test", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	// total would be 30 (>20 user limit), key still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation denied by user limit, but allowed")
+	}
+}
+
+// User has enough tokens but key hits limit
+func TestAnthropic_TokenRateLimit_KeyLimited_UserOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 20}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 100}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "anthropic", Model: "claude-test", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res1.Allowed {
+		t.Fatalf("expected first reservation allowed, got denied: %+v", res1)
+	}
+
+	// total would be 30 (>20 key limit), user still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 15, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.Allowed {
+		t.Fatalf("expected second reservation denied by key limit, but allowed")
+	}
+}
+
+// Verify rate limit headers for token-based key scope denial via middleware
+// ... existing code ...

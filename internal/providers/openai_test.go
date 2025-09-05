@@ -15,6 +15,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 )
 
 // validateMetadata is a helper function to validate metadata parsing
@@ -542,4 +545,90 @@ data: [DONE]`
 		assert.Equal(t, "completed", metadata.FinishReason)
 		assert.False(t, metadata.IsStreaming)
 	})
+}
+
+// Token-based limiter behavior scoped by API key and user for OpenAI
+func TestOpenAI_TokenRateLimit_ByKeyAndUser(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 10}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 10}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "openai", Model: "gpt-4o-mini-2024-07-18", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 7, now)
+	require.NoError(t, err)
+	require.True(t, res1.Allowed, "first reservation should be allowed")
+
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 5, now)
+	require.NoError(t, err)
+	require.False(t, res2.Allowed, "second reservation should be rate limited")
+}
+
+// Key has enough tokens but user hits limit
+func TestOpenAI_TokenRateLimit_UserLimited_KeyOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 100}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 10}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "openai", Model: "gpt-4o-mini-2024-07-18", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 7, now)
+	require.NoError(t, err)
+	require.True(t, res1.Allowed)
+
+	// total would be 12 (>10 user limit), key still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 5, now)
+	require.NoError(t, err)
+	require.False(t, res2.Allowed)
+}
+
+// User has enough tokens but key hits limit
+func TestOpenAI_TokenRateLimit_KeyLimited_UserOK(t *testing.T) {
+	cfg := config.GetDefaultYAMLConfig()
+	cfg.Features.RateLimiting.Enabled = true
+	cfg.Features.RateLimiting.Backend = "memory"
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	if cfg.Features.RateLimiting.Overrides.PerKey == nil {
+		cfg.Features.RateLimiting.Overrides.PerKey = map[string]config.LimitsConfig{}
+	}
+	if cfg.Features.RateLimiting.Overrides.PerUser == nil {
+		cfg.Features.RateLimiting.Overrides.PerUser = map[string]config.LimitsConfig{}
+	}
+	cfg.Features.RateLimiting.Overrides.PerKey["devkey"] = config.LimitsConfig{TokensPerMinute: 10}
+	cfg.Features.RateLimiting.Overrides.PerUser["example-user"] = config.LimitsConfig{TokensPerMinute: 100}
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	now := time.Now()
+	scope := ratelimit.ScopeKeys{Provider: "openai", Model: "gpt-4o-mini-2024-07-18", APIKey: "devkey", UserID: "example-user"}
+
+	res1, err := lim.CheckAndReserve(context.TODO(), "", scope, 7, now)
+	require.NoError(t, err)
+	require.True(t, res1.Allowed)
+
+	// total would be 12 (>10 key limit), user still under 100
+	res2, err := lim.CheckAndReserve(context.TODO(), "", scope, 5, now)
+	require.NoError(t, err)
+	require.False(t, res2.Allowed)
 }

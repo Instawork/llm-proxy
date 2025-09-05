@@ -19,6 +19,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
 )
 
@@ -86,6 +87,9 @@ var globalCostTracker *cost.CostTracker
 
 // Global API key store instance
 var globalAPIKeyStore providers.APIKeyStore
+
+// Global rate limiter instance
+var globalRateLimiter ratelimit.RateLimiter
 
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -489,6 +493,22 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	// Initialize API key store if enabled
 	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
 
+	// Initialize rate limiter if enabled
+	if yamlConfig.Features.RateLimiting.Enabled {
+		lim, err := ratelimit.Factory(yamlConfig)
+		if err != nil {
+			logger.Error("Failed to initialize rate limiter", "error", err)
+		} else {
+			globalRateLimiter = lim
+			logger.Info("Rate limiting: ENABLED",
+				"backend", yamlConfig.Features.RateLimiting.Backend,
+				"rpm", yamlConfig.Features.RateLimiting.Limits.RequestsPerMinute,
+				"tpm", yamlConfig.Features.RateLimiting.Limits.TokensPerMinute,
+				"rpd", yamlConfig.Features.RateLimiting.Limits.RequestsPerDay,
+				"tpd", yamlConfig.Features.RateLimiting.Limits.TokensPerDay)
+		}
+	}
+
 	// Register providers
 	openAIProvider := providers.NewOpenAIProxy()
 	globalProviderManager.RegisterProvider(openAIProvider)
@@ -508,6 +528,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	}
 
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
+	if globalRateLimiter != nil {
+		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter))
+	}
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
 
 	// Create callbacks for cost tracking
@@ -561,6 +584,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
 	if globalCostTracker != nil {
 		features = append(features, "Cost tracking")
+	}
+	if globalRateLimiter != nil {
+		features = append(features, "Rate limiting")
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 

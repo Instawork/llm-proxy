@@ -29,4 +29,22 @@ features:
     table_name: "llm-proxy-api-keys-dev"
     region: "us-west-2"
   rate_limiting:
-    enabled: false
+    enabled: true
+    backend: "memory"
+    estimation:
+      max_sample_bytes: 20000
+      bytes_per_token: 4
+    limits:
+      # Global limits: 0 means unlimited in dev by default
+      requests_per_minute: 0
+      tokens_per_minute: 0
+      requests_per_day: 0
+      tokens_per_day: 0
+    overrides:
+      per_user:
+        # Example: apply a dev-only limit to a specific user id
+        example-user:
+          requests_per_minute: 5
+          tokens_per_minute: 2000
+          requests_per_day: 100
+          tokens_per_day: 200000

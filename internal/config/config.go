@@ -46,6 +46,7 @@ type YAMLConfig struct {
 type FeaturesConfig struct {
 	CostTracking     CostTrackingConfig     `yaml:"cost_tracking"`
 	APIKeyManagement APIKeyManagementConfig `yaml:"api_key_management"`
+	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration
@@ -91,6 +92,44 @@ type APIKeyManagementConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	TableName string `yaml:"table_name"`
 	Region    string `yaml:"region"`
+}
+
+// RateLimitingConfig represents rate limiting feature configuration
+type RateLimitingConfig struct {
+	Enabled    bool               `yaml:"enabled"`
+	Backend    string             `yaml:"backend"` // "memory" or "redis"
+	Limits     LimitsConfig       `yaml:"limits"`
+	Overrides  RateLimitOverrides `yaml:"overrides,omitempty"`
+	Estimation EstimationConfig   `yaml:"estimation,omitempty"`
+	Redis      *RedisConfig       `yaml:"redis,omitempty"`
+}
+
+// LimitsConfig contains the per-window limits. Zero or negative means unlimited.
+type LimitsConfig struct {
+	RequestsPerMinute int `yaml:"requests_per_minute"`
+	TokensPerMinute   int `yaml:"tokens_per_minute"`
+	RequestsPerDay    int `yaml:"requests_per_day"`
+	TokensPerDay      int `yaml:"tokens_per_day"`
+}
+
+// RateLimitOverrides allow per-entity limit overrides
+type RateLimitOverrides struct {
+	PerKey   map[string]LimitsConfig `yaml:"per_key,omitempty"`
+	PerUser  map[string]LimitsConfig `yaml:"per_user,omitempty"`
+	PerModel map[string]LimitsConfig `yaml:"per_model,omitempty"`
+}
+
+// EstimationConfig controls request token estimation behavior
+type EstimationConfig struct {
+	MaxSampleBytes int `yaml:"max_sample_bytes"`
+	BytesPerToken  int `yaml:"bytes_per_token"`
+}
+
+// RedisConfig contains Redis backend settings
+type RedisConfig struct {
+	Address  string `yaml:"address"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
 }
 
 // ProviderConfig represents configuration for a specific provider
@@ -365,6 +404,13 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
+	// Validate rate limiting configuration if enabled
+	if c.Features.RateLimiting.Enabled {
+		if err := c.validateRateLimitingConfig(); err != nil {
+			return fmt.Errorf("invalid rate limiting configuration: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -425,6 +471,29 @@ func (c *YAMLConfig) GetAllTransports() []TransportConfig {
 	}
 
 	return c.Features.CostTracking.Transports
+}
+
+// validateRateLimitingConfig validates the rate limiting configuration
+func (c *YAMLConfig) validateRateLimitingConfig() error {
+	rl := c.Features.RateLimiting
+	switch rl.Backend {
+	case "", "memory":
+		// default to memory
+	case "redis":
+		if rl.Redis == nil || rl.Redis.Address == "" {
+			return fmt.Errorf("redis backend selected but redis.address is empty")
+		}
+	default:
+		return fmt.Errorf("unsupported backend: %s (supported: memory, redis)", rl.Backend)
+	}
+
+	if rl.Estimation.BytesPerToken < 0 {
+		return fmt.Errorf("estimation.bytes_per_token cannot be negative")
+	}
+	if rl.Estimation.MaxSampleBytes < -1 {
+		return fmt.Errorf("estimation.max_sample_bytes cannot be less than -1")
+	}
+	return nil
 }
 
 // ParsePricing iterates through all models and parses the flexible `Pricing` field
@@ -624,6 +693,20 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 							Path: "./cost_tracking.json",
 						},
 					},
+				},
+			},
+			RateLimiting: RateLimitingConfig{
+				Enabled: false,
+				Backend: "memory",
+				Limits: LimitsConfig{
+					RequestsPerMinute: 0,
+					TokensPerMinute:   0,
+					RequestsPerDay:    0,
+					TokensPerDay:      0,
+				},
+				Estimation: EstimationConfig{
+					MaxSampleBytes: 20000,
+					BytesPerToken:  4,
 				},
 			},
 		},
