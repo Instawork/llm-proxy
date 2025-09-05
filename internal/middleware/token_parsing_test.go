@@ -494,6 +494,10 @@ func (fmp *FailingMockProvider) ValidateAPIKey(req *http.Request, keyStore provi
 	return nil
 }
 
+func (fmp *FailingMockProvider) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	return "", nil
+}
+
 func TestTokenParsingMiddleware_ParsingFailureContinuesProxy(t *testing.T) {
 	manager := providers.NewProviderManager()
 

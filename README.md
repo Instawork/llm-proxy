@@ -118,8 +118,9 @@ export GEMINI_API_KEY=your_gemini_key
 ### Rate Limiting (Experimental)
 
 - Disabled by default. Enable via config: see `configs/base.yml` and `configs/dev.yml`.
-- Supports provisional token estimation with post-response reconciliation using `X-LLM-Total-Tokens`.
+- Supports provisional token estimation with post-response reconciliation using `X-LLM-Input-Tokens` (input tokens only).
 - Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
+ - Redis backend is currently not supported; only the in-process memory backend is available.
 
 Minimal dev example (see `configs/dev.yml` for a full setup):
 
@@ -127,14 +128,27 @@ Minimal dev example (see `configs/dev.yml` for a full setup):
 features:
   rate_limiting:
     enabled: true
-    backend: "memory" # dev only
+    backend: "memory" # single instance only
     estimation:
       max_sample_bytes: 20000
-      bytes_per_token: 4
+      bytes_per_token: 4 # Fallback to request size (Content-Length based)
+      chars_per_token: 4 # Default for message-based estimation
+      # Optional per-provider overrides (recommended)
+      provider_chars_per_token:
+        openai: 5      # ~185–190 tokens per 1k chars (from scripts/token_estimation.py)
+        anthropic: 3   # ~290–315 tokens per 1k chars (from scripts/token_estimation.py)
     limits:
       requests_per_minute: 0   # 0 = unlimited (dev defaults)
       tokens_per_minute: 0
 ```
+
+#### Token estimation behavior
+
+- We currently account for and reconcile only input tokens. Output tokens are not yet considered for rate limits/credits.
+- For small JSON requests (size controlled by `max_sample_bytes`), the proxy extracts textual message content via provider-specific parsers and estimates tokens by character count using `chars_per_token` (with per-provider overrides).
+- Default per-provider values come from benchmarks produced by `scripts/token_estimation.py`. You can run the script to generate your own table and override values in config.
+- Non-text modalities (images/videos) are not supported for estimation at this time and will fall back to credit-based only behavior essentially via `max_sample_bytes`.
+- Optimistic first request: to avoid estimation blocking initial traffic, the first token-bearing request in a window (when current token count is zero) is allowed even if token limits would otherwise apply. Subsequent requests are enforced normally.
 
 ## API Endpoints
 

@@ -8,6 +8,7 @@ package providers
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -425,4 +426,85 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 	}
 
 	return nil
+}
+
+// ExtractRequestModelAndMessages extracts model and message text content from Gemini request bodies.
+// IMPORTANT: Keep this lightweight and only rely on already-present body (do not force full reads of large uploads).
+// We only act on small JSON requests as gated by caller. We do minimal parsing of "contents" text parts.
+func (g *GeminiProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	if req == nil || req.Method != "POST" {
+		return "", nil
+	}
+	// Only consider Gemini endpoints
+	isGeminiEndpoint := strings.HasPrefix(req.URL.Path, "/gemini/") ||
+		strings.HasPrefix(req.URL.Path, "/v1beta/models/gemini") ||
+		strings.HasPrefix(req.URL.Path, "/v1/models/gemini")
+	if !isGeminiEndpoint {
+		return "", nil
+	}
+
+	// Attempt to read small cached body if available; avoid heavy operations
+	var bodyBytes []byte
+	if req.GetBody != nil {
+		r, err := req.GetBody()
+		if err == nil {
+			defer r.Close()
+			bodyBytes, _ = io.ReadAll(r)
+		}
+	} else if req.Body != nil {
+		// Read and restore because caller gated by size
+		b, err := io.ReadAll(req.Body)
+		if err != nil {
+			return "", nil
+		}
+		req.Body = io.NopCloser(bytes.NewBuffer(b))
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewBuffer(b)), nil }
+		bodyBytes = b
+	}
+	if len(bodyBytes) == 0 {
+		return "", nil
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return "", nil
+	}
+
+	// Model may be in URL; also allow explicit model field if present
+	model := ""
+	if mv, ok := data["model"].(string); ok && mv != "" {
+		model = strings.TrimPrefix(mv, "models/")
+	} else {
+		// Fallback: extract from path like /v1/models/gemini-1.5-pro:generateContent
+		path := req.URL.Path
+		idx := strings.Index(path, "/models/")
+		if idx >= 0 {
+			m := path[idx+len("/models/"):]
+			// trim suffix after :
+			if j := strings.Index(m, ":"); j >= 0 {
+				m = m[:j]
+			}
+			model = strings.TrimPrefix(m, "models/")
+		}
+	}
+
+	messages := make([]string, 0, 8)
+	// Gemini content structure: contents: [{role, parts:[{text:...}, ...]}]
+	if contents, ok := data["contents"].([]interface{}); ok {
+		for _, c := range contents {
+			if cm, ok := c.(map[string]interface{}); ok {
+				if parts, ok := cm["parts"].([]interface{}); ok {
+					for _, p := range parts {
+						if pm, ok := p.(map[string]interface{}); ok {
+							if txt, ok := pm["text"].(string); ok && txt != "" {
+								messages = append(messages, txt)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return model, messages
 }

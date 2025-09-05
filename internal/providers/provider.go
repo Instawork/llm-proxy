@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -69,6 +68,12 @@ type Provider interface {
 	// If the key starts with "iw:", it looks it up in the key store and replaces it with the actual key
 	// Returns an error if the key is invalid or disabled
 	ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error
+
+	// ExtractRequestModelAndMessages extracts the model and textual message content from a request body
+	// for the purpose of token estimation by character count. Implementations must restore req.Body
+	// if they read from it, to avoid impacting downstream handlers.
+	// Return values: (model, messages)
+	ExtractRequestModelAndMessages(req *http.Request) (string, []string)
 }
 
 // APIKeyStore defines the interface for API key storage operations
@@ -215,30 +220,46 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 	return io.MultiReader(bytes.NewReader(buffer[:n]), peekReader), nil
 }
 
-// EstimateRequestTokens provides a generic, provider-agnostic estimation of request tokens.
-// It avoids reading the full body by default; if the body is small (per config), it samples
-// the body to attempt to extract the model and then restores the body for downstream handlers.
 // Estimation primarily uses Content-Length divided by BytesPerToken.
 type estimationConfig interface {
 	// Adapter to decouple from config package to avoid import cycles in tests
 	GetMaxSampleBytes() int
 	GetBytesPerToken() int
+	GetCharsPerToken() int
+	GetProviderCharsPerToken(provider string) int
 }
 
 // YAMLConfigEstimationAdapter adapts config.EstimationConfig
 type YAMLConfigEstimationAdapter struct {
-	MaxSampleBytes int
-	BytesPerToken  int
+	MaxSampleBytes        int
+	BytesPerToken         int
+	CharsPerToken         int
+	ProviderCharsPerToken map[string]int
 }
 
 func (a YAMLConfigEstimationAdapter) GetMaxSampleBytes() int { return a.MaxSampleBytes }
 func (a YAMLConfigEstimationAdapter) GetBytesPerToken() int  { return a.BytesPerToken }
+func (a YAMLConfigEstimationAdapter) GetCharsPerToken() int  { return a.CharsPerToken }
+func (a YAMLConfigEstimationAdapter) GetProviderCharsPerToken(provider string) int {
+	if a.ProviderCharsPerToken == nil {
+		return 0
+	}
+	if v, ok := a.ProviderCharsPerToken[provider]; ok {
+		return v
+	}
+	return 0
+}
 
 // EstimateRequestTokens returns (estimatedTokens, model)
-func EstimateRequestTokens(req *http.Request, cfg estimationConfig) (int, string) {
+// It primarily uses Content-Length divided by BytesPerToken. When the request is small enough
+// (<= GetMaxSampleBytes) and is JSON, it will delegate to the provider to extract messages and
+// estimate tokens by character count of those messages.
+func EstimateRequestTokens(req *http.Request, cfg estimationConfig, provider Provider) (int, string) {
 	if cfg == nil {
 		return 0, ""
 	}
+
+	// Bytes-per-token used for Content-Length based estimation
 	bytesPerToken := cfg.GetBytesPerToken()
 	if bytesPerToken <= 0 {
 		bytesPerToken = 4
@@ -249,6 +270,7 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig) (int, string
 	est := 0
 	if req.ContentLength > 0 {
 		est = int(req.ContentLength) / bytesPerToken
+		log.Printf("🔍 Debug: Estimated tokens via Content-Length: %v, model: %v", est, model)
 	}
 
 	// Optional sampling: only if small and JSON
@@ -257,23 +279,30 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig) (int, string
 		ct := req.Header.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
 			if req.ContentLength >= 0 && req.ContentLength <= int64(maxSample) {
-				// Read and restore body
-				buf := &bytes.Buffer{}
-				if req.Body != nil {
-					_, _ = io.CopyN(buf, req.Body, int64(maxSample))
-				}
-				// Restore body for downstream
-				req.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
-				// Try to parse minimal JSON to extract model
-				var tmp map[string]interface{}
-				if err := json.Unmarshal(buf.Bytes(), &tmp); err == nil {
-					if mv, ok := tmp["model"].(string); ok {
-						model = mv
+				if provider != nil {
+					provModel, messages := provider.ExtractRequestModelAndMessages(req)
+					if provModel != "" {
+						model = provModel
 					}
-				}
-				// If no Content-Length, estimate from buffer length
-				if est == 0 && buf.Len() > 0 {
-					est = buf.Len() / bytesPerToken
+					if len(messages) > 0 {
+						// chars-per-token for character-count based estimation, with provider override if present
+						charsPerToken := cfg.GetCharsPerToken()
+						if cpt := cfg.GetProviderCharsPerToken(provider.GetName()); cpt > 0 {
+							charsPerToken = cpt
+						}
+						if charsPerToken <= 0 {
+							charsPerToken = 4
+						}
+
+						totalChars := 0
+						for _, m := range messages {
+							totalChars += len([]rune(m))
+						}
+						msgEst := totalChars / charsPerToken
+						if msgEst > 0 {
+							est = msgEst
+						}
+					}
 				}
 			}
 		}

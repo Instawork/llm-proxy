@@ -20,6 +20,10 @@ type MockProvider struct {
 	name string
 }
 
+func (mp *MockProvider) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	return "", nil
+}
+
 func (mp *MockProvider) GetName() string {
 	return mp.name
 }

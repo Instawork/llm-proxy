@@ -1,0 +1,2 @@
+tiktoken>=0.7.0,<1
+anthropic>=0.34.0,<1

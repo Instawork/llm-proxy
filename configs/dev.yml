@@ -32,8 +32,12 @@ features:
     enabled: true
     backend: "memory"
     estimation:
-      max_sample_bytes: 20000
+      max_sample_bytes: 200000
       bytes_per_token: 4
+      chars_per_token: 4
+      provider_chars_per_token:
+        openai: 5 # ~185–190 tokens per 1k chars (from scripts/token_estimation.py)
+        anthropic: 3 # ~290–315 tokens per 1k chars (from scripts/token_estimation.py)
     limits:
       # Global limits: 0 means unlimited in dev by default
       requests_per_minute: 0
@@ -41,6 +45,11 @@ features:
       requests_per_day: 0
       tokens_per_day: 0
     overrides:
+    # Example Redis configuration (switch backend to "redis" to use)
+    redis:
+      address: "localhost:6379"
+      password: ""
+      db: 0
       per_user:
         # Example: apply a dev-only limit to a specific user id
         example-user:

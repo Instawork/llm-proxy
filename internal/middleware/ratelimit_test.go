@@ -27,6 +27,9 @@ func (f *fakeProvider) GetHealthStatus() map[string]interface{}                 
 func (f *fakeProvider) UserIDFromRequest(req *http.Request) string                       { return "" }
 func (f *fakeProvider) RegisterExtraRoutes(r *mux.Router)                                {}
 func (f *fakeProvider) ValidateAPIKey(req *http.Request, ks providers.APIKeyStore) error { return nil }
+func (f *fakeProvider) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	return "", nil
+}
 
 func makeCfg() *config.YAMLConfig {
 	cfg := config.GetDefaultYAMLConfig()
@@ -100,42 +103,51 @@ func TestRateLimitingTokensPerMinute(t *testing.T) {
 	pm.RegisterProvider(&fakeProvider{})
 
 	h := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate final token count header set by TokenParsingMiddleware
-		w.Header().Set("X-LLM-Total-Tokens", "25")
+		// Simulate final token count header set by TokenParsingMiddleware (input tokens only)
+		w.Header().Set("X-LLM-Input-Tokens", "25")
 		w.WriteHeader(200)
 	}))
 
-	// Body of ~100 bytes -> est ~25 tokens assuming 4 bytes/token, should be blocked
+	// Body of ~100 bytes -> est ~25 tokens assuming 4 bytes/token
 	payload := map[string]interface{}{"model": "gpt-4o", "messages": []string{"hello", "world"}, "pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/openai/chat/completions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429 due to token estimate, got %d", rr.Code)
+
+	// First request should be allowed due to optimistic first-token policy
+	rr1 := httptest.NewRecorder()
+	h.ServeHTTP(rr1, req)
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for first request, got %d", rr1.Code)
+	}
+
+	// Second request should be throttled by token limit
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req)
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 due to token limit on second request, got %d", rr2.Code)
 	}
 
 	// Verify informative rate limit headers for token limit
-	if got := rr.Header().Get("X-RateLimit-Reason"); got != "minute limit exceeded" {
+	if got := rr2.Header().Get("X-RateLimit-Reason"); got != "minute limit exceeded" {
 		t.Fatalf("unexpected X-RateLimit-Reason: %q", got)
 	}
-	if got := rr.Header().Get("X-RateLimit-Metric"); got != "tokens" {
+	if got := rr2.Header().Get("X-RateLimit-Metric"); got != "tokens" {
 		t.Fatalf("unexpected X-RateLimit-Metric: %q", got)
 	}
-	if got := rr.Header().Get("X-RateLimit-Window"); got != "minute" {
+	if got := rr2.Header().Get("X-RateLimit-Window"); got != "minute" {
 		t.Fatalf("unexpected X-RateLimit-Window: %q", got)
 	}
-	if got := rr.Header().Get("X-RateLimit-Scope"); got != "global" {
+	if got := rr2.Header().Get("X-RateLimit-Scope"); got != "global" {
 		t.Fatalf("unexpected X-RateLimit-Scope: %q", got)
 	}
-	if got := rr.Header().Get("X-RateLimit-Limit"); got != "20" {
+	if got := rr2.Header().Get("X-RateLimit-Limit"); got != "20" {
 		t.Fatalf("unexpected X-RateLimit-Limit: %q", got)
 	}
-	if got := rr.Header().Get("X-RateLimit-Remaining"); got != "0" {
+	if got := rr2.Header().Get("X-RateLimit-Remaining"); got != "0" {
 		t.Fatalf("unexpected X-RateLimit-Remaining: %q", got)
 	}
-	if got := rr.Header().Get("Retry-After"); got != "60" {
+	if got := rr2.Header().Get("Retry-After"); got != "60" {
 		t.Fatalf("unexpected Retry-After: %q", got)
 	}
 }

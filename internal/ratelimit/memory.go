@@ -152,8 +152,13 @@ func (m *memoryLimiter) exceeds(c *counters, lim limits, addTokens int) bool {
 	if lim.reqPerWindow > 0 && c.Requests+1 > lim.reqPerWindow {
 		return true
 	}
-	if lim.tokPerWindow > 0 && c.Tokens+addTokens > lim.tokPerWindow {
-		return true
+	if lim.tokPerWindow > 0 {
+		// Allow the first token-bearing request in the window optimistically.
+		if c.Tokens == 0 {
+			// Skip token exceed check for the first request in this window.
+		} else if c.Tokens+addTokens > lim.tokPerWindow {
+			return true
+		}
 	}
 	return false
 }

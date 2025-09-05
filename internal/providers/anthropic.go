@@ -515,6 +515,57 @@ func (a *AnthropicProxy) readRequestBodyForUserID(req *http.Request) ([]byte, er
 	return bodyBytes, nil
 }
 
+// ExtractRequestModelAndMessages extracts model and message text content from Anthropic request bodies
+// for the messages API. Restores req.Body if read.
+func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	if req == nil || req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/anthropic/") {
+		return "", nil
+	}
+	// Only consider the /messages endpoint for token estimation
+	if !strings.Contains(req.URL.Path, "/messages") {
+		return "", nil
+	}
+
+	bodyBytes, err := a.readRequestBodyForUserID(req)
+	if err != nil || len(bodyBytes) == 0 {
+		return "", nil
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return "", nil
+	}
+
+	model := ""
+	if mv, ok := data["model"].(string); ok {
+		model = mv
+	}
+
+	messages := make([]string, 0, 8)
+	// Anthropic request: messages: [{role, content: [{type:"text", text:"..."}, ...]}]
+	if rawMsgs, ok := data["messages"].([]interface{}); ok {
+		for _, m := range rawMsgs {
+			if msg, ok := m.(map[string]interface{}); ok {
+				if parts, ok := msg["content"].([]interface{}); ok {
+					for _, p := range parts {
+						if pm, ok := p.(map[string]interface{}); ok {
+							if t, ok := pm["type"].(string); ok && t == "text" {
+								if txt, ok := pm["text"].(string); ok && txt != "" {
+									messages = append(messages, txt)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Tool use/input blocks might include text; ignore non-text to avoid overcounting
+
+	return model, messages
+}
+
 // ValidateAPIKey validates and potentially replaces the API key in the request
 func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
 	// Get the API key from the x-api-key header (Anthropic uses this header)

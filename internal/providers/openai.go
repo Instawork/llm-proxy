@@ -835,6 +835,82 @@ func (o *OpenAIProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error
 	return bodyBytes, nil
 }
 
+// ExtractRequestModelAndMessages extracts model and message text content from OpenAI request bodies
+// Supports Chat Completions and Responses API minimal structures. Restores req.Body if read.
+func (o *OpenAIProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
+	// Only attempt for OpenAI endpoints and POST requests
+	if req == nil || req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/openai/") {
+		return "", nil
+	}
+
+	// Reuse existing safe body reader
+	bodyBytes, err := o.readRequestBodyForUserID(req)
+	if err != nil || len(bodyBytes) == 0 {
+		return "", nil
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return "", nil
+	}
+
+	// Model
+	model := ""
+	if mv, ok := data["model"].(string); ok {
+		model = mv
+	}
+
+	messages := make([]string, 0, 8)
+
+	// Chat Completions style: messages: [{ role, content }]
+	if rawMsgs, ok := data["messages"].([]interface{}); ok {
+		for _, m := range rawMsgs {
+			if msg, ok := m.(map[string]interface{}); ok {
+				if contentStr, ok := msg["content"].(string); ok && contentStr != "" {
+					messages = append(messages, contentStr)
+					continue
+				}
+				// content can be array for multimodal; collect text parts
+				if parts, ok := msg["content"].([]interface{}); ok {
+					for _, p := range parts {
+						if pm, ok := p.(map[string]interface{}); ok {
+							if t, ok := pm["type"].(string); ok && t == "text" {
+								if txt, ok := pm["text"].(string); ok && txt != "" {
+									messages = append(messages, txt)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Responses API: input can be string or array of blocks {type, text}
+	if inputStr, ok := data["input"].(string); ok && inputStr != "" {
+		messages = append(messages, inputStr)
+	} else if inputArr, ok := data["input"].([]interface{}); ok {
+		for _, it := range inputArr {
+			if m, ok := it.(map[string]interface{}); ok {
+				if t, ok := m["type"].(string); ok && (t == "input_text" || t == "text") {
+					if txt, ok := m["text"].(string); ok && txt != "" {
+						messages = append(messages, txt)
+					}
+				}
+			} else if s, ok := it.(string); ok && s != "" {
+				messages = append(messages, s)
+			}
+		}
+	}
+
+	// Legacy completions: prompt
+	if prompt, ok := data["prompt"].(string); ok && prompt != "" {
+		messages = append(messages, prompt)
+	}
+
+	return model, messages
+}
+
 // ValidateAPIKey validates and potentially replaces the API key in the request
 func (o *OpenAIProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
 	// Get the API key from the Authorization header

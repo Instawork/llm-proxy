@@ -20,8 +20,10 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 	}
 
 	estCfg := providers.YAMLConfigEstimationAdapter{
-		MaxSampleBytes: cfg.Features.RateLimiting.Estimation.MaxSampleBytes,
-		BytesPerToken:  cfg.Features.RateLimiting.Estimation.BytesPerToken,
+		MaxSampleBytes:        cfg.Features.RateLimiting.Estimation.MaxSampleBytes,
+		BytesPerToken:         cfg.Features.RateLimiting.Estimation.BytesPerToken,
+		CharsPerToken:         cfg.Features.RateLimiting.Estimation.CharsPerToken,
+		ProviderCharsPerToken: cfg.Features.RateLimiting.Estimation.ProviderCharsPerToken,
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -41,7 +43,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			}
 			model := ""
 
-			estTokens, parsedModel := providers.EstimateRequestTokens(r, estCfg)
+			estTokens, parsedModel := providers.EstimateRequestTokens(r, estCfg, prov)
 			if parsedModel != "" {
 				model = parsedModel
 			}
@@ -78,14 +80,14 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			// in the chain will set X-LLM-Total-Tokens if available.
 			next.ServeHTTP(w, r)
 
-			// Reconcile using metadata set by token parsing middleware headers if present
-			actual := headerToInt(w.Header().Get("X-LLM-Total-Tokens"))
-			if actual > 0 {
-				delta := actual - estTokens
+			// Reconcile using input token metadata set by token parsing middleware headers if present
+			actualInput := headerToInt(w.Header().Get("X-LLM-Input-Tokens"))
+			if actualInput > 0 {
+				delta := actualInput - estTokens
 				if err := limiter.Adjust(r.Context(), "", scope, delta, time.Now()); err != nil {
 					log.Printf("ratelimit: adjust error: %v", err)
 				} else if delta != 0 {
-					log.Printf("ratelimit: adjust provider=%s model=%s user=%s key_prefix=%s delta_tokens=%d",
+					log.Printf("ratelimit: adjust (input) provider=%s model=%s user=%s key_prefix=%s delta_input_tokens=%d",
 						prov.GetName(), model, userID, prefix(apiKey), delta)
 				}
 			}

@@ -121,8 +121,10 @@ type RateLimitOverrides struct {
 
 // EstimationConfig controls request token estimation behavior
 type EstimationConfig struct {
-	MaxSampleBytes int `yaml:"max_sample_bytes"`
-	BytesPerToken  int `yaml:"bytes_per_token"`
+	MaxSampleBytes        int            `yaml:"max_sample_bytes"`
+	BytesPerToken         int            `yaml:"bytes_per_token"`
+	CharsPerToken         int            `yaml:"chars_per_token"`
+	ProviderCharsPerToken map[string]int `yaml:"provider_chars_per_token,omitempty"`
 }
 
 // RedisConfig contains Redis backend settings
@@ -490,8 +492,19 @@ func (c *YAMLConfig) validateRateLimitingConfig() error {
 	if rl.Estimation.BytesPerToken < 0 {
 		return fmt.Errorf("estimation.bytes_per_token cannot be negative")
 	}
+	if rl.Estimation.CharsPerToken < 0 {
+		return fmt.Errorf("estimation.chars_per_token cannot be negative")
+	}
 	if rl.Estimation.MaxSampleBytes < -1 {
 		return fmt.Errorf("estimation.max_sample_bytes cannot be less than -1")
+	}
+	// Validate per-provider char overrides if present
+	if rl.Estimation.ProviderCharsPerToken != nil {
+		for prov, v := range rl.Estimation.ProviderCharsPerToken {
+			if v < 0 {
+				return fmt.Errorf("estimation.provider_chars_per_token[%s] cannot be negative", prov)
+			}
+		}
 	}
 	return nil
 }
@@ -707,6 +720,11 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 				Estimation: EstimationConfig{
 					MaxSampleBytes: 20000,
 					BytesPerToken:  4,
+					CharsPerToken:  4,
+					ProviderCharsPerToken: map[string]int{
+						"openai":    5,
+						"anthropic": 3,
+					},
 				},
 			},
 		},
