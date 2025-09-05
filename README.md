@@ -15,6 +15,7 @@ A simple, Go-based alternative to the `litellm` proxy, without all the extra stu
 - **CORS Support**: Browser-based application compatibility
 - **Health Check**: Detailed health status for all providers
 - **Configurable Port**: Environment variable configuration (default: 9002)
+- **Rate Limiting (experimental)**: Optional request/token-based limits per user/API key/model/provider
 
 ## Quick Start
 
@@ -113,6 +114,27 @@ export GEMINI_API_KEY=your_gemini_key
 ## Configuration
 
 - `PORT`: Environment variable to set the server port (default: 9002)
+
+### Rate Limiting (Experimental)
+
+- Disabled by default. Enable via config: see `configs/base.yml` and `configs/dev.yml`.
+- Supports provisional token estimation with post-response reconciliation using `X-LLM-Total-Tokens`.
+- Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
+
+Minimal dev example (see `configs/dev.yml` for a full setup):
+
+```yaml
+features:
+  rate_limiting:
+    enabled: true
+    backend: "memory" # dev only
+    estimation:
+      max_sample_bytes: 20000
+      bytes_per_token: 4
+    limits:
+      requests_per_minute: 0   # 0 = unlimited (dev defaults)
+      tokens_per_minute: 0
+```
 
 ## API Endpoints
 
