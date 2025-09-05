@@ -53,7 +53,14 @@ func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope Sc
 			} else if minLim.reqPerWindow > 0 {
 				remaining = max0(minLim.reqPerWindow - (minC.Requests + 1))
 			}
-			details := &LimitDetails{ScopeKey: k, Metric: exceededMetric(minC, minLim, estTokens), Window: "minute", Limit: maxInt(minLim.reqPerWindow, minLim.tokPerWindow), Remaining: remaining}
+			metric := exceededMetric(minC, minLim, estTokens)
+			limitVal := 0
+			if metric == "tokens" {
+				limitVal = minLim.tokPerWindow
+			} else {
+				limitVal = minLim.reqPerWindow
+			}
+			details := &LimitDetails{ScopeKey: k, Metric: metric, Window: "minute", Limit: limitVal, Remaining: remaining}
 			return ReservationResult{Allowed: false, RetryAfterSeconds: 60, Reason: "minute limit exceeded", Details: details}, nil
 		}
 		// day window
@@ -66,7 +73,14 @@ func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope Sc
 			} else if dayLim.reqPerWindow > 0 {
 				remaining = max0(dayLim.reqPerWindow - (dayC.Requests + 1))
 			}
-			details := &LimitDetails{ScopeKey: k, Metric: exceededMetric(dayC, dayLim, estTokens), Window: "day", Limit: maxInt(dayLim.reqPerWindow, dayLim.tokPerWindow), Remaining: remaining}
+			metric := exceededMetric(dayC, dayLim, estTokens)
+			limitVal := 0
+			if metric == "tokens" {
+				limitVal = dayLim.tokPerWindow
+			} else {
+				limitVal = dayLim.reqPerWindow
+			}
+			details := &LimitDetails{ScopeKey: k, Metric: metric, Window: "day", Limit: limitVal, Remaining: remaining}
 			return ReservationResult{Allowed: false, RetryAfterSeconds: int(time.Until(m.dayTick.Add(24 * time.Hour)).Seconds()), Reason: "daily limit exceeded", Details: details}, nil
 		}
 	}
