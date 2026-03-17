@@ -26,19 +26,19 @@ type anthropicTestModel struct {
 // Test models to use in parameterized tests
 var anthropicTestModels = []anthropicTestModel{
 	{
-		name:       "Claude-4.6-Opus",
+		name:       "Claude-Opus-4.6",
 		modelID:    "claude-opus-4-6",
 		maxTokens:  50,
 		testPrompt: "What is 2+2?",
 	},
 	{
-		name:       "Claude-4.5-Haiku",
+		name:       "Claude-Haiku-4.5",
 		modelID:    "claude-haiku-4-5",
 		maxTokens:  50,
 		testPrompt: "What is 2+2?",
 	},
 	{
-		name:       "Claude-Sonnet-4-6",
+		name:       "Claude-Sonnet-4.6",
 		modelID:    "claude-sonnet-4-6",
 		maxTokens:  100,
 		testPrompt: "Hello! Can you tell me a short joke?",

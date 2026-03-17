@@ -290,7 +290,7 @@ providers:
       "claude-opus-4-5":
         enabled: true
         aliases: [
-          "claude-opus-4.5-20251101",
+          "claude-opus-4-5-20251101",
           "claude-opus-4.5",
         ]
         limits:
@@ -409,10 +409,9 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
-      "claude-4-5-haiku":
+      "claude-haiku-4-5":
         enabled: true
         aliases: [
-            "claude-4.5-haiku",
             "claude-haiku-4.5",
             "claude-haiku-4-5-20251001"
           ]
