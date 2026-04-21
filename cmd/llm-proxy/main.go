@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/middleware"
@@ -90,6 +91,9 @@ var globalAPIKeyStore providers.APIKeyStore
 
 // Global rate limiter instance
 var globalRateLimiter ratelimit.RateLimiter
+
+// Global circuit breaker store instance
+var globalCircuitStore circuit.Store
 
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -354,6 +358,72 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	return costTracker
 }
 
+// circuitConfigFromYAML converts the YAML circuit breaker config into the
+// internal circuit.Config (with defaults applied). Centralised so we don't
+// drift between the store-initialisation and transport-wrapping call sites.
+func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
+	cfg := circuit.Config{
+		Enabled:                         cb.Enabled,
+		Backend:                         cb.Backend,
+		FailureThreshold:                cb.FailureThreshold,
+		WindowSeconds:                   cb.WindowSeconds,
+		CooldownSeconds:                 cb.CooldownSeconds,
+		MaxTransientRetries:             cb.MaxTransientRetries,
+		MaxRateLimitRetries:             cb.MaxRateLimitRetries,
+		RetryContributionMode:           cb.RetryContributionMode,
+		GlobalRateLimitEscalationWindow: cb.GlobalRateLimitEscalationWindow,
+	}
+	if cb.Redis != nil {
+		cfg.RedisAddress = cb.Redis.Address
+		cfg.RedisPassword = cb.Redis.Password
+		cfg.RedisDB = cb.Redis.DB
+	}
+	return cfg.Defaults()
+}
+
+// initializeCircuitStore creates the circuit breaker state store from config.
+func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
+	cb := yamlConfig.Features.CircuitBreaker
+	if !cb.Enabled {
+		logger.Info("⚡ Circuit Breaker: disabled in config")
+		return nil
+	}
+
+	cfg := circuitConfigFromYAML(cb)
+
+	store, err := circuit.Factory(cfg)
+	if err != nil {
+		logger.Error("⚡ Circuit Breaker: failed to create store", "error", err)
+		return nil
+	}
+
+	logger.Info("⚡ Circuit Breaker: initialized",
+		"backend", cfg.Backend,
+		"failure_threshold", cfg.FailureThreshold,
+		"window_seconds", cfg.WindowSeconds,
+		"cooldown_seconds", cfg.CooldownSeconds,
+		"max_transient_retries", cfg.MaxTransientRetries,
+		"max_rate_limit_retries", cfg.MaxRateLimitRetries,
+		"retry_contribution_mode", cfg.RetryContributionMode,
+	)
+	return store
+}
+
+// wrapProviderWithCircuitBreaker injects a circuit-breaking transport into the
+// provider, keyed by providerName.
+func wrapProviderWithCircuitBreaker(
+	p interface {
+		WrapTransport(func(http.RoundTripper) http.RoundTripper)
+	},
+	store circuit.Store,
+	cfg circuit.Config,
+	providerName string,
+) {
+	p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
+		return circuit.NewTransport(inner, store, cfg, providerName, logger)
+	})
+}
+
 // initializeAPIKeyStore creates and configures the API key store from config
 func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
 	// Check if API key management is enabled
@@ -390,12 +460,35 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 
 // healthHandler provides a simple health check endpoint
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	providerHealth := globalProviderManager.GetHealthStatus()
+
+	// Augment with circuit breaker stats when available.
+	if globalCircuitStore != nil {
+		for _, name := range []string{"openai", "anthropic", "gemini"} {
+			stats, err := globalCircuitStore.GetStats(r.Context(), name)
+			if err != nil {
+				continue
+			}
+			ph, _ := providerHealth[name].(map[string]interface{})
+			if ph == nil {
+				ph = make(map[string]interface{})
+			}
+			ph["circuit_state"] = stats.State.String()
+			ph["circuit_failures"] = stats.Failures
+			if stats.CooldownUntil != nil {
+				ph["circuit_cooldown_until"] = stats.CooldownUntil.Unix()
+			}
+			providerHealth[name] = ph
+		}
+	}
+
 	health := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().Unix(),
-		"providers": globalProviderManager.GetHealthStatus(),
+		"providers": providerHealth,
 		"features": map[string]bool{
-			"cost_tracking": globalCostTracker != nil,
+			"cost_tracking":   globalCostTracker != nil,
+			"circuit_breaker": globalCircuitStore != nil,
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -509,6 +602,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 		}
 	}
 
+	// Initialize circuit breaker
+	globalCircuitStore = initializeCircuitStore(yamlConfig)
+
 	// Register providers
 	openAIProvider := providers.NewOpenAIProxy()
 	globalProviderManager.RegisterProvider(openAIProvider)
@@ -519,12 +615,27 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	geminiProvider := providers.NewGeminiProxy()
 	globalProviderManager.RegisterProvider(geminiProvider)
 
+	// Inject circuit-breaking transports when the feature is enabled.
+	if globalCircuitStore != nil {
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker)
+		wrapProviderWithCircuitBreaker(openAIProvider, globalCircuitStore, cbCfg, "openai")
+		wrapProviderWithCircuitBreaker(anthropicProvider, globalCircuitStore, cbCfg, "anthropic")
+		wrapProviderWithCircuitBreaker(geminiProvider, globalCircuitStore, cbCfg, "gemini")
+		logger.Info("⚡ Circuit Breaker: transports wrapped for all providers")
+	}
+
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 
 	// Add API key validation middleware if API key management is enabled
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore))
+	}
+
+	// Add test-mode middleware when enabled (integration tests only).
+	if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
+		r.Use(middleware.TestModeMiddleware)
+		logger.Info("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
 	}
 
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
@@ -587,6 +698,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	}
 	if globalRateLimiter != nil {
 		features = append(features, "Rate limiting")
+	}
+	if globalCircuitStore != nil {
+		features = append(features, "Circuit breaker")
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 

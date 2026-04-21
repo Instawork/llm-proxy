@@ -28,6 +28,16 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-dev"
     region: "us-west-2"
+  circuit_breaker:
+    enabled: true
+    backend: "memory"
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    retry_contribution_mode: "log"
+    test_mode_enabled: true
   rate_limiting:
     enabled: true
     backend: "memory"

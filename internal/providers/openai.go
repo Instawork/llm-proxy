@@ -190,6 +190,13 @@ func (o *OpenAIProxy) Proxy() http.Handler {
 	return o.proxy
 }
 
+// WrapTransport replaces the proxy's transport with the result of calling fn
+// on the current transport.  Call this after construction to inject circuit
+// breaking, tracing, or other transport-level middleware.
+func (o *OpenAIProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper) {
+	o.proxy.Transport = fn(o.proxy.Transport)
+}
+
 // GetHealthStatus returns the health status of the OpenAI proxy
 func (o *OpenAIProxy) GetHealthStatus() map[string]interface{} {
 	return map[string]interface{}{

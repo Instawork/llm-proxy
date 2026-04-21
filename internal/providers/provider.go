@@ -188,6 +188,17 @@ func newProxyTransport() *http.Transport {
 	}
 }
 
+// newGeminiProxyTransport creates a transport specifically for Gemini requests.
+// Gemini models (especially larger ones) can take significantly longer to start
+// returning response headers than other providers, so we use a longer
+// ResponseHeaderTimeout to avoid premature 502s that the google-genai client
+// would then retry multiple times, leading to very long total request durations.
+func newGeminiProxyTransport() *http.Transport {
+	t := newProxyTransport()
+	t.ResponseHeaderTimeout = 5 * time.Minute
+	return t
+}
+
 // DecompressResponseIfNeeded checks if the response is gzip compressed and decompresses it.
 // This is a shared utility function that all providers can use to handle gzip-compressed responses
 // when DisableCompression is set to true in the transport.

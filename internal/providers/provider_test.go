@@ -208,6 +208,27 @@ func TestNewProxyTransport(t *testing.T) {
 	}
 }
 
+func TestNewGeminiProxyTransport(t *testing.T) {
+	transport := newGeminiProxyTransport()
+
+	if transport == nil {
+		t.Fatal("newGeminiProxyTransport() returned nil")
+	}
+
+	if transport.ResponseHeaderTimeout != 5*time.Minute {
+		t.Errorf("Expected Gemini ResponseHeaderTimeout=5m, got %v", transport.ResponseHeaderTimeout)
+	}
+
+	// Other settings should inherit from the base transport
+	if transport.MaxIdleConns != 100 {
+		t.Errorf("Expected MaxIdleConns=100, got %d", transport.MaxIdleConns)
+	}
+
+	if !transport.DisableCompression {
+		t.Error("Expected DisableCompression=true")
+	}
+}
+
 // Test data structures
 
 func TestLLMResponseMetadata_Struct(t *testing.T) {

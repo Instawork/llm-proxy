@@ -47,6 +47,53 @@ type FeaturesConfig struct {
 	CostTracking     CostTrackingConfig     `yaml:"cost_tracking"`
 	APIKeyManagement APIKeyManagementConfig `yaml:"api_key_management"`
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
+	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
+}
+
+// CircuitBreakerConfig configures the proxy-side circuit breaker and retry
+// policies for provider degradation detection.
+type CircuitBreakerConfig struct {
+	// Enabled gates the feature entirely.
+	Enabled bool `yaml:"enabled"`
+
+	// Backend selects the state store: "memory" (default, single-process) or
+	// "redis" (recommended for production with multiple proxy instances).
+	Backend string `yaml:"backend"`
+
+	// FailureThreshold is the number of terminal failures within WindowSeconds
+	// that trips the circuit.  Default: 5.
+	FailureThreshold int `yaml:"failure_threshold"`
+
+	// WindowSeconds is the sliding-window TTL for failure counters.  Default: 120.
+	WindowSeconds int `yaml:"window_seconds"`
+
+	// CooldownSeconds is how long the circuit stays Open before probing.
+	// Default: 300.
+	CooldownSeconds int `yaml:"cooldown_seconds"`
+
+	// MaxTransientRetries is the retry limit for degraded-class failures.
+	// Default: 2.
+	MaxTransientRetries int `yaml:"max_transient_retries"`
+
+	// MaxRateLimitRetries is the retry limit for rate-limit failures.
+	// Default: 2.
+	MaxRateLimitRetries int `yaml:"max_rate_limit_retries"`
+
+	// RetryContributionMode controls whether retried failures count toward the
+	// circuit-breaker threshold.  Values: "off", "log" (default), "on".
+	RetryContributionMode string `yaml:"retry_contribution_mode"`
+
+	// GlobalRateLimitEscalationWindow is the number of seconds of sustained
+	// global rate-limit failures that must elapse before escalating to
+	// provider_degraded.  Default: 60.
+	GlobalRateLimitEscalationWindow int `yaml:"global_rate_limit_escalation_window"`
+
+	// Redis connection settings when Backend is "redis".
+	Redis *RedisConfig `yaml:"redis,omitempty"`
+
+	// TestModeEnabled allows the X-LLM-Proxy-Test-Mode header to be honoured.
+	// Should be false in production.
+	TestModeEnabled bool `yaml:"test_mode_enabled"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration
@@ -697,6 +744,18 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 	return &YAMLConfig{
 		Enabled: true,
 		Features: FeaturesConfig{
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:                         false,
+				Backend:                         "memory",
+				FailureThreshold:                5,
+				WindowSeconds:                   120,
+				CooldownSeconds:                 300,
+				MaxTransientRetries:             2,
+				MaxRateLimitRetries:             2,
+				RetryContributionMode:           "log",
+				GlobalRateLimitEscalationWindow: 60,
+				TestModeEnabled:                 false,
+			},
 			CostTracking: CostTrackingConfig{
 				Enabled: true,
 				Transports: []TransportConfig{

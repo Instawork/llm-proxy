@@ -189,6 +189,11 @@ func (a *AnthropicProxy) Proxy() http.Handler {
 	return a.proxy
 }
 
+// WrapTransport replaces the proxy's transport with fn(current transport).
+func (a *AnthropicProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper) {
+	a.proxy.Transport = fn(a.proxy.Transport)
+}
+
 // GetHealthStatus returns the health status of the Anthropic proxy
 func (a *AnthropicProxy) GetHealthStatus() map[string]interface{} {
 	return map[string]interface{}{
