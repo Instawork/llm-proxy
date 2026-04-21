@@ -16,6 +16,7 @@ A simple, Go-based alternative to the `litellm` proxy, without all the extra stu
 - **Health Check**: Detailed health status for all providers
 - **Configurable Port**: Environment variable configuration (default: 9002)
 - **Rate Limiting (experimental)**: Optional request/token-based limits per user/API key/model/provider
+- **Circuit Breaker**: Opt-in provider health tracking that classifies upstream failures, retries transient / rate-limit errors, and emits a dedicated degraded-signal response so clients can fall back to another provider during an outage
 
 ## Quick Start
 
@@ -150,11 +151,82 @@ features:
 - Non-text modalities (images/videos) are not supported for estimation at this time and will fall back to credit-based only behavior essentially via `max_sample_bytes`.
 - Optimistic first request: to avoid estimation blocking initial traffic, the first token-bearing request in a window (when current token count is zero) is allowed even if token limits would otherwise apply. Subsequent requests are enforced normally.
 
+### Circuit Breaker & Provider Degradation
+
+Disabled by default. Enable it when you want the proxy to detect provider outages (as opposed to individual request failures) and broadcast that state to clients so they can switch to a fallback provider instead of retry-storming a dead upstream.
+
+#### What it does
+
+- **Classifies every upstream failure** as one of: local rate-limit, global rate-limit, or provider-degraded. Provider-specific rules — e.g. Anthropic `529 Overloaded` → degraded, Gemini `429 RESOURCE_EXHAUSTED` → local rate-limit, OpenAI 429 with both `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` at zero → global rate-limit.
+- **Retries transient failures** with jittered exponential backoff (configurable attempts). Rate-limit retries honour `Retry-After`. Sustained global rate limits escalate to degraded after a configurable window.
+- **Opens the circuit** once a provider accumulates enough terminal failures inside a sliding window. While open, every request is fast-failed locally without touching the network. After a cooldown the proxy issues one half-open probe; success closes the circuit, failure re-opens it for another cooldown.
+- **Surfaces state** on `GET /health` per provider: `circuit_state` (`closed` / `open` / `half_open`), `circuit_failures`, `circuit_cooldown_until`.
+
+#### The degraded signal
+
+When a provider is degraded (terminal retry exhaustion, open-circuit fast-fail, or half-open probe failure), the proxy returns a synthetic response:
+
+- **HTTP 503** status
+- **`X-Llm-Proxy-Error-Class: provider_degraded`** response header
+- **JSON body** containing a configurable marker substring — `[LLM_PROXY_PROVIDER_DEGRADED]` by default:
+
+  ```json
+  {"error":{"message":"[LLM_PROXY_PROVIDER_DEGRADED] Provider openai is currently degraded or unavailable. Please try again later.","type":"provider_degraded","code":"provider_degraded"}}
+  ```
+
+Clients detect the degraded condition by looking for that substring anywhere in `str(exception)` (or the response body) and can then fall back to a different provider / model.
+
+#### Why a body marker and not just a status code?
+
+The 503 status and `X-Llm-Proxy-Error-Class` header are always set, but on their own they are not enough:
+
+1. **5xx is ambiguous.** The proxy streams real provider 5xx responses straight through (Anthropic 529, OpenAI 500/502/503/504, Gemini 500/503, …). A client that only looks at status code cannot tell a passthrough upstream 503 from a proxy-synthesised "circuit open" 503 — they have very different retry / fallback semantics.
+2. **4xx is wrong.** The caller did nothing wrong; the upstream is degraded. 4xx would break SDK retry logic that (correctly) refuses to retry 4xx.
+3. **A novel status code (e.g. 599) is hostile.** Many reverse proxies, CDNs, and HTTP clients coerce unknown codes to 500 or strip them entirely. The OpenAI / Anthropic / Google SDKs all map any ≥500 response into a generic `APIError` / `ServerError` class, so a custom code buys you nothing downstream.
+4. **Custom headers get stripped by SDK exception wrappers.** By the time an HTTPS error propagates up through e.g. the OpenAI Python SDK or LangChain, the caller typically only sees `str(exception)` (the body). Response headers are usually only accessible if the caller catches a specific, provider-native exception type *before* any framework wraps it. A body substring survives every wrapping layer.
+
+So the contract is **503 + header + body marker, and clients can key off any of them**. The body marker is the most reliable because exception message text is the lowest common denominator across every SDK stack.
+
+#### Configuration
+
+Config lives under `features.circuit_breaker` in YAML. All values shown below are defaults:
+
+```yaml
+features:
+  circuit_breaker:
+    enabled: true                       # gate the whole feature
+    backend: "memory"                   # "memory" (single instance) or "redis" (multi-instance)
+    failure_threshold: 5                # terminal failures in the window that trip the circuit
+    window_seconds: 120                 # sliding-window TTL for the failure counter
+    cooldown_seconds: 300               # how long the circuit stays open before a probe
+    max_transient_retries: 2            # retries for degraded-class failures
+    max_rate_limit_retries: 2           # retries for rate-limit failures
+    retry_contribution_mode: "log"      # "off" | "log" | "on" — whether retried failures count
+    global_rate_limit_escalation_window: 60  # seconds of sustained global 429s → degraded
+    degraded_signal: ""                 # override the body marker; empty → "[LLM_PROXY_PROVIDER_DEGRADED]"
+    test_mode_enabled: false            # prod: leave off.  Enables X-LLM-Proxy-Test-Mode header.
+    # redis:                            # required when backend == "redis"
+    #   address: "localhost:6379"
+    #   password: ""
+    #   db: 0
+```
+
+The `degraded_signal` field lets you embed a project- or company-specific tag in the response body (e.g. `"[MY_COMPANY_UPSTREAM_DOWN]"`). Clients then pattern-match on that tag instead of the default. Leaving it empty keeps the default, which is the right choice for most deployments.
+
+#### Testing the circuit breaker without touching real providers
+
+When `test_mode_enabled: true`, the proxy honours an `X-LLM-Proxy-Test-Mode` request header (or `llm_proxy_test_mode` query parameter, for SDKs like the Google Gemini client that don't let you pass custom headers):
+
+- `force_degraded` — return the synthesised 503 / degraded body immediately, as if the circuit were open.
+- `force_transient_recover` — fail the first attempt with a degraded error and succeed on the retry, so you can exercise the retry loop without the circuit tripping.
+
+This is intended strictly for integration tests — leave `test_mode_enabled` off in production.
+
 ## API Endpoints
 
 ### General
 
-- `GET /health` - Health check endpoint for all providers
+- `GET /health` - Health check endpoint for all providers. When the circuit breaker is enabled the response also includes `circuit_state`, `circuit_failures`, and `circuit_cooldown_until` per provider.
 
 ### OpenAI
 
