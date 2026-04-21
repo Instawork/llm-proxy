@@ -22,15 +22,24 @@ type geminiTestModel struct {
 	testPrompt string
 }
 
-// Test models to use in parameterized tests
+// Test models to use in parameterized tests.
+//
+// Model selection notes (April 2026):
+//   - Gemini 1.5 family (`gemini-1.5-flash`, `gemini-1.5-pro`) was retired by
+//     Google in October 2025.
+//   - `gemini-2.0-flash` is deprecated and its free-tier quota is tiny enough
+//     that these tests routinely hit `429 RESOURCE_EXHAUSTED` on CI.
+//   - `gemini-2.5-flash` is the current stable replacement; it sits in a
+//     different quota bucket and is Google's recommended low-latency default.
+//   - We prefer the aliased ID (no date suffix) so the tests don't need code
+//     changes on every snapshot; pin to a dated form if you need bit-for-bit
+//     reproducibility.
 var geminiTestModels = []geminiTestModel{
 	{
-		name:       "Gemini-2.0-Flash",
-		modelID:    "gemini-2.0-flash",
+		name:       "Gemini-2.5-Flash",
+		modelID:    "gemini-2.5-flash",
 		testPrompt: "Hello! Can you tell me a short joke?",
 	},
-	// Note: Gemini 1.5 models (gemini-1.5-flash and gemini-1.5-pro) have been deprecated
-	// by Google and are no longer available in the API as of October 2025
 }
 
 // TestGeminiIntegration_Models tests multiple Gemini models using subtests
@@ -366,21 +375,22 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 		})
 	}
 
-	// Test v1beta embedding models
+	// Test v1beta embedding models.
+	//
+	// Legacy `text-embedding-004` was deprecated on 2026-01-14 and `embedding-001`
+	// on 2025-08-14.  `gemini-embedding-001` is the current GA multimodal
+	// embedding model and the recommended replacement for both.  We only test
+	// the single current model here; if more variants ship in the future,
+	// add them alongside this entry.
 	embeddingModels := []struct {
 		name    string
 		modelID string
 		text    string
 	}{
 		{
-			name:    "TextEmbedding004",
-			modelID: "text-embedding-004",
+			name:    "GeminiEmbedding001",
+			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
-		},
-		{
-			name:    "Embedding001",
-			modelID: "embedding-001",
-			text:    "Hello, world! This is a test of the embedding API.",
 		},
 	}
 
@@ -774,18 +784,18 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 	server, providerManager := setupTestServer(t)
 	defer server.Close()
 
-	// Embedding models to test
+	// Embedding models to test.  Legacy `text-embedding-004` and `embedding-001`
+	// are deprecated; `gemini-embedding-001` is the current GA replacement.
 	embeddingModels := []struct {
 		name    string
 		modelID string
 		text    string
 	}{
 		{
-			name:    "TextEmbedding004",
-			modelID: "text-embedding-004",
+			name:    "GeminiEmbedding001",
+			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
 		},
-		// Add more embedding models as needed
 	}
 
 	for _, model := range embeddingModels {
