@@ -8,48 +8,63 @@ import (
 	"github.com/Instawork/llm-proxy/internal/circuit"
 )
 
-// TestModeMiddleware intercepts requests that carry the X-LLM-Proxy-Test-Mode
-// header and returns synthetic responses without hitting real LLM providers.
+// NewTestModeMiddleware returns middleware that intercepts requests carrying
+// the X-LLM-Proxy-Test-Mode header (or the llm_proxy_test_mode query param)
+// and returns synthetic responses without hitting real LLM providers.
 //
-// This is intended exclusively for integration tests.  It should be disabled
-// in production via the TestModeEnabled config flag.
+// This is intended exclusively for integration tests.  It should stay
+// disabled in production via the TestModeEnabled config flag.
 //
-// Supported header values:
-//   - force_degraded: immediately return a 503 with the MagicString degraded
-//     error body, exactly as the circuit breaker would when the circuit is open.
+// The `signal` argument is the degraded-body marker that will be embedded in
+// synthetic degraded responses; pass circuit.Config.DegradedSignal (falls
+// back to circuit.DefaultDegradedSignal when empty).  See the docstring on
+// circuit.DefaultDegradedSignal for the full rationale on why we use a body
+// substring in addition to the 503 status and response headers.
 //
-// The force_transient_recover scenario is handled at the Transport level (see
-// internal/circuit/transport.go) because it needs to interact with the
+// Supported test mode values:
+//
+//   - force_degraded: immediately return a 503 with the degraded error body
+//     (including `signal`), exactly as the circuit breaker would when the
+//     circuit is open.
+//
+// The force_transient_recover scenario is handled at the Transport level
+// (see internal/circuit/transport.go) because it needs to interact with the
 // internal retry loop.
-func TestModeMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mode := testModeValue(r)
-		if mode == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
+func NewTestModeMiddleware(signal string) func(http.Handler) http.Handler {
+	if signal == "" {
+		signal = circuit.DefaultDegradedSignal
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mode := testModeValue(r)
+			if mode == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		// Promote query-param to header so the circuit Transport sees it too,
-		// then strip the param from the URL before forwarding downstream.
-		if r.URL.Query().Get(circuit.TestModeQueryParam) != "" {
-			r = r.Clone(r.Context())
-			r.Header.Set(circuit.TestModeHeader, mode)
-			q := r.URL.Query()
-			q.Del(circuit.TestModeQueryParam)
-			r.URL.RawQuery = q.Encode()
-		}
+			// Promote query-param to header so the circuit Transport sees it
+			// too, then strip the param from the URL before forwarding.
+			if r.URL.Query().Get(circuit.TestModeQueryParam) != "" {
+				r = r.Clone(r.Context())
+				r.Header.Set(circuit.TestModeHeader, mode)
+				q := r.URL.Query()
+				q.Del(circuit.TestModeQueryParam)
+				r.URL.RawQuery = q.Encode()
+			}
 
-		switch mode {
-		case circuit.TestModeForceDegraded:
-			provider := providerFromRequest(r)
-			writeDegradedResponse(w, provider)
-			return
+			switch mode {
+			case circuit.TestModeForceDegraded:
+				provider := providerFromRequest(r)
+				writeDegradedResponse(w, provider, signal)
+				return
 
-		default:
-			// Unknown test mode — pass through so the transport can handle it.
-			next.ServeHTTP(w, r)
-		}
-	})
+			default:
+				// Unknown test mode — pass through so the transport can
+				// handle it.
+				next.ServeHTTP(w, r)
+			}
+		})
+	}
 }
 
 // testModeValue returns the test mode string from the header or, as a fallback,
@@ -67,10 +82,11 @@ func providerFromRequest(r *http.Request) string {
 	return circuit.ProviderFromPath(r.URL.Path)
 }
 
-// writeDegradedResponse writes a 503 JSON response containing MagicString.
-func writeDegradedResponse(w http.ResponseWriter, provider string) {
+// writeDegradedResponse writes a 503 JSON response whose message contains
+// the configured degraded signal.
+func writeDegradedResponse(w http.ResponseWriter, provider, signal string) {
 	msg := fmt.Sprintf("%s Provider %s is currently degraded or unavailable. Please try again later.",
-		circuit.MagicString, provider)
+		signal, provider)
 
 	body := map[string]interface{}{
 		"error": map[string]interface{}{

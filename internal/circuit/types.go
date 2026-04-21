@@ -2,11 +2,52 @@ package circuit
 
 import "time"
 
-// MagicString is injected into every degraded error response body so that
-// downstream callers (e.g. Finch Python SDKs) can detect provider degradation
-// by checking `"[FINCH_PROVIDER_DEGRADED]" in str(e)` regardless of which SDK
-// exception type wraps the HTTP error.
-const MagicString = "[FINCH_PROVIDER_DEGRADED]"
+// DefaultDegradedSignal is the default marker embedded in synthetic degraded
+// error response bodies.  Callers can override it per-deployment via
+// Config.DegradedSignal; e.g. an operator that wants a provider-neutral tag
+// might set it to "[LLM_PROXY_PROVIDER_DEGRADED]" or an org-specific string.
+//
+// ─── Why a body marker instead of a status code? ────────────────────────────
+//
+// The proxy already sets HTTP 503 and an X-Llm-Proxy-Error-Class response
+// header on every synthesised degradation response, but neither is sufficient
+// on its own for downstream clients to reliably detect a proxy-originated
+// degradation:
+//
+//  1. **5xx is ambiguous.**  The proxy streams real 5xx responses straight
+//     from providers (Anthropic 529, OpenAI 500/502/503/504, Gemini 500/503,
+//     etc.) through unmodified.  A client that only looks at status code
+//     cannot tell the difference between a passthrough upstream 503 and a
+//     proxy-synthesised "circuit open" 503.  They have very different
+//     semantics for retry / fallback decisions.
+//
+//  2. **4xx is wrong.**  The caller has done nothing wrong — the upstream is
+//     degraded.  Using 4xx would break SDK retry logic that (correctly)
+//     treats 4xx as a client-side error and refuses to retry.
+//
+//  3. **A novel status code (e.g. 599) is hostile to the ecosystem.**  Many
+//     reverse proxies, CDNs, and HTTP clients coerce unknown status codes
+//     to 500 or strip them entirely.  Anthropic / OpenAI / Google SDKs all
+//     map any ≥500 response into a generic APIError / ServerError class.
+//
+//  4. **Custom headers get stripped by the SDK exception layer.**  By the
+//     time an HTTPS error propagates up through e.g. the OpenAI Python SDK
+//     or LangChain, the caller typically only sees `str(exception)` — the
+//     response body in the exception message.  Response headers are usually
+//     only accessible if the caller catches a specific, provider-native
+//     exception type *before* any framework wraps it.  A substring of the
+//     body, on the other hand, survives every wrapping layer because the
+//     body ends up in the exception's message.
+//
+// So the contract is:
+//   - HTTP 503 + `X-Llm-Proxy-Error-Class: provider_degraded` for clients
+//     that read response metadata directly.
+//   - DegradedSignal substring in the JSON error message for SDK / framework
+//     consumers that only see the exception body.
+//
+// Clients should treat the presence of DegradedSignal anywhere in the
+// exception / response body as authoritative.
+const DefaultDegradedSignal = "[LLM_PROXY_PROVIDER_DEGRADED]"
 
 // TestModeHeader is the HTTP request header used to force specific failure
 // scenarios in integration tests without hitting real providers.
@@ -41,7 +82,8 @@ const (
 
 	// StateOpen is the degraded/cooldown state: the circuit has tripped.  The
 	// proxy fast-fails every request without hitting the network and returns
-	// the MagicString degraded error to Finch.
+	// a synthetic degraded error (503 + DegradedSignal in the body) to the
+	// caller.
 	StateOpen
 
 	// StateHalfOpen is the probing state: the cooldown period has expired and
@@ -139,6 +181,16 @@ type Config struct {
 	RedisAddress  string
 	RedisPassword string
 	RedisDB       int
+
+	// DegradedSignal is the opaque substring embedded in every synthesised
+	// degraded error body so downstream clients can detect proxy-originated
+	// provider degradation even after SDK / framework exception wrapping
+	// discards headers and remaps status codes.  See DefaultDegradedSignal
+	// for the rationale on why a body marker is used in addition to the 503
+	// status and X-Llm-Proxy-Error-Class header.
+	//
+	// Defaults to DefaultDegradedSignal when empty.
+	DegradedSignal string
 }
 
 // Defaults returns a Config with all zero fields replaced by sensible defaults.
@@ -163,6 +215,9 @@ func (c Config) Defaults() Config {
 	}
 	if c.GlobalRateLimitEscalationWindow <= 0 {
 		c.GlobalRateLimitEscalationWindow = 60
+	}
+	if c.DegradedSignal == "" {
+		c.DegradedSignal = DefaultDegradedSignal
 	}
 	return c
 }

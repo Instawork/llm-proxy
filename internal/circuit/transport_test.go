@@ -96,10 +96,10 @@ func TestTransport_DegradedAfterTerminalFailures(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 degraded response, got %d", resp.StatusCode)
 	}
-	// Body must contain MagicString.
+	// Body must contain DefaultDegradedSignal.
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), MagicString) {
-		t.Fatalf("MagicString not found in response body: %s", b)
+	if !strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in response body: %s", b)
 	}
 }
 
@@ -151,8 +151,8 @@ func TestTransport_FastFailWhenCircuitOpen(t *testing.T) {
 		t.Fatalf("want 503 fast-fail, got %d", resp.StatusCode)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), MagicString) {
-		t.Fatalf("MagicString not found in fast-fail body: %s", b)
+	if !strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in fast-fail body: %s", b)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestTransport_TestMode_ForceDegraded(t *testing.T) {
 		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), MagicString) {
-		t.Fatalf("MagicString not found in body: %s", b)
+	if !strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in body: %s", b)
 	}
 }
 
@@ -231,8 +231,8 @@ func TestTransport_DegradedResponseBodyIsValidJSON(t *testing.T) {
 		t.Fatal("expected 'error' key in JSON body")
 	}
 	msg, _ := errObj["message"].(string)
-	if !strings.Contains(msg, MagicString) {
-		t.Fatalf("MagicString not in message: %s", msg)
+	if !strings.Contains(msg, DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not in message: %s", msg)
 	}
 	if errObj["type"] != "provider_degraded" {
 		t.Fatalf("expected type 'provider_degraded', got %v", errObj["type"])
@@ -241,7 +241,7 @@ func TestTransport_DegradedResponseBodyIsValidJSON(t *testing.T) {
 
 // TestTransport_DegradedResponse_SetsErrorClassHeader verifies the defense-in-
 // depth signal: even if the response body is ever rewritten by a downstream
-// transformer, Finch can still detect provider degradation via the
+// transformer, clients can still detect provider degradation via the
 // X-Llm-Proxy-Error-Class header.
 func TestTransport_DegradedResponse_SetsErrorClassHeader(t *testing.T) {
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -267,8 +267,9 @@ func TestTransport_DegradedResponse_SetsErrorClassHeader(t *testing.T) {
 }
 
 // TestTransport_RateLimitExhausted_SetsErrorClassHeader verifies the header
-// flags rate-limit exhaustion distinctly from degradation.  Finch uses the
-// magic string only for degradation; 429s must NOT be classified as degraded.
+// flags rate-limit exhaustion distinctly from degradation.  The degraded
+// signal is only emitted for true degradation; 429s must NOT be classified
+// as degraded.
 func TestTransport_RateLimitExhausted_SetsErrorClassHeader(t *testing.T) {
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		r := makeResp(429)
@@ -354,8 +355,8 @@ func TestTransport_ProbeFails_ReturnsDegraded(t *testing.T) {
 		t.Fatalf("want 503 degraded after probe failure, got %d", resp.StatusCode)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), MagicString) {
-		t.Fatalf("MagicString not found in probe-failed body: %s", b)
+	if !strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in probe-failed body: %s", b)
 	}
 	// Circuit should still be open (not closed).
 	state, _ := store.GetState(ctx, "openai")
@@ -403,8 +404,8 @@ func TestTransport_HalfOpen_ConcurrentRequestFastFails(t *testing.T) {
 		t.Fatalf("want 503 fast-fail while probe in flight, got %d", resp.StatusCode)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), MagicString) {
-		t.Fatalf("MagicString not found: %s", b)
+	if !strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found: %s", b)
 	}
 }
 
@@ -435,8 +436,8 @@ func TestTransport_RateLimitRetriesExhausted_Returns429(t *testing.T) {
 		t.Fatalf("want 429 after rate-limit exhaustion, got %d", resp.StatusCode)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(b), MagicString) {
-		t.Fatal("MagicString should NOT be in rate-limit response (not degraded)")
+	if strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatal("DefaultDegradedSignal should NOT be in rate-limit response (not degraded)")
 	}
 }
 
@@ -543,5 +544,41 @@ func TestTransport_ProbeSucceeds_ClosesCircuit(t *testing.T) {
 	state, _ := store.GetState(ctx, "openai")
 	if state != StateClosed {
 		t.Fatalf("circuit should be closed after successful probe, got %s", state)
+	}
+}
+
+// TestTransport_CustomDegradedSignal verifies that operators can override
+// the degraded-signal marker via Config.DegradedSignal and it shows up in
+// synthetic degraded responses instead of DefaultDegradedSignal.
+func TestTransport_CustomDegradedSignal(t *testing.T) {
+	const custom = "[MY_COMPANY_UPSTREAM_DOWN]"
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return makeResp(503), nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		FailureThreshold:    1,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 0,
+		DegradedSignal:      custom,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), custom) {
+		t.Fatalf("custom degraded signal not found in body: %s", b)
+	}
+	if strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("default signal should NOT appear when custom one is set: %s", b)
 	}
 }

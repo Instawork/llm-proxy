@@ -26,8 +26,10 @@ type retryAttemptKey struct{}
 //   - records terminal failures in the Store and opens the circuit when the
 //     threshold is crossed;
 //   - performs a single probe request when the circuit is Half-Open;
-//   - injects MagicString into any degraded error response so Finch can detect
-//     it regardless of which SDK exception type surfaces the HTTP error.
+//   - injects Config.DegradedSignal into every synthesised degraded response
+//     body so downstream clients can reliably detect provider degradation
+//     even after SDK / framework exception wrapping hides headers and status
+//     codes (see DefaultDegradedSignal for the full rationale).
 type Transport struct {
 	inner    http.RoundTripper
 	store    Store
@@ -263,7 +265,7 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 }
 
 // handleTerminalFailure records the failure, potentially opens the circuit,
-// and returns the appropriate response to Finch.
+// and returns the appropriate synthesised response to the caller.
 func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request) (*http.Response, error) {
 	newState, err := t.store.RecordTerminalFailure(ctx, t.provider)
 	if err != nil {
@@ -287,9 +289,10 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 // ─────────────────────────────────────────────────────────────────────────────
 
 // degradedResponse returns a synthetic HTTP 503 response whose JSON body
-// contains MagicString so Finch can detect provider degradation.
+// contains Config.DegradedSignal so downstream clients can detect
+// proxy-originated provider degradation (see DefaultDegradedSignal).
 func (t *Transport) degradedResponse(req *http.Request) *http.Response {
-	body := buildDegradedBody(t.provider)
+	body := buildDegradedBody(t.provider, t.cfg.DegradedSignal)
 	return &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
 		Status:     "503 Service Unavailable",
@@ -306,7 +309,7 @@ func (t *Transport) degradedResponse(req *http.Request) *http.Response {
 	}
 }
 
-// rateLimitResponse returns a synthetic 429 without the MagicString — the
+// rateLimitResponse returns a synthetic 429 without the DegradedSignal — the
 // request is throttled but the provider is not considered degraded.
 func (t *Transport) rateLimitResponse() *http.Response {
 	body := []byte(`{"error":{"message":"Rate limit exceeded; please retry later.","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
@@ -325,10 +328,15 @@ func (t *Transport) rateLimitResponse() *http.Response {
 	}
 }
 
-// buildDegradedBody returns a JSON error body containing MagicString.
-func buildDegradedBody(provider string) []byte {
+// buildDegradedBody returns a JSON error body containing the configured
+// degraded signal.  An empty signal falls back to DefaultDegradedSignal so
+// the body is never unmarked.
+func buildDegradedBody(provider, signal string) []byte {
+	if signal == "" {
+		signal = DefaultDegradedSignal
+	}
 	msg := fmt.Sprintf("%s Provider %s is currently degraded or unavailable. Please try again later.",
-		MagicString, provider)
+		signal, provider)
 	body := map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": msg,

@@ -11,6 +11,12 @@ import (
 	"github.com/Instawork/llm-proxy/internal/circuit"
 )
 
+// newTestMiddleware builds a TestModeMiddleware with the default signal,
+// matching the behaviour of the old package-level function.
+func newTestMiddleware() func(http.Handler) http.Handler {
+	return NewTestModeMiddleware(circuit.DefaultDegradedSignal)
+}
+
 func TestTestModeMiddleware_ForceDegraded(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +24,7 @@ func TestTestModeMiddleware_ForceDegraded(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
 	req.Header.Set(circuit.TestModeHeader, circuit.TestModeForceDegraded)
@@ -33,8 +39,8 @@ func TestTestModeMiddleware_ForceDegraded(t *testing.T) {
 		t.Fatalf("want 503, got %d", rr.Code)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), circuit.MagicString) {
-		t.Fatalf("MagicString not found in response body: %s", body)
+	if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in response body: %s", body)
 	}
 	// Verify valid JSON.
 	var payload map[string]interface{}
@@ -54,7 +60,7 @@ func TestTestModeMiddleware_NoHeader_PassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
 	rr := httptest.NewRecorder()
@@ -76,7 +82,7 @@ func TestTestModeMiddleware_UnknownMode_PassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil)
 	req.Header.Set(circuit.TestModeHeader, "unknown_mode")
@@ -96,7 +102,7 @@ func TestTestModeMiddleware_QueryParam_ForceDegraded(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/gemini/v1beta/models/gemini-2.5-flash:generateContent?llm_proxy_test_mode=force_degraded", nil)
@@ -111,8 +117,8 @@ func TestTestModeMiddleware_QueryParam_ForceDegraded(t *testing.T) {
 		t.Fatalf("want 503, got %d", rr.Code)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), circuit.MagicString) {
-		t.Fatalf("MagicString not found in query-param response body: %s", body)
+	if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in query-param response body: %s", body)
 	}
 }
 
@@ -123,7 +129,7 @@ func TestTestModeMiddleware_QueryParam_StrippedFromURL(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions?llm_proxy_test_mode=force_transient_recover&other=123", nil)
@@ -140,7 +146,7 @@ func TestTestModeMiddleware_QueryParam_StrippedFromURL(t *testing.T) {
 }
 
 func TestTestModeMiddleware_ForceDegraded_SetsErrorClassHeader(t *testing.T) {
-	handler := TestModeMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := newTestMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
 	req.Header.Set(circuit.TestModeHeader, circuit.TestModeForceDegraded)
@@ -166,7 +172,7 @@ func TestTestModeMiddleware_HeaderTakesPrecedenceOverQueryParam(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions?llm_proxy_test_mode=unknown_mode", nil)
@@ -193,7 +199,7 @@ func TestTestModeMiddleware_QueryParamPromotedToHeader(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := TestModeMiddleware(next)
+	handler := newTestMiddleware()(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions?llm_proxy_test_mode=force_transient_recover", nil)
@@ -206,7 +212,7 @@ func TestTestModeMiddleware_QueryParamPromotedToHeader(t *testing.T) {
 }
 
 func TestTestModeMiddleware_ForceDegraded_ContainsProvider(t *testing.T) {
-	handler := TestModeMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := newTestMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	for _, path := range []string{
 		"/openai/v1/chat/completions",
@@ -222,8 +228,8 @@ func TestTestModeMiddleware_ForceDegraded_ContainsProvider(t *testing.T) {
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Errorf("path %s: want 503, got %d", path, rr.Code)
 		}
-		if !strings.Contains(string(body), circuit.MagicString) {
-			t.Errorf("path %s: MagicString not in body: %s", path, body)
+		if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
+			t.Errorf("path %s: DefaultDegradedSignal not in body: %s", path, body)
 		}
 	}
 }

@@ -39,7 +39,7 @@ func wrapProviderTransport(
 
 // TestProviderCircuitBreaker_OpenAI_DegradedSignal ensures that after
 // MaxTransientRetries+1 consecutive 503 responses the circuit-breaking
-// transport returns a 503 with MagicString to the upstream caller.
+// transport returns a 503 containing the DefaultDegradedSignal to the upstream caller.
 func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 	server := upstreamServer(503)
 	defer server.Close()
@@ -77,8 +77,8 @@ func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 		t.Fatalf("want 503 degraded response, got %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), circuit.MagicString) {
-		t.Fatalf("MagicString not found in body: %s", body)
+	if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not found in body: %s", body)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestProviderCircuitBreaker_TestMode_ForceDegraded(t *testing.T) {
 		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), circuit.MagicString) {
-		t.Fatalf("MagicString not in body: %s", body)
+	if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
+		t.Fatalf("DefaultDegradedSignal not in body: %s", body)
 	}
 }

@@ -94,6 +94,13 @@ type CircuitBreakerConfig struct {
 	// TestModeEnabled allows the X-LLM-Proxy-Test-Mode header to be honoured.
 	// Should be false in production.
 	TestModeEnabled bool `yaml:"test_mode_enabled"`
+
+	// DegradedSignal overrides the substring embedded in synthesised
+	// degraded error bodies so downstream clients can detect proxy-
+	// originated degradation.  Leave empty to use the default
+	// (see circuit.DefaultDegradedSignal).  Change it only if your clients
+	// already key off a different, project-specific tag.
+	DegradedSignal string `yaml:"degraded_signal,omitempty"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration

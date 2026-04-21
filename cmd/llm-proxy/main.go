@@ -372,6 +372,7 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
 		MaxRateLimitRetries:             cb.MaxRateLimitRetries,
 		RetryContributionMode:           cb.RetryContributionMode,
 		GlobalRateLimitEscalationWindow: cb.GlobalRateLimitEscalationWindow,
+		DegradedSignal:                  cb.DegradedSignal,
 	}
 	if cb.Redis != nil {
 		cfg.RedisAddress = cb.Redis.Address
@@ -405,6 +406,7 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 		"max_transient_retries", cfg.MaxTransientRetries,
 		"max_rate_limit_retries", cfg.MaxRateLimitRetries,
 		"retry_contribution_mode", cfg.RetryContributionMode,
+		"degraded_signal", cfg.DegradedSignal,
 	)
 	return store
 }
@@ -634,7 +636,8 @@ func runServer(yamlConfig *config.YAMLConfig) {
 
 	// Add test-mode middleware when enabled (integration tests only).
 	if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
-		r.Use(middleware.TestModeMiddleware)
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker)
+		r.Use(middleware.NewTestModeMiddleware(cbCfg.DegradedSignal))
 		logger.Info("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
 	}
 
