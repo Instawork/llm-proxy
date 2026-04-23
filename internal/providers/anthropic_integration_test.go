@@ -26,14 +26,20 @@ type anthropicTestModel struct {
 // Test models to use in parameterized tests
 var anthropicTestModels = []anthropicTestModel{
 	{
-		name:       "Claude-3.5-Haiku",
-		modelID:    "claude-3-5-haiku-latest",
+		name:       "Claude-Opus-4.6",
+		modelID:    "claude-opus-4-6",
 		maxTokens:  50,
 		testPrompt: "What is 2+2?",
 	},
 	{
-		name:       "Claude-3.5-Sonnet",
-		modelID:    "claude-3-5-sonnet-latest",
+		name:       "Claude-Haiku-4.5",
+		modelID:    "claude-haiku-4-5",
+		maxTokens:  50,
+		testPrompt: "What is 2+2?",
+	},
+	{
+		name:       "Claude-Sonnet-4.6",
+		modelID:    "claude-sonnet-4-6",
 		maxTokens:  100,
 		testPrompt: "Hello! Can you tell me a short joke?",
 	},
@@ -51,8 +57,6 @@ func TestAnthropicIntegration_Models(t *testing.T) {
 
 	// Run model tests in parallel
 	for _, model := range anthropicTestModels {
-		model := model // capture range variable
-
 		t.Run(model.name, func(t *testing.T) {
 			// Test both streaming and non-streaming in parallel
 			t.Run("NonStreaming", func(t *testing.T) {
