@@ -22,15 +22,16 @@ type geminiTestModel struct {
 	testPrompt string
 }
 
-// Test models to use in parameterized tests
+// Test models to use in parameterized tests.
+// Note: Gemini 1.5 models were retired by Google in October 2025. Gemini 2.0
+// Flash is scheduled for shutdown on June 1, 2026 per
+// https://ai.google.dev/gemini-api/docs/deprecations — tests target 2.5 Flash.
 var geminiTestModels = []geminiTestModel{
 	{
-		name:       "Gemini-2.0-Flash",
-		modelID:    "gemini-2.0-flash",
+		name:       "Gemini-2.5-Flash",
+		modelID:    "gemini-2.5-flash",
 		testPrompt: "Hello! Can you tell me a short joke?",
 	},
-	// Note: Gemini 1.5 models (gemini-1.5-flash and gemini-1.5-pro) have been deprecated
-	// by Google and are no longer available in the API as of October 2025
 }
 
 // TestGeminiIntegration_Models tests multiple Gemini models using subtests
@@ -372,15 +373,13 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 		modelID string
 		text    string
 	}{
+		// text-embedding-004 (retired 2026-01-14) and embedding-001 (retired
+		// 2025-10-30) were consolidated into gemini-embedding-001. See
+		// https://ai.google.dev/gemini-api/docs/deprecations.
 		{
-			name:    "TextEmbedding004",
-			modelID: "text-embedding-004",
+			name:    "GeminiEmbedding001",
+			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
-		},
-		{
-			name:    "Embedding001",
-			modelID: "embedding-001",
-			text:    "Hello, world! This is a test of the embedding API.",
 		},
 	}
 
@@ -781,11 +780,12 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 		text    string
 	}{
 		{
-			name:    "TextEmbedding004",
-			modelID: "text-embedding-004",
+			name:    "GeminiEmbedding001",
+			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
 		},
-		// Add more embedding models as needed
+		// Add more embedding models as needed. Note: text-embedding-004 and
+		// embedding-001 were both retired in favor of gemini-embedding-001.
 	}
 
 	for _, model := range embeddingModels {
@@ -805,7 +805,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 				t.Fatalf("Failed to marshal request body: %v", err)
 			}
 
-			url := fmt.Sprintf("%s/gemini/v1/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
+			// gemini-embedding-001 is only served on v1beta, not v1. The former
+			// /v1/ embedding models (text-embedding-004, embedding-001) were
+			// retired by Google before the v1 endpoint was promoted.
+			url := fmt.Sprintf("%s/gemini/v1beta/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
 				t.Fatalf("Failed to create request: %v", err)
