@@ -27,7 +27,8 @@ Task progress:
 - [ ] 4. Diff vendor data against configs/base.yml
 - [ ] 5. Build pricing changeset + deprecations list
 - [ ] 6. Present plan (or apply, depending on mode)
-- [ ] 7. Run `go test ./internal/config/...` after editing
+- [ ] 7. Run `go run ./cmd/config-validator/` after editing
+- [ ] 8. Run `go test ./internal/config/...` after editing
 ```
 
 ### Step 1. Read the current config
@@ -122,13 +123,23 @@ Include this block in the plan/PR body and, if the user asks, write it to a file
 
 ### Step 7. Verify after editing
 
+Always run both commands before committing:
+
 ```bash
-cd <llm-proxy repo>
+# 1. Semantic config validation (pricing sanity, duplicate aliases, structural correctness)
+go run ./cmd/config-validator/
+
+# 2. Unit tests (config parsing, tiered pricing logic, alias resolution)
 go test ./internal/config/...
-rg -n "\"<changed-model-id>\"" internal/ configs/   # catch hardcoded test expectations
 ```
 
-If tests assert specific prices for models whose prices changed, update those tests in the same change.
+Also grep for any hardcoded price assertions in tests that touch changed models:
+
+```bash
+rg -n "\"<changed-model-id>\"" internal/ configs/
+```
+
+Update test expectations if tests assert specific prices that changed. The validator and test suite must both be clean before the PR is considered ready.
 
 ## Alias rules (non-negotiable)
 
