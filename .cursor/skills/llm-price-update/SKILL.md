@@ -13,7 +13,8 @@ Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) 
 2. **Always dispatch parallel subagents** (one per provider) to gather pricing. Then verify the most surprising claims with direct `WebSearch` calls before writing the config. Subagents can hallucinate; independent verification is required for any new model family, price drop >20%, or price increase.
 3. **Never add aliases for models that are actually different versions.** Aliases are only for the same underlying model (e.g., `claude-opus-4-1` ↔ `claude-opus-4-1-20250805`, `gpt-4o` ↔ `gpt-4o-2024-11-20`). Never alias `gpt-5` to `gpt-5.1`, `claude-opus-4-0` to `claude-opus-4-1`, `gemini-2.5-pro` to `gemini-3-pro`, etc. Different version numbers = different models = separate entries.
 4. **Always encode tiered pricing when the vendor publishes it.** This is not optional. If the vendor lists different input/output rates based on prompt length (e.g., Gemini Pro ≤200k vs >200k, Gemini 1.5 ≤128k vs >128k, Anthropic Sonnet 4.x ≤200k vs >200k), the model MUST be configured as a `PricingTier` list — never collapsed to flat `{input, output}`. Flat pricing silently under-bills long-prompt traffic.
-5. **Always produce a deprecations list** alongside the pricing diff so it can be consumed by downstream callers (e.g., client UI, docs). See "Deprecation output" below.
+5. **Always consult each vendor's official deprecations page.** Do not rely on the pricing page alone — models often linger on the pricing page after sunset, and new sunsets are announced on the deprecations page first. Cross-reference every model in `configs/base.yml` against the URLs in "Vendor URLs" below, and surface any retired/sunset model in the deprecations output.
+6. **Always produce a deprecations list** alongside the pricing diff so it can be consumed by downstream callers (e.g., client UI, docs). See "Deprecation output" below.
 
 ## Workflow
 
@@ -22,10 +23,10 @@ Copy this checklist at the start of a run:
 ```
 Task progress:
 - [ ] 1. Read configs/base.yml to capture current pricing and models
-- [ ] 2. Dispatch 3 parallel subagents (OpenAI, Anthropic, Google) to fetch current prices
+- [ ] 2. Dispatch 3 parallel subagents (OpenAI, Anthropic, Google), each reading BOTH the pricing page AND the deprecations page
 - [ ] 3. Verify surprising findings with direct WebSearch
-- [ ] 4. Diff vendor data against configs/base.yml
-- [ ] 5. Build pricing changeset + deprecations list
+- [ ] 4. Diff vendor data against configs/base.yml (pricing + deprecations)
+- [ ] 5. Build pricing changeset + deprecations list (including shutdown models to remove)
 - [ ] 6. Present plan (or apply, depending on mode)
 - [ ] 7. Run `go run ./cmd/config-validator/` after editing
 - [ ] 8. Run `go test ./internal/config/...` after editing
@@ -52,23 +53,27 @@ Launch all three in one tool-call batch using `subagent_type: generalPurpose`. E
 
 Prompt skeleton (adapt per provider):
 
-> Go to `<vendor pricing URL>` and find the CURRENT pricing as of `<today>` for all of the following models. Return per-million-token input and output prices in USD for the standard (non-cached, non-batch) tier. Cross-reference against a second source (OpenRouter, artificialanalysis, vendor docs) if possible.
+> Read BOTH `<vendor pricing URL>` AND `<vendor deprecations URL>` and return two tables:
 >
-> Models needed: `<list from base.yml>`
+> **Table 1 — current pricing.** For every model in the list below, the current per-million-token input and output prices in USD for the standard (non-cached, non-batch) tier. Include any tiered pricing (e.g., >200k input tokens) as an explicit second row. Cross-reference against a second source (OpenRouter, artificialanalysis, vendor docs) if possible.
 >
-> Also list ANY NEW `<vendor>` models released since `<assumed cutoff>` that we should be aware of. For each new model, confirm:
-> - Official API model name (NOT aliases)
-> - Standard input/output $/1M
-> - Whether it has tiered pricing (e.g., >200k input tokens)
-> - Release date
-> - Deprecation status and sunset date of any old model it replaces
+> Models in current config: `<list from base.yml>`
 >
-> Format response as a compact table with columns: model, input $/1M, output $/1M, tier_threshold, release_date, deprecated_by, source URL, notes.
+> Also list ANY NEW `<vendor>` models released since `<assumed cutoff>` that we should be aware of. For each new model: official API model name (NOT aliases), input/output $/1M, tier threshold, release date.
+>
+> **Table 2 — deprecations.** Every model on the vendor's official deprecations page, including models NOT currently in our config. Columns: model, status (deprecated / shutdown / legacy), sunset_date (ISO or null), replaced_by, source URL, notes.
+>
+> Format both tables as compact markdown tables. If a model appears on the pricing page but NOT the deprecations page, treat it as active. If it appears on the deprecations page but NOT the pricing page, treat it as sunset and include it only in Table 2.
 
-Vendor URLs (primary / secondary):
-- OpenAI: `https://platform.openai.com/docs/pricing` / `https://openai.com/api/pricing/`
-- Anthropic: `https://docs.anthropic.com/en/docs/about-claude/pricing` / `https://www.anthropic.com/pricing`
-- Google: `https://ai.google.dev/gemini-api/docs/pricing` / `https://cloud.google.com/vertex-ai/generative-ai/pricing`
+Vendor URLs — the subagent MUST read **both** the pricing page and the deprecations page for its provider:
+
+| Provider | Pricing | Deprecations | Secondary |
+|---|---|---|---|
+| OpenAI | `https://platform.openai.com/docs/pricing` | `https://developers.openai.com/api/docs/deprecations` | `https://openai.com/api/pricing/` |
+| Anthropic | `https://docs.anthropic.com/en/docs/about-claude/pricing` | `https://platform.claude.com/docs/en/about-claude/model-deprecations` | `https://www.anthropic.com/pricing` |
+| Google | `https://ai.google.dev/gemini-api/docs/pricing` | `https://ai.google.dev/gemini-api/docs/deprecations` | `https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions` |
+
+The deprecations page is authoritative for sunset dates and replacements. The pricing page is authoritative for current rates. Both must be read.
 
 ### Step 3. Verify surprising findings
 
@@ -83,8 +88,9 @@ For each provider section of `configs/base.yml`, categorize every model:
 | Unchanged | Skip |
 | Price changed | Update `input`/`output`; if an alias has a different price, move it into `overrides` |
 | New model | Add entry with canonical ID + same-model aliases only (see rule 3) |
-| Deprecated/sunset | Keep in config (callers still reference it), but add to deprecations list |
-| Removed from vendor | Only remove if vendor returns 404 for API calls; otherwise keep |
+| Deprecated (future sunset) | Keep in config, add to deprecations list with `sunset_date` |
+| Shutdown (past sunset, vendor 404s on it) | Remove from `configs/base.yml`, add to deprecations list. Google retired `gemini-1.5-*` and `text-embedding-004`/`embedding-001` this way. |
+| Listed as deprecated on vendor page but pricing page still shows it | Keep in config, add to deprecations list with `sunset_date` if known |
 
 Reuse the `limits` block of a similar existing model rather than inventing new rate-limit numbers — e.g., a new flagship uses the same limits as the previous flagship.
 
@@ -97,21 +103,30 @@ deprecations:
   openai:
     - model: o1-preview
       replaced_by: o1
-      sunset_date: null  # or ISO date if vendor announced one
-      source: <URL>
+      sunset_date: null  # ISO date if vendor announced one, null if only delisted
+      status: deprecated  # deprecated | shutdown | legacy
+      source: https://developers.openai.com/api/docs/deprecations
       notes: Removed from platform pricing page
   anthropic:
     - model: claude-3-5-sonnet
       replaced_by: claude-sonnet-4-5
       sunset_date: null
-      source: <URL>
+      status: deprecated
+      source: https://platform.claude.com/docs/en/about-claude/model-deprecations
       notes: Dropped from marketing page; still listed on docs pricing
   gemini:
-    - model: gemini-3-pro-preview
-      replaced_by: gemini-3.1-pro
-      sunset_date: null
-      source: <URL>
-      notes: Marked deprecated on AI Studio models page
+    - model: text-embedding-004
+      replaced_by: gemini-embedding-001
+      sunset_date: "2026-01-14"
+      status: shutdown
+      source: https://ai.google.dev/gemini-api/docs/deprecations
+      notes: Shutdown Jan 14, 2026; API now 404s
+    - model: gemini-2.0-flash
+      replaced_by: gemini-2.5-flash
+      sunset_date: "2026-06-01"
+      status: deprecated
+      source: https://ai.google.dev/gemini-api/docs/deprecations
+      notes: Scheduled shutdown June 1, 2026
 ```
 
 Include this block in the plan/PR body and, if the user asks, write it to a file (suggest `docs/model-deprecations.yml` or similar — do not create it unprompted).
@@ -223,5 +238,5 @@ Per-snapshot override (snapshot priced differently from the alias base):
 
 At the end of the run, produce two artifacts:
 
-1. **Pricing changeset** — a list of edits grouped by provider, with old vs new prices. Flag each entry as `fix-stale`, `price-change`, `new-model`, or `no-op`.
-2. **Deprecations list** — the YAML block above. Always include it, even if empty (emit `deprecations: {openai: [], anthropic: [], gemini: []}`).
+1. **Pricing changeset** — a list of edits grouped by provider, with old vs new prices. Flag each entry as `fix-stale`, `price-change`, `new-model`, `remove-shutdown`, or `no-op`.
+2. **Deprecations list** — the YAML block above, sourced from each vendor's official deprecations page. Always include it, even if empty (emit `deprecations: {openai: [], anthropic: [], gemini: []}`). Entries with `status: shutdown` SHOULD correspond to `remove-shutdown` entries in the changeset.
