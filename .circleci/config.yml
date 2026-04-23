@@ -77,7 +77,7 @@ jobs:
       - setup_go_environment
       - run:
           name: Run config validator
-          command: go run cmd/config-validator/main.go
+          command: go run ./cmd/config-validator/
       - run:
           name: Run unit tests
           command: make test
