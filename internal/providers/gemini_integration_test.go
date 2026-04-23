@@ -805,7 +805,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 				t.Fatalf("Failed to marshal request body: %v", err)
 			}
 
-			url := fmt.Sprintf("%s/gemini/v1/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
+			// gemini-embedding-001 is only served on v1beta, not v1. The former
+			// /v1/ embedding models (text-embedding-004, embedding-001) were
+			// retired by Google before the v1 endpoint was promoted.
+			url := fmt.Sprintf("%s/gemini/v1beta/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
 				t.Fatalf("Failed to create request: %v", err)
