@@ -20,7 +20,7 @@ Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) 
 
 Copy this checklist at the start of a run:
 
-```
+```text
 Task progress:
 - [ ] 1. Read configs/base.yml to capture current pricing and models
 - [ ] 2. Dispatch 3 parallel subagents (OpenAI, Anthropic, Google), each reading BOTH the pricing page AND the deprecations page
