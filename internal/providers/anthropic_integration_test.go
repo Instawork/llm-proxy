@@ -29,12 +29,19 @@ type anthropicTestModel struct {
 //   - Claude 3.5 family (`claude-3-5-haiku-latest`, `claude-3-5-sonnet-latest`)
 //     was retired by Anthropic — Haiku 3.5 on 2026-02-19, Sonnet 3.5 in 2025-10.
 //     The `-latest` aliases no longer resolve and the dated IDs return 404.
-//   - `claude-haiku-4-5` and `claude-sonnet-4-5` are the current stable
-//     replacements recommended by Anthropic for production workloads.
+//   - `claude-haiku-4-5`, `claude-sonnet-4-6`, and `claude-opus-4-6` are the
+//     current stable replacements recommended by Anthropic for production
+//     workloads.
 //   - We prefer aliased IDs (no date suffix) so the tests don't require a
 //     code change every time Anthropic rolls a new snapshot.  If you need
 //     reproducibility, pin to the dated form (e.g. `claude-haiku-4-5-20251001`).
 var anthropicTestModels = []anthropicTestModel{
+	{
+		name:       "Claude-Opus-4.6",
+		modelID:    "claude-opus-4-6",
+		maxTokens:  50,
+		testPrompt: "What is 2+2?",
+	},
 	{
 		name:       "Claude-Haiku-4.5",
 		modelID:    "claude-haiku-4-5",
@@ -42,8 +49,8 @@ var anthropicTestModels = []anthropicTestModel{
 		testPrompt: "What is 2+2?",
 	},
 	{
-		name:       "Claude-Sonnet-4.5",
-		modelID:    "claude-sonnet-4-5",
+		name:       "Claude-Sonnet-4.6",
+		modelID:    "claude-sonnet-4-6",
 		maxTokens:  100,
 		testPrompt: "Hello! Can you tell me a short joke?",
 	},
@@ -61,8 +68,6 @@ func TestAnthropicIntegration_Models(t *testing.T) {
 
 	// Run model tests in parallel
 	for _, model := range anthropicTestModels {
-		model := model // capture range variable
-
 		t.Run(model.name, func(t *testing.T) {
 			// Test both streaming and non-streaming in parallel
 			t.Run("NonStreaming", func(t *testing.T) {

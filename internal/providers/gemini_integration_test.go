@@ -27,8 +27,10 @@ type geminiTestModel struct {
 // Model selection notes (April 2026):
 //   - Gemini 1.5 family (`gemini-1.5-flash`, `gemini-1.5-pro`) was retired by
 //     Google in October 2025.
-//   - `gemini-2.0-flash` is deprecated and its free-tier quota is tiny enough
-//     that these tests routinely hit `429 RESOURCE_EXHAUSTED` on CI.
+//   - `gemini-2.0-flash` is deprecated (scheduled for shutdown on June 1, 2026
+//     per https://ai.google.dev/gemini-api/docs/deprecations) and its
+//     free-tier quota is tiny enough that these tests routinely hit
+//     `429 RESOURCE_EXHAUSTED` on CI.
 //   - `gemini-2.5-flash` is the current stable replacement; it sits in a
 //     different quota bucket and is Google's recommended low-latency default.
 //   - We prefer the aliased ID (no date suffix) so the tests don't need code
@@ -387,6 +389,9 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 		modelID string
 		text    string
 	}{
+		// text-embedding-004 (retired 2026-01-14) and embedding-001 (retired
+		// 2025-10-30) were consolidated into gemini-embedding-001. See
+		// https://ai.google.dev/gemini-api/docs/deprecations.
 		{
 			name:    "GeminiEmbedding001",
 			modelID: "gemini-embedding-001",
@@ -796,6 +801,8 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
 		},
+		// Add more embedding models as needed. Note: text-embedding-004 and
+		// embedding-001 were both retired in favor of gemini-embedding-001.
 	}
 
 	for _, model := range embeddingModels {
@@ -815,7 +822,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 				t.Fatalf("Failed to marshal request body: %v", err)
 			}
 
-			url := fmt.Sprintf("%s/gemini/v1/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
+			// gemini-embedding-001 is only served on v1beta, not v1. The former
+			// /v1/ embedding models (text-embedding-004, embedding-001) were
+			// retired by Google before the v1 endpoint was promoted.
+			url := fmt.Sprintf("%s/gemini/v1beta/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
 				t.Fatalf("Failed to create request: %v", err)
