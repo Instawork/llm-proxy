@@ -270,19 +270,6 @@ providers:
         pricing:
           input: 20.00
           output: 80.00
-      "o1-pro":
-        enabled: true
-        aliases: ["o1-pro-2024-12-17"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 150.00
-          output: 600.00
       "gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-2026-03-05"]
@@ -322,19 +309,6 @@ providers:
         pricing:
           input: 0.20
           output: 1.25
-      "gpt-5.4-pro":
-        enabled: true
-        aliases: ["gpt-5.4-pro-2026-03-05"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 30.00
-          output: 180.00
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -348,19 +322,6 @@ providers:
         pricing:
           input: 1.75
           output: 14.00
-      "gpt-5.2-pro":
-        enabled: true
-        aliases: ["gpt-5.2-pro-2025-12-11"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 21.00
-          output: 168.00
       "gpt-5.1":
         enabled: true
         aliases: ["gpt-5.1-2025-10-01"]
@@ -374,19 +335,6 @@ providers:
         pricing:
           input: 1.25
           output: 10.00
-      "gpt-5-pro":
-        enabled: true
-        aliases: ["gpt-5-pro-2025-08-07"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 15.00
-          output: 120.00
 
   # ---------------------------------------------------------------------------
   # ANTHROPIC PROVIDER

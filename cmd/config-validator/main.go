@@ -68,8 +68,20 @@ func main() {
 	fmt.Println("\nAll configurations are valid.")
 }
 
+const (
+	// minPricePerMillion is the minimum sane price per 1M tokens ($0.01).
+	// Any price below one cent per million has never been observed and likely
+	// indicates a decimal-place error (e.g. 0.001 instead of 0.10).
+	minPricePerMillion = 0.01
+
+	// maxPricePerMillion is the maximum sane price per 1M tokens ($100.00).
+	// Prices above this have never been observed and likely indicate a
+	// magnitude error (e.g. 1000.00 instead of 10.00).
+	maxPricePerMillion = 100.00
+)
+
 // validateSemantics checks for logical errors that YAML parsing won't catch:
-//   - Pricing values must be positive (> 0)
+//   - Pricing values must be within the sane range [minPricePerMillion, maxPricePerMillion]
 //   - Aliases must be unique within a provider (duplicate aliases cause non-deterministic routing)
 func validateSemantics(cfg *config.YAMLConfig) []string {
 	var errs []string
@@ -99,7 +111,7 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 				}
 			}
 
-			// Check pricing values are positive.
+			// Check pricing values are within sane bounds.
 			if model.Pricing == nil {
 				continue
 			}
@@ -108,35 +120,32 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 				continue
 			}
 			for i, tier := range mp.Tiers {
-				if tier.Input <= 0 {
-					errs = append(errs, fmt.Sprintf(
-						"%s/%s: tier[%d] input price must be > 0, got %g",
-						providerName, modelName, i, tier.Input,
-					))
-				}
-				if tier.Output <= 0 {
-					errs = append(errs, fmt.Sprintf(
-						"%s/%s: tier[%d] output price must be > 0, got %g",
-						providerName, modelName, i, tier.Output,
-					))
-				}
+				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] input", i), tier.Input)...)
+				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] output", i), tier.Output)...)
 			}
 			for alias, p := range mp.Overrides {
-				if p.Input <= 0 {
-					errs = append(errs, fmt.Sprintf(
-						"%s/%s: override[%q] input price must be > 0, got %g",
-						providerName, modelName, alias, p.Input,
-					))
-				}
-				if p.Output <= 0 {
-					errs = append(errs, fmt.Sprintf(
-						"%s/%s: override[%q] output price must be > 0, got %g",
-						providerName, modelName, alias, p.Output,
-					))
-				}
+				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] input", alias), p.Input)...)
+				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] output", alias), p.Output)...)
 			}
 		}
 	}
 
 	return errs
+}
+
+// checkPrice returns an error string if price is outside [minPricePerMillion, maxPricePerMillion].
+func checkPrice(provider, model, field string, price float64) []string {
+	if price < minPricePerMillion {
+		return []string{fmt.Sprintf(
+			"%s/%s: %s price $%g/1M is below minimum $%.2f/1M — likely a decimal error",
+			provider, model, field, price, minPricePerMillion,
+		)}
+	}
+	if price > maxPricePerMillion {
+		return []string{fmt.Sprintf(
+			"%s/%s: %s price $%g/1M exceeds maximum $%.2f/1M — likely a magnitude error",
+			provider, model, field, price, maxPricePerMillion,
+		)}
+	}
+	return nil
 }
