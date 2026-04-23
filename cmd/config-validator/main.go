@@ -74,10 +74,11 @@ const (
 	// indicates a decimal-place error (e.g. 0.001 instead of 0.10).
 	minPricePerMillion = 0.01
 
-	// maxPricePerMillion is the maximum sane price per 1M tokens ($100.00).
-	// Prices above this have never been observed and likely indicate a
-	// magnitude error (e.g. 1000.00 instead of 10.00).
-	maxPricePerMillion = 100.00
+	// maxPricePerMillion is the maximum sane price per 1M tokens ($1000.00).
+	// The highest real-world price we've seen is o1-pro at $600/1M output, so
+	// $1000 leaves headroom while still catching obvious magnitude errors
+	// (e.g. 10000.00 instead of 100.00).
+	maxPricePerMillion = 1000.00
 )
 
 // validateSemantics checks for logical errors that YAML parsing won't catch:
