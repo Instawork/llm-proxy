@@ -56,6 +56,17 @@ type CircuitBreakerConfig struct {
 	// Enabled gates the feature entirely.
 	Enabled bool `yaml:"enabled"`
 
+	// Mode selects the operational mode.  "log" (default) is observe-only:
+	// the transport does one round trip, classifies the response, records
+	// failures in the store for observability, emits counterfactual log
+	// lines, and returns the real upstream response — no retries, no
+	// fast-fail on open circuit, no synthetic 503s.  "enforce" runs the
+	// full retry + fast-fail + synthetic-response behaviour.
+	//
+	// The safe default is "log" so that partially rolled-out or
+	// misconfigured deployments never alter user-facing traffic.
+	Mode string `yaml:"mode"`
+
 	// Backend selects the state store: "memory" (default, single-process) or
 	// "redis" (recommended for production with multiple proxy instances).
 	Backend string `yaml:"backend"`
@@ -183,9 +194,21 @@ type EstimationConfig struct {
 
 // RedisConfig contains Redis backend settings
 type RedisConfig struct {
+	// URL is a full Redis connection string (e.g. `redis://:pw@host:6379/3`
+	// or `rediss://...` for TLS).  Takes priority over Address/Password
+	// when set, and any `${VAR}` / `$VAR` token is expanded from the
+	// process environment at load time so secrets (e.g. Finch's
+	// ML_CACHE_URL SSM parameter) can be passed in via container
+	// environment without baking credentials into YAML.
+	URL      string `yaml:"url"`
 	Address  string `yaml:"address"`
 	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
+	// DB pins which Redis database the circuit breaker uses.  When the
+	// URL already encodes a DB (via `/N`) this field overrides it — set
+	// this explicitly when sharing a Redis instance with another tenant
+	// that owns a different DB.  A zero value is treated as "don't
+	// override".
+	DB int `yaml:"db"`
 }
 
 // ProviderConfig represents configuration for a specific provider
@@ -753,6 +776,7 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 		Features: FeaturesConfig{
 			CircuitBreaker: CircuitBreakerConfig{
 				Enabled:                         false,
+				Mode:                            "log",
 				Backend:                         "memory",
 				FailureThreshold:                5,
 				WindowSeconds:                   120,

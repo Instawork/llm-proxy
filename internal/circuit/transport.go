@@ -56,6 +56,17 @@ func NewTransport(inner http.RoundTripper, store Store, cfg Config, provider str
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
+	// ── Observe-only / log-mode fast path ─────────────────────────────────
+	// In ModeLog we intentionally skip the retry loop, fast-fail, and
+	// synthetic-response machinery entirely.  We just do one round trip,
+	// classify the result, record failures so /health and Redis counters
+	// are accurate, emit counterfactual logs, and hand the real response
+	// back to the caller.  This lets us roll out the feature to prod
+	// without any behavioural change to traffic.
+	if t.cfg.Mode == ModeLog {
+		return t.runObserveOnly(req)
+	}
+
 	// ── Test-mode: force_degraded fast path ───────────────────────────────
 	// force_transient_recover is handled inside runWithRetries so it can
 	// interact with the retry loop's attempt counter.
@@ -82,6 +93,51 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	default: // StateClosed — normal path
 		return t.runWithRetries(req)
 	}
+}
+
+// runObserveOnly performs a single pass-through RoundTrip, records observed
+// failures + emits counterfactual log lines, and returns the real upstream
+// response.  No retries, no synthetic responses, no fast-fail on open
+// circuit — this is the "shadow" rollout path (ModeLog).
+func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+
+	// Log what ModeEnforce *would* have done given the current state, but
+	// always let the real request through.
+	if state, err := t.store.GetState(ctx, t.provider); err == nil && state == StateOpen {
+		t.log.Info("circuit: log-mode would_have_fast_failed (circuit open, passing through)",
+			"provider", t.provider)
+	}
+
+	resp, err := t.inner.RoundTrip(req)
+	fc := ClassifyResponse(t.provider, resp, err)
+
+	switch fc {
+	case FailureClassDegraded:
+		// Record the failure so cross-instance counters and /health stats
+		// still reflect reality in shadow mode.  The Store is guaranteed
+		// to fail-open on Redis errors (returns StateClosed, no error),
+		// so this cannot cascade.
+		newState, recErr := t.store.RecordTerminalFailure(ctx, t.provider)
+		if recErr != nil {
+			t.log.Error("circuit: log-mode RecordTerminalFailure error",
+				"provider", t.provider, "error", recErr)
+		}
+		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
+			"provider", t.provider,
+			"would_be_new_state", newState.String(),
+		)
+
+	case FailureClassGlobalRateLimit:
+		t.log.Info("circuit: log-mode global_rate_limit_observed (passing through)",
+			"provider", t.provider)
+
+	case FailureClassLocalRateLimit:
+		t.log.Info("circuit: log-mode local_rate_limit_observed (passing through)",
+			"provider", t.provider)
+	}
+
+	return resp, err
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

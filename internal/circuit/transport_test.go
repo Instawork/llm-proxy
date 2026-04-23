@@ -34,6 +34,7 @@ func makeResp(status int) *http.Response {
 func newTestTransport(inner http.RoundTripper) *Transport {
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    3,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -47,6 +48,7 @@ func newTestTransport(inner http.RoundTripper) *Transport {
 func newTestTransportWithStore(inner http.RoundTripper, store Store) *Transport {
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    3,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -133,6 +135,7 @@ func TestTransport_FastFailWhenCircuitOpen(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -211,6 +214,7 @@ func TestTransport_DegradedResponseBodyIsValidJSON(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -249,6 +253,7 @@ func TestTransport_DegradedResponse_SetsErrorClassHeader(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -279,6 +284,7 @@ func TestTransport_RateLimitExhausted_SetsErrorClassHeader(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    5,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -325,6 +331,7 @@ func TestTransport_RateLimitRetry(t *testing.T) {
 func TestTransport_ProbeFails_ReturnsDegraded(t *testing.T) {
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     0,
@@ -368,6 +375,7 @@ func TestTransport_ProbeFails_ReturnsDegraded(t *testing.T) {
 func TestTransport_HalfOpen_ConcurrentRequestFastFails(t *testing.T) {
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     0,
@@ -419,6 +427,7 @@ func TestTransport_RateLimitRetriesExhausted_Returns429(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    5,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -464,6 +473,7 @@ func TestTransport_RetryContributionMode_On(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:               true,
+		Mode:                  ModeEnforce,
 		FailureThreshold:      10,
 		WindowSeconds:         60,
 		CooldownSeconds:       300,
@@ -490,6 +500,7 @@ func TestTransport_RetryContributionMode_Off(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:               true,
+		Mode:                  ModeEnforce,
 		FailureThreshold:      10,
 		WindowSeconds:         60,
 		CooldownSeconds:       300,
@@ -512,6 +523,7 @@ func TestTransport_ProbeSucceeds_ClosesCircuit(t *testing.T) {
 	// Build a store where the circuit is already half-open.
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     0,
@@ -558,6 +570,7 @@ func TestTransport_CustomDegradedSignal(t *testing.T) {
 	})
 	cfg := Config{
 		Enabled:             true,
+		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
 		CooldownSeconds:     300,

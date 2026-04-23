@@ -134,12 +134,40 @@ const (
 	FailureClassNone FailureClass = ""
 )
 
+// Operational modes for the circuit breaker.
+const (
+	// ModeEnforce is the normal, enforcing mode: retries transient failures,
+	// opens the circuit when the threshold is crossed, and returns synthetic
+	// 503 degraded responses on open or after retry exhaustion.
+	ModeEnforce = "enforce"
+
+	// ModeLog is a fully observe-only / shadow mode: the transport performs
+	// exactly one upstream round trip, classifies the response, records
+	// observed failures in the Store (so /health stats and counters are
+	// accurate), and emits structured counterfactual log lines describing
+	// what ModeEnforce would have done — but it never retries, never
+	// short-circuits when the circuit is "open", and never returns a
+	// synthetic response.  The caller always sees the real upstream
+	// response.  Intended for pre-rollout validation where we want to
+	// measure would-trip rates without touching live traffic.
+	ModeLog = "log"
+)
+
 // Config holds all circuit-breaker and retry tuning parameters.  Zero values
 // are replaced by the defaults documented on each field.
 type Config struct {
 	// Enabled gates the entire circuit-breaker feature.  When false the
 	// transport behaves as a simple pass-through with no retries.
 	Enabled bool
+
+	// Mode selects the operational mode: ModeLog (default) is observe-only
+	// (one round trip, record + log, return real response); ModeEnforce
+	// runs the full retry + fast-fail + synthetic-response behaviour.
+	//
+	// Defaulting to ModeLog is deliberate: a misconfigured or partially
+	// rolled-out deployment should err on the side of not altering user-
+	// facing traffic.  Operators opt in to enforcement explicitly.
+	Mode string
 
 	// Backend selects the state store: "memory" (default) or "redis".
 	Backend string
@@ -178,6 +206,21 @@ type Config struct {
 	GlobalRateLimitEscalationWindow int
 
 	// Redis connection settings, used when Backend == "redis".
+	//
+	// Two mutually compatible ways to supply the connection:
+	//   1. RedisURL — a full `redis://[:password@]host:port[/db]` (or
+	//      `rediss://...` for TLS) URL.  Parsed via redis.ParseURL so
+	//      every option it supports is honoured.  Intended to be populated
+	//      from a secret (e.g. SSM) so we can share Finch's Redis
+	//      instance without duplicating password/hostname config.
+	//   2. RedisAddress / RedisPassword / RedisDB — individual fields.
+	//
+	// If both are provided, RedisURL is parsed first and the individual
+	// fields overlay its result (so you can, for example, point the URL
+	// at Finch's cluster but explicitly pin DB to a dedicated circuit-
+	// breaker database).  A zero RedisDB is treated as "don't override"
+	// when a URL is also provided; set it explicitly to 0 via URL path.
+	RedisURL      string
 	RedisAddress  string
 	RedisPassword string
 	RedisDB       int
@@ -195,6 +238,18 @@ type Config struct {
 
 // Defaults returns a Config with all zero fields replaced by sensible defaults.
 func (c Config) Defaults() Config {
+	switch c.Mode {
+	case "":
+		c.Mode = ModeLog
+	case ModeEnforce, ModeLog:
+		// valid
+	default:
+		// Unknown mode — fall back to the safest default (log / observe-
+		// only) rather than silently enforcing, so misconfigurations
+		// don't translate into traffic-impacting behaviour.  We don't
+		// panic because Defaults() is called from many hot paths.
+		c.Mode = ModeLog
+	}
 	if c.FailureThreshold <= 0 {
 		c.FailureThreshold = 5
 	}

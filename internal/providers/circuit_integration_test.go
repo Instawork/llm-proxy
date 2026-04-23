@@ -46,6 +46,7 @@ func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 
 	cfg := circuit.Config{
 		Enabled:             true,
+		Mode:                circuit.ModeEnforce,
 		FailureThreshold:    10, // high so the circuit doesn't open yet
 		WindowSeconds:       60,
 		CooldownSeconds:     300,
@@ -97,7 +98,7 @@ func TestProviderCircuitBreaker_TestMode_ForceDegraded(t *testing.T) {
 		}, nil
 	})
 
-	cfg := circuit.Config{Enabled: true}.Defaults()
+	cfg := circuit.Config{Enabled: true, Mode: circuit.ModeEnforce}.Defaults()
 	store := circuit.NewMemoryStore(cfg)
 	tr := circuit.NewTransport(inner, store, cfg, "anthropic", nil)
 

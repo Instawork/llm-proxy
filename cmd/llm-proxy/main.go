@@ -364,6 +364,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
 	cfg := circuit.Config{
 		Enabled:                         cb.Enabled,
+		Mode:                            cb.Mode,
 		Backend:                         cb.Backend,
 		FailureThreshold:                cb.FailureThreshold,
 		WindowSeconds:                   cb.WindowSeconds,
@@ -375,14 +376,31 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
 		DegradedSignal:                  cb.DegradedSignal,
 	}
 	if cb.Redis != nil {
-		cfg.RedisAddress = cb.Redis.Address
-		cfg.RedisPassword = cb.Redis.Password
+		// Expand ${VAR} / $VAR tokens from the process environment so we
+		// can thread secrets (e.g. Finch's ML_CACHE_URL SSM parameter
+		// rendered into REDIS_URL by ECS) through without baking them
+		// into the YAML or requiring a separate secrets flavour.  Values
+		// without any `$` pass through unchanged.
+		cfg.RedisURL = os.ExpandEnv(cb.Redis.URL)
+		cfg.RedisAddress = os.ExpandEnv(cb.Redis.Address)
+		cfg.RedisPassword = os.ExpandEnv(cb.Redis.Password)
 		cfg.RedisDB = cb.Redis.DB
 	}
 	return cfg.Defaults()
 }
 
 // initializeCircuitStore creates the circuit breaker state store from config.
+//
+// Redis failures are intentionally non-fatal:
+//   - If NewRedisStore itself errors (e.g. malformed URL), we log and fall
+//     back to a MemoryStore so the proxy still comes up.
+//   - If NewRedisStore succeeds but the cluster is unreachable at boot, the
+//     short-timeout PING warns the operator but we keep the Redis-backed
+//     store anyway — steady-state Store operations already fail-open to
+//     StateClosed on Redis errors, so transient outages self-heal.
+//
+// Net effect: a Redis outage degrades the circuit breaker to "per-instance
+// best effort" without ever taking the sidecar down.
 func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 	cb := yamlConfig.Features.CircuitBreaker
 	if !cb.Enabled {
@@ -394,12 +412,32 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 
 	store, err := circuit.Factory(cfg)
 	if err != nil {
-		logger.Error("⚡ Circuit Breaker: failed to create store", "error", err)
-		return nil
+		if cfg.Backend == "redis" {
+			logger.Error("⚡ Circuit Breaker: Redis store construction failed — falling back to memory store",
+				"error", err,
+			)
+			store = circuit.NewMemoryStore(cfg)
+		} else {
+			logger.Error("⚡ Circuit Breaker: failed to create store", "error", err)
+			return nil
+		}
+	}
+
+	if rs, ok := store.(*circuit.RedisStore); ok {
+		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if pingErr := rs.Ping(pingCtx); pingErr != nil {
+			logger.Warn("⚡ Circuit Breaker: Redis PING failed at startup — proxy will continue (store fails open on Redis errors)",
+				"error", pingErr,
+			)
+		} else {
+			logger.Info("⚡ Circuit Breaker: Redis reachable")
+		}
+		cancel()
 	}
 
 	logger.Info("⚡ Circuit Breaker: initialized",
 		"backend", cfg.Backend,
+		"mode", cfg.Mode,
 		"failure_threshold", cfg.FailureThreshold,
 		"window_seconds", cfg.WindowSeconds,
 		"cooldown_seconds", cfg.CooldownSeconds,

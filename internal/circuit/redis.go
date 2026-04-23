@@ -9,10 +9,14 @@ import (
 )
 
 const (
-	// Redis key prefixes.
-	redisKeyFailures = "cb:failures:" // sorted set of failure timestamps
-	redisKeyState    = "cb:state:"    // string: "open" | "half_open" (absence = closed)
-	redisKeyProbe    = "cb:probe:"    // short-lived lock for half-open probe slot
+	// Redis key prefixes.  We namespace under `llm:cb:` so the circuit
+	// breaker can safely share a Redis instance (and database) with other
+	// tenants — notably the Finch app, which also uses this cluster.
+	// Anything prefixed with `llm:cb:` is owned by the llm-proxy circuit
+	// breaker and may be wiped by operators at any time.
+	redisKeyFailures = "llm:cb:failures:" // sorted set of failure timestamps
+	redisKeyState    = "llm:cb:state:"    // string: "open" | "half_open" (absence = closed)
+	redisKeyProbe    = "llm:cb:probe:"    // short-lived lock for half-open probe slot
 )
 
 // RedisStore is a distributed, Redis-backed circuit breaker store.  It uses a
@@ -24,17 +28,59 @@ type RedisStore struct {
 }
 
 // NewRedisStore constructs a RedisStore connected to the address in cfg.
+//
+// Connection inputs are resolved in this order:
+//  1. If cfg.RedisURL is non-empty it is parsed via redis.ParseURL and its
+//     resulting Options form the baseline.
+//  2. Otherwise cfg.RedisAddress seeds the baseline Addr.
+//  3. The individual RedisPassword / RedisDB fields, when set, overlay
+//     whatever the URL parsed.  This lets us share Finch's Redis URL
+//     (from SSM) while pinning a dedicated DB to keep `llm:cb:*` keys
+//     isolated.
+//
+// Note: the Redis client is lazy — construction here does NOT require the
+// server to be reachable.  Connectivity is validated (soft-fail) by the
+// caller with a short-timeout PING; all steady-state ops on the Store
+// fail-open to StateClosed on Redis errors, so a Redis outage can never
+// cascade into a proxy outage.
 func NewRedisStore(cfg Config) (*RedisStore, error) {
 	cfg = cfg.Defaults()
-	if cfg.RedisAddress == "" {
-		return nil, fmt.Errorf("circuit.RedisStore: redis address is required")
+
+	var opts *redis.Options
+	if cfg.RedisURL != "" {
+		parsed, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return nil, fmt.Errorf("circuit.RedisStore: parse redis_url: %w", err)
+		}
+		opts = parsed
+	} else {
+		if cfg.RedisAddress == "" {
+			return nil, fmt.Errorf("circuit.RedisStore: redis address or url is required")
+		}
+		opts = &redis.Options{Addr: cfg.RedisAddress}
 	}
-	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddress,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
-	})
+
+	// Per-field overlays.  We intentionally only overlay when the caller
+	// explicitly set a value — e.g. a password of "" means "don't
+	// override", not "force-clear", so operators can supply a URL with
+	// embedded credentials and leave RedisPassword unset.
+	if cfg.RedisPassword != "" {
+		opts.Password = cfg.RedisPassword
+	}
+	if cfg.RedisDB != 0 {
+		opts.DB = cfg.RedisDB
+	}
+
+	client := redis.NewClient(opts)
 	return &RedisStore{cfg: cfg, rdb: client}, nil
+}
+
+// Ping issues a bounded Redis PING to verify connectivity.  Intended for
+// one-shot startup health checks; callers should treat a non-nil error as
+// "Redis is currently unreachable" rather than fatal — the Store itself is
+// designed to fail-open on subsequent errors.
+func (s *RedisStore) Ping(ctx context.Context) error {
+	return s.rdb.Ping(ctx).Err()
 }
 
 // failuresKey returns the sorted-set key for a provider's failure timestamps.
