@@ -6,13 +6,33 @@ import (
 	"time"
 )
 
+// maxFailureWindowEntries caps the number of per-provider failure timestamps
+// the MemoryStore keeps in the sliding window.  Without a cap a sustained
+// failure burst can cause the slice to grow O(failures-in-window), which on
+// a long WindowSeconds setting is an unbounded-ish memory footprint per
+// provider.  Once the cap is reached we drop the oldest entries; since the
+// threshold check only cares about `len >= threshold`, this cap cannot
+// cause a false negative (if we already hit the cap we already tripped the
+// circuit several orders of magnitude ago).
+const maxFailureWindowEntries = 4096
+
+// probeWatchdogTTL bounds how long a probeInFlight=true flag can persist
+// without progress before TryStartProbe considers it stale and reclaims
+// the slot.  This defends against the degenerate case where a probe's
+// goroutine exits (panic, ctx cancellation, deferred cleanup skipped)
+// without clearing the flag, which would otherwise starve the circuit
+// permanently in this process.  Chosen generously so a healthy probe
+// (which typically completes in < 30 s) is never reclaimed prematurely.
+const probeWatchdogTTL = 5 * time.Minute
+
 // memoryEntry holds per-provider circuit state for the in-memory store.
 type memoryEntry struct {
 	mu            sync.Mutex
 	state         State
 	failures      []time.Time // sliding window: timestamps of terminal failures
 	cooldownUntil time.Time
-	probeInFlight bool // prevents multiple concurrent probes in half-open
+	probeInFlight bool      // prevents multiple concurrent probes in half-open
+	probeStartAt  time.Time // watchdog timestamp; see probeWatchdogTTL
 }
 
 // MemoryStore is a single-process, mutex-backed circuit breaker store.
@@ -80,6 +100,14 @@ func (s *MemoryStore) RecordTerminalFailure(_ context.Context, provider string) 
 			pruned = append(pruned, t)
 		}
 	}
+	// Apply a hard count-based cap as a belt-and-braces defence against a
+	// sustained failure flood outpacing WindowSeconds pruning.  We drop
+	// the oldest entries rather than the newest so that when the failures
+	// eventually subside the most recent ones accurately reflect the
+	// freshest state.
+	if len(pruned) > maxFailureWindowEntries {
+		pruned = pruned[len(pruned)-maxFailureWindowEntries:]
+	}
 	e.failures = pruned
 
 	// Open the circuit if we've crossed the threshold.
@@ -101,6 +129,7 @@ func (s *MemoryStore) RecordSuccess(_ context.Context, provider string) error {
 	e.failures = e.failures[:0]
 	e.cooldownUntil = time.Time{}
 	e.probeInFlight = false
+	e.probeStartAt = time.Time{}
 	return nil
 }
 
@@ -112,6 +141,21 @@ func (s *MemoryStore) RecordProbeFailed(_ context.Context, provider string) erro
 	e.state = StateOpen
 	e.cooldownUntil = time.Now().Add(time.Duration(s.cfg.CooldownSeconds) * time.Second)
 	e.probeInFlight = false
+	e.probeStartAt = time.Time{}
+	return nil
+}
+
+// ReleaseProbe releases the probe slot without changing the circuit state.
+// Used when the probe did not produce a signal we should credit — e.g.
+// the caller's request context was cancelled or its deadline expired, so
+// the "success or failure" of the upstream call does not reflect on the
+// provider's health.  Safe to call multiple times.
+func (s *MemoryStore) ReleaseProbe(_ context.Context, provider string) error {
+	e := s.entry(provider)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.probeInFlight = false
+	e.probeStartAt = time.Time{}
 	return nil
 }
 
@@ -136,13 +180,29 @@ func (s *MemoryStore) GetStats(_ context.Context, provider string) (*ProviderSta
 // TryStartProbe attempts to acquire the probe slot in half-open state.
 // Returns true if this goroutine should send the probe, false if another
 // goroutine already claimed it (fast-fail the request instead).
-func (s *MemoryStore) TryStartProbe(provider string) bool {
+//
+// The ctx argument is accepted for signature parity with RedisStore (the
+// distributed backend); in-memory coordination is synchronous and does not
+// consult it.
+//
+// A watchdog (see probeWatchdogTTL) forcibly reclaims a stale in-flight
+// flag whose probeStartAt is older than the TTL.  Without this, a probe
+// goroutine that exits before clearing probeInFlight (e.g. via a panic
+// in the HTTP transport, an early context cancellation that skips the
+// deferred cleanup, or a bug in caller wiring) would permanently starve
+// future probes on this instance.
+func (s *MemoryStore) TryStartProbe(_ context.Context, provider string) bool {
 	e := s.entry(provider)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	now := time.Now()
 	if e.probeInFlight {
-		return false
+		if e.probeStartAt.IsZero() || now.Sub(e.probeStartAt) < probeWatchdogTTL {
+			return false
+		}
+		// Stale flag — reclaim it.
 	}
 	e.probeInFlight = true
+	e.probeStartAt = now
 	return true
 }

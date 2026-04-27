@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,13 @@ import (
 	"strings"
 	"time"
 )
+
+// errRetryBodyTooLarge is an internal sentinel returned by cacheBody when
+// the incoming request body exceeds Config.MaxRetryableBodyBytes.  We
+// treat it as "body too large to buffer — fall through and disable
+// retries" rather than a hard error back to the caller, so oversize
+// requests still reach the upstream on a best-effort basis.
+var errRetryBodyTooLarge = errors.New("circuit: request body exceeds MaxRetryableBodyBytes")
 
 // retryAttemptKey is the context key used to pass the current attempt index
 // down to the inner transport (used by the test-mode transport).
@@ -70,7 +78,13 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// ── Test-mode: force_degraded fast path ───────────────────────────────
 	// force_transient_recover is handled inside runWithRetries so it can
 	// interact with the retry loop's attempt counter.
-	if testModeFromRequest(req) == TestModeForceDegraded {
+	//
+	// Test-mode honouring is gated on Config.TestModeEnabled so a prod
+	// deployment cannot be tricked into emitting synthetic degraded
+	// responses by a client setting X-LLM-Proxy-Test-Mode or
+	// llm_proxy_test_mode.  Plumbed from the CLI's three-condition
+	// security gate in cmd/llm-proxy/main.go.
+	if t.testModeFromRequest(req) == TestModeForceDegraded {
 		t.log.Info("circuit: test-mode force_degraded", "provider", t.provider)
 		return t.degradedResponse(req), nil
 	}
@@ -149,8 +163,20 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
-	// Ensure the body can be re-read on retries.
-	if err := cacheBody(req); err != nil {
+	// Ensure the body can be re-read on retries.  When the body is too
+	// large to buffer in memory we gracefully disable retries and fall
+	// through to a single-pass RoundTrip so oversize requests (e.g. a
+	// multi-megabyte vision payload) still reach the upstream without
+	// giving a client an unbounded-memory DoS vector.
+	if err := t.cacheBody(req); err != nil {
+		if errors.Is(err, errRetryBodyTooLarge) {
+			t.log.Warn("circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request",
+				"provider", t.provider,
+				"content_length", req.ContentLength,
+				"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
+			)
+			return t.inner.RoundTrip(req)
+		}
 		return nil, fmt.Errorf("circuit: cacheBody: %w", err)
 	}
 
@@ -163,6 +189,13 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	var firstRateLimitAt time.Time
 
 	for {
+		// Bail out early if the caller has gone away.  Without this check
+		// we would still consume retry budget and record terminal
+		// failures for requests whose downstream has already cancelled.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		attempt := transientAttempts + rateLimitAttempts
 		attemptReq := req.WithContext(context.WithValue(ctx, retryAttemptKey{}, attempt))
 		if attempt > 0 {
@@ -178,13 +211,17 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 
 		// ── test-mode: force_transient_recover ────────────────────────────
 		// Fail on attempt 0, forward to the real inner transport on attempt 1+.
-		if testModeFromRequest(req) == TestModeForceTransientRecover {
+		// Gated on Config.TestModeEnabled — see the header docstring on
+		// Transport.testModeFromRequest for why that gate exists.
+		if t.testModeFromRequest(req) == TestModeForceTransientRecover {
 			if attempt == 0 {
 				t.log.Info("circuit: test-mode force_transient_recover (attempt 0 → fail)",
 					"provider", t.provider)
 				// Simulate a degraded failure and let the retry loop continue.
 				backoff := transientBackoff(transientAttempts)
-				t.sleep(ctx, backoff)
+				if err := t.sleep(ctx, backoff); err != nil {
+					return nil, err
+				}
 				transientAttempts++
 				continue
 			}
@@ -233,7 +270,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				}
 				// Return a synthetic rate-limit error (no magic string — not
 				// degraded, just throttled).
-				return t.rateLimitResponse(), nil
+				return t.rateLimitResponse(fc), nil
 			}
 			if fc == FailureClassGlobalRateLimit && firstRateLimitAt.IsZero() {
 				firstRateLimitAt = time.Now()
@@ -245,7 +282,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				"backoff_ms", backoff.Milliseconds(),
 				"attempt", rateLimitAttempts+1,
 			)
-			t.sleep(ctx, backoff)
+			if err := t.sleep(ctx, backoff); err != nil {
+				return nil, err
+			}
 			rateLimitAttempts++
 			continue
 		}
@@ -275,7 +314,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				"backoff_ms", backoff.Milliseconds(),
 				"attempt", transientAttempts+1,
 			)
-			t.sleep(ctx, backoff)
+			if err := t.sleep(ctx, backoff); err != nil {
+				return nil, err
+			}
 			transientAttempts++
 			continue
 		}
@@ -289,12 +330,15 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
-	// Only one goroutine/process should probe at a time.
+	// Only one goroutine/process should probe at a time.  Both MemoryStore
+	// (single-process) and RedisStore (distributed) implement this via
+	// TryStartProbe, which takes a context so Redis ops are bounded by the
+	// request deadline.
 	type probeStarter interface {
-		TryStartProbe(provider string) bool
+		TryStartProbe(ctx context.Context, provider string) bool
 	}
 	if ps, ok := t.store.(probeStarter); ok {
-		if !ps.TryStartProbe(t.provider) {
+		if !ps.TryStartProbe(ctx, t.provider) {
 			// Another probe is already in flight — fast-fail this request.
 			t.log.Info("circuit: half-open probe already in flight, fast-failing",
 				"provider", t.provider)
@@ -302,7 +346,57 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	// For distributed stores the probe slot is held by a TTL-bounded
+	// Redis key; if the upstream round-trip exceeds that TTL a parallel
+	// probe could win the slot.  KeepProbeAlive starts a background
+	// lease-refresher that extends the TTL until we're done.  MemoryStore
+	// does not expose this and is a no-op here.
+	type probeLeaser interface {
+		KeepProbeAlive(provider string) func()
+	}
+	if pl, ok := t.store.(probeLeaser); ok {
+		stop := pl.KeepProbeAlive(t.provider)
+		defer stop()
+	}
+
 	resp, err := t.inner.RoundTrip(req)
+
+	// If the caller's context was cancelled or its deadline expired,
+	// we learned nothing about the provider's actual health.  Silently
+	// releasing the probe slot (without flipping state in either
+	// direction) is the correct outcome: a subsequent request will try
+	// the probe again, instead of either (a) prematurely closing the
+	// circuit because we saw FailureClassNone, or (b) re-opening for a
+	// full cooldown because we saw "some error".  We check ctx.Err()
+	// directly rather than errors.Is(err, context.Canceled) because
+	// http.RoundTrip wraps context errors inside *url.Error, and some
+	// transports surface the cancellation as an io.EOF when the body
+	// is drained mid-flight.
+	if ctxErr := ctx.Err(); ctxErr != nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		t.log.Info("circuit: probe aborted by caller context, releasing probe slot without state change",
+			"provider", t.provider,
+			"ctx_err", ctxErr,
+			"round_trip_err", err,
+		)
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			resp.Body.Close()
+		}
+		type probeReleaser interface {
+			ReleaseProbe(ctx context.Context, provider string) error
+		}
+		if pr, ok := t.store.(probeReleaser); ok {
+			// Use a detached, short-timeout context because the
+			// caller's context is already dead.
+			relCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			pr.ReleaseProbe(relCtx, t.provider) //nolint:errcheck
+			cancel()
+		}
+		return nil, err
+	}
+
 	fc := ClassifyResponse(t.provider, resp, err)
 
 	if fc == FailureClassNone {
@@ -367,7 +461,7 @@ func (t *Transport) degradedResponse(req *http.Request) *http.Response {
 
 // rateLimitResponse returns a synthetic 429 without the DegradedSignal — the
 // request is throttled but the provider is not considered degraded.
-func (t *Transport) rateLimitResponse() *http.Response {
+func (t *Transport) rateLimitResponse(fc FailureClass) *http.Response {
 	body := []byte(`{"error":{"message":"Rate limit exceeded; please retry later.","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
 	return &http.Response{
 		StatusCode: http.StatusTooManyRequests,
@@ -377,7 +471,7 @@ func (t *Transport) rateLimitResponse() *http.Response {
 		ProtoMinor: 1,
 		Header: http.Header{
 			"Content-Type":            []string{"application/json"},
-			"X-Llm-Proxy-Error-Class": []string{string(FailureClassLocalRateLimit)},
+			"X-Llm-Proxy-Error-Class": []string{string(fc)},
 		},
 		Body:          io.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
@@ -444,34 +538,92 @@ func retryAfterSeconds(resp *http.Response) int {
 // cacheBody reads req.Body into memory and replaces it with a NopCloser
 // backed by the bytes, setting GetBody so retries can re-read it.
 // A no-op if req.Body is nil or already has GetBody.
-func cacheBody(req *http.Request) error {
+//
+// Returns errRetryBodyTooLarge (a sentinel the caller is expected to
+// handle) when the body exceeds Config.MaxRetryableBodyBytes, rather
+// than either (a) allocating the full payload anyway — which gives a
+// client an easy memory-DoS primitive — or (b) returning a hard error
+// that fails otherwise-legitimate large requests.  On overflow we
+// leave req.Body as a streaming reader that still carries every byte
+// we observed (via MultiReader over the peeked prefix + the rest of
+// the original body), so the caller can still forward the request on
+// a best-effort, no-retry basis.
+func (t *Transport) cacheBody(req *http.Request) error {
 	if req.Body == nil || req.GetBody != nil {
 		return nil
 	}
-	b, err := io.ReadAll(req.Body)
-	req.Body.Close()
+	cap := t.cfg.MaxRetryableBodyBytes
+	if cap <= 0 {
+		cap = DefaultMaxRetryableBodyBytes
+	}
+
+	// Content-Length short-circuit: if the client explicitly tells us
+	// the body is too big we skip the read entirely and leave the body
+	// intact for a streaming pass-through.
+	if req.ContentLength > cap {
+		return errRetryBodyTooLarge
+	}
+
+	// Read at most cap+1 bytes so we can detect overflow even when
+	// Content-Length is unknown / chunked.  io.LimitReader is safe
+	// against a body that lies about its length.
+	limited := &io.LimitedReader{R: req.Body, N: cap + 1}
+	prefix, err := io.ReadAll(limited)
 	if err != nil {
+		req.Body.Close()
 		return err
 	}
-	req.Body = io.NopCloser(bytes.NewReader(b))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(b)), nil
+
+	if int64(len(prefix)) > cap {
+		// Overflow: rewind what we read into the front of the body so a
+		// downstream streaming pass-through sees the full payload, and
+		// let the caller know retries are not possible for this req.
+		req.Body = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: io.MultiReader(bytes.NewReader(prefix), req.Body),
+			Closer: req.Body,
+		}
+		return errRetryBodyTooLarge
 	}
-	req.ContentLength = int64(len(b))
+
+	// Fits in memory — buffer it and enable retries.
+	req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(prefix))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(prefix)), nil
+	}
+	req.ContentLength = int64(len(prefix))
 	return nil
 }
 
 // sleep blocks for d, respecting context cancellation.
-func (t *Transport) sleep(ctx context.Context, d time.Duration) {
+func (t *Transport) sleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
 	select {
-	case <-time.After(d):
+	case <-timer.C:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 // testModeFromRequest returns the test mode value from the header or, as a
-// fallback, the URL query parameter.
-func testModeFromRequest(req *http.Request) string {
+// fallback, the URL query parameter.  When Config.TestModeEnabled is
+// false it unconditionally returns "" so a client cannot smuggle
+// X-LLM-Proxy-Test-Mode or llm_proxy_test_mode past a production
+// deployment to force synthetic degraded responses.
+//
+// This is a method on Transport (rather than a free function) precisely
+// so we always route through the config gate.  Callers inside this
+// package MUST NOT read those fields directly.
+func (t *Transport) testModeFromRequest(req *http.Request) string {
+	if !t.cfg.TestModeEnabled {
+		return ""
+	}
 	if v := req.Header.Get(TestModeHeader); v != "" {
 		return v
 	}

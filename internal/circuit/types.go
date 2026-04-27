@@ -1,6 +1,22 @@
 package circuit
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
+
+// MaxDegradedSignalLength bounds the DegradedSignal substring we embed in
+// synthetic degraded bodies so a misconfigured (or hostile) operator setting
+// cannot force arbitrary-sized strings into every error response, blow up log
+// volume, or complicate client-side substring detection.
+const MaxDegradedSignalLength = 256
+
+// DefaultMaxRetryableBodyBytes is the default hard cap cacheBody uses to
+// decide whether an incoming request body can be buffered in memory for
+// retry-replay.  Chosen to comfortably fit typical LLM requests (including
+// moderate base64 image payloads) while keeping per-request memory bounded
+// even when a client streams a pathologically large body.
+const DefaultMaxRetryableBodyBytes int64 = 10 * 1024 * 1024 // 10 MiB
 
 // DefaultDegradedSignal is the default marker embedded in synthetic degraded
 // error response bodies.  Callers can override it per-deployment via
@@ -218,12 +234,13 @@ type Config struct {
 	// If both are provided, RedisURL is parsed first and the individual
 	// fields overlay its result (so you can, for example, point the URL
 	// at Finch's cluster but explicitly pin DB to a dedicated circuit-
-	// breaker database).  A zero RedisDB is treated as "don't override"
-	// when a URL is also provided; set it explicitly to 0 via URL path.
+	// breaker database).  RedisDB overlays the URL DB only when
+	// RedisDBSet is true, which lets an explicit DB 0 override a URL path.
 	RedisURL      string
 	RedisAddress  string
 	RedisPassword string
 	RedisDB       int
+	RedisDBSet    bool
 
 	// DegradedSignal is the opaque substring embedded in every synthesised
 	// degraded error body so downstream clients can detect proxy-originated
@@ -234,6 +251,22 @@ type Config struct {
 	//
 	// Defaults to DefaultDegradedSignal when empty.
 	DegradedSignal string
+
+	// TestModeEnabled gates whether the transport will honour the
+	// X-LLM-Proxy-Test-Mode header and llm_proxy_test_mode query
+	// parameter.  When false (the default) the transport ignores those
+	// signals entirely so that a production deployment cannot be
+	// tricked by a client into returning synthetic degraded responses.
+	// Operators opt-in explicitly via the YAML config.
+	TestModeEnabled bool
+
+	// MaxRetryableBodyBytes caps how much of an incoming request body
+	// cacheBody is willing to buffer into memory to support retry
+	// replay.  Requests whose body exceeds this cap bypass the retry
+	// machinery and are forwarded once as a streaming pass-through so
+	// we never hold an unbounded byte slice per request.  Zero or
+	// negative means "use DefaultMaxRetryableBodyBytes".
+	MaxRetryableBodyBytes int64
 }
 
 // Defaults returns a Config with all zero fields replaced by sensible defaults.
@@ -274,7 +307,40 @@ func (c Config) Defaults() Config {
 	if c.DegradedSignal == "" {
 		c.DegradedSignal = DefaultDegradedSignal
 	}
+	if c.MaxRetryableBodyBytes <= 0 {
+		c.MaxRetryableBodyBytes = DefaultMaxRetryableBodyBytes
+	}
 	return c
+}
+
+// Validate returns a non-nil error when cfg contains a value we cannot
+// safely use at runtime.  It is intentionally strict about things that
+// silently-fall-through today (unknown backend, oversize degraded signal,
+// unknown mode) so a typo in the YAML surfaces at startup instead of
+// manifesting as surprising behaviour under load.
+func (c Config) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	switch c.Backend {
+	case "", "memory", "redis":
+	default:
+		return fmt.Errorf("circuit: unsupported backend %q (supported: memory, redis)", c.Backend)
+	}
+	switch c.Mode {
+	case "", ModeLog, ModeEnforce:
+	default:
+		return fmt.Errorf("circuit: unsupported mode %q (supported: %s, %s)", c.Mode, ModeLog, ModeEnforce)
+	}
+	switch c.RetryContributionMode {
+	case "", "off", "log", "on":
+	default:
+		return fmt.Errorf("circuit: unsupported retry_contribution_mode %q (supported: off, log, on)", c.RetryContributionMode)
+	}
+	if len(c.DegradedSignal) > MaxDegradedSignalLength {
+		return fmt.Errorf("circuit: degraded_signal length %d exceeds max %d", len(c.DegradedSignal), MaxDegradedSignalLength)
+	}
+	return nil
 }
 
 // ProviderStats is returned by the Store for health / observability endpoints.

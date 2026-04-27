@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,19 +198,115 @@ type EstimationConfig struct {
 type RedisConfig struct {
 	// URL is a full Redis connection string (e.g. `redis://:pw@host:6379/3`
 	// or `rediss://...` for TLS).  Takes priority over Address/Password
-	// when set, and any `${VAR}` / `$VAR` token is expanded from the
-	// process environment at load time so secrets (e.g. Finch's
-	// ML_CACHE_URL SSM parameter) can be passed in via container
-	// environment without baking credentials into YAML.
+	// when set.  YAML unmarshalling does not expand `${VAR}` / `$VAR`
+	// tokens; callers may expand them later during wiring/initialization
+	// so secrets (e.g. Finch's ML_CACHE_URL SSM parameter) can be passed
+	// in via container environment without baking credentials into YAML.
 	URL      string `yaml:"url"`
 	Address  string `yaml:"address"`
 	Password string `yaml:"password"`
 	// DB pins which Redis database the circuit breaker uses.  When the
 	// URL already encodes a DB (via `/N`) this field overrides it — set
 	// this explicitly when sharing a Redis instance with another tenant
-	// that owns a different DB.  A zero value is treated as "don't
-	// override".
-	DB int `yaml:"db"`
+	// that owns a different DB.  DBSet tracks whether YAML explicitly
+	// provided db, allowing an explicit db: 0 to override a URL DB.
+	DB    int  `yaml:"db"`
+	DBSet bool `yaml:"-"`
+}
+
+type redisConfigYAML struct {
+	URL      string `yaml:"url,omitempty"`
+	Address  string `yaml:"address,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	DB       *int   `yaml:"db,omitempty"`
+}
+
+// UnmarshalYAML records whether db was explicitly present so db: 0 can be
+// distinguished from an omitted DB value.
+func (c *RedisConfig) UnmarshalYAML(value *yaml.Node) error {
+	var raw redisConfigYAML
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	c.URL = raw.URL
+	c.Address = raw.Address
+	c.Password = raw.Password
+	if raw.DB != nil {
+		c.DB = *raw.DB
+		c.DBSet = true
+	} else {
+		c.DB = 0
+		c.DBSet = false
+	}
+	return nil
+}
+
+// MarshalYAML preserves the distinction between omitted db and explicit db: 0
+// across config merge round-trips.
+func (c RedisConfig) MarshalYAML() (interface{}, error) {
+	out := redisConfigYAML{
+		URL:      c.URL,
+		Address:  c.Address,
+		Password: c.Password,
+	}
+	if c.DBSet {
+		db := c.DB
+		out.DB = &db
+	}
+	return out, nil
+}
+
+// MarshalJSON redacts secret-bearing fields on RedisConfig so the full
+// configuration can be safely dumped by the --version / /health paths
+// (or any other JSON diagnostic output) without leaking credentials.
+// Password is replaced with a fixed sentinel when present, and any
+// userinfo in URL is stripped by re-marshalling the parsed URL.  The
+// output schema is stable: every field the YAML form uses is still
+// present so diagnostic tooling does not have to special-case
+// redacted payloads.
+//
+// Note: this only affects JSON marshalling.  The YAML-tagged struct
+// can still be serialised unchanged for round-trip writes (see
+// SaveConfigurationToFile) — in that code path the config is written
+// back to an operator-owned file where the original credentials must
+// be preserved.
+func (c RedisConfig) MarshalJSON() ([]byte, error) {
+	const redacted = "***REDACTED***"
+	// Use an alias type to avoid an infinite MarshalJSON recursion on
+	// the embedded struct literal.  The alias has no methods.
+	type redisConfigJSON struct {
+		URL      string `json:"url,omitempty"`
+		Address  string `json:"address,omitempty"`
+		Password string `json:"password,omitempty"`
+		DB       int    `json:"db"`
+	}
+	out := redisConfigJSON{
+		URL:     redactedRedisURL(c.URL),
+		Address: c.Address,
+		DB:      c.DB,
+	}
+	if c.Password != "" {
+		out.Password = redacted
+	}
+	return json.Marshal(out)
+}
+
+// redactedRedisURL returns u with any embedded userinfo (`user:pw@`)
+// replaced by `***:***@`.  An unparseable URL is fully redacted to
+// "***" since we cannot safely strip credentials we cannot locate.
+func redactedRedisURL(u string) string {
+	if u == "" {
+		return ""
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed == nil {
+		return "***"
+	}
+	if parsed.User != nil {
+		parsed.User = url.UserPassword("***", "***")
+	}
+	return parsed.String()
 }
 
 // ProviderConfig represents configuration for a specific provider
@@ -490,6 +588,13 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
+	// Validate circuit breaker configuration if enabled
+	if c.Features.CircuitBreaker.Enabled {
+		if err := c.validateCircuitBreakerConfig(); err != nil {
+			return fmt.Errorf("invalid CircuitBreakerConfig: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -559,8 +664,8 @@ func (c *YAMLConfig) validateRateLimitingConfig() error {
 	case "", "memory":
 		// default to memory
 	case "redis":
-		if rl.Redis == nil || rl.Redis.Address == "" {
-			return fmt.Errorf("redis backend selected but redis.address is empty")
+		if rl.Redis == nil || (rl.Redis.URL == "" && rl.Redis.Address == "") {
+			return fmt.Errorf("redis backend selected but redis.url and redis.address are empty")
 		}
 	default:
 		return fmt.Errorf("unsupported backend: %s (supported: memory, redis)", rl.Backend)
@@ -583,6 +688,68 @@ func (c *YAMLConfig) validateRateLimitingConfig() error {
 			}
 		}
 	}
+	return nil
+}
+
+// validateCircuitBreakerConfig validates the circuit_breaker feature config
+// early so --validate-config catches rollout typos before runtime.
+func (c *YAMLConfig) validateCircuitBreakerConfig() error {
+	cb := c.Features.CircuitBreaker
+
+	switch cb.Mode {
+	case "", "log", "enforce":
+	default:
+		return fmt.Errorf("mode must be one of log, enforce (got %q)", cb.Mode)
+	}
+
+	switch cb.Backend {
+	case "", "memory":
+		// default to memory
+	case "redis":
+		if cb.Redis == nil {
+			return fmt.Errorf("backend redis requires redis configuration")
+		}
+		if cb.Redis.URL == "" && cb.Redis.Address == "" {
+			return fmt.Errorf("backend redis requires redis.url or redis.address")
+		}
+	default:
+		return fmt.Errorf("backend must be one of memory, redis (got %q)", cb.Backend)
+	}
+
+	if cb.FailureThreshold < 0 {
+		return fmt.Errorf("failure_threshold cannot be negative")
+	}
+	if cb.FailureThreshold == 0 {
+		return fmt.Errorf("failure_threshold must be greater than 0")
+	}
+	if cb.WindowSeconds < 0 {
+		return fmt.Errorf("window_seconds cannot be negative")
+	}
+	if cb.WindowSeconds == 0 {
+		return fmt.Errorf("window_seconds must be greater than 0")
+	}
+	if cb.CooldownSeconds < 0 {
+		return fmt.Errorf("cooldown_seconds cannot be negative")
+	}
+	if cb.CooldownSeconds == 0 {
+		return fmt.Errorf("cooldown_seconds must be greater than 0")
+	}
+	if cb.MaxTransientRetries < 0 {
+		return fmt.Errorf("max_transient_retries cannot be negative")
+	}
+	if cb.MaxRateLimitRetries < 0 {
+		return fmt.Errorf("max_rate_limit_retries cannot be negative")
+	}
+	if cb.GlobalRateLimitEscalationWindow < 0 {
+		return fmt.Errorf("global_rate_limit_escalation_window cannot be negative")
+	}
+
+	switch cb.RetryContributionMode {
+	case "", "off", "log", "on":
+	default:
+		return fmt.Errorf("retry_contribution_mode must be one of off, log, on (got %q)", cb.RetryContributionMode)
+	}
+
 	return nil
 }
 

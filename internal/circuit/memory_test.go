@@ -121,22 +121,36 @@ func TestMemoryStore_SlidingWindowExpiry(t *testing.T) {
 	cfg := Config{
 		Enabled:          true,
 		FailureThreshold: 3,
-		WindowSeconds:    1, // 1 second window for test speed
+		WindowSeconds:    60,
 	}.Defaults()
 	s := NewMemoryStore(cfg)
 	ctx := context.Background()
 
-	// Record 2 failures.
+	// Record 2 failures at the current time.
 	s.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
 	s.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
 
-	// Wait for the window to expire.
-	time.Sleep(1100 * time.Millisecond)
+	// Rewind the recorded failure timestamps so they fall outside the
+	// sliding window — this is equivalent to waiting out the window but
+	// does not introduce a wall-clock sleep, which was previously the
+	// slowest test in the package and occasionally flaked on busy CI.
+	e := s.entry("openai")
+	e.mu.Lock()
+	rewound := time.Now().Add(-2 * time.Duration(cfg.WindowSeconds) * time.Second)
+	for i := range e.failures {
+		e.failures[i] = rewound
+	}
+	e.mu.Unlock()
 
-	// One more failure — the window is now clean, so we should still be closed.
+	// One more failure — the previous two are now outside the window so
+	// the count should be exactly 1 and the circuit should stay closed.
 	st, _ := s.RecordTerminalFailure(ctx, "openai")
 	if st != StateClosed {
 		t.Fatalf("want StateClosed after window expiry, got %s", st)
+	}
+	stats, _ := s.GetStats(ctx, "openai")
+	if stats.Failures != 1 {
+		t.Fatalf("want 1 failure after sliding-window prune, got %d", stats.Failures)
 	}
 }
 
@@ -160,13 +174,14 @@ func TestMemoryStore_GetStats(t *testing.T) {
 
 func TestMemoryStore_TryStartProbe(t *testing.T) {
 	s := NewMemoryStore(defaultConfig())
+	ctx := context.Background()
 
 	// First attempt should succeed.
-	if !s.TryStartProbe("openai") {
+	if !s.TryStartProbe(ctx, "openai") {
 		t.Fatal("first TryStartProbe should return true")
 	}
 	// Second attempt while probe is in flight should fail.
-	if s.TryStartProbe("openai") {
+	if s.TryStartProbe(ctx, "openai") {
 		t.Fatal("second TryStartProbe should return false")
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -379,5 +380,84 @@ func TestDefaultConfig(t *testing.T) {
 	// Test cost tracking is enabled by default
 	if !config.Features.CostTracking.Enabled {
 		t.Error("Expected cost tracking to be enabled in default config")
+	}
+}
+
+func TestRedisConfig_ExplicitZeroDBIsRecordedAsSet(t *testing.T) {
+	var cfg RedisConfig
+	if err := yaml.Unmarshal([]byte("url: redis://cache.example.com:6379/6\ndb: 0\n"), &cfg); err != nil {
+		t.Fatalf("unmarshal redis config: %v", err)
+	}
+	if cfg.DB != 0 {
+		t.Fatalf("want DB=0, got %d", cfg.DB)
+	}
+	if !cfg.DBSet {
+		t.Fatal("explicit db: 0 should set DBSet")
+	}
+}
+
+func TestValidateRateLimitingConfig_RedisURLOrAddress(t *testing.T) {
+	cfg := &YAMLConfig{
+		Providers: map[string]ProviderConfig{"openai": {Enabled: true}},
+		Features: FeaturesConfig{
+			RateLimiting: RateLimitingConfig{
+				Enabled: true,
+				Backend: "redis",
+				Redis:   &RedisConfig{URL: "redis://cache.example.com:6379/0"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("redis.url should satisfy rate limiting validation: %v", err)
+	}
+
+	cfg.Features.RateLimiting.Redis = &RedisConfig{Address: "cache.example.com:6379"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("redis.address should satisfy rate limiting validation: %v", err)
+	}
+}
+
+func TestValidateCircuitBreakerConfig(t *testing.T) {
+	valid := &YAMLConfig{
+		Providers: map[string]ProviderConfig{"openai": {Enabled: true}},
+		Features: FeaturesConfig{
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:                         true,
+				Mode:                            "log",
+				Backend:                         "redis",
+				FailureThreshold:                5,
+				WindowSeconds:                   120,
+				CooldownSeconds:                 300,
+				MaxTransientRetries:             2,
+				MaxRateLimitRetries:             2,
+				RetryContributionMode:           "log",
+				GlobalRateLimitEscalationWindow: 60,
+				Redis:                           &RedisConfig{URL: "redis://cache.example.com:6379/0"},
+			},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid CircuitBreakerConfig rejected: %v", err)
+	}
+
+	invalidMode := *valid
+	invalidMode.Features.CircuitBreaker.Mode = "observe"
+	err := invalidMode.Validate()
+	if err == nil || !strings.Contains(err.Error(), "CircuitBreakerConfig") {
+		t.Fatalf("invalid mode should produce CircuitBreakerConfig validation error, got %v", err)
+	}
+
+	missingRedis := *valid
+	missingRedis.Features.CircuitBreaker.Redis = nil
+	err = missingRedis.Validate()
+	if err == nil || !strings.Contains(err.Error(), "requires redis configuration") {
+		t.Fatalf("redis backend without config should fail, got %v", err)
+	}
+
+	negativeRetries := *valid
+	negativeRetries.Features.CircuitBreaker.MaxTransientRetries = -1
+	err = negativeRetries.Validate()
+	if err == nil || !strings.Contains(err.Error(), "max_transient_retries") {
+		t.Fatalf("negative retry count should fail, got %v", err)
 	}
 }

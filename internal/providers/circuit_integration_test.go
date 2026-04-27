@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/circuit"
@@ -15,34 +17,23 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// upstreamServer creates a test HTTP server that returns the given status on
-// every request.  The caller is responsible for calling server.Close().
-func upstreamServer(status int) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(status)
-	}))
-}
-
-// wrapProviderTransport injects a circuit-breaking transport into provider p.
-func wrapProviderTransport(
-	p interface {
-		WrapTransport(func(http.RoundTripper) http.RoundTripper)
-	},
-	store circuit.Store,
-	cfg circuit.Config,
-	name string,
-) {
-	p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
-		return circuit.NewTransport(inner, store, cfg, name, nil)
-	})
-}
-
 // TestProviderCircuitBreaker_OpenAI_DegradedSignal ensures that after
-// MaxTransientRetries+1 consecutive 503 responses the circuit-breaking
-// transport returns a 503 containing the DefaultDegradedSignal to the upstream caller.
+// MaxTransientRetries+1 consecutive 503 responses a real request routed
+// through OpenAIProxy.Proxy() receives a synthesised 503 containing
+// DefaultDegradedSignal in its body.
+//
+// This exercises the actual provider wiring: WrapTransport → circuit
+// transport → inner (pointed at the test server) → reverse proxy → client.
+// The previous version bypassed WrapTransport entirely by invoking
+// circuit.NewTransport directly, which meant a regression that broke the
+// provider-level wrapping would not be caught.
 func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
-	server := upstreamServer(503)
-	defer server.Close()
+	var upstreamCalls int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&upstreamCalls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
 
 	cfg := circuit.Config{
 		Enabled:             true,
@@ -55,20 +46,40 @@ func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 	store := circuit.NewMemoryStore(cfg)
 
 	provider := NewOpenAIProxy()
-	wrapProviderTransport(provider, store, cfg, "openai")
 
-	// Re-point the proxy's transport target at our test server.
-	// The circuit transport wraps the existing transport, which would normally
-	// point at OpenAI.  We use the test server instead by creating a request
-	// directly against the circuit transport.
-	innerTransport := &http.Transport{}
-	cbTransport := circuit.NewTransport(innerTransport, store, cfg, "openai", nil)
+	// Install the circuit-breaking transport via the provider's own
+	// WrapTransport hook — this is the production code path.  The inner
+	// RoundTripper rewrites the request URL to target the test upstream
+	// in place of api.openai.com, so the reverse proxy never actually
+	// reaches the internet.
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	provider.WrapTransport(func(_ http.RoundTripper) http.RoundTripper {
+		inner := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme = upstreamURL.Scheme
+			r.URL.Host = upstreamURL.Host
+			r.Host = upstreamURL.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})
+		return circuit.NewTransport(inner, store, cfg, "openai", nil)
+	})
 
-	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions",
+	// Front the provider with a local test server so we can issue a real
+	// client request against the wired-up proxy.Handler.
+	front := httptest.NewServer(provider.Proxy())
+	defer front.Close()
+
+	req, err := http.NewRequest(http.MethodPost,
+		front.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := cbTransport.RoundTrip(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,9 +88,19 @@ func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 degraded response, got %d", resp.StatusCode)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
 	if !strings.Contains(string(body), circuit.DefaultDegradedSignal) {
 		t.Fatalf("DefaultDegradedSignal not found in body: %s", body)
+	}
+
+	// Retry budget is one, so we expect initial attempt + one retry before
+	// giving up — the upstream must have been hit exactly twice.  If the
+	// wrapping were not applied (regression) this would be 1.
+	if got := atomic.LoadInt32(&upstreamCalls); got != 2 {
+		t.Fatalf("expected upstream to be called twice (attempt + 1 retry), got %d", got)
 	}
 }
 
@@ -98,7 +119,10 @@ func TestProviderCircuitBreaker_TestMode_ForceDegraded(t *testing.T) {
 		}, nil
 	})
 
-	cfg := circuit.Config{Enabled: true, Mode: circuit.ModeEnforce}.Defaults()
+	// Explicitly opt-in to honouring the X-LLM-Proxy-Test-Mode header;
+	// the transport refuses to interpret it in the default (prod-safe)
+	// configuration.  See TestTransport_TestMode_DisabledByDefault_*.
+	cfg := circuit.Config{Enabled: true, Mode: circuit.ModeEnforce, TestModeEnabled: true}.Defaults()
 	store := circuit.NewMemoryStore(cfg)
 	tr := circuit.NewTransport(inner, store, cfg, "anthropic", nil)
 

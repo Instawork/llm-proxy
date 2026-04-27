@@ -20,18 +20,22 @@ func TestCircuitConfigFromYAML_ExpandsRedisURLEnvVar(t *testing.T) {
 		Mode:    "log",
 		Backend: "redis",
 		Redis: &config.RedisConfig{
-			URL: "${REDIS_URL}",
-			DB:  5,
+			URL:   "${REDIS_URL}",
+			DB:    5,
+			DBSet: true,
 		},
 	}
 
-	cfg := circuitConfigFromYAML(cbYAML)
+	cfg := circuitConfigFromYAML(cbYAML, false)
 
 	if cfg.RedisURL != want {
 		t.Fatalf("RedisURL want %q, got %q (os.ExpandEnv didn't fire)", want, cfg.RedisURL)
 	}
 	if cfg.RedisDB != 5 {
 		t.Fatalf("RedisDB overlay lost: want 5, got %d", cfg.RedisDB)
+	}
+	if !cfg.RedisDBSet {
+		t.Fatal("RedisDBSet overlay lost")
 	}
 }
 
@@ -44,7 +48,7 @@ func TestCircuitConfigFromYAML_ExpandsShellStyleVar(t *testing.T) {
 		Enabled: true,
 		Backend: "redis",
 		Redis:   &config.RedisConfig{URL: "$MY_REDIS"},
-	})
+	}, false)
 
 	if cfg.RedisURL != "redis://cache.example.com:6379/1" {
 		t.Fatalf("shell-style var not expanded; got %q", cfg.RedisURL)
@@ -65,7 +69,7 @@ func TestCircuitConfigFromYAML_UnsetVarBecomesEmpty(t *testing.T) {
 		Enabled: true,
 		Backend: "redis",
 		Redis:   &config.RedisConfig{URL: "${DEFINITELY_NOT_SET_ANYWHERE_12345}"},
-	})
+	}, false)
 
 	if cfg.RedisURL != "" {
 		t.Fatalf("unset env var should expand to empty string; got %q", cfg.RedisURL)
@@ -82,7 +86,7 @@ func TestCircuitConfigFromYAML_LiteralURLPassesThrough(t *testing.T) {
 		Enabled: true,
 		Backend: "redis",
 		Redis:   &config.RedisConfig{URL: literal},
-	})
+	}, false)
 
 	if cfg.RedisURL != literal {
 		t.Fatalf("literal URL mutated by ExpandEnv: want %q, got %q", literal, cfg.RedisURL)
@@ -111,7 +115,7 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 		t.Fatalf("load prod configs: %v", err)
 	}
 
-	cfg := circuitConfigFromYAML(merged.Features.CircuitBreaker)
+	cfg := circuitConfigFromYAML(merged.Features.CircuitBreaker, false)
 
 	if cfg.RedisURL != want {
 		t.Fatalf("production.yml REDIS_URL expansion broken: want %q, got %q", want, cfg.RedisURL)
@@ -124,5 +128,8 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 	}
 	if cfg.RedisDB != 5 {
 		t.Fatalf("production.yml cb.redis.db should pin 5 (isolated from Finch's DB), got %d", cfg.RedisDB)
+	}
+	if !cfg.RedisDBSet {
+		t.Fatal("production.yml cb.redis.db should be recorded as explicitly set")
 	}
 }

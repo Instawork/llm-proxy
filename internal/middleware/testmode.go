@@ -8,6 +8,33 @@ import (
 	"github.com/Instawork/llm-proxy/internal/circuit"
 )
 
+// knownProviders is the allowlist writeDegradedResponse uses to decide
+// whether it is safe to reflect a path-derived provider name into the
+// JSON `message` field.  Anything outside this set is coerced to
+// "unknown" so an attacker-controlled URL path cannot smuggle
+// arbitrary substrings into a response body that will surface in
+// client-side logs, SDK exceptions, or error-reporting pipelines.
+//
+// The list is intentionally short and static; if you add a new
+// provider to the proxy, extend this map too.  (We prefer an explicit
+// allowlist over regex/sanitisation because the set of supported
+// providers is closed and small.)
+var knownProviders = map[string]struct{}{
+	"openai":    {},
+	"anthropic": {},
+	"gemini":    {},
+}
+
+// safeProviderName returns provider verbatim when it appears in
+// knownProviders; otherwise it returns "unknown".  See knownProviders
+// for the rationale.
+func safeProviderName(provider string) string {
+	if _, ok := knownProviders[provider]; ok {
+		return provider
+	}
+	return "unknown"
+}
+
 // NewTestModeMiddleware returns middleware that intercepts requests carrying
 // the X-LLM-Proxy-Test-Mode header (or the llm_proxy_test_mode query param)
 // and returns synthetic responses without hitting real LLM providers.
@@ -83,10 +110,12 @@ func providerFromRequest(r *http.Request) string {
 }
 
 // writeDegradedResponse writes a 503 JSON response whose message contains
-// the configured degraded signal.
+// the configured degraded signal.  The provider name is validated
+// against an allowlist before being reflected into the response body
+// so a caller cannot inject arbitrary text via the URL path.
 func writeDegradedResponse(w http.ResponseWriter, provider, signal string) {
 	msg := fmt.Sprintf("%s Provider %s is currently degraded or unavailable. Please try again later.",
-		signal, provider)
+		signal, safeProviderName(provider))
 
 	body := map[string]interface{}{
 		"error": map[string]interface{}{

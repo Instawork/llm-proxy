@@ -95,6 +95,27 @@ var globalRateLimiter ratelimit.RateLimiter
 // Global circuit breaker store instance
 var globalCircuitStore circuit.Store
 
+// Resolved circuit-breaker config after Defaults() is applied.  Captured at
+// startup so /health can surface the effective mode / backend / thresholds
+// without re-reading YAML.
+var globalCircuitConfig circuit.Config
+
+// Set to true when the configured backend was "redis" but the Redis store
+// could not be constructed and we transparently fell back to MemoryStore.
+// Surfaced in /health so operators can tell at a glance that the circuit
+// breaker is running without distributed coordination.
+var globalCircuitRedisFallback bool
+
+// Known provider names the circuit breaker tracks.  Kept as a single source
+// of truth so the wiring code, /health handler, and any future diagnostics
+// agree on the list.
+var circuitBreakerProviders = []string{"openai", "anthropic", "gemini"}
+
+// redisPingTimeout bounds the blocking startup PING to Redis.  Long enough
+// to succeed on a warm connection across regions, short enough that a dead
+// Redis never holds up proxy startup past its health-check window.
+const redisPingTimeout = 2 * time.Second
+
 func init() {
 	logLevel := os.Getenv("LOG_LEVEL")
 	var level slog.Level
@@ -358,10 +379,37 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	return costTracker
 }
 
+// isTestModeAllowed evaluates the three-condition gate that controls
+// whether the proxy honours X-LLM-Proxy-Test-Mode / llm_proxy_test_mode.
+// ALL THREE conditions must be satisfied:
+//  1. The circuit breaker feature is enabled (otherwise there is
+//     nothing for the test-mode flag to exercise, and any honouring
+//     of the header is pure attack surface).
+//  2. TestModeEnabled is true in YAML (explicit opt-in).
+//  3. LLM_PROXY_ALLOW_TEST_MODE=1 is set in the process environment
+//     (belt-and-suspenders guard against a misconfigured YAML in
+//     production).
+//
+// The result of this gate is plumbed into circuit.Config.TestModeEnabled
+// so the transport layer refuses to honour the test-mode signals when
+// any guard fails — without this, a client could smuggle synthetic
+// degraded responses past the middleware by sending a request that
+// hits the transport directly.
+func isTestModeAllowed(yc *config.YAMLConfig) bool {
+	return yc.Features.CircuitBreaker.Enabled &&
+		yc.Features.CircuitBreaker.TestModeEnabled &&
+		os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1"
+}
+
 // circuitConfigFromYAML converts the YAML circuit breaker config into the
 // internal circuit.Config (with defaults applied). Centralised so we don't
 // drift between the store-initialisation and transport-wrapping call sites.
-func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
+//
+// testModeAllowed must be the result of isTestModeAllowed for the same
+// yamlConfig.  It is threaded in rather than re-derived so every call
+// site sees an identical value (there is no scenario where one layer
+// should honour test-mode and another should not).
+func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool) circuit.Config {
 	cfg := circuit.Config{
 		Enabled:                         cb.Enabled,
 		Mode:                            cb.Mode,
@@ -374,6 +422,7 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
 		RetryContributionMode:           cb.RetryContributionMode,
 		GlobalRateLimitEscalationWindow: cb.GlobalRateLimitEscalationWindow,
 		DegradedSignal:                  cb.DegradedSignal,
+		TestModeEnabled:                 testModeAllowed,
 	}
 	if cb.Redis != nil {
 		// Expand ${VAR} / $VAR tokens from the process environment so we
@@ -385,6 +434,7 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig) circuit.Config {
 		cfg.RedisAddress = os.ExpandEnv(cb.Redis.Address)
 		cfg.RedisPassword = os.ExpandEnv(cb.Redis.Password)
 		cfg.RedisDB = cb.Redis.DB
+		cfg.RedisDBSet = cb.Redis.DBSet
 	}
 	return cfg.Defaults()
 }
@@ -408,7 +458,11 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 		return nil
 	}
 
-	cfg := circuitConfigFromYAML(cb)
+	cfg := circuitConfigFromYAML(cb, isTestModeAllowed(yamlConfig))
+	if err := cfg.Validate(); err != nil {
+		logger.Error("⚡ Circuit Breaker: invalid configuration — feature disabled", "error", err)
+		return nil
+	}
 
 	store, err := circuit.Factory(cfg)
 	if err != nil {
@@ -417,6 +471,7 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 				"error", err,
 			)
 			store = circuit.NewMemoryStore(cfg)
+			globalCircuitRedisFallback = true
 		} else {
 			logger.Error("⚡ Circuit Breaker: failed to create store", "error", err)
 			return nil
@@ -424,7 +479,7 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 	}
 
 	if rs, ok := store.(*circuit.RedisStore); ok {
-		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pingCtx, cancel := context.WithTimeout(context.Background(), redisPingTimeout)
 		if pingErr := rs.Ping(pingCtx); pingErr != nil {
 			logger.Warn("⚡ Circuit Breaker: Redis PING failed at startup — proxy will continue (store fails open on Redis errors)",
 				"error", pingErr,
@@ -435,8 +490,13 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 		cancel()
 	}
 
+	// Capture the resolved config so /health can report it without
+	// re-applying Defaults() on every request.
+	globalCircuitConfig = cfg.Defaults()
+
 	logger.Info("⚡ Circuit Breaker: initialized",
 		"backend", cfg.Backend,
+		"redis_fallback", globalCircuitRedisFallback,
 		"mode", cfg.Mode,
 		"failure_threshold", cfg.FailureThreshold,
 		"window_seconds", cfg.WindowSeconds,
@@ -498,17 +558,49 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	return store
 }
 
-// healthHandler provides a simple health check endpoint
+// healthHandler provides a simple health check endpoint.
+//
+// When the circuit breaker is enabled, the response includes a
+// `circuit_breaker` block describing the effective mode, backend, whether
+// we fell back from Redis to in-memory, and per-provider state/failure
+// counts.  This is the canonical signal operators should key dashboards
+// and alerts off of.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	providerHealth := globalProviderManager.GetHealthStatus()
 
-	// Augment with circuit breaker stats when available.
+	var circuitBlock map[string]interface{}
 	if globalCircuitStore != nil {
-		for _, name := range []string{"openai", "anthropic", "gemini"} {
+		perProvider := make(map[string]interface{}, len(circuitBreakerProviders))
+		for _, name := range circuitBreakerProviders {
 			stats, err := globalCircuitStore.GetStats(r.Context(), name)
 			if err != nil {
+				// /health is unauthenticated, so we MUST NOT leak the
+				// raw error string (it can contain Redis URLs, host
+				// names, port numbers, or other infrastructure detail
+				// that helps an attacker enumerate the deployment).
+				// Operators get the full detail via the structured
+				// logger below.
+				logger.Warn("⚡ Circuit Breaker: GetStats error on /health",
+					"provider", name,
+					"error", err,
+				)
+				perProvider[name] = map[string]interface{}{
+					"error": "stats_unavailable",
+				}
 				continue
 			}
+			entry := map[string]interface{}{
+				"state":    stats.State.String(),
+				"failures": stats.Failures,
+			}
+			if stats.CooldownUntil != nil {
+				entry["cooldown_until"] = stats.CooldownUntil.Unix()
+			}
+			perProvider[name] = entry
+
+			// Keep the legacy provider-level fields populated so any
+			// existing consumers that read providers[X].circuit_state
+			// don't break.
 			ph, _ := providerHealth[name].(map[string]interface{})
 			if ph == nil {
 				ph = make(map[string]interface{})
@@ -519,6 +611,14 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 				ph["circuit_cooldown_until"] = stats.CooldownUntil.Unix()
 			}
 			providerHealth[name] = ph
+		}
+		circuitBlock = map[string]interface{}{
+			"enabled":         true,
+			"mode":            globalCircuitConfig.Mode,
+			"backend":         globalCircuitConfig.Backend,
+			"redis_fallback":  globalCircuitRedisFallback,
+			"providers":       perProvider,
+			"degraded_signal": globalCircuitConfig.DegradedSignal,
 		}
 	}
 
@@ -531,8 +631,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			"circuit_breaker": globalCircuitStore != nil,
 		},
 	}
+	if circuitBlock != nil {
+		health["circuit_breaker"] = circuitBlock
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(health)
+	json.NewEncoder(w).Encode(health) //nolint:errcheck
 }
 
 // handleConfigValidation handles the --validate-config flag functionality
@@ -657,11 +760,24 @@ func runServer(yamlConfig *config.YAMLConfig) {
 
 	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
-		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker)
-		wrapProviderWithCircuitBreaker(openAIProvider, globalCircuitStore, cbCfg, "openai")
-		wrapProviderWithCircuitBreaker(anthropicProvider, globalCircuitStore, cbCfg, "anthropic")
-		wrapProviderWithCircuitBreaker(geminiProvider, globalCircuitStore, cbCfg, "gemini")
-		logger.Info("⚡ Circuit Breaker: transports wrapped for all providers")
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, isTestModeAllowed(yamlConfig))
+		// Pair each provider with its canonical name so the wiring loop
+		// iterates the same set of names that /health queries.
+		type namedProvider struct {
+			name string
+			p    interface {
+				WrapTransport(func(http.RoundTripper) http.RoundTripper)
+			}
+		}
+		for _, np := range []namedProvider{
+			{"openai", openAIProvider},
+			{"anthropic", anthropicProvider},
+			{"gemini", geminiProvider},
+		} {
+			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name)
+		}
+		logger.Info("⚡ Circuit Breaker: transports wrapped for all providers",
+			"providers", circuitBreakerProviders)
 	}
 
 	// Add middleware (order matters for streaming)
@@ -673,10 +789,28 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	}
 
 	// Add test-mode middleware when enabled (integration tests only).
-	if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
-		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker)
+	//
+	// We require THREE conditions before enabling this middleware, any one
+	// of which is sufficient to disable it:
+	//   1. The circuit breaker feature itself is Enabled.  Without it, the
+	//      test-mode header has nothing to toggle and only adds attack
+	//      surface.
+	//   2. TestModeEnabled is true in YAML.  This is the explicit opt-in
+	//      used by integration test configs.
+	//   3. LLM_PROXY_ALLOW_TEST_MODE=1 in the environment.  This belt-and-
+	//      suspenders guard ensures a production binary cannot accidentally
+	//      honour a test-mode header even if a misconfigured YAML slips
+	//      through review.
+	testModeAllowed := isTestModeAllowed(yamlConfig)
+	if testModeAllowed {
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, testModeAllowed)
 		r.Use(middleware.NewTestModeMiddleware(cbCfg.DegradedSignal))
-		logger.Info("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
+		logger.Warn("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
+	} else if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
+		logger.Warn("⚡ Circuit Breaker: test-mode requested in YAML but one or more guards not satisfied; middleware NOT installed",
+			"circuit_breaker_enabled", yamlConfig.Features.CircuitBreaker.Enabled,
+			"allow_env_set", os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1",
+		)
 	}
 
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
@@ -802,6 +936,17 @@ func runServer(yamlConfig *config.YAMLConfig) {
 		logger.Info("🔄 Stopping cost tracking workers and flushing queue...")
 		globalCostTracker.StopAsyncWorkers()
 		logger.Info("✅ Cost tracking workers stopped and queue flushed")
+	}
+
+	// Release circuit-breaker Redis connections so the pool drains cleanly.
+	// Best effort only: any error here is logged, not fatal, because at
+	// this point the HTTP server is already stopped.
+	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
+		if err := rs.Close(); err != nil {
+			logger.Warn("Circuit Breaker: Redis close failed", "error", err)
+		} else {
+			logger.Info("✅ Circuit Breaker: Redis client closed")
+		}
 	}
 
 	logger.Info("👋 Server shutdown complete")

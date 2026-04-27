@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,28 +41,20 @@ func newTestTransport(inner http.RoundTripper) *Transport {
 		CooldownSeconds:     300,
 		MaxTransientRetries: 1, // small for tests
 		MaxRateLimitRetries: 1,
+		// Tests that exercise the X-LLM-Proxy-Test-Mode plumbing need
+		// the gate open; tests that don't care are unaffected by the
+		// setting.  Production gating is covered separately by
+		// TestTransport_TestMode_DisabledByDefault_IgnoresHeader.
+		TestModeEnabled: true,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
-	return NewTransport(inner, store, cfg, "openai", nil)
-}
-
-func newTestTransportWithStore(inner http.RoundTripper, store Store) *Transport {
-	cfg := Config{
-		Enabled:             true,
-		Mode:                ModeEnforce,
-		FailureThreshold:    3,
-		WindowSeconds:       60,
-		CooldownSeconds:     300,
-		MaxTransientRetries: 1,
-		MaxRateLimitRetries: 1,
-	}.Defaults()
 	return NewTransport(inner, store, cfg, "openai", nil)
 }
 
 // dummyRequest creates a minimal POST request with a cacheable body.
 func dummyRequest() *http.Request {
 	body := `{"model":"gpt-4o","messages":[]}`
-	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions",
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/openai/v1/chat/completions",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	return req
@@ -182,6 +175,84 @@ func TestTransport_TestMode_ForceDegraded(t *testing.T) {
 	}
 }
 
+// TestTransport_TestMode_DisabledByDefault_IgnoresHeader pins down the
+// fix for the B1 security finding: with Config.TestModeEnabled left at
+// its zero-value (false), the transport MUST NOT honour the
+// X-LLM-Proxy-Test-Mode header.  If this regresses, a client could
+// smuggle synthetic degraded responses past a production deployment by
+// setting the header on any request.
+func TestTransport_TestMode_DisabledByDefault_IgnoresHeader(t *testing.T) {
+	innerCalled := false
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		innerCalled = true
+		return makeResp(200), nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    3,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 0,
+		// TestModeEnabled intentionally left false.
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	req := dummyRequest()
+	req.Header.Set(TestModeHeader, TestModeForceDegraded)
+
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !innerCalled {
+		t.Fatal("inner transport should have been called — test-mode header must be ignored when TestModeEnabled is false")
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("want real 200 response, got %d", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(b), DefaultDegradedSignal) {
+		t.Fatalf("synthetic DegradedSignal leaked into response body: %s", b)
+	}
+}
+
+// TestTransport_TestMode_DisabledByDefault_IgnoresQueryParam is the
+// query-param counterpart of the header regression test above.
+func TestTransport_TestMode_DisabledByDefault_IgnoresQueryParam(t *testing.T) {
+	innerCalled := false
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		innerCalled = true
+		return makeResp(200), nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    3,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 0,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/openai/v1/chat/completions?"+TestModeQueryParam+"="+TestModeForceDegraded,
+		strings.NewReader(`{}`))
+
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !innerCalled {
+		t.Fatal("inner transport should have been called — test-mode query param must be ignored when TestModeEnabled is false")
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("want real 200 response, got %d", resp.StatusCode)
+	}
+}
+
 func TestTransport_TestMode_ForceTransientRecover(t *testing.T) {
 	attempts := 0
 	inner := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -223,8 +294,15 @@ func TestTransport_DegradedResponseBodyIsValidJSON(t *testing.T) {
 	store := NewMemoryStore(cfg)
 	tr := NewTransport(inner, store, cfg, "anthropic", nil)
 
-	resp, _ := tr.RoundTrip(dummyRequest())
-	b, _ := io.ReadAll(resp.Body)
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected RoundTrip error: %v", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
 
 	var payload map[string]interface{}
 	if err := json.Unmarshal(b, &payload); err != nil {
@@ -306,6 +384,38 @@ func TestTransport_RateLimitExhausted_SetsErrorClassHeader(t *testing.T) {
 	}
 }
 
+func TestTransport_GlobalRateLimitExhausted_SetsErrorClassHeader(t *testing.T) {
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		r := makeResp(429)
+		r.Header.Set("Retry-After", "0")
+		r.Header.Set("x-ratelimit-remaining-requests", "0")
+		r.Header.Set("x-ratelimit-remaining-tokens", "0")
+		return r, nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    5,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 1,
+		MaxRateLimitRetries: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Llm-Proxy-Error-Class"); got != string(FailureClassGlobalRateLimit) {
+		t.Fatalf("want X-Llm-Proxy-Error-Class=%q, got %q", FailureClassGlobalRateLimit, got)
+	}
+}
+
 func TestTransport_RateLimitRetry(t *testing.T) {
 	attempts := 0
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -325,6 +435,42 @@ func TestTransport_RateLimitRetry(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("want 200 after rate-limit retry, got %d", resp.StatusCode)
+	}
+}
+
+func TestTransport_BackoffSleepStopsOnContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	attempts := 0
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		cancel()
+		return makeResp(503), nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    5,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 1,
+		MaxRateLimitRetries: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	req := dummyRequest().WithContext(ctx)
+	resp, err := tr.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response on cancellation, got %d", resp.StatusCode)
+	}
+	if attempts != 1 {
+		t.Fatalf("sleep cancellation should abort before retry; attempts=%d", attempts)
 	}
 }
 
@@ -393,7 +539,7 @@ func TestTransport_HalfOpen_ConcurrentRequestFastFails(t *testing.T) {
 	e.mu.Unlock()
 
 	// Start a probe (simulating an in-flight probe).
-	if !store.TryStartProbe("openai") {
+	if !store.TryStartProbe(ctx, "openai") {
 		t.Fatal("first TryStartProbe should succeed")
 	}
 

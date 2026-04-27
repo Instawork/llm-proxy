@@ -379,18 +379,19 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 
 	// Test v1beta embedding models.
 	//
-	// Legacy `text-embedding-004` was deprecated on 2026-01-14 and `embedding-001`
-	// on 2025-08-14.  `gemini-embedding-001` is the current GA multimodal
+	// Legacy `text-embedding-004` was retired on 2026-01-14 and `embedding-001`
+	// on 2025-10-30.  `gemini-embedding-001` is the current GA multimodal
 	// embedding model and the recommended replacement for both.  We only test
 	// the single current model here; if more variants ship in the future,
-	// add them alongside this entry.
+	// add them alongside this entry.  Source:
+	// https://ai.google.dev/gemini-api/docs/deprecations.
 	embeddingModels := []struct {
 		name    string
 		modelID string
 		text    string
 	}{
 		// text-embedding-004 (retired 2026-01-14) and embedding-001 (retired
-		// 2025-10-30) were consolidated into gemini-embedding-001. See
+		// 2025-10-30) were consolidated into gemini-embedding-001. Source:
 		// https://ai.google.dev/gemini-api/docs/deprecations.
 		{
 			name:    "GeminiEmbedding001",
@@ -789,8 +790,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 	server, providerManager := setupTestServer(t)
 	defer server.Close()
 
-	// Embedding models to test.  Legacy `text-embedding-004` and `embedding-001`
-	// are deprecated; `gemini-embedding-001` is the current GA replacement.
+	// Embedding models to test.  Legacy `text-embedding-004` (retired
+	// 2026-01-14) and `embedding-001` (retired 2025-10-30) are retired;
+	// `gemini-embedding-001` is the current GA replacement.  Source:
+	// https://ai.google.dev/gemini-api/docs/deprecations.
 	embeddingModels := []struct {
 		name    string
 		modelID string
@@ -801,8 +804,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 			modelID: "gemini-embedding-001",
 			text:    "The quick brown fox jumps over the lazy dog.",
 		},
-		// Add more embedding models as needed. Note: text-embedding-004 and
-		// embedding-001 were both retired in favor of gemini-embedding-001.
+		// Add more embedding models as needed. Note: text-embedding-004
+		// (retired 2026-01-14) and embedding-001 (retired 2025-10-30) were
+		// both retired in favor of gemini-embedding-001. Source:
+		// https://ai.google.dev/gemini-api/docs/deprecations.
 	}
 
 	for _, model := range embeddingModels {
@@ -823,8 +828,10 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 			}
 
 			// gemini-embedding-001 is only served on v1beta, not v1. The former
-			// /v1/ embedding models (text-embedding-004, embedding-001) were
-			// retired by Google before the v1 endpoint was promoted.
+			// /v1/ embedding models (text-embedding-004 retired 2026-01-14,
+			// embedding-001 retired 2025-10-30) were retired by Google before
+			// the v1 endpoint was promoted. Source:
+			// https://ai.google.dev/gemini-api/docs/deprecations.
 			url := fmt.Sprintf("%s/gemini/v1beta/models/%s:embedContent?key=%s", server.URL, model.modelID, apiKey)
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {

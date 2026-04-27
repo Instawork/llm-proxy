@@ -33,16 +33,35 @@ func TestNewRedisStore_URLOnly(t *testing.T) {
 // cluster while pinning a dedicated circuit-breaker DB.
 func TestNewRedisStore_URLPlusDBOverlay(t *testing.T) {
 	s, err := NewRedisStore(Config{
-		Enabled:  true,
-		Backend:  "redis",
-		RedisURL: "redis://cache.example.com:6379/6", // Finch uses DB 6
-		RedisDB:  5,                                  // circuit breaker pinned to DB 5
+		Enabled:    true,
+		Backend:    "redis",
+		RedisURL:   "redis://cache.example.com:6379/6", // Finch uses DB 6
+		RedisDB:    5,                                  // circuit breaker pinned to DB 5
+		RedisDBSet: true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := s.rdb.Options().DB; got != 5 {
 		t.Fatalf("explicit RedisDB must override URL DB; got %d", got)
+	}
+}
+
+// TestNewRedisStore_URLPlusExplicitZeroDBOverlay confirms that an explicit
+// RedisDB=0 can override a DB encoded in the URL.
+func TestNewRedisStore_URLPlusExplicitZeroDBOverlay(t *testing.T) {
+	s, err := NewRedisStore(Config{
+		Enabled:    true,
+		Backend:    "redis",
+		RedisURL:   "redis://cache.example.com:6379/6",
+		RedisDB:    0,
+		RedisDBSet: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := s.rdb.Options().DB; got != 0 {
+		t.Fatalf("explicit RedisDB=0 must override URL DB; got %d", got)
 	}
 }
 
@@ -90,6 +109,7 @@ func TestNewRedisStore_AddressFallback(t *testing.T) {
 		RedisAddress:  "cache.example.com:6379",
 		RedisPassword: "pw",
 		RedisDB:       2,
+		RedisDBSet:    true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -122,5 +142,12 @@ func TestNewRedisStore_MalformedURL(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected parse error on malformed URL")
+	}
+	// We specifically want the factory error wrapper (parse redis_url),
+	// not some unrelated validation error — asserting on the wrapper
+	// prevents accidental changes where a future refactor would bypass
+	// redis.ParseURL and hide the underlying problem.
+	if !strings.Contains(err.Error(), "parse redis_url") {
+		t.Fatalf("error message should wrap the parse failure; got: %v", err)
 	}
 }

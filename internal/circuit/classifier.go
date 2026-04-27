@@ -1,6 +1,7 @@
 package circuit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -162,13 +163,21 @@ func classifyNetworkError(err error) FailureClass {
 		return FailureClassNone
 	}
 
+	// Client-initiated cancellation is not a provider failure and must never
+	// count toward the circuit's failure window. We still treat a deadline
+	// exceeded at the request level as a degradation signal below, since that
+	// usually indicates the provider is too slow.
+	if errors.Is(err, context.Canceled) {
+		return FailureClassNone
+	}
+
 	// Unexpected EOF or closed connection.
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return FailureClassDegraded
 	}
 
 	// context deadline / timeout.
-	if errors.Is(err, http.ErrHandlerTimeout) {
+	if errors.Is(err, http.ErrHandlerTimeout) || errors.Is(err, context.DeadlineExceeded) {
 		return FailureClassDegraded
 	}
 
