@@ -50,8 +50,11 @@ func NewGeminiProxy() *GeminiProxy {
 	originalDirector := proxy.Director
 	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector)
 
-	// Customize the transport for optimal streaming performance
-	proxy.Transport = newProxyTransport()
+	// Customize the transport for optimal streaming performance.
+	// Gemini can be significantly slower to return response headers than other providers,
+	// so give it a dedicated transport with a longer ResponseHeaderTimeout to avoid
+	// premature 502s that trigger repeated retries in the client.
+	proxy.Transport = newGeminiProxyTransport()
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -158,6 +161,11 @@ func (g *GeminiProxy) isStreamingResponse(resp *http.Response) bool {
 // Proxy returns the HTTP handler for the Gemini provider
 func (g *GeminiProxy) Proxy() http.Handler {
 	return g.proxy
+}
+
+// WrapTransport replaces the proxy's transport with fn(current transport).
+func (g *GeminiProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper) {
+	g.proxy.Transport = fn(g.proxy.Transport)
 }
 
 // GetHealthStatus returns the health status of the Gemini proxy

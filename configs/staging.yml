@@ -18,5 +18,23 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-staging"
     region: "us-west-2"
+  # Circuit breaker: shadow/observe-only rollout in staging, matching
+  # production config so we can validate Redis connectivity and
+  # would-trip rates before flipping prod to `mode: enforce`.  DB 5 is
+  # pinned so `llm:cb:*` keys stay isolated from Finch's ML cache (DB 6
+  # in staging2).
+  circuit_breaker:
+    enabled: true
+    mode: "log"
+    backend: "redis"
+    redis:
+      url: "${REDIS_URL}"
+      db: 5
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    retry_contribution_mode: "log"
   rate_limiting:
     enabled: false

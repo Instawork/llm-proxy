@@ -23,7 +23,18 @@ type anthropicTestModel struct {
 	testPrompt string
 }
 
-// Test models to use in parameterized tests
+// Test models to use in parameterized tests.
+//
+// Model selection notes (April 2026):
+//   - Claude 3.5 family (`claude-3-5-haiku-latest`, `claude-3-5-sonnet-latest`)
+//     was retired by Anthropic — Haiku 3.5 on 2026-02-19, Sonnet 3.5 in 2025-10.
+//     The `-latest` aliases no longer resolve and the dated IDs return 404.
+//   - `claude-haiku-4-5`, `claude-sonnet-4-6`, and `claude-opus-4-6` are the
+//     current stable replacements recommended by Anthropic for production
+//     workloads.
+//   - We prefer aliased IDs (no date suffix) so the tests don't require a
+//     code change every time Anthropic rolls a new snapshot.  If you need
+//     reproducibility, pin to the dated form (e.g. `claude-haiku-4-5-20251001`).
 var anthropicTestModels = []anthropicTestModel{
 	{
 		name:       "Claude-Opus-4.6",
