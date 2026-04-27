@@ -81,6 +81,24 @@ func (s *MemoryStore) stateUnlocked(e *memoryEntry) State {
 	return e.state
 }
 
+// pruneFailuresLocked removes failures outside the sliding window and applies
+// the hard entry cap. Must be called with e.mu held.
+func (s *MemoryStore) pruneFailuresLocked(e *memoryEntry, now time.Time) {
+	window := time.Duration(s.cfg.WindowSeconds) * time.Second
+	cutoff := now.Add(-window)
+
+	pruned := e.failures[:0]
+	for _, t := range e.failures {
+		if t.After(cutoff) {
+			pruned = append(pruned, t)
+		}
+	}
+	if len(pruned) > maxFailureWindowEntries {
+		pruned = pruned[len(pruned)-maxFailureWindowEntries:]
+	}
+	e.failures = pruned
+}
+
 // RecordTerminalFailure adds a failure timestamp to the sliding window and
 // opens the circuit if the threshold is exceeded.
 func (s *MemoryStore) RecordTerminalFailure(_ context.Context, provider string) (State, error) {
@@ -89,26 +107,10 @@ func (s *MemoryStore) RecordTerminalFailure(_ context.Context, provider string) 
 	defer e.mu.Unlock()
 
 	now := time.Now()
-	window := time.Duration(s.cfg.WindowSeconds) * time.Second
-	cutoff := now.Add(-window)
 
 	// Append and prune the sliding window.
 	e.failures = append(e.failures, now)
-	pruned := e.failures[:0]
-	for _, t := range e.failures {
-		if t.After(cutoff) {
-			pruned = append(pruned, t)
-		}
-	}
-	// Apply a hard count-based cap as a belt-and-braces defence against a
-	// sustained failure flood outpacing WindowSeconds pruning.  We drop
-	// the oldest entries rather than the newest so that when the failures
-	// eventually subside the most recent ones accurately reflect the
-	// freshest state.
-	if len(pruned) > maxFailureWindowEntries {
-		pruned = pruned[len(pruned)-maxFailureWindowEntries:]
-	}
-	e.failures = pruned
+	s.pruneFailuresLocked(e, now)
 
 	// Open the circuit if we've crossed the threshold.
 	if len(e.failures) >= s.cfg.FailureThreshold && e.state == StateClosed {
@@ -165,6 +167,7 @@ func (s *MemoryStore) GetStats(_ context.Context, provider string) (*ProviderSta
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	s.pruneFailuresLocked(e, time.Now())
 	state := s.stateUnlocked(e)
 	stats := &ProviderStats{
 		State:    state,
@@ -195,6 +198,9 @@ func (s *MemoryStore) TryStartProbe(_ context.Context, provider string) bool {
 	e := s.entry(provider)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if s.stateUnlocked(e) != StateHalfOpen {
+		return false
+	}
 	now := time.Now()
 	if e.probeInFlight {
 		if e.probeStartAt.IsZero() || now.Sub(e.probeStartAt) < probeWatchdogTTL {

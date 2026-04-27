@@ -442,12 +442,10 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool)
 // initializeCircuitStore creates the circuit breaker state store from config.
 //
 // Redis failures are intentionally non-fatal:
-//   - If NewRedisStore itself errors (e.g. malformed URL), we log and fall
-//     back to a MemoryStore so the proxy still comes up.
-//   - If NewRedisStore succeeds but the cluster is unreachable at boot, the
-//     short-timeout PING warns the operator but we keep the Redis-backed
-//     store anyway — steady-state Store operations already fail-open to
-//     StateClosed on Redis errors, so transient outages self-heal.
+//   - If NewRedisStore itself errors (e.g. malformed URL or failed PING), we
+//     log and fall back to a MemoryStore so the proxy still comes up.
+//   - If the Redis-backed store later encounters Redis errors, steady-state
+//     Store operations fail-open to StateClosed so transient outages self-heal.
 //
 // Net effect: a Redis outage degrades the circuit breaker to "per-instance
 // best effort" without ever taking the sidecar down.
@@ -460,22 +458,18 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 
 	cfg := circuitConfigFromYAML(cb, isTestModeAllowed(yamlConfig))
 	if err := cfg.Validate(); err != nil {
-		logger.Error("⚡ Circuit Breaker: invalid configuration — feature disabled", "error", err)
-		return nil
+		logger.Error("⚡ Circuit Breaker: invalid configuration — falling back to memory store", "error", err)
+		cfg.Backend = "memory"
 	}
 
 	store, err := circuit.Factory(cfg)
 	if err != nil {
-		if cfg.Backend == "redis" {
-			logger.Error("⚡ Circuit Breaker: Redis store construction failed — falling back to memory store",
-				"error", err,
-			)
-			store = circuit.NewMemoryStore(cfg)
-			globalCircuitRedisFallback = true
-		} else {
-			logger.Error("⚡ Circuit Breaker: failed to create store", "error", err)
-			return nil
-		}
+		logger.Error("⚡ Circuit Breaker: store construction failed — falling back to memory store",
+			"backend", cfg.Backend,
+			"error", err,
+		)
+		store = circuit.NewMemoryStore(cfg)
+		globalCircuitRedisFallback = true
 	}
 
 	if rs, ok := store.(*circuit.RedisStore); ok {

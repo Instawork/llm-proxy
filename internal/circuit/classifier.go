@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ClassifyResponse examines an HTTP response and the optional transport-level
@@ -207,13 +209,23 @@ func classifyNetworkError(err error) FailureClass {
 	return FailureClassDegraded // unknown transport errors → degraded
 }
 
-// parseRetryAfterSeconds returns the numeric seconds from a Retry-After header
-// value.  Returns 0 if unparseable.
+// parseRetryAfterSeconds returns seconds from a Retry-After header value.
+// Supports both delta-seconds and HTTP-date forms. Returns 0 if unparseable
+// or if the parsed date is in the past.
 func parseRetryAfterSeconds(s string) int {
 	s = strings.TrimSpace(s)
 	var n int
 	if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
 		return n
 	}
-	return 0
+
+	t, err := http.ParseTime(s)
+	if err != nil {
+		return 0
+	}
+	seconds := t.Sub(time.Now()).Seconds()
+	if seconds <= 0 {
+		return 0
+	}
+	return int(math.Ceil(seconds))
 }

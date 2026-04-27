@@ -36,6 +36,7 @@ features:
     cooldown_seconds: 300
     max_transient_retries: 2
     max_rate_limit_retries: 2
+    global_rate_limit_escalation_window: 300
     retry_contribution_mode: "log"
     test_mode_enabled: true
   rate_limiting:

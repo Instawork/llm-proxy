@@ -172,10 +172,46 @@ func TestMemoryStore_GetStats(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_TryStartProbe(t *testing.T) {
-	s := NewMemoryStore(defaultConfig())
+func TestMemoryStore_GetStatsPrunesExpiredFailures(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.WindowSeconds = 1
+	s := NewMemoryStore(cfg)
 	ctx := context.Background()
 
+	s.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
+	e := s.entry("openai")
+	e.mu.Lock()
+	e.failures[0] = time.Now().Add(-2 * time.Second)
+	e.mu.Unlock()
+
+	stats, err := s.GetStats(ctx, "openai")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Failures != 0 {
+		t.Fatalf("want expired failures pruned from stats, got %d", stats.Failures)
+	}
+}
+
+func TestMemoryStore_TryStartProbe(t *testing.T) {
+	cfg := Config{
+		Enabled:          true,
+		Backend:          "memory",
+		FailureThreshold: 1,
+		WindowSeconds:    10,
+		CooldownSeconds:  1,
+	}.Defaults()
+	s := NewMemoryStore(cfg)
+	ctx := context.Background()
+
+	if s.TryStartProbe(ctx, "openai") {
+		t.Fatal("TryStartProbe should return false before half-open state")
+	}
+	s.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
+	time.Sleep(1100 * time.Millisecond)
+	if state, _ := s.GetState(ctx, "openai"); state != StateHalfOpen {
+		t.Fatalf("circuit should be half-open after cooldown, got %s", state)
+	}
 	// First attempt should succeed.
 	if !s.TryStartProbe(ctx, "openai") {
 		t.Fatal("first TryStartProbe should return true")

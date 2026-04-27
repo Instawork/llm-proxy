@@ -244,7 +244,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		//    returned to the pool cleanly.
 		if resp != nil {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck
-			resp.Body.Close()
+			resp.Body.Close()              //nolint:errcheck
 		}
 
 		retryAfterSec := retryAfterSeconds(resp)
@@ -291,11 +291,12 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 
 		// ── Degraded / transient handling ─────────────────────────────────
 		if fc == FailureClassDegraded {
-			if t.cfg.RetryContributionMode == "on" {
+			switch t.cfg.RetryContributionMode {
+			case "on":
 				t.log.Info("circuit: retried failure contributing to degradation score",
 					"provider", t.provider, "attempt", transientAttempts)
 				t.store.RecordTerminalFailure(ctx, t.provider) //nolint:errcheck
-			} else if t.cfg.RetryContributionMode == "log" {
+			case "log":
 				t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
 					"provider", t.provider, "attempt", transientAttempts)
 			}
@@ -382,7 +383,7 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 		)
 		if resp != nil {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck
-			resp.Body.Close()
+			resp.Body.Close()              //nolint:errcheck
 		}
 		type probeReleaser interface {
 			ReleaseProbe(ctx context.Context, provider string) error
@@ -408,7 +409,7 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 	t.log.Warn("circuit: probe failed, re-opening circuit", "provider", t.provider)
 	if resp != nil {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		resp.Body.Close()
+		resp.Body.Close()              //nolint:errcheck
 	}
 	t.store.RecordProbeFailed(ctx, t.provider) //nolint:errcheck
 	return t.degradedResponse(req), nil
@@ -570,7 +571,7 @@ func (t *Transport) cacheBody(req *http.Request) error {
 	limited := &io.LimitedReader{R: req.Body, N: cap + 1}
 	prefix, err := io.ReadAll(limited)
 	if err != nil {
-		req.Body.Close()
+		req.Body.Close() //nolint:errcheck
 		return err
 	}
 
@@ -589,7 +590,9 @@ func (t *Transport) cacheBody(req *http.Request) error {
 	}
 
 	// Fits in memory — buffer it and enable retries.
-	req.Body.Close()
+	if err := req.Body.Close(); err != nil {
+		return err
+	}
 	req.Body = io.NopCloser(bytes.NewReader(prefix))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(prefix)), nil

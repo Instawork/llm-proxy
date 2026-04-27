@@ -707,10 +707,10 @@ func (c *YAMLConfig) validateCircuitBreakerConfig() error {
 		// default to memory
 	case "redis":
 		if cb.Redis == nil {
-			return fmt.Errorf("backend redis requires redis configuration")
+			return fmt.Errorf("backend redis requires RedisConfig")
 		}
 		if cb.Redis.URL == "" && cb.Redis.Address == "" {
-			return fmt.Errorf("backend redis requires redis.url or redis.address")
+			return fmt.Errorf("backend redis requires RedisConfig.url or RedisConfig.address")
 		}
 	default:
 		return fmt.Errorf("backend must be one of memory, redis (got %q)", cb.Backend)

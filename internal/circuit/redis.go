@@ -3,6 +3,7 @@ package circuit
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -35,7 +36,10 @@ const (
 type RedisStore struct {
 	cfg Config
 	rdb *redis.Client
+	log *slog.Logger
 }
+
+const redisStorePingTimeout = 2 * time.Second
 
 // NewRedisStore constructs a RedisStore connected to the address in cfg.
 //
@@ -48,11 +52,9 @@ type RedisStore struct {
 //     (from SSM) while pinning a dedicated DB to keep `llm:cb:*` keys
 //     isolated.
 //
-// Note: the Redis client is lazy — construction here does NOT require the
-// server to be reachable.  Connectivity is validated (soft-fail) by the
-// caller with a short-timeout PING; all steady-state ops on the Store
-// fail-open to StateClosed on Redis errors, so a Redis outage can never
-// cascade into a proxy outage.
+// NewRedisStore validates connectivity with a short PING before returning.
+// Steady-state ops still fail-open to StateClosed on Redis errors, so a Redis
+// outage after startup can never cascade into a proxy outage.
 func NewRedisStore(cfg Config) (*RedisStore, error) {
 	cfg = cfg.Defaults()
 
@@ -82,7 +84,14 @@ func NewRedisStore(cfg Config) (*RedisStore, error) {
 	}
 
 	client := redis.NewClient(opts)
-	return &RedisStore{cfg: cfg, rdb: client}, nil
+	pingCtx, cancel := context.WithTimeout(context.Background(), redisStorePingTimeout)
+	err := client.Ping(pingCtx).Err()
+	cancel()
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("circuit.RedisStore: ping redis: %w", err)
+	}
+	return &RedisStore{cfg: cfg, rdb: client, log: slog.Default()}, nil
 }
 
 // Ping issues a bounded Redis PING to verify connectivity.  Intended for
@@ -136,6 +145,11 @@ func (s *RedisStore) GetState(ctx context.Context, provider string) (State, erro
 	if err != nil && err != redis.Nil {
 		// On Redis errors, fail open (treat as closed) to avoid taking down the
 		// service because of a Redis blip.
+		s.log.Warn("circuit.RedisStore: GetState failed open",
+			"provider", provider,
+			"error", err,
+			"ctx_err", ctx.Err(),
+		)
 		return StateClosed, nil
 	}
 	if err == nil {
@@ -219,6 +233,13 @@ func (s *RedisStore) RecordTerminalFailure(ctx context.Context, provider string)
 	).Text()
 	if err != nil {
 		// On Redis error fail safe: return closed so we don't block traffic.
+		s.log.Warn("circuit.RedisStore: luaRecordFailure failed open",
+			"provider", provider,
+			"script", "luaRecordFailure",
+			"redis_client", fmt.Sprintf("%p", s.rdb),
+			"error", err,
+			"ctx_err", ctx.Err(),
+		)
 		return StateClosed, nil
 	}
 	switch res {

@@ -480,7 +480,7 @@ func TestTransport_ProbeFails_ReturnsDegraded(t *testing.T) {
 		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
-		CooldownSeconds:     0,
+		CooldownSeconds:     1,
 		MaxTransientRetries: 0,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
@@ -488,11 +488,10 @@ func TestTransport_ProbeFails_ReturnsDegraded(t *testing.T) {
 
 	// Open the circuit.
 	store.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
-	// Expire cooldown.
-	e := store.entry("openai")
-	e.mu.Lock()
-	e.cooldownUntil = time.Now().Add(-1 * time.Second)
-	e.mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	if state, _ := store.GetState(ctx, "openai"); state != StateHalfOpen {
+		t.Fatalf("circuit should be half-open after cooldown, got %s", state)
+	}
 
 	// Inner returns 503 — the probe fails.
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -524,7 +523,7 @@ func TestTransport_HalfOpen_ConcurrentRequestFastFails(t *testing.T) {
 		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
-		CooldownSeconds:     0,
+		CooldownSeconds:     1,
 		MaxTransientRetries: 0,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
@@ -532,11 +531,10 @@ func TestTransport_HalfOpen_ConcurrentRequestFastFails(t *testing.T) {
 
 	// Open the circuit.
 	store.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
-	// Expire cooldown.
-	e := store.entry("openai")
-	e.mu.Lock()
-	e.cooldownUntil = time.Now().Add(-1 * time.Second)
-	e.mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	if state, _ := store.GetState(ctx, "openai"); state != StateHalfOpen {
+		t.Fatalf("circuit should be half-open after cooldown, got %s", state)
+	}
 
 	// Start a probe (simulating an in-flight probe).
 	if !store.TryStartProbe(ctx, "openai") {
@@ -672,7 +670,7 @@ func TestTransport_ProbeSucceeds_ClosesCircuit(t *testing.T) {
 		Mode:                ModeEnforce,
 		FailureThreshold:    1,
 		WindowSeconds:       60,
-		CooldownSeconds:     0,
+		CooldownSeconds:     1,
 		MaxTransientRetries: 0,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
@@ -680,11 +678,10 @@ func TestTransport_ProbeSucceeds_ClosesCircuit(t *testing.T) {
 
 	// Open the circuit.
 	store.RecordTerminalFailure(ctx, "openai") //nolint:errcheck
-	// Expire the cooldown by setting it to the past.
-	e := store.entry("openai")
-	e.mu.Lock()
-	e.cooldownUntil = time.Now().Add(-1 * time.Second)
-	e.mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	if state, _ := store.GetState(ctx, "openai"); state != StateHalfOpen {
+		t.Fatalf("circuit should be half-open after cooldown, got %s", state)
+	}
 
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return makeResp(200), nil

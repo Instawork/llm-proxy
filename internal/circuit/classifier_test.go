@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func resp(status int, headers map[string]string) *http.Response {
@@ -13,7 +14,7 @@ func resp(status int, headers map[string]string) *http.Response {
 	for k, v := range headers {
 		h.Set(k, v)
 	}
-	return &http.Response{StatusCode: status, Header: h}
+	return &http.Response{StatusCode: status, Header: h, Body: http.NoBody}
 }
 
 func TestClassifyResponse_Success(t *testing.T) {
@@ -98,6 +99,23 @@ func TestClassify_OpenAI_429_LongRetryAfter(t *testing.T) {
 	}), nil)
 	if fc != FailureClassGlobalRateLimit {
 		t.Fatalf("want GlobalRateLimit, got %s", fc)
+	}
+}
+
+func TestClassify_OpenAI_429_HTTPDateRetryAfter(t *testing.T) {
+	retryAt := time.Now().Add(2 * time.Minute).UTC().Format(http.TimeFormat)
+	fc := ClassifyResponse("openai", resp(429, map[string]string{
+		"retry-after": retryAt,
+	}), nil)
+	if fc != FailureClassGlobalRateLimit {
+		t.Fatalf("want GlobalRateLimit for future HTTP-date Retry-After, got %s", fc)
+	}
+}
+
+func TestParseRetryAfterSeconds_PastHTTPDate(t *testing.T) {
+	retryAt := time.Now().Add(-1 * time.Minute).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfterSeconds(retryAt); got != 0 {
+		t.Fatalf("past HTTP-date Retry-After should return 0, got %d", got)
 	}
 }
 

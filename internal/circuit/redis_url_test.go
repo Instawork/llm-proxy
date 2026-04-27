@@ -1,24 +1,104 @@
 package circuit
 
 import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 )
 
+func newPingRedisServer(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fake redis: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		for {
+			cmd, err := readRedisCommand(reader)
+			if err != nil || len(cmd) == 0 {
+				return
+			}
+			switch strings.ToUpper(cmd[0]) {
+			case "HELLO":
+				_, _ = conn.Write([]byte("%1\r\n+server\r\n+redis\r\n"))
+			case "PING":
+				_, _ = conn.Write([]byte("+PONG\r\n"))
+				return
+			default:
+				_, _ = conn.Write([]byte("+OK\r\n"))
+			}
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
+func readRedisCommand(reader *bufio.Reader) ([]string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "*") {
+		return nil, fmt.Errorf("unexpected redis command prefix: %q", line)
+	}
+	count, err := strconv.Atoi(strings.TrimPrefix(line, "*"))
+	if err != nil {
+		return nil, err
+	}
+
+	parts := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		lenLine, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		lenLine = strings.TrimSpace(lenLine)
+		if !strings.HasPrefix(lenLine, "$") {
+			return nil, fmt.Errorf("unexpected redis bulk prefix: %q", lenLine)
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(lenLine, "$"))
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, n+2)
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			return nil, err
+		}
+		parts = append(parts, string(buf[:n]))
+	}
+	return parts, nil
+}
+
 // TestNewRedisStore_URLOnly verifies that a redis:// URL alone is sufficient
 // and the resulting client inherits host, DB, and password from the URL.
 func TestNewRedisStore_URLOnly(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:  true,
 		Backend:  "redis",
-		RedisURL: "redis://:supersecret@cache.example.com:6379/3",
+		RedisURL: "redis://:supersecret@" + addr + "/3",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	opts := s.rdb.Options()
-	if opts.Addr != "cache.example.com:6379" {
-		t.Fatalf("want Addr=cache.example.com:6379, got %q", opts.Addr)
+	if opts.Addr != addr {
+		t.Fatalf("want Addr=%s, got %q", addr, opts.Addr)
 	}
 	if opts.Password != "supersecret" {
 		t.Fatalf("want Password=supersecret, got %q", opts.Password)
@@ -32,11 +112,12 @@ func TestNewRedisStore_URLOnly(t *testing.T) {
 // overrides the DB encoded in the URL, so operators can share Finch's
 // cluster while pinning a dedicated circuit-breaker DB.
 func TestNewRedisStore_URLPlusDBOverlay(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:    true,
 		Backend:    "redis",
-		RedisURL:   "redis://cache.example.com:6379/6", // Finch uses DB 6
-		RedisDB:    5,                                  // circuit breaker pinned to DB 5
+		RedisURL:   "redis://" + addr + "/6", // Finch uses DB 6
+		RedisDB:    5,                        // circuit breaker pinned to DB 5
 		RedisDBSet: true,
 	})
 	if err != nil {
@@ -50,10 +131,11 @@ func TestNewRedisStore_URLPlusDBOverlay(t *testing.T) {
 // TestNewRedisStore_URLPlusExplicitZeroDBOverlay confirms that an explicit
 // RedisDB=0 can override a DB encoded in the URL.
 func TestNewRedisStore_URLPlusExplicitZeroDBOverlay(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:    true,
 		Backend:    "redis",
-		RedisURL:   "redis://cache.example.com:6379/6",
+		RedisURL:   "redis://" + addr + "/6",
 		RedisDB:    0,
 		RedisDBSet: true,
 	})
@@ -67,10 +149,11 @@ func TestNewRedisStore_URLPlusExplicitZeroDBOverlay(t *testing.T) {
 
 // TestNewRedisStore_URLPlusPasswordOverlay confirms the same for password.
 func TestNewRedisStore_URLPlusPasswordOverlay(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:       true,
 		Backend:       "redis",
-		RedisURL:      "redis://:urlpw@cache.example.com:6379/0",
+		RedisURL:      "redis://:urlpw@" + addr + "/0",
 		RedisPassword: "overridepw",
 	})
 	if err != nil {
@@ -86,10 +169,11 @@ func TestNewRedisStore_URLPlusPasswordOverlay(t *testing.T) {
 // This is the behaviour that lets operators pass a URL-with-credentials
 // while leaving the individual field unset.
 func TestNewRedisStore_EmptyPasswordLeavesURLAlone(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:       true,
 		Backend:       "redis",
-		RedisURL:      "redis://:fromurl@cache.example.com:6379/0",
+		RedisURL:      "redis://:fromurl@" + addr + "/0",
 		RedisPassword: "",
 	})
 	if err != nil {
@@ -103,10 +187,11 @@ func TestNewRedisStore_EmptyPasswordLeavesURLAlone(t *testing.T) {
 // TestNewRedisStore_AddressFallback confirms that when no URL is provided
 // we still accept the legacy Address/Password/DB triple.
 func TestNewRedisStore_AddressFallback(t *testing.T) {
+	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:       true,
 		Backend:       "redis",
-		RedisAddress:  "cache.example.com:6379",
+		RedisAddress:  addr,
 		RedisPassword: "pw",
 		RedisDB:       2,
 		RedisDBSet:    true,
@@ -115,7 +200,7 @@ func TestNewRedisStore_AddressFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	opts := s.rdb.Options()
-	if opts.Addr != "cache.example.com:6379" || opts.Password != "pw" || opts.DB != 2 {
+	if opts.Addr != addr || opts.Password != "pw" || opts.DB != 2 {
 		t.Fatalf("address-only fallback broken: %+v", opts)
 	}
 }

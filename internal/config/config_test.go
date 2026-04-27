@@ -450,7 +450,7 @@ func TestValidateCircuitBreakerConfig(t *testing.T) {
 	missingRedis := *valid
 	missingRedis.Features.CircuitBreaker.Redis = nil
 	err = missingRedis.Validate()
-	if err == nil || !strings.Contains(err.Error(), "requires redis configuration") {
+	if err == nil || !strings.Contains(err.Error(), "requires RedisConfig") {
 		t.Fatalf("redis backend without config should fail, got %v", err)
 	}
 
