@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -187,4 +188,114 @@ type MockFlushableRecorder struct {
 func (m *MockFlushableRecorder) Flush() {
 	m.flushCalled = true
 	m.flushCallCount++
+}
+
+// TestResponseCapture_ImplementsFlusher guards against regression of the bug
+// where TokenParsingMiddleware's responseCapture wrapper hid the http.Flusher
+// interface from downstream middleware, causing SSE streams to be buffered
+// instead of flushed chunk-by-chunk. See token_parsing.go Flush().
+func TestResponseCapture_ImplementsFlusher(t *testing.T) {
+	rc := &responseCapture{
+		ResponseWriter: httptest.NewRecorder(),
+		body:           &bytes.Buffer{},
+	}
+
+	if _, ok := interface{}(rc).(http.Flusher); !ok {
+		t.Fatal("responseCapture must implement http.Flusher so StreamingMiddleware can detect Flusher capability")
+	}
+}
+
+// TestResponseCapture_FlushDelegatesToUnderlying verifies that Flush() on
+// responseCapture calls Flush on the underlying ResponseWriter when supported.
+func TestResponseCapture_FlushDelegatesToUnderlying(t *testing.T) {
+	recorder := &MockFlushableRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+	}
+	rc := &responseCapture{
+		ResponseWriter: recorder,
+		body:           &bytes.Buffer{},
+	}
+
+	rc.Flush()
+	rc.Flush()
+
+	if recorder.flushCallCount != 2 {
+		t.Errorf("Expected 2 flush calls on underlying writer, got %d", recorder.flushCallCount)
+	}
+}
+
+// TestResponseCapture_FlushNoopWhenUnderlyingNotFlushable ensures Flush() is a
+// safe no-op when the underlying ResponseWriter does not support flushing,
+// rather than panicking with a failed type assertion.
+func TestResponseCapture_FlushNoopWhenUnderlyingNotFlushable(t *testing.T) {
+	rc := &responseCapture{
+		ResponseWriter: httptest.NewRecorder(), // plain recorder does not implement Flusher
+		body:           &bytes.Buffer{},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Flush() panicked when underlying writer does not support flushing: %v", r)
+		}
+	}()
+
+	rc.Flush()
+}
+
+// TestTokenParsingThenStreaming_FlushesEachWrite verifies the production
+// middleware chain order from cmd/llm-proxy/main.go:
+//
+//	TokenParsingMiddleware -> StreamingMiddleware -> handler
+//
+// In the broken state, StreamingMiddleware logged
+// "Warning: ResponseWriter does not support flushing for streaming request"
+// because responseCapture (from TokenParsingMiddleware) did not expose
+// http.Flusher. With Flush() on responseCapture the chain flushes each chunk.
+func TestTokenParsingThenStreaming_FlushesEachWrite(t *testing.T) {
+	manager := providers.NewProviderManager()
+	manager.RegisterProvider(providers.NewAnthropicProxy())
+
+	// Handler emits 3 chunks like an SSE stream would.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: chunk1\n\n"))
+		w.Write([]byte("data: chunk2\n\n"))
+		w.Write([]byte("data: chunk3\n\n"))
+	})
+
+	// Compose middleware in the same order as main.go:
+	// TokenParsing wraps Streaming, which wraps the handler.
+	chain := TokenParsingMiddleware(manager)(StreamingMiddleware(manager)(handler))
+
+	// Mimic an Anthropic streaming request: matching path + Accept header so
+	// IsStreamingRequest returns true via the fast-path check.
+	req := httptest.NewRequest("POST", "/anthropic/v1/messages", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	recorder := &MockFlushableRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+	}
+
+	chain.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	// Critical assertion: streaming middleware must have detected Flusher
+	// capability on responseCapture and called Flush after each Write.
+	// Without the Flush() method on responseCapture, this would be 0.
+	if recorder.flushCallCount == 0 {
+		t.Fatal("Expected Flush to be called at least once; StreamingMiddleware did not detect Flusher on responseCapture")
+	}
+	if recorder.flushCallCount < 3 {
+		t.Errorf("Expected Flush to be called for each of the 3 chunks, got %d", recorder.flushCallCount)
+	}
+
+	expectedBody := "data: chunk1\n\ndata: chunk2\n\ndata: chunk3\n\n"
+	if recorder.Body.String() != expectedBody {
+		t.Errorf("Expected body %q, got %q", expectedBody, recorder.Body.String())
+	}
 }

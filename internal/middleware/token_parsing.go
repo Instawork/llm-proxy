@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -222,6 +225,33 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 	}
 
 	return rc.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher so that downstream middleware (StreamingMiddleware)
+// can detect Flusher capability on the wrapped writer. Without this, the type
+// assertion `w.(http.Flusher)` fails when responseCapture is in the chain,
+// causing SSE responses from LLM providers to be buffered until the request
+// completes — the entire streamed response is delivered in a single chunk.
+//
+// Delegates to the underlying ResponseWriter's Flush when supported; otherwise
+// it is a safe no-op. This makes streaming work for all providers (OpenAI,
+// Anthropic, Gemini) that emit SSE through the proxy.
+func (rc *responseCapture) Flush() {
+	if flusher, ok := rc.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker by delegating to the underlying ResponseWriter
+// when it supports hijacking. LLM endpoints use SSE rather than HTTP upgrades,
+// so this is mostly defensive: it preserves transparency in case any consumer
+// (e.g. a future websocket-style endpoint proxied through here) needs Hijack.
+// Returns http.ErrNotSupported when the underlying writer does not support it.
+func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := rc.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, errors.ErrUnsupported
 }
 
 // Helper function to find minimum of two integers
