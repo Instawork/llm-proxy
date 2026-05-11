@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -34,9 +35,10 @@ const (
 // sorted set per provider to implement the sliding-window failure counter, and
 // a keyed string for open/half-open state with a TTL-based cooldown.
 type RedisStore struct {
-	cfg Config
-	rdb *redis.Client
-	log *slog.Logger
+	cfg        Config
+	rdb        *redis.Client
+	log        *slog.Logger
+	failureSeq atomic.Uint64
 }
 
 const redisStorePingTimeout = 2 * time.Second
@@ -182,6 +184,7 @@ func (s *RedisStore) GetState(ctx context.Context, provider string) (State, erro
 // ARGV[4] = cooldown duration in seconds (int)
 // ARGV[5] = window duration in seconds (int)
 // ARGV[6] = half-open marker TTL in seconds (int)
+// ARGV[7] = unique sorted-set member for this failure
 //
 // Returns: new state string ("closed" | "open" | "half_open")
 var luaRecordFailure = redis.NewScript(`
@@ -194,11 +197,12 @@ local thresh = tonumber(ARGV[3])
 local cd     = tonumber(ARGV[4])
 local win    = tonumber(ARGV[5])
 local hoTTL  = tonumber(ARGV[6])
+local member = ARGV[7]
 
 -- Add the new failure and prune the window.  We keep the sorted set alive
 -- for at least one full window so the failure count survives even if no
 -- further failures arrive before the cooldown ends.
-redis.call('ZADD', fkey, now, tostring(now))
+redis.call('ZADD', fkey, now, member)
 redis.call('ZREMRANGEBYSCORE', fkey, '-inf', cutoff)
 local fttl = cd * 2
 if win > fttl then fttl = win end
@@ -222,6 +226,7 @@ return cur
 func (s *RedisStore) RecordTerminalFailure(ctx context.Context, provider string) (State, error) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	cutoff := now - float64(s.cfg.WindowSeconds)
+	member := fmt.Sprintf("%.9f:%d", now, s.failureSeq.Add(1))
 
 	res, err := luaRecordFailure.Run(ctx, s.rdb,
 		[]string{s.failuresKey(provider), s.stateKey(provider), s.halfOpenKey(provider)},
@@ -230,6 +235,7 @@ func (s *RedisStore) RecordTerminalFailure(ctx context.Context, provider string)
 		s.cfg.CooldownSeconds,
 		s.cfg.WindowSeconds,
 		s.cfg.CooldownSeconds*halfOpenMarkerTTLMultiplier,
+		member,
 	).Text()
 	if err != nil {
 		// On Redis error fail safe: return closed so we don't block traffic.

@@ -152,6 +152,51 @@ func TestTransport_FastFailWhenCircuitOpen(t *testing.T) {
 	}
 }
 
+func TestTransport_FastFailWhenCircuitOpen_DoesNotReadRequestBodyForModel(t *testing.T) {
+	cfg := Config{
+		Enabled:          true,
+		Mode:             ModeEnforce,
+		FailureThreshold: 1,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	store.RecordTerminalFailure(context.Background(), "openai") //nolint:errcheck
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("inner transport must not be called when circuit is open")
+		return nil, nil
+	})
+	modelFnCalled := false
+	tr := NewTransport(inner, store, cfg, "openai", nil,
+		WithModelExtractor(func(req *http.Request) string {
+			modelFnCalled = true
+			_, _ = io.ReadAll(req.Body)
+			return "should-not-be-used"
+		}),
+	)
+
+	req := dummyRequest()
+	req.GetBody = nil // server-side requests are not replayable until cacheBody runs
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 fast-fail, got %d", resp.StatusCode)
+	}
+	if modelFnCalled {
+		t.Fatal("fast-fail observability must not invoke model extraction before cacheBody")
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("body should remain readable after fast-fail: %v", err)
+	}
+	if !strings.Contains(string(body), `"model":"gpt-4o"`) {
+		t.Fatalf("request body was consumed during fast-fail: %q", body)
+	}
+}
+
 func TestTransport_TestMode_ForceDegraded(t *testing.T) {
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		t.Error("inner transport should NOT be called in force_degraded test mode")
@@ -594,6 +639,43 @@ func TestTransport_RateLimitRetriesExhausted_Returns429(t *testing.T) {
 	}
 }
 
+func TestTransport_GlobalRateLimitEscalatesToDegradedAfterWindow(t *testing.T) {
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		r := makeResp(429)
+		r.Header.Set("Retry-After", "1")
+		r.Header.Set("x-ratelimit-remaining-requests", "0")
+		r.Header.Set("x-ratelimit-remaining-tokens", "0")
+		return r, nil
+	})
+	cfg := Config{
+		Enabled:                         true,
+		Mode:                            ModeEnforce,
+		FailureThreshold:                1,
+		WindowSeconds:                   60,
+		CooldownSeconds:                 300,
+		MaxRateLimitRetries:             1,
+		GlobalRateLimitEscalationWindow: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("global rate-limit escalation should synthesize degraded 503, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), DefaultDegradedSignal) {
+		t.Fatalf("degraded signal not found after global-rate-limit escalation: %s", body)
+	}
+	state, _ := store.GetState(context.Background(), "openai")
+	if state != StateOpen {
+		t.Fatalf("global rate-limit escalation should record terminal failure and open circuit, got %s", state)
+	}
+}
+
 func TestTransport_NonRetryable400_Passthrough(t *testing.T) {
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return makeResp(400), nil
@@ -606,6 +688,46 @@ func TestTransport_NonRetryable400_Passthrough(t *testing.T) {
 	}
 	if resp.StatusCode != 400 {
 		t.Fatalf("want 400 passthrough, got %d", resp.StatusCode)
+	}
+}
+
+func TestTransport_OversizeBodyDisablesRetriesAndForwardsFullBody(t *testing.T) {
+	const payload = `{"model":"gpt-4o","messages":[{"role":"user","content":"abcdef"}]}`
+	attempts := 0
+	inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("inner read body: %v", err)
+		}
+		if string(body) != payload {
+			t.Fatalf("oversize pass-through body changed: want %q, got %q", payload, body)
+		}
+		return makeResp(503), nil
+	})
+	cfg := Config{
+		Enabled:               true,
+		Mode:                  ModeEnforce,
+		FailureThreshold:      1,
+		WindowSeconds:         60,
+		CooldownSeconds:       300,
+		MaxTransientRetries:   2,
+		MaxRetryableBodyBytes: 8,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(inner, store, cfg, "openai", nil)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/openai/v1/chat/completions",
+		strings.NewReader(payload))
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("oversize body should disable retries and issue one upstream call, got %d", attempts)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("oversize body should pass through upstream 503, got %d", resp.StatusCode)
 	}
 }
 

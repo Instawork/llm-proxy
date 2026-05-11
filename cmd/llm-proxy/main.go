@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -504,7 +505,8 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 }
 
 // wrapProviderWithCircuitBreaker injects a circuit-breaking transport into the
-// provider, keyed by providerName.
+// provider, keyed by providerName.  Optional opts (metrics sink, model
+// extractor, env tag) flow through to circuit.NewTransport.
 func wrapProviderWithCircuitBreaker(
 	p interface {
 		WrapTransport(func(http.RoundTripper) http.RoundTripper)
@@ -512,10 +514,110 @@ func wrapProviderWithCircuitBreaker(
 	store circuit.Store,
 	cfg circuit.Config,
 	providerName string,
+	opts ...circuit.Option,
 ) {
 	p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
-		return circuit.NewTransport(inner, store, cfg, providerName, logger)
+		return circuit.NewTransport(inner, store, cfg, providerName, logger, opts...)
 	})
+}
+
+// circuitDatadogConfig returns the Datadog transport config from the
+// cost-tracking section if one is configured, or nil otherwise.  We
+// reuse the cost-tracking Datadog config (host / port / namespace /
+// tags) for circuit metrics so all llm_proxy.* metrics share the same
+// agent address and base tags without operators having to declare
+// them twice.
+func circuitDatadogConfig(yamlConfig *config.YAMLConfig) *config.DatadogTransportConfig {
+	for i := range yamlConfig.Features.CostTracking.Transports {
+		tc := &yamlConfig.Features.CostTracking.Transports[i]
+		if tc.Type == "datadog" && tc.Datadog != nil {
+			return tc.Datadog
+		}
+	}
+	return nil
+}
+
+// initializeCircuitMetrics builds a dogstatsd-style sink for circuit
+// breaker metrics.  Returns nil when no Datadog transport is configured
+// or when the statsd client cannot be constructed; callers must treat
+// nil as "metrics disabled" (circuit.NewTransport substitutes a no-op
+// sink in that case so emit sites stay branchless).
+//
+// The returned client always carries the same namespace and global
+// tags as the cost-tracking transport, which means circuit metrics
+// land at e.g. "llm.circuit.terminal_failure" alongside
+// "llm.tokens.input" and inherit env / service / team tags from the
+// existing YAML.  No additional config knobs are introduced.
+func initializeCircuitMetrics(yamlConfig *config.YAMLConfig) circuit.MetricsSink {
+	ddCfg := circuitDatadogConfig(yamlConfig)
+	if ddCfg == nil {
+		logger.Info("⚡ Circuit Breaker: dogstatsd metrics disabled (no datadog transport in cost_tracking)")
+		return nil
+	}
+	host := ddCfg.Host
+	if host == "" {
+		host = "localhost"
+	}
+	port := ddCfg.Port
+	if port == "" {
+		port = "8125"
+	}
+	namespace := ddCfg.Namespace
+	if namespace == "" {
+		namespace = "llm"
+	}
+	addr := fmt.Sprintf("%s:%s", host, port)
+	client, err := statsd.New(addr,
+		statsd.WithNamespace(namespace),
+		statsd.WithTags(ddCfg.Tags),
+	)
+	if err != nil {
+		// UDP send failures are best-effort by design (the cost
+		// tracker uses the same convention); a startup error means
+		// the address itself is malformed, which we surface but do
+		// not treat as fatal — the proxy must still serve traffic.
+		logger.Warn("⚡ Circuit Breaker: failed to create dogstatsd client; metrics disabled",
+			"error", err, "addr", addr)
+		return nil
+	}
+	logger.Info("⚡ Circuit Breaker: dogstatsd metrics enabled",
+		"addr", addr,
+		"namespace", namespace,
+		"tags", ddCfg.Tags,
+	)
+	return client
+}
+
+// circuitModelExtractor returns a ModelFromRequestFunc that dispatches to
+// the right provider's request-body parser by URL prefix.  Used by the
+// circuit transport on failure paths to enrich logs and metrics with
+// the LLM model name.  Returns "" for any unrecognised path so log
+// fields stay schema-stable rather than panicking on a stray request.
+func circuitModelExtractor(
+	openAIProvider *providers.OpenAIProxy,
+	anthropicProvider *providers.AnthropicProxy,
+	geminiProvider *providers.GeminiProxy,
+) circuit.ModelFromRequestFunc {
+	return func(req *http.Request) string {
+		if req == nil || req.URL == nil {
+			return ""
+		}
+		path := req.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/openai/"):
+			model, _ := openAIProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/anthropic/"):
+			model, _ := anthropicProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/gemini/"),
+			strings.HasPrefix(path, "/v1beta/models/"),
+			strings.HasPrefix(path, "/v1/models/"):
+			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
+			return model
+		}
+		return ""
+	}
 }
 
 // initializeAPIKeyStore creates and configures the API key store from config
@@ -755,6 +857,21 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
 		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, isTestModeAllowed(yamlConfig))
+
+		// Build the optional observability sinks once, then share them
+		// across every provider's wrapped transport.  Both are nil-safe
+		// — circuit.NewTransport falls back to no-op behaviour if either
+		// is missing, which keeps test fixtures and Datadog-less
+		// deployments working unchanged.
+		circuitMetrics := initializeCircuitMetrics(yamlConfig)
+		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider)
+		opts := []circuit.Option{
+			circuit.WithModelExtractor(modelFn),
+		}
+		if circuitMetrics != nil {
+			opts = append(opts, circuit.WithMetrics(circuitMetrics))
+		}
+
 		// Pair each provider with its canonical name so the wiring loop
 		// iterates the same set of names that /health queries.
 		type namedProvider struct {
@@ -768,10 +885,12 @@ func runServer(yamlConfig *config.YAMLConfig) {
 			{"anthropic", anthropicProvider},
 			{"gemini", geminiProvider},
 		} {
-			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name)
+			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, opts...)
 		}
 		logger.Info("⚡ Circuit Breaker: transports wrapped for all providers",
-			"providers", circuitBreakerProviders)
+			"providers", circuitBreakerProviders,
+			"metrics_enabled", circuitMetrics != nil,
+		)
 	}
 
 	// Add middleware (order matters for streaming)

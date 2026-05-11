@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
@@ -51,175 +53,155 @@ func GetProviderFromRequest(providerManager *providers.ProviderManager, req *htt
 	return nil
 }
 
-// TokenParsingMiddleware intercepts responses to parse and log token usage
+// TokenParsingMiddleware intercepts responses to parse and log token usage.
+// It also measures time-to-first-byte (TTFB) — the elapsed milliseconds from
+// when the proxy handler is entered to when the first byte is written back to
+// the caller.  The measurement is attached to the parsed LLMResponseMetadata so
+// that registered callbacks (e.g. the cost tracker) can record it.
 func TokenParsingMiddleware(providerManager *providers.ProviderManager, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Determine which provider this request is for
 			provider := GetProviderFromRequest(providerManager, r)
-
-			// Check if this is a streaming request
 			isStreaming := providerManager.IsStreamingRequest(r)
+			requestStart := time.Now()
 
-			// Create a custom response writer that can capture the response
 			captureWriter := &responseCapture{
 				ResponseWriter: w,
 				body:           &bytes.Buffer{},
 				isStreaming:    isStreaming,
 				provider:       provider,
-				lastMetadata:   nil,
+				requestStart:   requestStart,
 			}
-
-			// Debug logging
-			log.Printf("🔍 Debug: Request path: %s, Provider: %v", r.URL.Path, provider != nil)
 
 			next.ServeHTTP(captureWriter, r)
 
-			// Debug logging for endpoint matching
 			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
 				strings.Contains(r.URL.Path, "/completions") ||
 				strings.Contains(r.URL.Path, "/messages") ||
 				strings.Contains(r.URL.Path, ":generateContent") ||
 				strings.Contains(r.URL.Path, ":streamGenerateContent")
 
-			log.Printf("🔍 Debug: Provider: %v, API endpoint: %v, Response body length: %d",
-				provider != nil, isAPIEndpoint, captureWriter.body.Len())
+			if provider == nil || !isAPIEndpoint {
+				return
+			}
 
-			// Only process if we have a provider and this is an API endpoint
-			if provider != nil && isAPIEndpoint {
-				var metadata *providers.LLMResponseMetadata
-				var err error
+			totalElapsed := time.Since(requestStart)
 
-				// For streaming responses, use the last metadata captured during streaming
-				if isStreaming && captureWriter.lastMetadata != nil {
-					metadata = captureWriter.lastMetadata
-					log.Printf("🔍 Token Parser: Using captured streaming metadata - Input: %d, Output: %d, Total: %d",
-						metadata.InputTokens, metadata.OutputTokens, metadata.TotalTokens)
-				} else {
-					// For non-streaming responses, parse the final response
-					bodyReader := bytes.NewReader(captureWriter.body.Bytes())
-					metadata, err = provider.ParseResponseMetadata(bodyReader, isStreaming)
-					if isStreaming && metadata != nil {
-						log.Printf("🔍 Token Parser: Got final parse metadata - Input: %d, Output: %d, Total: %d",
-							metadata.InputTokens, metadata.OutputTokens, metadata.TotalTokens)
-					}
-				}
+			var metadata *providers.LLMResponseMetadata
+			var err error
 
-				if err != nil {
-					// For streaming responses, partial data is expected and not necessarily an error
-					if isStreaming {
-						log.Printf("Info: Partial streaming response data for %s: %v", provider.GetName(), err)
-					} else {
-						log.Printf("Warning: Failed to parse response metadata for %s: %v", provider.GetName(), err)
-					}
-					// Add debug logging for response body if parsing fails
+			if isStreaming && captureWriter.lastMetadata != nil {
+				metadata = captureWriter.lastMetadata
+			} else {
+				bodyReader := bytes.NewReader(captureWriter.body.Bytes())
+				metadata, err = provider.ParseResponseMetadata(bodyReader, isStreaming)
+			}
+
+			if err != nil {
+				if !isStreaming {
+					log.Printf("Warning: failed to parse response metadata for %s: %v", provider.GetName(), err)
 					if captureWriter.body.Len() > 0 {
 						bodyBytes := captureWriter.body.Bytes()
-						previewBytes := bodyBytes[:min(200, len(bodyBytes))]
-
-						// Check for gzip magic number (0x1f, 0x8b)
-						if len(previewBytes) >= 2 && previewBytes[0] == 0x1f && previewBytes[1] == 0x8b {
-							// Try to decompress for preview
-							if decompressed, err := decompressForPreview(bodyBytes); err == nil {
+						if len(bodyBytes) >= 2 && bodyBytes[0] == 0x1f && bodyBytes[1] == 0x8b {
+							if decompressed, e := decompressForPreview(bodyBytes); e == nil {
 								previewLen := min(200, len(decompressed))
-								log.Printf("🔍 Debug: Response body is gzip compressed, decompressed preview: %s", string(decompressed[:previewLen]))
-							} else {
-								log.Printf("🔍 Debug: Response body is gzip compressed (failed to decompress for preview): %v", err)
+								log.Printf("🔍 Response body (gzip-decompressed): %s", string(decompressed[:previewLen]))
 							}
 						} else {
-							log.Printf("🔍 Debug: Response body preview: %s", string(previewBytes))
+							log.Printf("🔍 Response body preview: %s", string(bodyBytes[:min(200, len(bodyBytes))]))
 						}
 					}
-				} else if metadata != nil {
-					// Log the metadata for cost tracking
-					log.Printf("🔢 LLM Response Metadata:\n"+
-						"   Provider: %s\n"+
-						"   Model: %s\n"+
-						"   Request ID: %s\n"+
-						"   Input Tokens: %d\n"+
-						"   Output Tokens: %d\n"+
-						"   Total Tokens: %d\n"+
-						"   Streaming: %t\n"+
-						"   Finish Reason: %s",
-						metadata.Provider, metadata.Model, metadata.RequestID, metadata.InputTokens, metadata.OutputTokens,
-						metadata.TotalTokens, metadata.IsStreaming, metadata.FinishReason)
+				}
+				return
+			}
 
-					// Additional detailed logging for cost tracking
-					if metadata.TotalTokens > 0 {
-						// Include thought tokens in the logging if available
-						log.Printf("💰 Token Usage Summary:\n"+
-							"   Provider/Model: %s/%s\n"+
-							"   Input Tokens: %d\n"+
-							"   Output Tokens: %d\n"+
-							"   Thought Tokens: %d\n"+
-							"   Total Tokens: %d",
-							metadata.Provider, metadata.Model, metadata.InputTokens, metadata.OutputTokens, metadata.ThoughtTokens, metadata.TotalTokens)
-					} else if metadata.IsStreaming {
-						log.Printf("ℹ️  Streaming Response: Usage information not yet available (partial response captured)")
-					}
+			if metadata == nil {
+				return
+			}
 
-					// Add custom header with token usage information
-					w.Header().Set("X-LLM-Input-Tokens", fmt.Sprintf("%d", metadata.InputTokens))
-					w.Header().Set("X-LLM-Output-Tokens", fmt.Sprintf("%d", metadata.OutputTokens))
-					w.Header().Set("X-LLM-Total-Tokens", fmt.Sprintf("%d", metadata.TotalTokens))
-					w.Header().Set("X-LLM-Thought-Tokens", fmt.Sprintf("%d", metadata.ThoughtTokens))
-					w.Header().Set("X-LLM-Provider", metadata.Provider)
-					w.Header().Set("X-LLM-Model", metadata.Model)
-					if metadata.RequestID != "" {
-						w.Header().Set("X-LLM-Request-ID", metadata.RequestID)
-					}
+			// Attach TTFB.
+			if captureWriter.ttfbMS > 0 {
+				metadata.TTFBMS = captureWriter.ttfbMS
+			}
 
-					// Execute all registered callbacks with the metadata
-					for _, callback := range callbacks {
-						if callback != nil {
-							callback(r, metadata)
-						}
-					}
-				} else if isStreaming {
-					// For streaming responses without metadata, just log that we're still waiting
-					log.Printf("ℹ️  Streaming Response: Still waiting for complete usage information")
+			// Emit a single, human-readable summary line.
+			cacheNote := ""
+			if metadata.CacheReadInputTokens > 0 || metadata.CacheCreationInputTokens > 0 {
+				cacheNote = fmt.Sprintf(" | cache_read=%d cache_write=%d", metadata.CacheReadInputTokens, metadata.CacheCreationInputTokens)
+			}
+			thoughtNote := ""
+			if metadata.ThoughtTokens > 0 {
+				thoughtNote = fmt.Sprintf(" | thought=%d", metadata.ThoughtTokens)
+			}
+			log.Printf("📊 LLM %s/%s | in=%d out=%d total=%d%s%s | ttfb=%dms total=%dms | req=%s",
+				metadata.Provider, metadata.Model,
+				metadata.InputTokens, metadata.OutputTokens, metadata.TotalTokens,
+				cacheNote, thoughtNote,
+				metadata.TTFBMS, totalElapsed.Milliseconds(),
+				metadata.RequestID)
+
+			// Response headers (best-effort; headers may already be flushed for streaming).
+			w.Header().Set("X-LLM-Input-Tokens", fmt.Sprintf("%d", metadata.InputTokens))
+			w.Header().Set("X-LLM-Output-Tokens", fmt.Sprintf("%d", metadata.OutputTokens))
+			w.Header().Set("X-LLM-Total-Tokens", fmt.Sprintf("%d", metadata.TotalTokens))
+			w.Header().Set("X-LLM-Thought-Tokens", fmt.Sprintf("%d", metadata.ThoughtTokens))
+			w.Header().Set("X-LLM-Cache-Read-Tokens", fmt.Sprintf("%d", metadata.CacheReadInputTokens))
+			w.Header().Set("X-LLM-Cache-Write-Tokens", fmt.Sprintf("%d", metadata.CacheCreationInputTokens))
+			w.Header().Set("X-LLM-TTFB-MS", fmt.Sprintf("%d", metadata.TTFBMS))
+			w.Header().Set("X-LLM-Provider", metadata.Provider)
+			w.Header().Set("X-LLM-Model", metadata.Model)
+			if metadata.RequestID != "" {
+				w.Header().Set("X-LLM-Request-ID", metadata.RequestID)
+			}
+
+			for _, callback := range callbacks {
+				if callback != nil {
+					callback(r, metadata)
 				}
 			}
 		})
 	}
 }
 
-// responseCapture captures the response body for parsing
+// responseCapture captures the response body for parsing and measures TTFB.
 type responseCapture struct {
 	http.ResponseWriter
-	body          *bytes.Buffer
-	isStreaming   bool
-	provider      providers.Provider
-	lastMetadata  *providers.LLMResponseMetadata
-	lastParsedPos int // Track the last position we parsed to avoid re-parsing
+
+	body         *bytes.Buffer
+	isStreaming  bool
+	provider     providers.Provider
+	lastMetadata *providers.LLMResponseMetadata
+	requestStart time.Time
+
+	// TTFB bookkeeping — written once on the first non-empty Write call.
+	ttfbOnce sync.Once
+	ttfbMS   int64
+
+	// lastParsedPos tracks how many bytes we have already tried to parse so we
+	// avoid re-scanning the same prefix on every chunk.
+	lastParsedPos int
 }
 
 func (rc *responseCapture) Write(b []byte) (int, error) {
-	// Write to both the original response and our buffer
+	if len(b) > 0 {
+		rc.ttfbOnce.Do(func() {
+			rc.ttfbMS = time.Since(rc.requestStart).Milliseconds()
+			log.Printf("⏱  TTFB: %dms", rc.ttfbMS)
+		})
+	}
+
 	rc.body.Write(b)
 
-	// For streaming responses, only parse new data to avoid redundant parsing
+	// For streaming responses incrementally try to parse usage info.  The usage
+	// summary only appears in the final message_stop event, so most attempts will
+	// silently fail — that's expected and we no longer log those non-errors.
 	if rc.isStreaming && rc.provider != nil {
-		// Get the current buffer content
 		allData := rc.body.Bytes()
-
-		// Only parse if we have new data since the last parse
 		if len(allData) > rc.lastParsedPos {
-			log.Printf("🔍 Token Parser: Parsing streaming data, buffer size: %d, new data: %d bytes",
-				len(allData), len(allData)-rc.lastParsedPos)
-
-			// For streaming, we need to parse the entire buffer since usage info
-			// comes at the end and we might have partial events
 			bodyReader := bytes.NewReader(allData)
 			if metadata, err := rc.provider.ParseResponseMetadata(bodyReader, true); err == nil && metadata != nil {
-				log.Printf("🔍 Token Parser: Got metadata - Input: %d, Output: %d, Total: %d",
-					metadata.InputTokens, metadata.OutputTokens, metadata.TotalTokens)
-				// Update the last successful metadata
 				rc.lastMetadata = metadata
-			} else if err != nil {
-				log.Printf("🔍 Token Parser: Parse error (expected for partial data): %v", err)
 			}
-			// Update the last parsed position
 			rc.lastParsedPos = len(allData)
 		}
 	}

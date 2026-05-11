@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,20 +45,156 @@ type Transport struct {
 	cfg      Config
 	provider string
 	log      *slog.Logger
+	metrics  MetricsSink
+	modelFn  ModelFromRequestFunc
 }
 
 // NewTransport wraps inner with circuit-breaker behaviour for provider.
-func NewTransport(inner http.RoundTripper, store Store, cfg Config, provider string, log *slog.Logger) *Transport {
+//
+// Optional behaviour (dogstatsd metric emission, model-name
+// extraction) is configured via Option values; see WithMetrics and
+// WithModelExtractor.  Callers that pass no options get a transport
+// that logs but does not emit metrics — which preserves the previous
+// behaviour exactly.
+func NewTransport(inner http.RoundTripper, store Store, cfg Config, provider string, log *slog.Logger, opts ...Option) *Transport {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Transport{
+	t := &Transport{
 		inner:    inner,
 		store:    store,
 		cfg:      cfg.Defaults(),
 		provider: provider,
 		log:      log,
+		metrics:  noopMetrics{},
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
+}
+
+// maxErrorStringLength bounds how much of an upstream / network error we
+// embed in slog attributes and metric tags.  Long errors (e.g. wrapped
+// TLS chains) blow up log volume and cardinality if untrimmed.
+const maxErrorStringLength = 256
+
+// failureContext is the shared, pre-computed payload that every
+// circuit-breaker observability call site uses.  Building it once per
+// event (and reusing it for both the slog line and the dogstatsd
+// counter) means we parse the request body for model attribution at
+// most once per failure even when the same event also crosses a state
+// transition or a "threshold crossed" warn line.
+//
+// Field set is deliberately flat so Datadog can facet on each
+// attribute and so the metric tag set stays low-cardinality (model is
+// bounded by the upstream catalogue, kind by the FailureKind enum,
+// status_code by HTTP).
+type failureContext struct {
+	Provider    string
+	Model       string
+	Path        string
+	Method      string
+	StatusCode  int
+	Kind        FailureKind
+	ErrorString string
+}
+
+// newFailureContext builds the canonical context for a failure event.
+// Pass nil resp / nil err for synthetic events (fast-fail, probe slot
+// taken) and follow up with .withKind(KindCircuitOpen) so the kind
+// reflects "we deliberately didn't try" rather than "upstream returned
+// nothing".
+func (t *Transport) newFailureContext(req *http.Request, resp *http.Response, err error) failureContext {
+	fc := failureContext{
+		Provider:    t.provider,
+		Kind:        ClassifyFailureKind(t.provider, resp, err),
+		ErrorString: truncateError(err),
+	}
+	if req != nil {
+		if req.URL != nil {
+			fc.Path = req.URL.Path
+		}
+		fc.Method = req.Method
+	}
+	if resp != nil {
+		fc.StatusCode = resp.StatusCode
+	}
+	if t.modelFn != nil && req != nil && req.GetBody != nil {
+		// Best-effort: only call the extractor when the request body is
+		// already replayable.  Synthetic fast-fail paths run before cacheBody,
+		// and allowing extractors to fall back to req.Body there can turn an
+		// open circuit into an unbounded body read just for observability.
+		fc.Model = t.modelFn(req)
+	}
+	return fc
+}
+
+// withKind returns a copy of fc with the failure kind overridden.
+// Used by synthetic-event call sites (fast-fail, probe slot taken,
+// would-have-fast-failed, body too large) where the default
+// classification (which keys off resp/err that don't exist) is
+// misleading.
+func (fc failureContext) withKind(k FailureKind) failureContext {
+	fc.Kind = k
+	return fc
+}
+
+// attrs returns a slog-friendly attribute slice with a stable schema.
+// The exact field set is documented on failureContext above.
+func (fc failureContext) attrs() []any {
+	return []any{
+		"provider", fc.Provider,
+		"model", fc.Model,
+		"path", fc.Path,
+		"method", fc.Method,
+		"status_code", fc.StatusCode,
+		"failure_kind", string(fc.Kind),
+		"error", fc.ErrorString,
+	}
+}
+
+// metricTags returns the dogstatsd tag set matching attrs().
+//
+// Empty model is rewritten to "unknown" because Datadog silently drops
+// tags with empty values, which would make the rest of the tag list
+// shift and break facet filters.  All other empty values are
+// preserved (status_code:0 for transport errors, etc.).
+func (fc failureContext) metricTags() []string {
+	model := fc.Model
+	if model == "" {
+		model = "unknown"
+	}
+	return []string{
+		"provider:" + fc.Provider,
+		"model:" + model,
+		"status_code:" + strconv.Itoa(fc.StatusCode),
+		"failure_kind:" + string(fc.Kind),
+	}
+}
+
+// emit publishes a circuit.<event> counter using the supplied context.
+// We deliberately ignore any dogstatsd error: UDP packet loss or an
+// Agent restart must never affect request flow.  The cost-tracking
+// transport follows the same convention (see internal/cost/datadog.go).
+func (t *Transport) emit(event string, fc failureContext) {
+	if t.metrics == nil {
+		return
+	}
+	_ = t.metrics.Incr("circuit."+event, fc.metricTags(), 1.0)
+}
+
+// truncateError returns a slog-friendly truncation of err for use in
+// the "error" attribute of failure log lines.
+func truncateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	if len(s) > maxErrorStringLength {
+		return s[:maxErrorStringLength] + "...(truncated)"
+	}
+	return s
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -85,7 +222,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// llm_proxy_test_mode.  Plumbed from the CLI's three-condition
 	// security gate in cmd/llm-proxy/main.go.
 	if t.testModeFromRequest(req) == TestModeForceDegraded {
-		t.log.Info("circuit: test-mode force_degraded", "provider", t.provider)
+		t.log.Info("circuit: test-mode force_degraded",
+			t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen).attrs()...)
 		return t.degradedResponse(req), nil
 	}
 
@@ -98,7 +236,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	switch state {
 	case StateOpen:
-		t.log.Info("circuit: fast-fail (circuit open)", "provider", t.provider)
+		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+		t.log.Warn("circuit: fast-fail (circuit open)",
+			append(fc.attrs(), "mode", ModeEnforce)...)
+		t.emit("fast_fail", fc)
 		return t.degradedResponse(req), nil
 
 	case StateHalfOpen:
@@ -113,20 +254,48 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 // failures + emits counterfactual log lines, and returns the real upstream
 // response.  No retries, no synthetic responses, no fast-fail on open
 // circuit — this is the "shadow" rollout path (ModeLog).
+//
+// Even though we never replay the body in this mode, we still call
+// cacheBody so the configured ModelFromRequestFunc has something to
+// read on the failure path.  The cost matches what runWithRetries
+// already pays for retry support, and an oversize body falls through
+// to a streaming pass-through exactly like there.
 func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
+
+	if err := t.cacheBody(req); err != nil {
+		if !errors.Is(err, errRetryBodyTooLarge) {
+			// Hard cacheBody error: req.Body has been read and closed,
+			// so we can't safely fall through to the inner transport.
+			// Surface the error to the caller — this matches the
+			// runWithRetries behaviour and is far better than silently
+			// dispatching a half-consumed body.
+			return nil, fmt.Errorf("circuit: cacheBody (log-mode): %w", err)
+		}
+		// Oversize body: req.Body has been rewired to a streaming
+		// pass-through, GetBody is nil, model extraction will return
+		// "" — that's acceptable for log mode.
+		t.log.Warn("circuit: log-mode request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+			"provider", t.provider,
+			"path", req.URL.Path,
+			"content_length", req.ContentLength,
+			"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
+			"failure_kind", string(KindBodyTooLarge),
+		)
+	}
 
 	// Log what ModeEnforce *would* have done given the current state, but
 	// always let the real request through.
 	if state, err := t.store.GetState(ctx, t.provider); err == nil && state == StateOpen {
-		t.log.Info("circuit: log-mode would_have_fast_failed (circuit open, passing through)",
-			"provider", t.provider)
+		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+		t.log.Info("circuit: log-mode would_have_fast_failed (circuit open, passing through)", fc.attrs()...)
+		t.emit("would_have_fast_failed", fc)
 	}
 
 	resp, err := t.inner.RoundTrip(req)
-	fc := ClassifyResponse(t.provider, resp, err)
+	class := ClassifyResponse(t.provider, resp, err)
 
-	switch fc {
+	switch class {
 	case FailureClassDegraded:
 		// Record the failure so cross-instance counters and /health stats
 		// still reflect reality in shadow mode.  The Store is guaranteed
@@ -137,18 +306,23 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 			t.log.Error("circuit: log-mode RecordTerminalFailure error",
 				"provider", t.provider, "error", recErr)
 		}
+		fc := t.newFailureContext(req, resp, err)
 		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
-			"provider", t.provider,
-			"would_be_new_state", newState.String(),
-		)
+			append(fc.attrs(),
+				"would_be_new_state", newState.String(),
+				"mode", ModeLog,
+			)...)
+		t.emit("terminal_failure", fc)
 
 	case FailureClassGlobalRateLimit:
-		t.log.Info("circuit: log-mode global_rate_limit_observed (passing through)",
-			"provider", t.provider)
+		fc := t.newFailureContext(req, resp, err)
+		t.log.Info("circuit: log-mode global_rate_limit_observed (passing through)", fc.attrs()...)
+		t.emit("global_rate_limit", fc)
 
 	case FailureClassLocalRateLimit:
-		t.log.Info("circuit: log-mode local_rate_limit_observed (passing through)",
-			"provider", t.provider)
+		fc := t.newFailureContext(req, resp, err)
+		t.log.Info("circuit: log-mode local_rate_limit_observed (passing through)", fc.attrs()...)
+		t.emit("local_rate_limit", fc)
 	}
 
 	return resp, err
@@ -158,35 +332,61 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 // Core retry loops
 // ─────────────────────────────────────────────────────────────────────────────
 
+// slowRequestThreshold is the floor above which the success path emits an
+// info-level breakdown of where time was spent (cacheBody vs upstream
+// RoundTrip).  Sub-threshold requests stay silent so happy traffic does not
+// drown the logs; anything slower than this gets a single per-step
+// breakdown line so latency regressions are immediately attributable.
+const slowRequestThreshold = 5 * time.Second
+
 // runWithRetries executes the request with the configured retry policies and
 // records terminal failures in the circuit store.
 func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
+	startedAt := time.Now()
 
 	// Ensure the body can be re-read on retries.  When the body is too
 	// large to buffer in memory we gracefully disable retries and fall
 	// through to a single-pass RoundTrip so oversize requests (e.g. a
 	// multi-megabyte vision payload) still reach the upstream without
 	// giving a client an unbounded-memory DoS vector.
+	cacheBodyStart := time.Now()
 	if err := t.cacheBody(req); err != nil {
 		if errors.Is(err, errRetryBodyTooLarge) {
 			t.log.Warn("circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request",
 				"provider", t.provider,
+				"path", req.URL.Path,
 				"content_length", req.ContentLength,
 				"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
+				"failure_kind", string(KindBodyTooLarge),
 			)
 			return t.inner.RoundTrip(req)
 		}
 		return nil, fmt.Errorf("circuit: cacheBody: %w", err)
 	}
+	cacheBodyDur := time.Since(cacheBodyStart)
 
 	var (
 		transientAttempts int
 		rateLimitAttempts int
+		// upstreamDur is the time spent inside the inner RoundTripper
+		// (TLS handshake + body upload + upstream processing + first
+		// response byte).  Accumulates across retries so the breakdown
+		// log line below reflects the full wall-clock cost.
+		upstreamDur time.Duration
 	)
 
 	// Track whether we've had any rate-limit failures for escalation logic.
 	var firstRateLimitAt time.Time
+
+	// Remember the most recent failure context so log lines / metrics
+	// emitted after the response body is drained still carry the
+	// upstream status code, kind, and error string.  StatusCode is the
+	// only field we read off of resp post-drain so this is safe.
+	var (
+		lastResp *http.Response
+		lastErr  error
+	)
 
 	for {
 		// Bail out early if the caller has gone away.  Without this check
@@ -232,13 +432,22 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			attemptReq = inner
 		}
 
+		rtStart := time.Now()
 		resp, err := t.inner.RoundTrip(attemptReq)
+		upstreamDur += time.Since(rtStart)
 		fc := ClassifyResponse(t.provider, resp, err)
 
 		// ── Success ───────────────────────────────────────────────────────
 		if fc == FailureClassNone {
+			t.logTimingBreakdown(req, startedAt, cacheBodyDur, upstreamDur, attempt+1, resp)
 			return resp, err
 		}
+
+		// Capture before drain so emitFailureMetric / failureAttrs see
+		// the real upstream status.  Note: lastResp.Body is not safe to
+		// read after the drain below, but lastResp.StatusCode is.
+		lastResp = resp
+		lastErr = err
 
 		// ── Drain the response body before retrying so the connection is
 		//    returned to the pool cleanly.
@@ -252,20 +461,21 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		// ── Rate-limit handling ───────────────────────────────────────────
 		if fc == FailureClassLocalRateLimit || fc == FailureClassGlobalRateLimit {
 			if rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
+				evt := t.newFailureContext(req, lastResp, lastErr)
 				t.log.Warn("circuit: rate-limit retries exhausted",
-					"provider", t.provider,
-					"attempts", rateLimitAttempts,
-					"class", fc,
-				)
+					append(evt.attrs(),
+						"attempts", rateLimitAttempts,
+						"class", fc,
+					)...)
+				t.emit("rate_limit_exhausted", evt)
+
 				// Escalate sustained global rate limits to degraded.
 				if fc == FailureClassGlobalRateLimit && !firstRateLimitAt.IsZero() {
 					elapsed := time.Since(firstRateLimitAt).Seconds()
 					if int(elapsed) >= t.cfg.GlobalRateLimitEscalationWindow {
 						t.log.Warn("circuit: global rate-limit escalated to provider_degraded",
-							"provider", t.provider,
-							"elapsed_seconds", elapsed,
-						)
-						return t.handleTerminalFailure(ctx, req)
+							append(evt.attrs(), "elapsed_seconds", elapsed)...)
+						return t.handleTerminalFailure(ctx, req, lastResp, lastErr)
 					}
 				}
 				// Return a synthetic rate-limit error (no magic string — not
@@ -294,19 +504,20 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			switch t.cfg.RetryContributionMode {
 			case "on":
 				t.log.Info("circuit: retried failure contributing to degradation score",
-					"provider", t.provider, "attempt", transientAttempts)
+					append(t.newFailureContext(req, resp, err).attrs(),
+						"attempt", transientAttempts)...)
 				t.store.RecordTerminalFailure(ctx, t.provider) //nolint:errcheck
 			case "log":
 				t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
-					"provider", t.provider, "attempt", transientAttempts)
+					append(t.newFailureContext(req, resp, err).attrs(),
+						"attempt", transientAttempts)...)
 			}
 
 			if transientAttempts >= t.cfg.MaxTransientRetries {
 				t.log.Warn("circuit: transient retries exhausted, recording terminal failure",
-					"provider", t.provider,
-					"attempts", transientAttempts,
-				)
-				return t.handleTerminalFailure(ctx, req)
+					append(t.newFailureContext(req, lastResp, lastErr).attrs(),
+						"attempts", transientAttempts)...)
+				return t.handleTerminalFailure(ctx, req, lastResp, lastErr)
 			}
 
 			backoff := transientBackoff(transientAttempts)
@@ -327,9 +538,68 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	}
 }
 
+// logTimingBreakdown emits a single per-request line showing where wall-clock
+// time was spent on the happy path (cacheBody buffering vs. inner RoundTrip).
+// We only log when the request crosses slowRequestThreshold so successful sub-
+// second traffic stays quiet, but anything slow gets per-step attribution
+// inline — this is what answers "did the circuit breaker add latency?"
+// without needing to attach a profiler.
+func (t *Transport) logTimingBreakdown(
+	req *http.Request,
+	startedAt time.Time,
+	cacheBody, upstream time.Duration,
+	attempts int,
+	resp *http.Response,
+) {
+	total := time.Since(startedAt)
+	if total < slowRequestThreshold {
+		return
+	}
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	path := ""
+	method := ""
+	if req != nil {
+		method = req.Method
+		if req.URL != nil {
+			path = req.URL.Path
+		}
+	}
+	// overhead = total - upstream - cacheBody; should be ~0.  A positive
+	// value means the circuit breaker bookkeeping (Store calls, retry
+	// backoff sleeps, etc.) is contributing.
+	overhead := total - upstream - cacheBody
+	t.log.Info("circuit: slow request timing breakdown",
+		"provider", t.provider,
+		"path", path,
+		"method", method,
+		"status_code", statusCode,
+		"attempts", attempts,
+		"total_ms", total.Milliseconds(),
+		"upstream_ms", upstream.Milliseconds(),
+		"cache_body_ms", cacheBody.Milliseconds(),
+		"overhead_ms", overhead.Milliseconds(),
+	)
+}
+
 // runProbe executes a single half-open probe request (no retries).
 func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
+
+	// Buffer the body up to MaxRetryableBodyBytes so the model extractor
+	// has something replayable to read on the failure path, and so the
+	// upstream RoundTrip is never handed a body that the extractor has
+	// already drained.  Probes don't retry, but cacheBody is what makes
+	// req.GetBody non-nil — without it the modelFn guard in
+	// newFailureContext correctly skips extraction and probe_failed
+	// metrics lose model attribution.  Oversize bodies fall through to
+	// a streaming pass-through with model:"unknown" rather than failing
+	// the probe.
+	if err := t.cacheBody(req); err != nil && !errors.Is(err, errRetryBodyTooLarge) {
+		return nil, fmt.Errorf("circuit: cacheBody (probe): %w", err)
+	}
 
 	// Only one goroutine/process should probe at a time.  Both MemoryStore
 	// (single-process) and RedisStore (distributed) implement this via
@@ -341,8 +611,9 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 	if ps, ok := t.store.(probeStarter); ok {
 		if !ps.TryStartProbe(ctx, t.provider) {
 			// Another probe is already in flight — fast-fail this request.
-			t.log.Info("circuit: half-open probe already in flight, fast-failing",
-				"provider", t.provider)
+			evt := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+			t.log.Info("circuit: half-open probe already in flight, fast-failing", evt.attrs()...)
+			t.emit("fast_fail", evt)
 			return t.degradedResponse(req), nil
 		}
 	}
@@ -377,10 +648,9 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
 		t.log.Info("circuit: probe aborted by caller context, releasing probe slot without state change",
-			"provider", t.provider,
-			"ctx_err", ctxErr,
-			"round_trip_err", err,
-		)
+			append(t.newFailureContext(req, resp, err).attrs(),
+				"ctx_err", truncateError(ctxErr),
+			)...)
 		if resp != nil {
 			io.Copy(io.Discard, resp.Body) //nolint:errcheck
 			resp.Body.Close()              //nolint:errcheck
@@ -401,12 +671,23 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 	fc := ClassifyResponse(t.provider, resp, err)
 
 	if fc == FailureClassNone {
-		t.log.Info("circuit: probe succeeded, closing circuit", "provider", t.provider)
+		probeStatus := 0
+		if resp != nil {
+			probeStatus = resp.StatusCode
+		}
+		t.log.Info("circuit: probe succeeded, closing circuit",
+			"provider", t.provider,
+			"status_code", probeStatus,
+			"new_state", StateClosed.String(),
+		)
 		t.store.RecordSuccess(ctx, t.provider) //nolint:errcheck
 		return resp, err
 	}
 
-	t.log.Warn("circuit: probe failed, re-opening circuit", "provider", t.provider)
+	evt := t.newFailureContext(req, resp, err)
+	t.log.Warn("circuit: probe failed, re-opening circuit",
+		append(evt.attrs(), "new_state", StateOpen.String())...)
+	t.emit("probe_failed", evt)
 	if resp != nil {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
 		resp.Body.Close()              //nolint:errcheck
@@ -417,21 +698,30 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 
 // handleTerminalFailure records the failure, potentially opens the circuit,
 // and returns the appropriate synthesised response to the caller.
-func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request) (*http.Response, error) {
+//
+// lastResp / lastErr describe the most recent upstream attempt (post-
+// drain — only StatusCode / Header are safe to read on lastResp) so the
+// emitted log line and dogstatsd counter retain status_code, model,
+// failure_kind, and error context that would otherwise be lost between
+// retry exhaustion and synthetic-response emission.
+func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, lastResp *http.Response, lastErr error) (*http.Response, error) {
 	newState, err := t.store.RecordTerminalFailure(ctx, t.provider)
 	if err != nil {
 		t.log.Error("circuit: RecordTerminalFailure error", "provider", t.provider, "error", err)
 	}
 
+	evt := t.newFailureContext(req, lastResp, lastErr)
+	attrs := append(evt.attrs(),
+		"new_state", newState.String(),
+		"mode", ModeEnforce,
+	)
+
 	if newState == StateOpen {
-		t.log.Warn("circuit: threshold crossed — circuit opened",
-			"provider", t.provider)
+		t.log.Warn("circuit: threshold crossed — circuit opened", attrs...)
 	}
 
-	t.log.Warn("circuit: terminal failure, returning degraded signal",
-		"provider", t.provider,
-		"new_state", newState.String(),
-	)
+	t.log.Warn("circuit: terminal failure, returning degraded signal", attrs...)
+	t.emit("terminal_failure", evt)
 	return t.degradedResponse(req), nil
 }
 

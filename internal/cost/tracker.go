@@ -269,8 +269,10 @@ func (ct *CostTracker) asyncWorker(workerID int) {
 			}
 
 		case <-flushTicker.C:
-			// Periodic flush - process any queued records
-			ct.logger.Debug("💰 Cost Tracker: Periodic flush triggered", "worker_id", workerID)
+			// Periodic flush - process any queued records.
+			// No log here: this fires every flushInterval per worker and
+			// is extremely noisy. flushQueuedRecords logs when it actually
+			// processes records.
 			ct.flushQueuedRecords(workerID)
 
 		case <-ct.ctx.Done():

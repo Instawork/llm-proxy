@@ -217,16 +217,23 @@ type AnthropicResponse struct {
 	Usage        AnthropicUsage     `json:"usage"`
 }
 
-// AnthropicUsage represents token usage in Anthropic responses
+// AnthropicUsage represents token usage in Anthropic responses.
+// cache_read_input_tokens / cache_creation_input_tokens are only present when
+// prompt caching is active (claude-3+).
 type AnthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
-// AnthropicContent represents content in Anthropic responses
+// AnthropicContent represents content in Anthropic responses.
+// For extended-thinking models the type may be "thinking" and Thinking holds the
+// internal chain-of-thought (never "text").
 type AnthropicContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // AnthropicStreamResponse represents streaming response chunks
@@ -251,10 +258,12 @@ type AnthropicMessage struct {
 	Usage        AnthropicUsage     `json:"usage"`
 }
 
-// AnthropicDelta represents delta changes in streaming responses
+// AnthropicDelta represents delta changes in streaming responses.
+// ThinkingDelta carries incremental thinking text when extended thinking is on.
 type AnthropicDelta struct {
 	Type         string  `json:"type"`
 	Text         string  `json:"text,omitempty"`
+	Thinking     string  `json:"thinking,omitempty"`
 	StopReason   string  `json:"stop_reason,omitempty"`
 	StopSequence *string `json:"stop_sequence,omitempty"`
 }
@@ -321,28 +330,30 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	}
 
 	scanner := bufio.NewScanner(decompressedReader)
+	// Allow lines up to 2 MB — large tool call / thinking deltas can be wide.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
 	var metadata *LLMResponseMetadata
 	var model string
 	var requestID string
 	var finishReason string
 	var hasData bool
 
-	// Track token usage as we accumulate it from different events
-	var inputTokens int = 0
-	var outputTokens int = 0
+	// Token accumulators.
+	var inputTokens, outputTokens int
+	var cacheReadTokens, cacheCreationTokens int
+	// thoughtChars counts characters in thinking deltas so we can estimate
+	// thought tokens (Anthropic does not expose them separately yet).
+	var thoughtChars int
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Skip empty lines and non-data lines
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 
-		// Extract JSON data
 		jsonData := strings.TrimPrefix(line, "data: ")
-
-		// Skip [DONE] marker
 		if strings.TrimSpace(jsonData) == "[DONE]" {
 			break
 		}
@@ -351,55 +362,66 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 
 		var streamResponse AnthropicStreamResponse
 		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
-			// Log error but continue processing other chunks
-			log.Printf("Warning: failed to parse Anthropic streaming chunk: %v", err)
+			// Partial chunks are expected mid-stream; skip silently.
 			continue
 		}
 
-		// Handle different event types
 		switch streamResponse.Type {
 		case "message_start":
 			if streamResponse.Message != nil {
 				model = streamResponse.Message.Model
 				requestID = streamResponse.Message.ID
-				// Extract initial usage information from message_start
-				if streamResponse.Message.Usage.InputTokens > 0 {
-					inputTokens = streamResponse.Message.Usage.InputTokens
+				u := streamResponse.Message.Usage
+				if u.InputTokens > 0 {
+					inputTokens = u.InputTokens
 				}
-				if streamResponse.Message.Usage.OutputTokens > 0 {
-					outputTokens = streamResponse.Message.Usage.OutputTokens
+				if u.OutputTokens > 0 {
+					outputTokens = u.OutputTokens
 				}
-				log.Printf("🔍 Anthropic: message_start - Input: %d, Output: %d",
-					inputTokens, outputTokens)
+				cacheReadTokens = u.CacheReadInputTokens
+				cacheCreationTokens = u.CacheCreationInputTokens
+				log.Printf("🔍 Anthropic message_start: input=%d output=%d cache_read=%d cache_write=%d model=%s",
+					inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, model)
 			}
+
+		case "content_block_start":
+			// Track thinking blocks (extended-thinking models).
+			if streamResponse.ContentBlock != nil && streamResponse.ContentBlock.Type == "thinking" {
+				log.Printf("🧠 Anthropic: thinking block started (index %d)", streamResponse.Index)
+			}
+
+		case "content_block_delta":
+			if streamResponse.Delta != nil && streamResponse.Delta.Type == "thinking_delta" {
+				thoughtChars += len(streamResponse.Delta.Thinking)
+			}
+
 		case "message_delta":
 			if streamResponse.Delta != nil && streamResponse.Delta.StopReason != "" {
 				finishReason = streamResponse.Delta.StopReason
 			}
-			// Accumulate additional token usage from message_delta events
-			if streamResponse.Usage != nil {
-				if streamResponse.Usage.OutputTokens > 0 {
-					// For delta events, add the additional output tokens
-					outputTokens += streamResponse.Usage.OutputTokens
-					log.Printf("🔍 Anthropic: message_delta - Added %d output tokens, total output: %d",
-						streamResponse.Usage.OutputTokens, outputTokens)
-				}
+			if streamResponse.Usage != nil && streamResponse.Usage.OutputTokens > 0 {
+				outputTokens += streamResponse.Usage.OutputTokens
 			}
+
 		case "message_stop":
-			// Final message - create metadata with accumulated usage information
 			if inputTokens > 0 || outputTokens > 0 {
+				// Estimate thought tokens from chars (Anthropic ~4 chars/token).
+				thoughtTokens := thoughtChars / 4
 				metadata = &LLMResponseMetadata{
-					Model:        model,
-					InputTokens:  inputTokens,
-					OutputTokens: outputTokens,
-					TotalTokens:  inputTokens + outputTokens,
-					Provider:     "anthropic",
-					RequestID:    requestID,
-					IsStreaming:  true,
-					FinishReason: finishReason,
+					Model:                    model,
+					InputTokens:              inputTokens,
+					OutputTokens:             outputTokens,
+					TotalTokens:              inputTokens + outputTokens,
+					ThoughtTokens:            thoughtTokens,
+					CacheReadInputTokens:     cacheReadTokens,
+					CacheCreationInputTokens: cacheCreationTokens,
+					Provider:                 "anthropic",
+					RequestID:                requestID,
+					IsStreaming:              true,
+					FinishReason:             finishReason,
 				}
-				log.Printf("🔍 Anthropic: message_stop - Final tokens - Input: %d, Output: %d, Total: %d",
-					inputTokens, outputTokens, inputTokens+outputTokens)
+				log.Printf("🔍 Anthropic message_stop: input=%d output=%d thought=%d total=%d",
+					inputTokens, outputTokens, thoughtTokens, inputTokens+outputTokens)
 			}
 		}
 	}
@@ -408,24 +430,25 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 		return nil, fmt.Errorf("error reading streaming response: %w", err)
 	}
 
-	// If we have usage metadata, return it
 	if metadata != nil {
 		return metadata, nil
 	}
 
-	// If we have accumulated token counts even without message_stop, create metadata
+	// Accumulated tokens without an explicit message_stop (truncated stream).
 	if hasData && (inputTokens > 0 || outputTokens > 0) && (model != "" || requestID != "") {
-		log.Printf("🔍 Anthropic: Creating metadata from accumulated usage - Input: %d, Output: %d",
-			inputTokens, outputTokens)
+		thoughtTokens := thoughtChars / 4
 		return &LLMResponseMetadata{
-			Model:        model,
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
-			TotalTokens:  inputTokens + outputTokens,
-			Provider:     "anthropic",
-			RequestID:    requestID,
-			IsStreaming:  true,
-			FinishReason: finishReason,
+			Model:                    model,
+			InputTokens:              inputTokens,
+			OutputTokens:             outputTokens,
+			TotalTokens:              inputTokens + outputTokens,
+			ThoughtTokens:            thoughtTokens,
+			CacheReadInputTokens:     cacheReadTokens,
+			CacheCreationInputTokens: cacheCreationTokens,
+			Provider:                 "anthropic",
+			RequestID:                requestID,
+			IsStreaming:              true,
+			FinishReason:             finishReason,
 		}, nil
 	}
 

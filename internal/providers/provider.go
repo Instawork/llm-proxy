@@ -28,6 +28,10 @@ type LLMResponseMetadata struct {
 	TotalTokens   int `json:"total_tokens"`
 	ThoughtTokens int `json:"thought_tokens,omitempty"`
 
+	// Prompt-cache token breakdown (Anthropic-specific; zero for other providers)
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+
 	// Provider-specific information
 	Provider  string `json:"provider"`
 	RequestID string `json:"request_id,omitempty"`
@@ -35,6 +39,11 @@ type LLMResponseMetadata struct {
 	// Additional metadata for cost calculation
 	IsStreaming  bool   `json:"is_streaming"`
 	FinishReason string `json:"finish_reason,omitempty"`
+
+	// Latency measurements (populated by the proxy middleware)
+	// TTFBMS is the time from the proxy receiving the request to writing the first
+	// response byte back to the caller (time-to-first-byte, in milliseconds).
+	TTFBMS int64 `json:"ttfb_ms,omitempty"`
 }
 
 // Provider defines the interface that all LLM providers must implement
