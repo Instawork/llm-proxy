@@ -93,6 +93,17 @@ type APIKeyStore interface {
 	ValidateAndGetActualKey(ctx context.Context, key string) (string, string, error)
 }
 
+// ProxyOptions configures optional behaviour for provider proxy constructors.
+// All fields default to their zero value (false, 0, "") which corresponds to
+// the recommended production setting.
+type ProxyOptions struct {
+	// DisableGzip strips Accept-Encoding from upstream requests and sets
+	// DisableCompression on the transport, forcing uncompressed wire bytes.
+	// Useful for debugging SSE streams where you want plain-text event data
+	// visible in logs.  Defaults to false (gzip enabled).
+	DisableGzip bool
+}
+
 // ProviderManager manages multiple providers
 type ProviderManager struct {
 	providers map[string]Provider
@@ -145,12 +156,15 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 	return exists
 }
 
-// CreateGenericDirector creates a generic director function for reverse proxy requests
+// CreateGenericDirector creates a generic director function for reverse proxy requests.
 // This eliminates code duplication across all providers by handling the common logic:
 // - Setting the target host header
 // - Stripping the provider prefix from the path
+// - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
+//   upstream returns uncompressed responses. Useful for debugging SSE streams where
+//   plain-text event data is easier to inspect in logs. By default gzip is allowed.
 // - Logging the request with streaming detection
-func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request)) func(*http.Request) {
+func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request), disableGzip bool) func(*http.Request) {
 	return func(req *http.Request) {
 		// Call the original director first
 		originalDirector(req)
@@ -164,6 +178,14 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 		providerPrefix := "/" + provider.GetName()
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, providerPrefix)
 
+		// When gzip is disabled, force upstream to send uncompressed bytes.
+		// Without this, a client that sets Accept-Encoding: gzip causes Go's
+		// transport to pass that header through and return raw gzipped bytes
+		// (DisableCompression only suppresses gzip when the client did NOT request it).
+		if disableGzip {
+			req.Header.Del("Accept-Encoding")
+		}
+
 		// Log the request, including streaming detection
 		isStreaming := provider.IsStreamingRequest(req)
 		if isStreaming {
@@ -174,8 +196,12 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 	}
 }
 
-// newProxyTransport creates a new http.Transport with optimized settings for proxying LLM requests.
-func newProxyTransport() *http.Transport {
+// newProxyTransport creates a new http.Transport with optimized settings for
+// proxying LLM requests.  When disableGzip is true, DisableCompression is set
+// so Go's transport never auto-decompresses upstream gzip responses — useful
+// alongside Accept-Encoding stripping in CreateGenericDirector for debug builds.
+// Defaults to false (gzip allowed).
+func newProxyTransport(disableGzip bool) *http.Transport {
 	// These settings are based on http.DefaultTransport, but customized for the proxy.
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -191,9 +217,7 @@ func newProxyTransport() *http.Transport {
 		// A generous timeout for the response header, as some LLM providers
 		// may take a while to start streaming a response.
 		ResponseHeaderTimeout: 3 * time.Minute,
-		// Disable compression to let the client handle it and to avoid buffering
-		// issues with streaming responses.
-		DisableCompression: true,
+		DisableCompression:    disableGzip,
 	}
 }
 
@@ -202,8 +226,8 @@ func newProxyTransport() *http.Transport {
 // returning response headers than other providers, so we use a longer
 // ResponseHeaderTimeout to avoid premature 502s that the google-genai client
 // would then retry multiple times, leading to very long total request durations.
-func newGeminiProxyTransport() *http.Transport {
-	t := newProxyTransport()
+func newGeminiProxyTransport(disableGzip bool) *http.Transport {
+	t := newProxyTransport(disableGzip)
 	t.ResponseHeaderTimeout = 5 * time.Minute
 	return t
 }
@@ -288,13 +312,15 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig, provider Pro
 	var model string
 	// Primary: use Content-Length
 	est := 0
+	estSource := "none"
 	if req.ContentLength > 0 {
 		est = int(req.ContentLength) / bytesPerToken
-		log.Printf("🔍 Debug: Estimated tokens via Content-Length: %v, model: %v", est, model)
+		estSource = "content-length"
 	}
 
 	// Optional sampling: only if small and JSON
 	maxSample := cfg.GetMaxSampleBytes()
+	bodyTooLarge := false
 	if maxSample >= 0 {
 		ct := req.Header.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
@@ -321,14 +347,25 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig, provider Pro
 						msgEst := totalChars / charsPerToken
 						if msgEst > 0 {
 							est = msgEst
+							estSource = "messages"
 						}
 					}
 				}
+			} else if req.ContentLength > int64(maxSample) {
+				bodyTooLarge = true
 			}
 		}
 	}
 	if est < 0 {
 		est = 0
+	}
+	// Single, accurate log line. Includes whether the body was too large to
+	// sample (which is why "model" can be empty for big requests).
+	if bodyTooLarge {
+		log.Printf("🔍 Estimated tokens=%d model=%q source=%s (body %d bytes > max_sample %d, skipped body parse)",
+			est, model, estSource, req.ContentLength, maxSample)
+	} else {
+		log.Printf("🔍 Estimated tokens=%d model=%q source=%s", est, model, estSource)
 	}
 	return est, model
 }

@@ -27,8 +27,15 @@ type OpenAIProxy struct {
 	proxy *httputil.ReverseProxy
 }
 
-// NewOpenAIProxy creates a new OpenAI reverse proxy
-func NewOpenAIProxy() *OpenAIProxy {
+// NewOpenAIProxy creates a new OpenAI reverse proxy.
+// Pass a ProxyOptions value to override defaults (e.g. DisableGzip: true for
+// debug builds that need plain-text SSE wire bytes).
+func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
+	var opt ProxyOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	// Parse the OpenAI API URL
 	targetURL, err := url.Parse(openAIBaseURL)
 	if err != nil {
@@ -43,10 +50,10 @@ func NewOpenAIProxy() *OpenAIProxy {
 
 	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(openAIProxy, targetURL, originalDirector)
+	proxy.Director = CreateGenericDirector(openAIProxy, targetURL, originalDirector, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
-	proxy.Transport = newProxyTransport()
+	proxy.Transport = newProxyTransport(opt.DisableGzip)
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -846,7 +853,15 @@ func (o *OpenAIProxy) readRequestBodyForUserID(req *http.Request) ([]byte, error
 // Supports Chat Completions and Responses API minimal structures. Restores req.Body if read.
 func (o *OpenAIProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
 	// Only attempt for OpenAI endpoints and POST requests
-	if req == nil || req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/openai/") {
+	if req == nil || req.Method != "POST" {
+		return "", nil
+	}
+	path := req.URL.Path
+	isOpenAIEndpoint := strings.HasPrefix(path, "/openai/") ||
+		strings.HasPrefix(path, "/v1/chat/") ||
+		strings.HasPrefix(path, "/v1/responses") ||
+		strings.HasPrefix(path, "/v1/completions")
+	if !isOpenAIEndpoint {
 		return "", nil
 	}
 

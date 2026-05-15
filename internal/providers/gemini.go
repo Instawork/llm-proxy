@@ -32,8 +32,15 @@ type GeminiProxy struct {
 	proxy *httputil.ReverseProxy
 }
 
-// NewGeminiProxy creates a new Gemini reverse proxy
-func NewGeminiProxy() *GeminiProxy {
+// NewGeminiProxy creates a new Gemini reverse proxy.
+// Pass a ProxyOptions value to override defaults (e.g. DisableGzip: true for
+// debug builds that need plain-text SSE wire bytes).
+func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
+	var opt ProxyOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	// Parse the Gemini API URL
 	targetURL, err := url.Parse(geminiBaseURL)
 	if err != nil {
@@ -48,13 +55,13 @@ func NewGeminiProxy() *GeminiProxy {
 
 	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector)
+	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance.
 	// Gemini can be significantly slower to return response headers than other providers,
 	// so give it a dedicated transport with a longer ResponseHeaderTimeout to avoid
 	// premature 502s that trigger repeated retries in the client.
-	proxy.Transport = newGeminiProxyTransport()
+	proxy.Transport = newGeminiProxyTransport(opt.DisableGzip)
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {

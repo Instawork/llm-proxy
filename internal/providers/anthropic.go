@@ -27,8 +27,15 @@ type AnthropicProxy struct {
 	proxy *httputil.ReverseProxy
 }
 
-// NewAnthropicProxy creates a new Anthropic reverse proxy
-func NewAnthropicProxy() *AnthropicProxy {
+// NewAnthropicProxy creates a new Anthropic reverse proxy.
+// Pass a ProxyOptions value to override defaults (e.g. DisableGzip: true for
+// debug builds that need plain-text SSE wire bytes).
+func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
+	var opt ProxyOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	// Parse the Anthropic API URL
 	targetURL, err := url.Parse(anthropicBaseURL)
 	if err != nil {
@@ -43,10 +50,10 @@ func NewAnthropicProxy() *AnthropicProxy {
 
 	// Use the generic director function to handle common proxy logic
 	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector)
+	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
-	proxy.Transport = newProxyTransport()
+	proxy.Transport = newProxyTransport(opt.DisableGzip)
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -546,11 +553,17 @@ func (a *AnthropicProxy) readRequestBodyForUserID(req *http.Request) ([]byte, er
 // ExtractRequestModelAndMessages extracts model and message text content from Anthropic request bodies
 // for the messages API. Restores req.Body if read.
 func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
-	if req == nil || req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/anthropic/") {
+	if req == nil || req.Method != "POST" {
+		return "", nil
+	}
+	path := req.URL.Path
+	isAnthropicEndpoint := strings.HasPrefix(path, "/anthropic/") ||
+		strings.HasPrefix(path, "/v1/messages")
+	if !isAnthropicEndpoint {
 		return "", nil
 	}
 	// Only consider the /messages endpoint for token estimation
-	if !strings.Contains(req.URL.Path, "/messages") {
+	if !strings.Contains(path, "/messages") {
 		return "", nil
 	}
 

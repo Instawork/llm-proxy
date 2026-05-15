@@ -27,8 +27,9 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 	openAIProvider := providers.NewOpenAIProxy()
 	anthropicProvider := providers.NewAnthropicProxy()
 	geminiProvider := providers.NewGeminiProxy()
+	bedrockProvider := providers.NewBedrockProxy()
 
-	extract := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider)
+	extract := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
 
 	cases := []struct {
 		name string
@@ -43,6 +44,12 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 			want: "gpt-4o-mini",
 		},
 		{
+			name: "openai chat completions after reverse-proxy director stripped provider prefix",
+			path: "/v1/chat/completions",
+			body: `{"model":"gpt-4o","messages":[]}`,
+			want: "gpt-4o",
+		},
+		{
 			name: "openai responses api",
 			path: "/openai/v1/responses",
 			body: `{"model":"o3-mini","input":"hello"}`,
@@ -55,10 +62,22 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 			want: "claude-3-5-sonnet-20240620",
 		},
 		{
+			name: "anthropic messages after reverse-proxy director stripped provider prefix",
+			path: "/v1/messages",
+			body: `{"model":"claude-3-5-sonnet-latest","messages":[]}`,
+			want: "claude-3-5-sonnet-latest",
+		},
+		{
 			name: "gemini generateContent (URL-derived model)",
 			path: "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
 			body: `{"contents":[]}`,
 			want: "gemini-2.5-flash",
+		},
+		{
+			name: "bedrock converse (URL-derived model)",
+			path: "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			body: `{"messages":[]}`,
+			want: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		},
 		{
 			name: "non-matching path returns empty",
@@ -96,9 +115,31 @@ func TestCircuitModelExtractor_NilSafe(t *testing.T) {
 		providers.NewOpenAIProxy(),
 		providers.NewAnthropicProxy(),
 		providers.NewGeminiProxy(),
+		providers.NewBedrockProxy(),
 	)
 	if got := extract(nil); got != "" {
 		t.Fatalf("nil request: want \"\", got %q", got)
+	}
+}
+
+// TestCircuitModelExtractor_NilBedrockSafe ensures that when Bedrock is
+// disabled (provider is nil) the extractor still returns "" for any
+// `/bedrock/...` path that somehow reaches it, rather than panicking.
+func TestCircuitModelExtractor_NilBedrockSafe(t *testing.T) {
+	extract := circuitModelExtractor(
+		providers.NewOpenAIProxy(),
+		providers.NewAnthropicProxy(),
+		providers.NewGeminiProxy(),
+		nil,
+	)
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+		http.NoBody,
+	)
+	if got := extract(req); got != "" {
+		t.Fatalf("disabled bedrock: want \"\", got %q", got)
 	}
 }
 

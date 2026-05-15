@@ -109,7 +109,10 @@ var globalCircuitRedisFallback bool
 
 // Known provider names the circuit breaker tracks.  Kept as a single source
 // of truth so the wiring code, /health handler, and any future diagnostics
-// agree on the list.
+// agree on the list.  Bedrock is appended at runtime in runServer when the
+// YAML provider block is enabled — keeping it off the default list means
+// existing deployments without a `providers.bedrock` section see no extra
+// /health rollup entries.
 var circuitBreakerProviders = []string{"openai", "anthropic", "gemini"}
 
 // redisPingTimeout bounds the blocking startup PING to Redis.  Long enough
@@ -411,6 +414,15 @@ func isTestModeAllowed(yc *config.YAMLConfig) bool {
 // site sees an identical value (there is no scenario where one layer
 // should honour test-mode and another should not).
 func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool) circuit.Config {
+	// BypassAllowed defaults to true when the YAML field is omitted, on
+	// the principle that callers without a fallback should be able to
+	// opt out of fast-fail by default.  An explicit `bypass_allowed:
+	// false` (which the *bool unmarshalling preserves) disables the
+	// safety valve entirely.
+	bypassAllowed := true
+	if cb.BypassAllowed != nil {
+		bypassAllowed = *cb.BypassAllowed
+	}
 	cfg := circuit.Config{
 		Enabled:                         cb.Enabled,
 		Mode:                            cb.Mode,
@@ -424,6 +436,10 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool)
 		GlobalRateLimitEscalationWindow: cb.GlobalRateLimitEscalationWindow,
 		DegradedSignal:                  cb.DegradedSignal,
 		TestModeEnabled:                 testModeAllowed,
+		BypassAllowed:                   bypassAllowed,
+		PerProviderRollupThreshold:      cb.PerProviderRollupThreshold,
+		PerProviderRollupWindowSeconds:  cb.PerProviderRollupWindowSeconds,
+		BypassReasonAllowlist:           cb.BypassReasonAllowlist,
 	}
 	if cb.Redis != nil {
 		// Expand ${VAR} / $VAR tokens from the process environment so we
@@ -500,6 +516,10 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 		"max_rate_limit_retries", cfg.MaxRateLimitRetries,
 		"retry_contribution_mode", cfg.RetryContributionMode,
 		"degraded_signal", cfg.DegradedSignal,
+		"bypass_allowed", cfg.BypassAllowed,
+		"bypass_reason_allowlist", cfg.BypassReasonAllowlist,
+		"per_provider_rollup_threshold", cfg.PerProviderRollupThreshold,
+		"per_provider_rollup_window_seconds", cfg.PerProviderRollupWindowSeconds,
 	)
 	return store
 }
@@ -593,10 +613,15 @@ func initializeCircuitMetrics(yamlConfig *config.YAMLConfig) circuit.MetricsSink
 // circuit transport on failure paths to enrich logs and metrics with
 // the LLM model name.  Returns "" for any unrecognised path so log
 // fields stay schema-stable rather than panicking on a stray request.
+//
+// bedrockProvider is optional (nil when the YAML disables Bedrock); when
+// nil we skip the Bedrock-specific branch entirely so we don't panic on a
+// stray `/bedrock/...` path that the router somehow let through.
 func circuitModelExtractor(
 	openAIProvider *providers.OpenAIProxy,
 	anthropicProvider *providers.AnthropicProxy,
 	geminiProvider *providers.GeminiProxy,
+	bedrockProvider *providers.BedrockProxy,
 ) circuit.ModelFromRequestFunc {
 	return func(req *http.Request) string {
 		if req == nil || req.URL == nil {
@@ -604,16 +629,26 @@ func circuitModelExtractor(
 		}
 		path := req.URL.Path
 		switch {
-		case strings.HasPrefix(path, "/openai/"):
+		case strings.HasPrefix(path, "/openai/"),
+			strings.HasPrefix(path, "/v1/chat/"),
+			strings.HasPrefix(path, "/v1/responses"),
+			strings.HasPrefix(path, "/v1/completions"):
 			model, _ := openAIProvider.ExtractRequestModelAndMessages(req)
 			return model
-		case strings.HasPrefix(path, "/anthropic/"):
+		case strings.HasPrefix(path, "/anthropic/"),
+			strings.HasPrefix(path, "/v1/messages"):
 			model, _ := anthropicProvider.ExtractRequestModelAndMessages(req)
 			return model
 		case strings.HasPrefix(path, "/gemini/"),
 			strings.HasPrefix(path, "/v1beta/models/"),
 			strings.HasPrefix(path, "/v1/models/"):
 			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/bedrock/"):
+			if bedrockProvider == nil {
+				return ""
+			}
+			model, _ := bedrockProvider.ExtractRequestModelAndMessages(req)
 			return model
 		}
 		return ""
@@ -691,6 +726,30 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if stats.CooldownUntil != nil {
 				entry["cooldown_until"] = stats.CooldownUntil.Unix()
+			}
+
+			// Per-provider rollup snapshot.  In per-model keying mode
+			// the bare-provider state above is rarely Open (it only
+			// trips when the model extractor cannot identify a model);
+			// the rollup is what tells operators how many models are
+			// currently degraded and which ones.  Surfacing both lets
+			// dashboards alert on the right signal.
+			if rec, ok := globalCircuitStore.(circuit.RollupRecorder); ok && globalCircuitConfig.PerProviderRollupThreshold > 0 {
+				keys, _ := rec.RolledUpKeys(r.Context(), name, globalCircuitConfig.PerProviderRollupWindowSeconds)
+				rollupOpen, count, _ := rec.RollupOpen(r.Context(), name,
+					globalCircuitConfig.PerProviderRollupThreshold,
+					globalCircuitConfig.PerProviderRollupWindowSeconds)
+				rollup := map[string]interface{}{
+					"enabled":        true,
+					"open":           rollupOpen,
+					"count":          count,
+					"threshold":      globalCircuitConfig.PerProviderRollupThreshold,
+					"window_seconds": globalCircuitConfig.PerProviderRollupWindowSeconds,
+				}
+				if len(keys) > 0 {
+					rollup["open_keys"] = keys
+				}
+				entry["rollup"] = rollup
 			}
 			perProvider[name] = entry
 
@@ -800,7 +859,7 @@ func handleVersionFlag(yamlConfig *config.YAMLConfig) {
 }
 
 // runServer starts and runs the LLM proxy server
-func runServer(yamlConfig *config.YAMLConfig) {
+func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Get port from environment variable or use default
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -845,14 +904,37 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	globalCircuitStore = initializeCircuitStore(yamlConfig)
 
 	// Register providers
-	openAIProvider := providers.NewOpenAIProxy()
+	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
+	if disableGzip {
+		logger.Warn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
+	}
+
+	openAIProvider := providers.NewOpenAIProxy(proxyOpts)
 	globalProviderManager.RegisterProvider(openAIProvider)
 
-	anthropicProvider := providers.NewAnthropicProxy()
+	anthropicProvider := providers.NewAnthropicProxy(proxyOpts)
 	globalProviderManager.RegisterProvider(anthropicProvider)
 
-	geminiProvider := providers.NewGeminiProxy()
+	geminiProvider := providers.NewGeminiProxy(proxyOpts)
 	globalProviderManager.RegisterProvider(geminiProvider)
+
+	// Bedrock is opt-in via `providers.bedrock.enabled: true` so existing
+	// deployments without an AWS Bedrock relationship are unaffected, and
+	// the staged rollout in plan/bedrock-gmail-gating can flip the flag
+	// per-environment without touching binaries.  The proxy itself is a
+	// transparent SigV4 passthrough — see internal/providers/bedrock.go for
+	// the contract.
+	var bedrockProvider *providers.BedrockProxy
+	if bedrockCfg, ok := yamlConfig.Providers["bedrock"]; ok && bedrockCfg.Enabled {
+		bedrockProvider = providers.NewBedrockProxy(proxyOpts)
+		globalProviderManager.RegisterProvider(bedrockProvider)
+		// Extend the breaker rollup list so /health and the wrapping loop
+		// see the new provider alongside the others.
+		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock")
+		logger.Info("☁️  Bedrock provider: ENABLED", "region", bedrockProvider.Region())
+	} else {
+		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
+	}
 
 	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
@@ -864,7 +946,7 @@ func runServer(yamlConfig *config.YAMLConfig) {
 		// is missing, which keeps test fixtures and Datadog-less
 		// deployments working unchanged.
 		circuitMetrics := initializeCircuitMetrics(yamlConfig)
-		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider)
+		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 		}
@@ -880,11 +962,15 @@ func runServer(yamlConfig *config.YAMLConfig) {
 				WrapTransport(func(http.RoundTripper) http.RoundTripper)
 			}
 		}
-		for _, np := range []namedProvider{
+		namedProviders := []namedProvider{
 			{"openai", openAIProvider},
 			{"anthropic", anthropicProvider},
 			{"gemini", geminiProvider},
-		} {
+		}
+		if bedrockProvider != nil {
+			namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
+		}
+		for _, np := range namedProviders {
 			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, opts...)
 		}
 		logger.Info("⚡ Circuit Breaker: transports wrapped for all providers",
@@ -1009,6 +1095,9 @@ func runServer(yamlConfig *config.YAMLConfig) {
 	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
 	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
 	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
+	if bedrockProvider != nil {
+		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
+	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
 
 	server := &http.Server{
@@ -1069,8 +1158,10 @@ func main() {
 	// Parse command line flags
 	var showVersion bool
 	var validateConfig string
+	var disableGzip bool
 	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
 	flag.StringVar(&validateConfig, "validate-config", "", "Validate configuration files (comma-separated paths) and exit")
+	flag.BoolVar(&disableGzip, "disable-gzip", false, "Strip Accept-Encoding and disable transport compression (forces plain-text upstream bytes; useful for debugging SSE streams)")
 	flag.Parse()
 
 	// Handle config validation if requested
@@ -1091,5 +1182,5 @@ func main() {
 	}
 
 	// Start the server
-	runServer(yamlConfig)
+	runServer(yamlConfig, disableGzip)
 }

@@ -54,5 +54,40 @@ features:
     max_transient_retries: 2
     max_rate_limit_retries: 2
     retry_contribution_mode: "log"
+    # Bypass safety valve: callers without a fallback can set
+    # X-LLM-Proxy-Bypass-Circuit (or ?llm_proxy_bypass_circuit=1) to opt
+    # out of fast-fail.  Default is true; set to false to disable the
+    # safety valve entirely once every caller has fallback logic wired up.
+    bypass_allowed: true
+    # Bypass-reason allowlist: only these values are emitted verbatim on
+    # the `circuit.bypass` Datadog tag — anything else gets normalised to
+    # `other`.  Keeps tag cardinality bounded against noisy callers and
+    # standardises the dashboard vocabulary.  Comment out (or empty list)
+    # to accept any well-formed reason during early rollout.
+    bypass_reason_allowlist:
+      - no_fallback_configured
+      - manual_debug
+      - final_retry_tier
+      - force_real_upstream
+    # Per-provider rollup: when this many distinct per-model breakers
+    # open inside the rollup window, the entire provider is treated as
+    # Open and ALL keys for it fast-fail.  Set to 0 to disable (in which
+    # case behaviour matches per-model keying alone).  3 / 300s is the
+    # recommended starting point for prod — high enough that a single
+    # bad preview model doesn't trip wholesale enforcement, low enough
+    # that a real Gemini/OpenAI/Anthropic outage does.
+    per_provider_rollup_threshold: 3
+    per_provider_rollup_window_seconds: 300
   rate_limiting:
     enabled: false
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Base config disables AWS Bedrock by default (see configs/base.yml).  Flip the
+# override below — and confirm the Finch ECS task role has bedrock:Invoke* /
+# Converse* IAM grants for $AWS_REGION — to enable the SigV4 passthrough after
+# staging validation.
+# providers:
+#   bedrock:
+#     enabled: true

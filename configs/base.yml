@@ -607,6 +607,92 @@ providers:
           output: 1.25
 
   # ---------------------------------------------------------------------------
+  # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
+  # ---------------------------------------------------------------------------
+  # Bedrock is opt-in via `enabled: true` because, unlike the other providers,
+  # the proxy does not mint or validate credentials — clients (e.g. Finch via
+  # boto3 + langchain-aws.ChatBedrockConverse) sign SigV4 against the canonical
+  # AWS host and the proxy forwards bytes verbatim.  The proxy reads
+  # $AWS_REGION (default us-west-2) for the upstream hostname; no AWS SDK
+  # clients run in the proxy itself.
+  #
+  # Anthropic-on-Bedrock pricing matches native Anthropic pricing today, so the
+  # `pricing` blocks below mirror the matching SKUs in the `anthropic` provider
+  # above.  Aliases let cost-tracking key off either the AWS-native model id
+  # (e.g. `us.anthropic.claude-sonnet-4-5-...`) or the bare slug.
+  bedrock:
+    enabled: false # flip per-environment in configs/{staging,production}.yml
+
+    default_limits:
+      tokens_per_minute: 80_000
+      requests_per_minute: 1_000
+      tokens_per_hour: 4_800_000
+      tokens_per_day: 115_200_000
+      requests_per_day: 1_440_000
+      burst_tokens: 8_000
+      burst_requests: 100
+
+    models:
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "claude-sonnet-4-5-bedrock",
+            "claude-sonnet-4.5-bedrock",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          - threshold: 200_000
+            input: 3.00
+            output: 15.00
+          - threshold: 0
+            input: 6.00
+            output: 22.50
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "claude-haiku-4-5-bedrock",
+            "claude-haiku-4.5-bedrock",
+          ]
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          input: 1.00
+          output: 5.00
+      "us.anthropic.claude-opus-4-1-20250805-v1:0":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-opus-4-1-20250805-v1:0",
+            "claude-opus-4-1-bedrock",
+            "claude-opus-4.1-bedrock",
+          ]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 15.00
+          output: 75.00
+
+  # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
   # ---------------------------------------------------------------------------
   gemini:

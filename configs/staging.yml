@@ -36,5 +36,25 @@ features:
     max_transient_retries: 2
     max_rate_limit_retries: 2
     retry_contribution_mode: "log"
+    # Match production's bypass and rollup configuration so staging
+    # validates the same wiring + log lines before prod is flipped.
+    bypass_allowed: true
+    bypass_reason_allowlist:
+      - no_fallback_configured
+      - manual_debug
+      - final_retry_tier
+      - force_real_upstream
+    per_provider_rollup_threshold: 3
+    per_provider_rollup_window_seconds: 300
   rate_limiting:
     enabled: false
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Base config disables AWS Bedrock by default (see configs/base.yml).  Uncomment
+# the override below — and confirm the Finch ECS task role has bedrock:Invoke* /
+# Converse* IAM grants for $AWS_REGION — to enable the SigV4 passthrough.
+# providers:
+#   bedrock:
+#     enabled: true
