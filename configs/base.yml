@@ -610,9 +610,9 @@ providers:
   # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
   # ---------------------------------------------------------------------------
   # Bedrock is opt-in via `enabled: true` because, unlike the other providers,
-  # the proxy does not mint or validate credentials — clients (e.g. Finch via
-  # boto3 + langchain-aws.ChatBedrockConverse) sign SigV4 against the canonical
-  # AWS host and the proxy forwards bytes verbatim.  The proxy reads
+  # the proxy does not mint or validate credentials — clients (e.g. a boto3
+  # `before-send` hook or langchain-aws.ChatBedrockConverse) sign SigV4 against
+  # the canonical AWS host and the proxy forwards bytes verbatim.  The proxy reads
   # $AWS_REGION (default us-west-2) for the upstream hostname; no AWS SDK
   # clients run in the proxy itself.
   #

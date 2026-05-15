@@ -443,8 +443,8 @@ func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool)
 	}
 	if cb.Redis != nil {
 		// Expand ${VAR} / $VAR tokens from the process environment so we
-		// can thread secrets (e.g. Finch's ML_CACHE_URL SSM parameter
-		// rendered into REDIS_URL by ECS) through without baking them
+		// can thread secrets (e.g. a REDIS_URL rendered from a secret
+		// manager by the deploy system) through without baking them
 		// into the YAML or requiring a separate secrets flavour.  Values
 		// without any `$` pass through unchanged.
 		cfg.RedisURL = os.ExpandEnv(cb.Redis.URL)

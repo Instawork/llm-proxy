@@ -34,9 +34,8 @@ import (
 //     request body untouched.
 //
 // Clients sign with whatever AWS identity they already have (IAM role, IRSA,
-// env vars, AssumeRole, etc.). See the `examples/bedrock-passthrough/python.py`
-// recipe and the matching `agents/common/models/bedrock_session.py` helper in
-// Finch for the boto3 `before-send` hook that rewrites the destination URL
+// env vars, AssumeRole, etc.). See `examples/bedrock-passthrough/python.py`
+// for the boto3 `before-send` hook recipe that rewrites the destination URL
 // after the signer has finished.
 const (
 	defaultBedrockRegion   = "us-west-2"

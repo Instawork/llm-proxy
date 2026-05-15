@@ -74,9 +74,9 @@ func TestCircuitBreaker_EnvConfigsLoad(t *testing.T) {
 }
 
 // TestCircuitBreaker_ProdAndStaging_RedisPinnedToDedicatedDB verifies that
-// the shared Finch Redis cluster can't accidentally collide with the
+// a shared Redis cluster can't accidentally collide with the
 // circuit-breaker namespace: we pin to a dedicated DB so a future operator
-// mistake in ML_CACHE_URL can't start overwriting app cache keys.
+// mistake in the supplied REDIS_URL can't start overwriting app cache keys.
 func TestCircuitBreaker_ProdAndStaging_RedisPinnedToDedicatedDB(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	if err != nil {
@@ -97,10 +97,10 @@ func TestCircuitBreaker_ProdAndStaging_RedisPinnedToDedicatedDB(t *testing.T) {
 			t.Fatalf("%s: cb.redis must be populated for shared-cluster rollout", file)
 		}
 		if cb.Redis.DB == 0 {
-			t.Errorf("%s: cb.redis.db must be explicitly non-zero so we don't collide with Finch (got 0)", file)
+			t.Errorf("%s: cb.redis.db must be explicitly non-zero so we don't collide with a co-tenant on DB 0 (got 0)", file)
 		}
 		if cb.Redis.URL == "" {
-			t.Errorf("%s: cb.redis.url must be set (expected `${REDIS_URL}` from ECS secret)", file)
+			t.Errorf("%s: cb.redis.url must be set (expected `${REDIS_URL}` from a deployment-managed secret)", file)
 		}
 	}
 }

@@ -31,13 +31,13 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys"
     region: "us-west-2"
-  # Circuit breaker: shadow/observe-only rollout against the Finch-owned
-  # Redis cluster.  The sidecar records counterfactual state + failure
-  # counts in Redis (under the `llm:cb:` prefix, DB 5) but never retries
-  # traffic, fast-fails, or synthesises 503s — operators can flip
+  # Circuit breaker: shadow/observe-only rollout against an externally
+  # provided Redis cluster.  The sidecar records counterfactual state +
+  # failure counts in Redis (under the `llm:cb:` prefix, DB 5) but never
+  # retries traffic, fast-fails, or synthesises 503s — operators can flip
   # `mode: enforce` once the would-trip rates look sane.
   #
-  # ${REDIS_URL} is populated from the ML_CACHE_URL SSM secret in the
+  # ${REDIS_URL} is populated from a deployment-managed secret in the
   # ECS task definition; any transient Redis outage degrades the breaker
   # to per-instance best-effort (fail-open) rather than tripping the
   # proxy itself.
@@ -85,8 +85,8 @@ features:
 # PROVIDER OVERRIDES
 # =============================================================================
 # Base config disables AWS Bedrock by default (see configs/base.yml).  Flip the
-# override below — and confirm the Finch ECS task role has bedrock:Invoke* /
-# Converse* IAM grants for $AWS_REGION — to enable the SigV4 passthrough after
+# override below — and confirm the calling service's IAM role has bedrock:Invoke* /
+# Converse* grants for $AWS_REGION — to enable the SigV4 passthrough after
 # staging validation.
 # providers:
 #   bedrock:

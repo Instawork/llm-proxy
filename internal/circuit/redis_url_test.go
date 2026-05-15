@@ -109,14 +109,14 @@ func TestNewRedisStore_URLOnly(t *testing.T) {
 }
 
 // TestNewRedisStore_URLPlusDBOverlay confirms that an explicit RedisDB
-// overrides the DB encoded in the URL, so operators can share Finch's
-// cluster while pinning a dedicated circuit-breaker DB.
+// overrides the DB encoded in the URL, so operators can share an
+// existing cluster while pinning a dedicated circuit-breaker DB.
 func TestNewRedisStore_URLPlusDBOverlay(t *testing.T) {
 	addr := newPingRedisServer(t)
 	s, err := NewRedisStore(Config{
 		Enabled:    true,
 		Backend:    "redis",
-		RedisURL:   "redis://" + addr + "/6", // Finch uses DB 6
+		RedisURL:   "redis://" + addr + "/6", // co-tenant occupies DB 6
 		RedisDB:    5,                        // circuit breaker pinned to DB 5
 		RedisDBSet: true,
 	})

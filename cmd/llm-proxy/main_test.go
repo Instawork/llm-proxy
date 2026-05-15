@@ -98,9 +98,9 @@ func TestCircuitConfigFromYAML_LiteralURLPassesThrough(t *testing.T) {
 // set REDIS_URL in the environment, feed the parsed CircuitBreakerConfig
 // through circuitConfigFromYAML, and confirm the expanded URL reaches
 // circuit.Config.  If this test ever fails you have a real bug in the
-// path from ECS → binary → Redis.
+// path from deploy environment → binary → Redis.
 func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
-	const want = "redis://:prodpw@finch-cache.internal:6379/6"
+	const want = "redis://:prodpw@cache.internal:6379/6"
 	t.Setenv("REDIS_URL", want)
 
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
@@ -127,7 +127,7 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 		t.Fatalf("production.yml cb.backend should be 'redis', got %q", cfg.Backend)
 	}
 	if cfg.RedisDB != 5 {
-		t.Fatalf("production.yml cb.redis.db should pin 5 (isolated from Finch's DB), got %d", cfg.RedisDB)
+		t.Fatalf("production.yml cb.redis.db should pin 5 (isolated from any co-tenant DB), got %d", cfg.RedisDB)
 	}
 	if !cfg.RedisDBSet {
 		t.Fatal("production.yml cb.redis.db should be recorded as explicitly set")

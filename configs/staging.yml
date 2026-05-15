@@ -21,8 +21,8 @@ features:
   # Circuit breaker: shadow/observe-only rollout in staging, matching
   # production config so we can validate Redis connectivity and
   # would-trip rates before flipping prod to `mode: enforce`.  DB 5 is
-  # pinned so `llm:cb:*` keys stay isolated from Finch's ML cache (DB 6
-  # in staging2).
+  # pinned so `llm:cb:*` keys stay isolated from any application cache
+  # that may share the same Redis cluster.
   circuit_breaker:
     enabled: true
     mode: "log"
@@ -53,8 +53,8 @@ features:
 # PROVIDER OVERRIDES
 # =============================================================================
 # Base config disables AWS Bedrock by default (see configs/base.yml).  Uncomment
-# the override below — and confirm the Finch ECS task role has bedrock:Invoke* /
-# Converse* IAM grants for $AWS_REGION — to enable the SigV4 passthrough.
+# the override below — and confirm the calling service's IAM role has bedrock:Invoke* /
+# Converse* grants for $AWS_REGION — to enable the SigV4 passthrough.
 # providers:
 #   bedrock:
 #     enabled: true
