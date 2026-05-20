@@ -26,11 +26,19 @@ func (f *fakeProvider) IsStreamingRequest(req *http.Request) bool { return false
 func (f *fakeProvider) ParseResponseMetadata(body io.Reader, isStreaming bool) (*providers.LLMResponseMetadata, error) {
 	return nil, nil
 }
-func (f *fakeProvider) Proxy() http.Handler                                              { return http.NotFoundHandler() }
-func (f *fakeProvider) GetHealthStatus() map[string]interface{}                          { return map[string]interface{}{} }
-func (f *fakeProvider) UserIDFromRequest(req *http.Request) string                       { return "" }
-func (f *fakeProvider) RegisterExtraRoutes(r *mux.Router)                                {}
-func (f *fakeProvider) ValidateAPIKey(req *http.Request, ks providers.APIKeyStore) error { return nil }
+
+func (f *fakeProvider) Proxy() http.Handler { return http.NotFoundHandler() }
+
+func (f *fakeProvider) GetHealthStatus() map[string]interface{} { return map[string]interface{}{} }
+
+func (f *fakeProvider) UserIDFromRequest(req *http.Request) string { return "" }
+
+func (f *fakeProvider) RegisterExtraRoutes(r *mux.Router) {}
+
+func (f *fakeProvider) ValidateAPIKey(req *http.Request, ks providers.APIKeyStore) error {
+	return nil
+}
+
 func (f *fakeProvider) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
 	return "", nil
 }
@@ -279,9 +287,11 @@ type erroringLimiter struct{}
 func (erroringLimiter) CheckAndReserve(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) (ratelimit.ReservationResult, error) {
 	return ratelimit.ReservationResult{}, errors.New("simulated limiter outage")
 }
+
 func (erroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
 	return errors.New("simulated adjust outage")
 }
+
 func (erroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
 	return nil
 }
@@ -314,9 +324,11 @@ type adjustErroringLimiter struct{}
 func (adjustErroringLimiter) CheckAndReserve(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) (ratelimit.ReservationResult, error) {
 	return ratelimit.ReservationResult{Allowed: true}, nil
 }
+
 func (adjustErroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
 	return errors.New("simulated adjust outage")
 }
+
 func (adjustErroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
 	return nil
 }

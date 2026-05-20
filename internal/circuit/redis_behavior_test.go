@@ -42,7 +42,8 @@ func TestRedisStore_RecordTerminalFailure_CountsSameScoreFailures(t *testing.T) 
 		// so we read it via Slice() rather than Text().  openedNow is
 		// covered by the per-API test below; here we only assert the
 		// state transitions are stable across same-timestamp adds.
-		got, err := luaRecordFailure.Run(ctx, store.rdb,
+		got, err := luaRecordFailure.Run(
+			ctx, store.rdb,
 			[]string{store.failuresKey("openai"), store.stateKey("openai"), store.halfOpenKey("openai")},
 			now,
 			cutoff,

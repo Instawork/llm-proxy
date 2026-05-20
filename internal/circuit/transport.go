@@ -403,13 +403,15 @@ func (t *Transport) effectiveStateForRequest(req *http.Request) (State, string) 
 	// which is exactly the opposite of what we want.
 	if state == StateClosed && t.cfg.PerProviderRollupThreshold > 0 {
 		if rec, ok := t.store.(RollupRecorder); ok {
-			open, count, _ := rec.RollupOpen(ctx,
+			open, count, _ := rec.RollupOpen(
+				ctx,
 				t.provider,
 				t.cfg.PerProviderRollupThreshold,
 				t.cfg.PerProviderRollupWindowSeconds,
 			)
 			if open {
-				t.log.Warn("circuit: provider rollup open, treating per-key state as Open",
+				t.log.Warn(
+					"circuit: provider rollup open, treating per-key state as Open",
 					"provider", t.provider,
 					"cb_key", key,
 					"rollup_threshold", t.cfg.PerProviderRollupThreshold,
@@ -584,7 +586,8 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		// Oversize body: req.Body has been rewired to a streaming
 		// pass-through, GetBody is nil, model extraction will return
 		// "" — that's acceptable for log mode.
-		t.log.Warn("circuit: log-mode request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+		t.log.Warn(
+			"circuit: log-mode request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
 			"provider", t.provider,
 			"path", req.URL.Path,
 			"content_length", req.ContentLength,
@@ -608,7 +611,8 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 				t.cfg.PerProviderRollupWindowSeconds); open {
 				fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
 				t.log.Info("circuit: log-mode would_have_fast_failed (rollup open, passing through)",
-					append(fc.attrs(),
+					append(
+						fc.attrs(),
 						"rollup_count", count,
 						"rollup_threshold", t.cfg.PerProviderRollupThreshold,
 					)...)
@@ -641,7 +645,8 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		t.maybeRecordRollup(ctx, key, openedNow)
 		fc := t.newFailureContext(req, resp, err)
 		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
-			append(fc.attrs(),
+			append(
+				fc.attrs(),
 				"would_be_new_state", newState.String(),
 				"mode", ModeLog,
 			)...)
@@ -724,7 +729,8 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 		if !errors.Is(err, errRetryBodyTooLarge) {
 			return nil, fmt.Errorf("circuit: cacheBody (bypass): %w", err)
 		}
-		t.log.Warn("circuit: bypass request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+		t.log.Warn(
+			"circuit: bypass request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
 			"provider", t.provider,
 			"path", req.URL.Path,
 			"content_length", req.ContentLength,
@@ -754,7 +760,8 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 		_ = t.metrics.Incr("circuit.bypass", tags, 1.0)
 	}
 	t.log.Info("circuit: bypass requested by caller",
-		append(fc.attrs(),
+		append(
+			fc.attrs(),
 			"reason", reasonTag,
 			"outcome", string(class),
 			"upstream_ms", upstreamDur.Milliseconds(),
@@ -807,7 +814,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	cacheBodyStart := time.Now()
 	if err := t.cacheBody(req); err != nil {
 		if errors.Is(err, errRetryBodyTooLarge) {
-			t.log.Warn("circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request",
+			t.log.Warn(
+				"circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request",
 				"provider", t.provider,
 				"path", req.URL.Path,
 				"content_length", req.ContentLength,
@@ -1016,7 +1024,8 @@ func (t *Transport) handleRateLimitFailure(
 	if st.rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
 		evt := t.newFailureContext(req, st.lastResp, st.lastErr)
 		t.log.Warn("circuit: rate-limit retries exhausted",
-			append(evt.attrs(),
+			append(
+				evt.attrs(),
 				"attempts", st.rateLimitAttempts,
 				"class", fc,
 			)...)
@@ -1040,7 +1049,8 @@ func (t *Transport) handleRateLimitFailure(
 		st.firstRateLimitAt = time.Now()
 	}
 	backoff := rateLimitBackoff(retryAfterSec, st.rateLimitAttempts)
-	t.log.Info("circuit: rate-limit backoff",
+	t.log.Info(
+		"circuit: rate-limit backoff",
 		"provider", t.provider,
 		"class", fc,
 		"backoff_ms", backoff.Milliseconds(),
@@ -1092,7 +1102,8 @@ func (t *Transport) handleDegradedFailure(
 	}
 
 	backoff := transientBackoff(st.transientAttempts)
-	t.log.Info("circuit: transient backoff",
+	t.log.Info(
+		"circuit: transient backoff",
 		"provider", t.provider,
 		"backoff_ms", backoff.Milliseconds(),
 		"attempt", st.transientAttempts+1,
@@ -1137,7 +1148,8 @@ func (t *Transport) logTimingBreakdown(
 	// value means the circuit breaker bookkeeping (Store calls, retry
 	// backoff sleeps, etc.) is contributing.
 	overhead := total - upstream - cacheBody
-	t.log.Info("circuit: slow request timing breakdown",
+	t.log.Info(
+		"circuit: slow request timing breakdown",
 		"provider", t.provider,
 		"path", path,
 		"method", method,
@@ -1206,7 +1218,8 @@ func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, err
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
 		t.log.Info("circuit: probe aborted by caller context, releasing probe slot without state change",
-			append(t.newFailureContext(req, resp, err).attrs(),
+			append(
+				t.newFailureContext(req, resp, err).attrs(),
 				"ctx_err", truncateError(ctxErr),
 			)...)
 		drainResponseBody(resp)
@@ -1278,7 +1291,8 @@ func (t *Transport) recordProbeSuccess(ctx context.Context, req *http.Request, r
 	if resp != nil {
 		probeStatus = resp.StatusCode
 	}
-	t.log.Info("circuit: probe succeeded, closing circuit",
+	t.log.Info(
+		"circuit: probe succeeded, closing circuit",
 		"provider", t.provider,
 		"cb_key", key,
 		"status_code", probeStatus,
@@ -1329,7 +1343,8 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 	t.maybeRecordRollup(ctx, key, openedNow)
 
 	evt := t.newFailureContext(req, lastResp, lastErr)
-	attrs := append(evt.attrs(),
+	attrs := append(
+		evt.attrs(),
 		"new_state", newState.String(),
 		"mode", ModeEnforce,
 	)
