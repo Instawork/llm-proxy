@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func defaultConfig() Config {
@@ -34,21 +36,27 @@ func TestMemoryStore_CircuitOpensAtThreshold(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 2; i++ {
-		st, err := s.RecordTerminalFailure(ctx, "openai")
+		st, openedNow, err := s.RecordTerminalFailure(ctx, "openai")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if st != StateClosed {
 			t.Fatalf("expected StateClosed after %d failures, got %s", i+1, st)
 		}
+		if openedNow {
+			t.Fatalf("expected openedNow=false while still under threshold (i=%d)", i)
+		}
 	}
 
-	st, err := s.RecordTerminalFailure(ctx, "openai")
+	st, openedNow, err := s.RecordTerminalFailure(ctx, "openai")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if st != StateOpen {
 		t.Fatalf("expected StateOpen after 3 failures, got %s", st)
+	}
+	if !openedNow {
+		t.Fatalf("expected openedNow=true on the call that crosses the threshold")
 	}
 }
 
@@ -144,7 +152,7 @@ func TestMemoryStore_SlidingWindowExpiry(t *testing.T) {
 
 	// One more failure — the previous two are now outside the window so
 	// the count should be exactly 1 and the circuit should stay closed.
-	st, _ := s.RecordTerminalFailure(ctx, "openai")
+	st, _, _ := s.RecordTerminalFailure(ctx, "openai")
 	if st != StateClosed {
 		t.Fatalf("want StateClosed after window expiry, got %s", st)
 	}
@@ -238,4 +246,27 @@ func TestMemoryStore_MultipleProviders_Independent(t *testing.T) {
 	if anthropicState != StateOpen {
 		t.Fatalf("anthropic should be Open, got %s", anthropicState)
 	}
+}
+
+func TestMemoryStore_ReleaseProbe_ResetsFlag(t *testing.T) {
+	cfg := Config{
+		Enabled: true, Backend: "memory",
+		FailureThreshold: 1, WindowSeconds: 60, CooldownSeconds: 1,
+	}
+	s := NewMemoryStore(cfg)
+	ctx := context.Background()
+
+	_, _, err := s.RecordTerminalFailure(ctx, "foo")
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		st, _ := s.GetState(ctx, "foo")
+		return st == StateHalfOpen
+	}, 3*time.Second, 50*time.Millisecond)
+
+	require.True(t, s.TryStartProbe(ctx, "foo"))
+	require.False(t, s.TryStartProbe(ctx, "foo"))
+
+	require.NoError(t, s.ReleaseProbe(ctx, "foo"))
+	require.True(t, s.TryStartProbe(ctx, "foo"))
 }

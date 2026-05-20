@@ -178,6 +178,67 @@ func TestStreamingMiddleware_HandlerPanic(t *testing.T) {
 	// This test verifies that the middleware doesn't interfere with panic propagation
 }
 
+// nonFlushableWriter implements http.ResponseWriter but NOT http.Flusher.  We
+// hand-roll instead of using httptest.ResponseRecorder because the recorder
+// happens to expose flushable behaviour through its Result() helper, and the
+// branch we're trying to exercise is "underlying writer cannot flush".
+type nonFlushableWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (n *nonFlushableWriter) Header() http.Header {
+	if n.header == nil {
+		n.header = http.Header{}
+	}
+	return n.header
+}
+func (n *nonFlushableWriter) Write(b []byte) (int, error) { return n.body.Write(b) }
+func (n *nonFlushableWriter) WriteHeader(status int)      { n.status = status }
+
+// TestStreamingMiddleware_NonFlushableWriter_FallsThrough verifies that when
+// the underlying ResponseWriter does not implement http.Flusher, the streaming
+// middleware logs a warning and forwards the request unwrapped instead of
+// panicking on a failed type assertion.
+func TestStreamingMiddleware_NonFlushableWriter_FallsThrough(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	pm.RegisterProvider(providers.NewAnthropicProxy())
+	pm.RegisterProvider(providers.NewGeminiProxy())
+	pm.RegisterProvider(providers.NewBedrockProxy())
+
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
+		// The middleware should have left the writer untouched (no streaming
+		// wrapper) since the underlying writer doesn't implement Flusher.
+		if _, ok := w.(*streamingResponseWriter); ok {
+			t.Error("non-flushable writer must not be wrapped in streamingResponseWriter")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	chain := StreamingMiddleware(pm)(handler)
+
+	req := httptest.NewRequest("POST", "/anthropic/v1/messages", nil)
+	req.Header.Set("Accept", "text/event-stream")
+
+	w := &nonFlushableWriter{}
+	chain.ServeHTTP(w, req)
+
+	if !handlerCalled {
+		t.Fatal("inner handler must still be invoked when writer is non-flushable")
+	}
+	if w.status != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.status)
+	}
+	if w.body.String() != "ok" {
+		t.Errorf("expected body 'ok', got %q", w.body.String())
+	}
+}
+
 // Mock flushable recorder for testing
 type MockFlushableRecorder struct {
 	*httptest.ResponseRecorder
@@ -253,7 +314,10 @@ func TestResponseCapture_FlushNoopWhenUnderlyingNotFlushable(t *testing.T) {
 // http.Flusher. With Flush() on responseCapture the chain flushes each chunk.
 func TestTokenParsingThenStreaming_FlushesEachWrite(t *testing.T) {
 	manager := providers.NewProviderManager()
+	manager.RegisterProvider(providers.NewOpenAIProxy())
 	manager.RegisterProvider(providers.NewAnthropicProxy())
+	manager.RegisterProvider(providers.NewGeminiProxy())
+	manager.RegisterProvider(providers.NewBedrockProxy())
 
 	// Handler emits 3 chunks like an SSE stream would.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

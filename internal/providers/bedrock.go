@@ -68,7 +68,11 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 	baseURL := fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", region)
 	targetURL, err := url.Parse(baseURL)
 	if err != nil {
-		log.Fatalf("Failed to parse Bedrock upstream URL %q: %v", baseURL, err)
+		// baseURL is composed from a constant + region; parse failure
+		// indicates a malformed AWS_REGION value at startup. Panic so the
+		// stack trace points at the misconfiguration, instead of silently
+		// log.Fatalf-ing.
+		panic(fmt.Sprintf("invalid Bedrock upstream URL %q (region=%q): %v", baseURL, region, err))
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
@@ -158,17 +162,16 @@ func (b *BedrockProxy) Region() string { return b.region }
 // dedicated `*-stream` path, so the streaming detection is path-based — no
 // JSON body parsing is needed (and parsing the body would unnecessarily
 // burn the GetBody side-channel for callers that did not set it up).
+// IsStreamingRequest assumes the caller has already routed to Bedrock; cross-
+// provider gating lives in ProviderManager.IsStreamingRequest.
 func (b *BedrockProxy) IsStreamingRequest(req *http.Request) bool {
-	if strings.Contains(req.Header.Get("Accept"), bedrockEventStreamMIME) {
-		return true
-	}
 	if req == nil || req.URL == nil {
 		return false
 	}
-	p := req.URL.Path
-	if !strings.HasPrefix(p, "/bedrock/") && !strings.HasPrefix(p, "/model/") {
-		return false
+	if strings.Contains(req.Header.Get("Accept"), bedrockEventStreamMIME) {
+		return true
 	}
+	p := req.URL.Path
 	return strings.HasSuffix(p, "/converse-stream") || strings.HasSuffix(p, "/invoke-with-response-stream")
 }
 

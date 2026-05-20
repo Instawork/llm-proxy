@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"strconv"
@@ -105,7 +107,22 @@ func headerToInt(s string) int {
 	return v
 }
 
-func newReservationID() string { return "" }
+// newReservationID returns a 128-bit random identifier (hex-encoded). The
+// previous implementation returned the empty string, which made the
+// reservation ID indistinguishable between requests and prevented future
+// per-reservation tracking (e.g. Cancel correlation, metrics). We use
+// crypto/rand rather than a UUID dependency since the value is opaque to
+// every caller.
+func newReservationID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure on Linux/Darwin is essentially impossible; if
+		// it happens, fall back to a timestamp-based identifier so the
+		// process can keep serving rather than crashing under load.
+		return "ts-" + strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(b[:])
+}
 
 func prefix(s string) string {
 	if s == "" {

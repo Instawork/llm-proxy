@@ -18,17 +18,6 @@ func TestMetaURLRewritingMiddleware_BasicRewriting(t *testing.T) {
 	manager.RegisterProvider(anthropicProvider)
 	manager.RegisterProvider(geminiProvider)
 
-	// Create test handler that captures the final URL
-	var finalURL string
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		finalURL = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("success"))
-	})
-
-	// Wrap with meta URL rewriting middleware
-	rewritingHandler := MetaURLRewritingMiddleware(manager)(handler)
-
 	tests := []struct {
 		name        string
 		requestURL  string
@@ -62,7 +51,20 @@ func TestMetaURLRewritingMiddleware_BasicRewriting(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			// Local capture so subtests can be run with t.Parallel() in
+			// the future without racing on a shared finalURL string.
+			// Previously the outer-scope variable was shared across all
+			// subtests in this table.
+			var finalURL string
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				finalURL = r.URL.Path
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("success"))
+			})
+			rewritingHandler := MetaURLRewritingMiddleware(manager)(handler)
+
 			req := httptest.NewRequest("POST", tt.requestURL, nil)
 			recorder := httptest.NewRecorder()
 

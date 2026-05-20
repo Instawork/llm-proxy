@@ -35,7 +35,9 @@ func NewMemoryLimiter(cfg *config.YAMLConfig) RateLimiter {
 }
 
 func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) (ReservationResult, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return ReservationResult{}, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -97,7 +99,9 @@ func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope Sc
 }
 
 func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, now time.Time) error {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -110,18 +114,25 @@ func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, 
 	return nil
 }
 
-func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, now time.Time) error {
-	_ = ctx
+// Cancel undoes a prior reservation. estTokens MUST mirror what was passed
+// to CheckAndReserve for this reservation; otherwise the reserved tokens
+// remain in the window and silently under-credit the limit.
+func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.rotateWindowsLocked(now)
 	keys := m.scopeKeys(scope)
 	for _, k := range keys {
-		m.getCounterLocked(m.minute, k).Requests--
-		m.getCounterLocked(m.minute, k).Tokens = max0(m.getCounterLocked(m.minute, k).Tokens)
-		m.getCounterLocked(m.day, k).Requests--
-		m.getCounterLocked(m.day, k).Tokens = max0(m.getCounterLocked(m.day, k).Tokens)
+		minC := m.getCounterLocked(m.minute, k)
+		minC.Requests = max0(minC.Requests - 1)
+		minC.Tokens = max0(minC.Tokens - estTokens)
+		dayC := m.getCounterLocked(m.day, k)
+		dayC.Requests = max0(dayC.Requests - 1)
+		dayC.Tokens = max0(dayC.Tokens - estTokens)
 	}
 	return nil
 }

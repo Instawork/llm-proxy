@@ -51,8 +51,13 @@ type RateLimiter interface {
 	// (actual-estimated) across the same scope. Negative deltas credit back.
 	Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, now time.Time) error
 
-	// Cancel releases the effects of a prior reservation entirely (e.g., upstream error).
-	Cancel(ctx context.Context, id string, scope ScopeKeys, now time.Time) error
+	// Cancel releases the effects of a prior reservation entirely (e.g., upstream
+	// error). estTokens MUST be the same value passed to CheckAndReserve for this
+	// reservation — the previous signature accepted only (id, scope, now) and
+	// silently left the reserved tokens in place, causing under-credit when an
+	// upstream error happened after reservation. Callers that genuinely don't
+	// know the est tokens can pass 0; counters will only decrement the request.
+	Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error
 }
 
 // Factory creates a RateLimiter based on configuration.

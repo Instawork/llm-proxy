@@ -40,10 +40,10 @@ Usage: $0 [OPTIONS]
 
 Build and push Docker image to AWS ECR for LLM Proxy
 
-HARDCODED VALUES:
-    ECR Registry: 183605072238.dkr.ecr.us-west-2.amazonaws.com
-    Repository: llm-proxy
-    Region: us-west-2
+REQUIRED ENVIRONMENT VARIABLES:
+    AWS_ECR_REGISTRY_ID         12-digit AWS account that owns the ECR registry
+    AWS_DEFAULT_REGION          ECR region (defaults to us-west-2 if unset)
+    AWS_ECR_REPOSITORY_NAME     ECR repo name (defaults to llm-proxy if unset)
 
 OPTIONS:
     -v, --version VERSION    Application version (default: dev-{git-sha})
@@ -96,10 +96,14 @@ if [[ ! -f "go.mod" ]]; then
     exit 1
 fi
 
-# Set ECR variables (hardcoded values)
-ECR_URL_PREFIX=183605072238.dkr.ecr.us-west-2.amazonaws.com
-AWS_ECR_REPOSITORY_NAME=llm-proxy
-AWS_DEFAULT_REGION=us-west-2
+# ECR registry coordinates are sourced from the environment so the same script
+# can target dev / staging / prod registries without code changes. The :? form
+# aborts immediately with a clear message if AWS_ECR_REGISTRY_ID is missing,
+# which is the only field with no safe default.
+AWS_ECR_REGISTRY_ID="${AWS_ECR_REGISTRY_ID:?AWS_ECR_REGISTRY_ID must be set (12-digit AWS account ID that owns the ECR registry)}"
+AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
+AWS_ECR_REPOSITORY_NAME="${AWS_ECR_REPOSITORY_NAME:-llm-proxy}"
+ECR_URL_PREFIX="${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
 # Generate build metadata
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

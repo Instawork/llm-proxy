@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,16 +17,59 @@ type redisLimiter struct {
 	rdb *redis.Client
 }
 
+// NewRedisLimiter constructs a Redis-backed rate limiter.
+//
+// Connection options are derived from RedisConfig.URL (preferred — supports
+// rediss:// for TLS and embeds auth + DB) falling back to the discrete
+// Address/Password/DB triple. An explicit DBSet override always wins so a
+// shared Redis instance can pin a specific DB regardless of the URL.
+//
+// The constructor performs a Ping with a 5s context so a misconfigured
+// Redis at process startup fails fast instead of producing per-request
+// errors once traffic arrives.
 func NewRedisLimiter(cfg *config.YAMLConfig) (RateLimiter, error) {
 	if cfg == nil || cfg.Features.RateLimiting.Redis == nil {
 		return nil, fmt.Errorf("redis configuration is required")
 	}
 	r := cfg.Features.RateLimiting.Redis
-	client := redis.NewClient(&redis.Options{
-		Addr:     r.Address,
-		Password: r.Password,
-		DB:       r.DB,
-	})
+
+	// Expand `${VAR}` / `$VAR` tokens against the process environment so
+	// deployers can wire secrets (e.g. `REDIS_URL` rendered by a secret
+	// manager) into YAML without baking credentials into the file. Mirrors
+	// the same expansion the circuit breaker does in cmd/llm-proxy/main.go;
+	// without it, `url: ${REDIS_URL}` was being passed verbatim to
+	// redis.ParseURL and the limiter would fail to construct.
+	url := os.ExpandEnv(r.URL)
+	addr := os.ExpandEnv(r.Address)
+	password := os.ExpandEnv(r.Password)
+
+	var opts *redis.Options
+	if url != "" {
+		parsed, err := redis.ParseURL(url)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redis URL: %w", err)
+		}
+		opts = parsed
+		if addr != "" {
+			opts.Addr = addr
+		}
+		if password != "" {
+			opts.Password = password
+		}
+		if r.DBSet {
+			opts.DB = r.DB
+		}
+	} else {
+		opts = &redis.Options{Addr: addr, Password: password, DB: r.DB}
+	}
+
+	client := redis.NewClient(opts)
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("redis ping failed: %w", err)
+	}
 	return &redisLimiter{cfg: cfg, rdb: client}, nil
 }
 
@@ -219,22 +263,26 @@ end
 return {1}
 `)
 
+// luaCancel undoes a prior reservation. estTokens MUST mirror what was
+// passed to luaCheckAndReserve; otherwise the token reservation lingers
+// in the per-window hash and silently under-credits the limit window.
 var luaCancel = redis.NewScript(`
-local ttlMin = tonumber(ARGV[1])
-local ttlDay = tonumber(ARGV[2])
-local pairsCount = tonumber(ARGV[3])
+local estTokens = tonumber(ARGV[1])
+local ttlMin = tonumber(ARGV[2])
+local ttlDay = tonumber(ARGV[3])
+local pairsCount = tonumber(ARGV[4])
 for i = 0, pairsCount - 1 do
   local kMin = KEYS[2*i + 1]
   local kDay = KEYS[2*i + 2]
   local newMinReq = redis.call('HINCRBY', kMin, 'req', -1)
   if tonumber(newMinReq) < 0 then redis.call('HSET', kMin, 'req', 0) end
-  local minTok = tonumber(redis.call('HGET', kMin, 'tok') or '0')
-  if minTok < 0 then redis.call('HSET', kMin, 'tok', 0) end
+  local newMinTok = redis.call('HINCRBY', kMin, 'tok', -estTokens)
+  if tonumber(newMinTok) < 0 then redis.call('HSET', kMin, 'tok', 0) end
   redis.call('EXPIRE', kMin, ttlMin)
   local newDayReq = redis.call('HINCRBY', kDay, 'req', -1)
   if tonumber(newDayReq) < 0 then redis.call('HSET', kDay, 'req', 0) end
-  local dayTok = tonumber(redis.call('HGET', kDay, 'tok') or '0')
-  if dayTok < 0 then redis.call('HSET', kDay, 'tok', 0) end
+  local newDayTok = redis.call('HINCRBY', kDay, 'tok', -estTokens)
+  if tonumber(newDayTok) < 0 then redis.call('HSET', kDay, 'tok', 0) end
   redis.call('EXPIRE', kDay, ttlDay)
 end
 return {1}
@@ -300,7 +348,7 @@ func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, t
 	return err
 }
 
-func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, now time.Time) error {
+func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error {
 	_ = id
 	scopeKeys := r.scopeKeys(scope)
 	if len(scopeKeys) == 0 {
@@ -311,9 +359,17 @@ func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, n
 		keys = append(keys, minuteKey(sk))
 		keys = append(keys, dayKey(sk))
 	}
-	argv := []interface{}{secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys)}
+	argv := []interface{}{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys)}
 	_, err := luaCancel.Run(ctx, r.rdb, keys, argv...).Result()
 	return err
+}
+
+// Close releases the Redis client. Returns ErrClosed if already closed.
+func (r *redisLimiter) Close() error {
+	if r.rdb == nil {
+		return nil
+	}
+	return r.rdb.Close()
 }
 
 func toInt(v interface{}) int {

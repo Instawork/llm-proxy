@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,10 +35,13 @@ func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
 		opt = opts[0]
 	}
 
-	// Parse the OpenAI API URL
+	// Parse the OpenAI API URL. openAIBaseURL is a package constant, so a
+	// parse failure here means the constant itself is malformed — a
+	// programmer error that should produce a stack trace, not a silent
+	// log.Fatalf that bypasses defers and tests.
 	targetURL, err := url.Parse(openAIBaseURL)
 	if err != nil {
-		log.Fatalf("Failed to parse OpenAI API URL: %v", err)
+		panic(fmt.Sprintf("invalid openAIBaseURL constant %q: %v", openAIBaseURL, err))
 	}
 
 	// Create the reverse proxy
@@ -109,19 +111,18 @@ func (o *OpenAIProxy) GetName() string {
 	return "openai"
 }
 
-// IsStreamingRequest checks if the request is likely to be a streaming request for OpenAI
+// IsStreamingRequest checks if the request is likely to be a streaming
+// request for OpenAI. This assumes the caller has already routed the request
+// to OpenAI; the cross-provider OR-pattern is constrained at the
+// ProviderManager layer (see ProviderManager.IsStreamingRequest), which
+// resolves provider-from-path before consulting any provider — so e.g. a
+// /health request with Accept: text/event-stream no longer flips into the
+// streaming code path.
 func (o *OpenAIProxy) IsStreamingRequest(req *http.Request) bool {
-	// Check for streaming in the Accept header first (fast check)
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
 	}
 
-	// Only check OpenAI-specific endpoints
-	if !strings.HasPrefix(req.URL.Path, "/openai/") {
-		return false
-	}
-
-	// For completion endpoints and responses API, check the request body for stream: true
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/chat/completions") ||
 		strings.Contains(req.URL.Path, "/completions") ||
 		strings.Contains(req.URL.Path, "/responses")) {
@@ -414,6 +415,9 @@ func (o *OpenAIProxy) parseUnifiedStreamingResponse(responseBody io.Reader) (*LL
 	}
 
 	scanner := bufio.NewScanner(decompressedReader)
+	// Allow lines up to 2 MB — large tool call / responses-API deltas can be wide.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
 	var metadata *LLMResponseMetadata
 	var model string
 	var requestID string
@@ -951,8 +955,10 @@ func (o *OpenAIProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 
 	apiKey := strings.TrimPrefix(authHeader, bearerPrefix)
 
-	// Validate and potentially replace the key
-	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	// Validate and potentially replace the key. Use the request context so
+	// client cancellation / handler-level deadlines propagate into the
+	// DynamoDB validation lookup.
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), apiKey)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}

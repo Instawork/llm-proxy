@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -74,6 +75,13 @@ type CostRecord struct {
 
 // CostTracker manages cost tracking and output through transports
 type CostTracker struct {
+	// pricingMu guards pricingConfig. SetPricingForModel runs at startup
+	// and during config reloads, but lookups (GetPricingForModel,
+	// findClosestModelMatch) happen on every cost-record build — i.e. on
+	// every async worker tick. Without a mutex a concurrent reload would
+	// race the map and trip the -race detector or, worse, observe a
+	// torn map in production.
+	pricingMu     sync.RWMutex
 	pricingConfig map[string]map[string]*ModelPricing // provider -> model -> pricing
 	transports    []Transport                         // Multiple transports for parallel writes
 	logger        *slog.Logger
@@ -88,6 +96,12 @@ type CostTracker struct {
 	wg            sync.WaitGroup     // WaitGroup for tracking workers
 	started       bool               // Whether async workers have been started
 	mu            sync.RWMutex       // Mutex for protecting async state
+
+	// stopped is set during shutdown to prevent new sends into ct.queue
+	// after StopAsyncWorkers has been called. The queue is intentionally
+	// never closed (workers exit via ctx.Done) so that a late sender
+	// cannot panic with send-on-closed-channel.
+	stopped atomic.Bool
 }
 
 // NewCostTracker creates a new cost tracker with the specified transports
@@ -207,6 +221,19 @@ func (ct *CostTracker) StartAsyncWorkers() error {
 		return fmt.Errorf("async queue is not initialized")
 	}
 
+	// Refresh the cancellable context on every Start so a Start → Stop →
+	// Start cycle does not hand workers a context that is already
+	// cancelled (which would make every worker exit on the first select
+	// tick and silently drop records). Previously the constructor created
+	// the context once and StopAsyncWorkers cancel()'d it permanently;
+	// the next StartAsyncWorkers would inherit the dead context.
+	if ct.ctx == nil || ct.ctx.Err() != nil {
+		ct.ctx, ct.cancel = context.WithCancel(context.Background())
+	}
+	// Reset the shutdown flag so TrackRequest calls land in the queue
+	// again after a restart.
+	ct.stopped.Store(false)
+
 	ct.logger.Info("💰 Cost Tracker: Starting async workers", "worker_count", ct.workers)
 
 	for i := 0; i < ct.workers; i++ {
@@ -219,7 +246,10 @@ func (ct *CostTracker) StartAsyncWorkers() error {
 	return nil
 }
 
-// StopAsyncWorkers stops all async workers and waits for them to finish processing
+// StopAsyncWorkers stops all async workers and waits for them to finish processing.
+// It signals shutdown via `stopped` (preventing new sends) and ctx cancellation
+// (waking workers from their select); it deliberately does not close the queue,
+// so a TrackRequest call racing with shutdown cannot panic.
 func (ct *CostTracker) StopAsyncWorkers() {
 	ct.mu.Lock()
 	if !ct.started || !ct.async {
@@ -228,8 +258,8 @@ func (ct *CostTracker) StopAsyncWorkers() {
 	}
 
 	ct.logger.Info("💰 Cost Tracker: Stopping async workers...")
-	ct.cancel()     // Signal workers to stop
-	close(ct.queue) // Close the queue to signal no more records
+	ct.stopped.Store(true) // Block further sends into ct.queue
+	ct.cancel()            // Signal workers to drain and exit via ctx.Done
 	ct.mu.Unlock()
 
 	ct.wg.Wait() // Wait for all workers to finish
@@ -335,15 +365,19 @@ func (ct *CostTracker) processRemainingRecords(workerID int) {
 
 // SetPricingForModel sets pricing information for a specific provider and model
 func (ct *CostTracker) SetPricingForModel(provider, model string, pricing *ModelPricing) {
+	ct.pricingMu.Lock()
 	if ct.pricingConfig[provider] == nil {
 		ct.pricingConfig[provider] = make(map[string]*ModelPricing)
 	}
 	ct.pricingConfig[provider][model] = pricing
+	ct.pricingMu.Unlock()
 	ct.logger.Debug("💰 Cost Tracker: Set pricing for model", "provider", provider, "model", model)
 }
 
 // GetPricingForModel retrieves pricing information for a specific provider and model
 func (ct *CostTracker) GetPricingForModel(provider, model string, inputTokens int) (*PricingTier, error) {
+	ct.pricingMu.RLock()
+	defer ct.pricingMu.RUnlock()
 	if providerPricing, exists := ct.pricingConfig[provider]; exists {
 		if modelPricing, exists := providerPricing[model]; exists {
 			// Handle overrides first
@@ -365,6 +399,8 @@ func (ct *CostTracker) GetPricingForModel(provider, model string, inputTokens in
 
 // findClosestModelMatch uses fuzzy string matching to find the closest model name
 func (ct *CostTracker) findClosestModelMatch(provider, model string) (string, float64, error) {
+	ct.pricingMu.RLock()
+	defer ct.pricingMu.RUnlock()
 	providerPricing, exists := ct.pricingConfig[provider]
 	if !exists {
 		return "", 0, fmt.Errorf("provider %s not found", provider)
@@ -543,8 +579,12 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 	started := ct.started
 	ct.mu.RUnlock()
 
-	if async && started {
-		// Async mode - queue the record for processing
+	if async && started && !ct.stopped.Load() {
+		// Async mode - queue the record for processing.
+		// stopped is checked above and the queue is never closed by
+		// StopAsyncWorkers, so the send below cannot panic. (A late
+		// sender can still enqueue after workers have exited; the
+		// record is then lost, which is preferable to a panic.)
 		select {
 		case ct.queue <- record:
 			// Successfully queued

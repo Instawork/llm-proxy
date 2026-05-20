@@ -32,13 +32,15 @@ fi
 mkdir -p ~/.ssh
 ssh-keyscan github.com >>~/.ssh/known_hosts
 
-# Set AWS region
-AWS_DEFAULT_REGION=us-west-2
-aws configure set region ${AWS_DEFAULT_REGION}
+# ECR coordinates from the environment (see build_for_ecr.sh for the same
+# contract). AWS_ECR_REGISTRY_ID is required; everything else falls back to
+# the historical default so existing CI contexts keep working unchanged.
+AWS_ECR_REGISTRY_ID="${AWS_ECR_REGISTRY_ID:?AWS_ECR_REGISTRY_ID must be set (12-digit AWS account ID that owns the ECR registry)}"
+AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
+AWS_ECR_REPOSITORY_NAME="${AWS_ECR_REPOSITORY_NAME:-llm-proxy}"
+aws configure set region "${AWS_DEFAULT_REGION}"
 
-# ECR configuration (matching build_for_ecr.sh)
-ECR_URL_PREFIX=183605072238.dkr.ecr.us-west-2.amazonaws.com
-AWS_ECR_REPOSITORY_NAME=llm-proxy
+ECR_URL_PREFIX="${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 IMAGE_URL="${ECR_URL_PREFIX}/${AWS_ECR_REPOSITORY_NAME}:${GIT_SHA}"
 
 # Default resource values for production
@@ -52,6 +54,22 @@ echo "Image URL: ${IMAGE_URL}"
 echo "CPU: ${CPU}"
 echo "Memory: ${MEMORY}"
 echo "==========================================="
+
+# Interactive guard for accidental local runs. CircleCI sets CI=true so
+# the gated path runs unattended in the pipeline. A developer running
+# `./scripts/deploy.sh production <sha>` from their laptop will get a
+# prompt and must type the literal SHA to proceed, eliminating the
+# fat-finger-into-prod failure mode.
+if [[ -t 0 && "${CI:-}" != "true" ]]; then
+    echo ""
+    echo "⚠️  You are about to apply Terraform against PRODUCTION."
+    echo "    Type the full git SHA (${GIT_SHA}) to confirm, or anything else to abort:"
+    read -r confirmation
+    if [[ "$confirmation" != "$GIT_SHA" ]]; then
+        echo "❌ Confirmation did not match. Aborting."
+        exit 1
+    fi
+fi
 
 # Clone infrastructure repository
 echo "Cloning infrastructure repository..."

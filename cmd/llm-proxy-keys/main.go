@@ -70,11 +70,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create API key store
+	// Create API key store. The CLI is normally used in local dev where
+	// AutoCreateTable=true is desirable; defer to YAML config so the same
+	// guard applies as the proxy.
 	store, err := apikeys.NewStore(apikeys.StoreConfig{
-		TableName: yamlConfig.Features.APIKeyManagement.TableName,
-		Region:    yamlConfig.Features.APIKeyManagement.Region,
-		Logger:    logger,
+		TableName:       yamlConfig.Features.APIKeyManagement.TableName,
+		Region:          yamlConfig.Features.APIKeyManagement.Region,
+		Logger:          logger,
+		AutoCreateTable: yamlConfig.Features.APIKeyManagement.AutoCreateTable,
 	})
 	if err != nil {
 		logger.Error("Failed to create API key store", "error", err)
@@ -155,6 +158,8 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	}
 
 	fmt.Printf("\n✅ API Key Created Successfully!\n\n")
+	fmt.Printf("⚠️  This is the only time the full key value will be displayed.\n")
+	fmt.Printf("    Copy it to a secrets manager now; subsequent `list`/`show` calls will show a redacted form.\n\n")
 	fmt.Printf("Key:         %s\n", apiKey.PK)
 	fmt.Printf("Provider:    %s\n", apiKey.Provider)
 	fmt.Printf("Description: %s\n", apiKey.Description)
@@ -184,9 +189,13 @@ func handleList(ctx context.Context, store *apikeys.Store, provider string, logg
 	fmt.Fprintln(w, "KEY\tPROVIDER\tDESCRIPTION\tCOST LIMIT\tENABLED\tCREATED")
 	fmt.Fprintln(w, "---\t--------\t-----------\t----------\t-------\t-------")
 
+	// Redact key values in the list view so terminal scrollback, shell
+	// history, CI logs, or screenshots don't accidentally expose bearer
+	// secrets. Operators who need the full value should run create (which
+	// prints once) or fetch the underlying record directly.
 	for _, key := range keys {
 		fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f/day\t%v\t%s\n",
-			key.PK,
+			apikeys.RedactKey(key.PK),
 			key.Provider,
 			key.Description,
 			float64(key.DailyCostLimit)/100,
@@ -206,7 +215,7 @@ func handleShow(ctx context.Context, store *apikeys.Store, keyID string, logger 
 	}
 
 	fmt.Printf("\nAPI Key Details:\n\n")
-	fmt.Printf("Key:         %s\n", key.PK)
+	fmt.Printf("Key:         %s\n", apikeys.RedactKey(key.PK))
 	fmt.Printf("Provider:    %s\n", key.Provider)
 	fmt.Printf("Description: %s\n", key.Description)
 	fmt.Printf("Cost Limit:  $%.2f/day\n", float64(key.DailyCostLimit)/100)

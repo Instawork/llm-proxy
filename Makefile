@@ -159,18 +159,20 @@ install:
 	@go mod tidy
 	@echo "$(GREEN)✓ Dependencies installed$(NC)"
 
-# Run unit tests
+# Run unit tests with the race detector enabled. Concurrency bugs in the
+# in-memory rate limiter, cost tracker, and circuit-breaker stores can
+# only surface deterministically under -race; a green run without it is
+# not sufficient evidence that a change is safe to merge.
 .PHONY: test
 test:
-	@echo "$(BLUE)Running unit tests...$(NC)"
-	@go test -v ./internal/... -short -skip "Integration"
+	@echo "$(BLUE)Running unit tests (race detector enabled)...$(NC)"
+	@go test -race -v ./internal/... -short -skip "Integration"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
-# Run unit tests with verbose output
 .PHONY: test-verbose
 test-verbose:
-	@echo "$(BLUE)Running unit tests (verbose)...$(NC)"
-	@go test -v ./internal/... -short -skip "Integration"
+	@echo "$(BLUE)Running unit tests (verbose, race detector enabled)...$(NC)"
+	@go test -race -v ./internal/... -short -skip "Integration"
 	@echo "$(GREEN)✓ Verbose unit tests completed$(NC)"
 
 # Run integration tests (requires API keys)
@@ -230,11 +232,21 @@ dev:
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
 	@LOG_LEVEL=debug go run $(MAIN_PATH)
 
-# Run golint
+# golint is deprecated upstream but still serves as a useful style gate
+# in CI. We pin to a known-good commit so adding new lints does not silently
+# start failing builds on master. Override with GOLINT_VERSION at the
+# command line if a future revision is needed.
+GOLINT_VERSION?=v0.0.0-20210508222113-6edffad5e616
+
 .PHONY: lint
 lint:
-	@echo "$(BLUE)Running golint...$(NC)"
-	@golint ./cmd/... ./internal/... || echo "$(YELLOW)golint not installed, skipping...$(NC)"
+	@echo "$(BLUE)Running golint ($(GOLINT_VERSION))...$(NC)"
+	@if ! command -v golint >/dev/null 2>&1; then \
+		echo "$(YELLOW)golint not installed; installing $(GOLINT_VERSION)...$(NC)"; \
+		go install golang.org/x/lint/golint@$(GOLINT_VERSION) || \
+			(echo "$(YELLOW)golint install failed; skipping...$(NC)"; exit 0); \
+	fi; \
+	golint ./cmd/... ./internal/...
 	@echo "$(GREEN)✓ Lint completed$(NC)"
 
 # Format Go code

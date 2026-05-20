@@ -28,6 +28,10 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-dev"
     region: "us-west-2"
+    # Dev only — auto-creates the DynamoDB table against whatever AWS
+    # creds are active. Staging/production must leave this false and
+    # pre-provision the table via Terraform.
+    auto_create_table: true
   circuit_breaker:
     enabled: true
     backend: "memory"
@@ -56,15 +60,30 @@ features:
       requests_per_day: 0
       tokens_per_day: 0
     overrides:
-    # Example Redis configuration (switch backend to "redis" to use)
-    redis:
-      address: "localhost:6379"
-      password: ""
-      db: 0
       per_user:
-        # Example: apply a dev-only limit to a specific user id
+        # Example: apply a dev-only limit to a specific user id.
+        # Previously this block was nested under `rate_limiting.redis.per_user`
+        # which silently dropped on YAML unmarshal because RedisConfig has
+        # no per_user field. Anchored here matches RateLimitOverrides.
         example-user:
           requests_per_minute: 5
           tokens_per_minute: 2000
           requests_per_day: 100
           tokens_per_day: 200000
+    # Example Redis configuration (switch backend to "redis" to use)
+    redis:
+      address: "localhost:6379"
+      password: ""
+      db: 0
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Local Bedrock passthrough. Caller (the boto3 ``before-send`` hook in
+# ``agents/common/models/bedrock_session.py``) signs SigV4 against the real
+# AWS endpoint and redirects the wire request to this proxy; the proxy is
+# byte-for-byte transparent, so requests still authenticate against
+# whatever AWS identity the local shell has (``aws sso login`` etc.).
+providers:
+  bedrock:
+    enabled: true

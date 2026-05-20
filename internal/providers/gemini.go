@@ -9,7 +9,7 @@ package providers
 import (
 	"bufio"
 	"bytes"
-	"context"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,10 +41,11 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 		opt = opts[0]
 	}
 
-	// Parse the Gemini API URL
+	// Parse the Gemini API URL. See NewOpenAIProxy for rationale on
+	// using panic over log.Fatalf for malformed package constants.
 	targetURL, err := url.Parse(geminiBaseURL)
 	if err != nil {
-		log.Fatalf("Failed to parse Gemini API URL: %v", err)
+		panic(fmt.Sprintf("invalid geminiBaseURL constant %q: %v", geminiBaseURL, err))
 	}
 
 	// Create the reverse proxy
@@ -117,20 +118,12 @@ func (g *GeminiProxy) GetName() string {
 	return "gemini"
 }
 
-// IsStreamingRequest checks if the request is likely to be a streaming request for Gemini
+// IsStreamingRequest checks if the request is likely to be a streaming
+// request for Gemini. The cross-provider routing gate lives in
+// ProviderManager.IsStreamingRequest — see openai.go for the rationale.
 func (g *GeminiProxy) IsStreamingRequest(req *http.Request) bool {
-	// Check for streaming in the Accept header first (fast check)
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
-	}
-
-	// Check if this is a Gemini-related endpoint (original or compatibility routes)
-	isGeminiEndpoint := strings.HasPrefix(req.URL.Path, "/gemini/") ||
-		strings.HasPrefix(req.URL.Path, "/v1beta/models/gemini") ||
-		strings.HasPrefix(req.URL.Path, "/v1/models/gemini")
-
-	if !isGeminiEndpoint {
-		return false
 	}
 
 	// Check for alt=sse query parameter (Gemini SSE streaming format)
@@ -243,6 +236,13 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 	if err != nil {
 		return nil, fmt.Errorf("failed to decompress response: %w", err)
 	}
+	// Match OpenAI/Anthropic/Bedrock: close the gzip reader on the way out
+	// so the decoder's window slices return to its sync.Pool. Without this
+	// a long-running proxy steadily leaks gzip Reader buffers (~64 KiB
+	// each) under sustained Gemini load.
+	if gzipReader, ok := decompressedReader.(*gzip.Reader); ok {
+		defer gzipReader.Close()
+	}
 
 	bodyBytes, err := io.ReadAll(decompressedReader)
 	if err != nil {
@@ -289,8 +289,15 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	if err != nil {
 		return nil, fmt.Errorf("failed to decompress response: %w", err)
 	}
+	if gzipReader, ok := decompressedReader.(*gzip.Reader); ok {
+		defer gzipReader.Close()
+	}
 
 	scanner := bufio.NewScanner(decompressedReader)
+	// Allow lines up to 2 MB — large Gemini SSE JSON chunks (e.g. with grounded
+	// citations or long thinking traces) can exceed the default 64 KB.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
 	var metadata *LLMResponseMetadata
 	var model string
 	var finishReason string
@@ -416,8 +423,10 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 		return nil
 	}
 
-	// Validate and potentially replace the key
-	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	// Validate and potentially replace the key. Use the request context so
+	// client cancellation / handler-level deadlines propagate into the
+	// DynamoDB validation lookup.
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), apiKey)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}

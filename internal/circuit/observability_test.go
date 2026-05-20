@@ -415,7 +415,10 @@ func TestEnforce_FastFailMetric_OnOpenCircuit(t *testing.T) {
 		MaxTransientRetries: 1,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
-	store.RecordTerminalFailure(context.Background(), "openai") //nolint:errcheck
+	state, _, err := store.RecordTerminalFailure(context.Background(), "openai:gpt-4o") //nolint:errcheck
+	if state != StateOpen {
+		t.Fatalf("expected state to be Open after RecordTerminalFailure, got %v", state)
+	}
 
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		t.Fatal("inner transport must not be called when circuit is open")
@@ -450,7 +453,7 @@ func TestEnforce_FastFailMetric_OnOpenCircuit(t *testing.T) {
 		t.Fatalf("circuit.fast_fail must NOT also emit circuit.terminal_failure; got %d", len(got))
 	}
 
-	entry := findLogLine(t, buf, "fast-fail (circuit open)")
+	entry := findLogLine(t, buf, "fast-fail per-model breaker open")
 	if entry == nil {
 		t.Fatalf("expected fast-fail log line; got %s", buf.String())
 	}
@@ -483,7 +486,7 @@ func TestProbeFailed_Metric_TagsModelFromCachedBody(t *testing.T) {
 
 	// Force the store into half-open so the next call routes through
 	// runProbe rather than the fast-fail or retry paths.
-	e := store.entry("openai")
+	e := store.entry("openai:gpt-4o")
 	e.mu.Lock()
 	e.state = StateHalfOpen
 	e.mu.Unlock()

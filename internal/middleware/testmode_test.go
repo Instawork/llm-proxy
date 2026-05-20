@@ -211,6 +211,52 @@ func TestTestModeMiddleware_QueryParamPromotedToHeader(t *testing.T) {
 	}
 }
 
+// TestSafeProviderName_AllowlistedProvidersPassThrough verifies that the
+// safeProviderName allowlist returns provider names verbatim for the three
+// supported providers and "unknown" for everything else.  This guards
+// against URL-path injection into the synthetic degraded-response body.
+func TestSafeProviderName_AllowlistedProvidersPassThrough(t *testing.T) {
+	cases := map[string]string{
+		"openai":           "openai",
+		"anthropic":        "anthropic",
+		"gemini":           "gemini",
+		"":                 "unknown",
+		"injected; rm -rf": "unknown",
+		"OPENAI":           "unknown", // case-sensitive on purpose
+		"openai.evil.com":  "unknown",
+		"\u200banthropic":  "unknown",
+	}
+	for in, want := range cases {
+		if got := safeProviderName(in); got != want {
+			t.Errorf("safeProviderName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNewTestModeMiddleware_EmptySignal_FallsBackToDefaultDegradedSignal
+// verifies the constructor's empty-string fallback: when callers pass "" for
+// signal, the middleware substitutes circuit.DefaultDegradedSignal so the
+// synthetic 503 body still carries the marker the test harness expects.
+func TestNewTestModeMiddleware_EmptySignal_FallsBackToDefaultDegradedSignal(t *testing.T) {
+	mw := NewTestModeMiddleware("")
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called for force_degraded test mode")
+	})
+	chain := mw(handler)
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set(circuit.TestModeHeader, circuit.TestModeForceDegraded)
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("force_degraded must return 503, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), circuit.DefaultDegradedSignal) {
+		t.Fatalf("body must contain DefaultDegradedSignal when signal arg is empty; got %q", rr.Body.String())
+	}
+}
+
 func TestTestModeMiddleware_ForceDegraded_ContainsProvider(t *testing.T) {
 	handler := newTestMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 

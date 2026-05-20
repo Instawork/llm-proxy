@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,36 @@ const (
 	// KeyLength is the length of the random part of the key
 	KeyLength = 32
 )
+
+// RedactKey returns a short, identifiable form of an iw: API key safe to
+// emit to logs and observability sinks. The full key is a bearer secret;
+// dumping it into stdout/Datadog/CloudWatch is equivalent to leaking
+// credentials. We keep the `iw:` prefix and the first/last 4 hex chars so
+// that a human still has enough signal to correlate the same key across
+// log lines without exposing the secret material in the middle.
+func RedactKey(k string) string {
+	if k == "" {
+		return ""
+	}
+	stripped := strings.TrimPrefix(k, KeyPrefix)
+	if len(stripped) <= 8 {
+		return KeyPrefix + "***"
+	}
+	return KeyPrefix + stripped[:4] + "…" + stripped[len(stripped)-4:]
+}
+
+// updateFieldNames returns the sorted set of field names being updated.
+// We log field names rather than the updates map directly because some
+// update payloads include sensitive provider keys (e.g. `actual_key`)
+// that should never be persisted into logs in cleartext.
+func updateFieldNames(updates map[string]interface{}) []string {
+	names := make([]string, 0, len(updates))
+	for k := range updates {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // APIKey represents an API key record in DynamoDB
 type APIKey struct {
@@ -59,19 +90,29 @@ type StoreConfig struct {
 	TableName string
 	Region    string
 	Logger    *slog.Logger
+	// AutoCreateTable controls whether NewStore is allowed to CreateTable
+	// when the configured table is missing. Defaults to false so a
+	// misconfigured staging/production deploy cannot provision resources
+	// in whatever AWS account the process happens to authenticate against.
+	AutoCreateTable bool
 }
 
-// NewStore creates a new API key store
+// NewStore creates a new API key store.
+//
+// Startup uses a 30s bounded context for AWS config + table verification.
+// When cfg.AutoCreateTable is false (the default) the constructor only
+// verifies the table is reachable; otherwise it falls back to CreateTable.
 func NewStore(cfg StoreConfig) (*Store, error) {
-	// Load AWS configuration
-	awsConfig, err := config.LoadDefaultConfig(context.TODO(),
+	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	awsConfig, err := config.LoadDefaultConfig(startupCtx,
 		config.WithRegion(cfg.Region),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Create DynamoDB client
 	client := dynamodb.NewFromConfig(awsConfig)
 
 	logger := cfg.Logger
@@ -85,12 +126,26 @@ func NewStore(cfg StoreConfig) (*Store, error) {
 		logger:    logger,
 	}
 
-	// Ensure table exists
-	if err := store.ensureTableExists(context.TODO()); err != nil {
-		return nil, fmt.Errorf("failed to ensure table exists: %w", err)
+	if cfg.AutoCreateTable {
+		if err := store.ensureTableExists(startupCtx); err != nil {
+			return nil, fmt.Errorf("failed to ensure table exists: %w", err)
+		}
+	} else {
+		if err := store.verifyTableExists(startupCtx); err != nil {
+			return nil, fmt.Errorf("api keys table %q is not accessible (pass AutoCreateTable: true in dev only): %w", cfg.TableName, err)
+		}
 	}
 
 	return store, nil
+}
+
+// verifyTableExists checks that the configured table is reachable without
+// attempting to create it. Used for the default (production-safe) path.
+func (s *Store) verifyTableExists(ctx context.Context) error {
+	_, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(s.tableName),
+	})
+	return err
 }
 
 // ensureTableExists creates the DynamoDB table if it doesn't exist
@@ -207,7 +262,7 @@ func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description 
 	}
 
 	s.logger.Info("Created new API key",
-		"key", newKey,
+		"key", RedactKey(newKey),
 		"provider", provider,
 		"description", description,
 		"daily_cost_limit", dailyCostLimit)
@@ -314,7 +369,7 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 		return fmt.Errorf("failed to update API key: %w", err)
 	}
 
-	s.logger.Info("Updated API key", "key", key, "updates", updates)
+	s.logger.Info("Updated API key", "key", RedactKey(key), "update_fields", updateFieldNames(updates))
 	return nil
 }
 
@@ -331,7 +386,7 @@ func (s *Store) DeleteKey(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to delete API key: %w", err)
 	}
 
-	s.logger.Info("Deleted API key", "key", key)
+	s.logger.Info("Deleted API key", "key", RedactKey(key))
 	return nil
 }
 

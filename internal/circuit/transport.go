@@ -39,6 +39,16 @@ type retryAttemptKey struct{}
 //     body so downstream clients can reliably detect provider degradation
 //     even after SDK / framework exception wrapping hides headers and status
 //     codes (see DefaultDegradedSignal for the full rationale).
+//
+// Per-key state-machine scoping
+//
+// Historically the breaker tracked one state machine per provider.  Since
+// per-model keying landed it tracks one per `<provider>:<model>` key,
+// gracefully falling back to bare `<provider>` when the model cannot be
+// extracted.  A separate per-provider rollup signal (opt-in via
+// PerProviderRollupThreshold) escalates a wholesale outage when many
+// distinct model breakers trip concurrently — see Transport.effectiveState
+// for the join.
 type Transport struct {
 	inner    http.RoundTripper
 	store    Store
@@ -90,9 +100,15 @@ const maxErrorStringLength = 256
 // attribute and so the metric tag set stays low-cardinality (model is
 // bounded by the upstream catalogue, kind by the FailureKind enum,
 // status_code by HTTP).
+//
+// CBKey is the actual breaker key the Store sees (`<provider>:<model>` or
+// bare `<provider>` fallback) so operators can correlate a log line to a
+// specific Redis hash.  It always equals provider + ":" + model when both
+// are set; we precompute it once instead of inferring it at log time.
 type failureContext struct {
 	Provider    string
 	Model       string
+	CBKey       string
 	Path        string
 	Method      string
 	StatusCode  int
@@ -127,7 +143,44 @@ func (t *Transport) newFailureContext(req *http.Request, resp *http.Response, er
 		// open circuit into an unbounded body read just for observability.
 		fc.Model = t.modelFn(req)
 	}
+	fc.CBKey = composeKey(fc.Provider, fc.Model)
 	return fc
+}
+
+// keyFor returns the breaker key for req.  Per-model keying is automatic
+// when the configured ModelFromRequestFunc successfully extracts a model
+// from the (already cached) request body; we fall back to the bare
+// provider name when the extractor is missing, the body is oversize, or
+// the model field is absent.
+//
+// The fallback exists for two reasons:
+//
+//  1. Pre-cacheBody call sites (e.g. the initial GetState check that
+//     happens before runWithRetries even touches the body) cannot
+//     replay a streaming body to extract the model without breaking
+//     the upstream forward.
+//  2. Oversize-body requests (Config.MaxRetryableBodyBytes overflow)
+//     never get a usable GetBody, so the extractor cannot run.
+//
+// Per-provider keying for those edge cases is the safe default: a
+// genuine wholesale outage will trip the per-provider key just like
+// the pre-per-model behaviour did, so worst case we degrade back to
+// the v1 keying granularity instead of silently masking the breaker.
+func (t *Transport) keyFor(req *http.Request) string {
+	if t.modelFn == nil || req == nil || req.GetBody == nil {
+		return t.provider
+	}
+	model := t.modelFn(req)
+	return composeKey(t.provider, model)
+}
+
+// composeKey is the canonical (provider, model) → store key formatter.
+// Centralised so log lines, metric tags, and Store calls cannot drift.
+func composeKey(provider, model string) string {
+	if model == "" {
+		return provider
+	}
+	return provider + ":" + model
 }
 
 // withKind returns a copy of fc with the failure kind overridden.
@@ -146,6 +199,7 @@ func (fc failureContext) attrs() []any {
 	return []any{
 		"provider", fc.Provider,
 		"model", fc.Model,
+		"cb_key", fc.CBKey,
 		"path", fc.Path,
 		"method", fc.Method,
 		"status_code", fc.StatusCode,
@@ -160,17 +214,41 @@ func (fc failureContext) attrs() []any {
 // tags with empty values, which would make the rest of the tag list
 // shift and break facet filters.  All other empty values are
 // preserved (status_code:0 for transport errors, etc.).
+//
+// cb_key is intentionally omitted from the metric tag set: it is
+// derivable from `provider:model` via concatenation and including it
+// would double-count cardinality without adding any new dimension.
+//
+// Tag values are length-capped via normalizeTagValue to prevent
+// pathological model IDs (e.g. an attacker passing a 4096-char string
+// or a one-off fine-tune SKU) from blowing up the Datadog cardinality
+// budget. Datadog's per-metric tag-value cardinality limit is 1k by
+// default; without a cap a single noisy caller can exhaust that budget
+// and start silently dropping metric points across the fleet.
 func (fc failureContext) metricTags() []string {
-	model := fc.Model
-	if model == "" {
-		model = "unknown"
-	}
 	return []string{
-		"provider:" + fc.Provider,
-		"model:" + model,
+		"provider:" + normalizeTagValue(fc.Provider),
+		"model:" + normalizeTagValue(fc.Model),
 		"status_code:" + strconv.Itoa(fc.StatusCode),
-		"failure_kind:" + string(fc.Kind),
+		"failure_kind:" + normalizeTagValue(string(fc.Kind)),
 	}
+}
+
+// normalizeTagValue returns a Datadog-safe form of the supplied raw tag
+// value: empty becomes "unknown", and anything over 200 bytes is
+// truncated to that length to keep cardinality bounded. Returning the
+// truncated form (instead of dropping the tag entirely) preserves the
+// shape of the tag list so downstream facet filters do not silently
+// shift indices.
+func normalizeTagValue(v string) string {
+	if v == "" {
+		return "unknown"
+	}
+	const maxTagValueLen = 200
+	if len(v) > maxTagValueLen {
+		return v[:maxTagValueLen]
+	}
+	return v
 }
 
 // emit publishes a circuit.<event> counter using the supplied context.
@@ -182,6 +260,22 @@ func (t *Transport) emit(event string, fc failureContext) {
 		return
 	}
 	_ = t.metrics.Incr("circuit."+event, fc.metricTags(), 1.0)
+}
+
+// drainResponseBody reads the body to EOF and closes it so the
+// HTTP/1.x connection is returned to the keep-alive pool cleanly
+// when the caller is about to retry or replace the response.  Errors
+// are intentionally ignored: a half-drained body is not worse than
+// the alternative of leaking the connection, and any underlying
+// transport error has already surfaced via the parent RoundTrip
+// path.  resp may be nil — the no-op makes the helper safe to call
+// unconditionally from error branches.
+func drainResponseBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 // truncateError returns a slog-friendly truncation of err for use in
@@ -199,8 +293,6 @@ func truncateError(err error) string {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx := req.Context()
-
 	// ── Observe-only / log-mode fast path ─────────────────────────────────
 	// In ModeLog we intentionally skip the retry loop, fast-fail, and
 	// synthetic-response machinery entirely.  We just do one round trip,
@@ -208,6 +300,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// are accurate, emit counterfactual logs, and hand the real response
 	// back to the caller.  This lets us roll out the feature to prod
 	// without any behavioural change to traffic.
+	//
+	// Bypass is irrelevant in ModeLog (the request always passes through
+	// unmodified) so we do not branch on it here; the bypass headers are
+	// stripped inside runObserveOnly so they don't leak upstream.
 	if t.cfg.Mode == ModeLog {
 		return t.runObserveOnly(req)
 	}
@@ -227,12 +323,23 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.degradedResponse(req), nil
 	}
 
-	// ── Circuit state check ───────────────────────────────────────────────
-	state, err := t.store.GetState(ctx, t.provider)
-	if err != nil {
-		t.log.Warn("circuit: GetState error, treating as closed", "provider", t.provider, "error", err)
-		state = StateClosed
+	// ── Bypass header / query param ───────────────────────────────────────
+	// Callers that have no fallback wired up can opt out of fast-fail by
+	// setting X-LLM-Proxy-Bypass-Circuit (or the matching query param).
+	// Bypass requests still feed observability — failures we observe
+	// during a bypass are credited to the breaker so dashboards stay
+	// accurate — but the breaker never short-circuits the request and
+	// never returns a synthetic 503.  The caller gets the real upstream
+	// response, whatever it is.  See the BypassHeader docstring for the
+	// full rationale.
+	if t.cfg.BypassAllowed {
+		if reason, ok := bypassRequested(req); ok {
+			return t.runBypass(req, reason)
+		}
 	}
+
+	// ── Circuit state check ───────────────────────────────────────────────
+	state, key := t.effectiveStateForRequest(req)
 
 	switch state {
 	case StateOpen:
@@ -243,11 +350,213 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.degradedResponse(req), nil
 
 	case StateHalfOpen:
-		return t.runProbe(req)
+		return t.runProbe(req, key)
 
 	default: // StateClosed — normal path
 		return t.runWithRetries(req)
 	}
+}
+
+// effectiveStateForRequest computes the breaker state to use for routing
+// req.  It joins the per-key state with the optional per-provider rollup
+// signal: if either says Open, the request is treated as Open.  Returns
+// the resolved State plus the per-key string used (so the caller can
+// thread it into runProbe / probe-slot acquisition).
+//
+// Rationale for joining at this layer (rather than inside the Store):
+// the rollup is a separate state machine with its own threshold and
+// window, and it would be a category error to encode it as part of the
+// per-key state value.  Keeping the join here also means tests that
+// stub out a Store get clean, orthogonal coverage of each axis.
+func (t *Transport) effectiveStateForRequest(req *http.Request) (State, string) {
+	ctx := req.Context()
+	key := t.keyFor(req)
+
+	state := StateClosed
+	// If req.GetBody is nil, we haven't buffered the body yet, so the
+	// model extractor likely returned "" and keyFor fell back to
+	// t.provider.  We MUST NOT check the bare-provider state here,
+	// because if it happens to be Open, we would fast-fail a request
+	// that might actually belong to a perfectly healthy per-model key!
+	// We defer the per-key state check to runWithRetries (after
+	// cacheBody runs) in this specific case.
+	if key != t.provider || req.GetBody != nil {
+		var err error
+		state, err = t.store.GetState(ctx, key)
+		if err != nil {
+			t.log.Warn("circuit: GetState error, treating as closed", "key", key, "error", err)
+			state = StateClosed
+		}
+	} else {
+		// We also defer the rollup join until after cacheBody in this
+		// case.  Otherwise a provider-level rollup would fast-fail a
+		// request before we know whether its actual per-model breaker is
+		// HalfOpen, preventing the successful probes that clear keys from
+		// the rollup window.
+		return StateClosed, key
+	}
+
+	// Rollup join: only meaningful when the per-key state is Closed (an
+	// already-Open per-key state takes precedence and there is nothing
+	// the rollup can add).  HalfOpen requests should be allowed through
+	// as probes — the rollup fast-failing them would prevent recovery,
+	// which is exactly the opposite of what we want.
+	if state == StateClosed && t.cfg.PerProviderRollupThreshold > 0 {
+		if rec, ok := t.store.(RollupRecorder); ok {
+			open, count, _ := rec.RollupOpen(ctx,
+				t.provider,
+				t.cfg.PerProviderRollupThreshold,
+				t.cfg.PerProviderRollupWindowSeconds,
+			)
+			if open {
+				t.log.Warn("circuit: provider rollup open, treating per-key state as Open",
+					"provider", t.provider,
+					"cb_key", key,
+					"rollup_threshold", t.cfg.PerProviderRollupThreshold,
+					"rollup_count", count,
+					"rollup_window_seconds", t.cfg.PerProviderRollupWindowSeconds,
+				)
+				state = StateOpen
+			}
+		}
+	}
+	return state, key
+}
+
+// bypassRequested reports whether the caller asked to bypass the breaker
+// for this request, and returns the (truncated) reason string from
+// BypassReasonHeader / BypassQueryParamReason.  The header takes
+// precedence over the query parameter so SDKs that set BOTH (typically
+// during a debug session) get deterministic behaviour.
+//
+// Honoured truthy values are 1, true, yes (case-insensitive).  Anything
+// else — including the literal string "0" — is treated as "no bypass",
+// so a misconfigured client that hard-codes the header but leaves the
+// value empty cannot accidentally bypass production.
+//
+// The returned reason is RAW (not yet length-capped or
+// allowlist-normalised) — callers that emit it as a metric tag must
+// route it through Transport.normalizeBypassReason first.
+func bypassRequested(req *http.Request) (reason string, ok bool) {
+	if req == nil {
+		return "", false
+	}
+	val := req.Header.Get(BypassHeader)
+	if val == "" && req.URL != nil {
+		val = req.URL.Query().Get(BypassQueryParam)
+	}
+	if !isTruthy(val) {
+		return "", false
+	}
+	reason = req.Header.Get(BypassReasonHeader)
+	if reason == "" && req.URL != nil {
+		reason = req.URL.Query().Get(BypassQueryParamReason)
+	}
+	if len(reason) > maxBypassReasonLength {
+		reason = reason[:maxBypassReasonLength]
+	}
+	return reason, true
+}
+
+// normalizeBypassReason converts a caller-supplied bypass reason into a
+// metric-tag-safe canonical string.  Steps:
+//
+//  1. Empty / whitespace-only → BypassReasonUnspecified.
+//  2. Lowercased and stripped of any character outside [a-z0-9_-]; runs
+//     of stripped characters collapse to a single underscore.  This
+//     keeps the dogstatsd tag value within the agent's allowed grammar
+//     and prevents a malicious caller from injecting tag separators.
+//  3. If Config.BypassReasonAllowlist is non-empty AND the normalised
+//     reason is not in it, the result is BypassReasonOther.  Operators
+//     who care about cardinality bounds opt in to this filter; the
+//     default empty allowlist means "accept any well-formed reason".
+//
+// The function is intentionally on the Transport (not a free function)
+// so it can read the per-instance allowlist without threading it
+// through the call chain.
+func (t *Transport) normalizeBypassReason(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return BypassReasonUnspecified
+	}
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	prevUnderscore := false
+	for _, r := range strings.ToLower(trimmed) {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '_', r == '-':
+			b.WriteRune(r)
+			prevUnderscore = false
+		default:
+			if !prevUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	normalised := strings.Trim(b.String(), "_-")
+	if normalised == "" {
+		return BypassReasonUnspecified
+	}
+	if len(t.cfg.BypassReasonAllowlist) == 0 {
+		return normalised
+	}
+	for _, allowed := range t.cfg.BypassReasonAllowlist {
+		if strings.EqualFold(allowed, normalised) {
+			return normalised
+		}
+	}
+	return BypassReasonOther
+}
+
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+// hasBypassMarkers returns true if the request contains ANY bypass header
+// or query parameter, regardless of whether the value is truthy.
+func hasBypassMarkers(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.Header.Get(BypassHeader) != "" || req.Header.Get(BypassReasonHeader) != "" {
+		return true
+	}
+	if req.URL != nil {
+		q := req.URL.Query()
+		return q.Has(BypassQueryParam) || q.Has(BypassQueryParamReason)
+	}
+	return false
+}
+
+// stripBypassMarkers removes bypass header(s) and query param(s) from a
+// request before forwarding upstream so the bypass signal is purely
+// proxy-internal and never leaks into provider request logs.  Callers
+// pass the result of req.Clone(ctx) so we never mutate the caller's
+// request object.
+func stripBypassMarkers(req *http.Request) *http.Request {
+	if req == nil {
+		return req
+	}
+	out := req.Clone(req.Context())
+	out.Header.Del(BypassHeader)
+	out.Header.Del(BypassReasonHeader)
+	if out.URL != nil {
+		q := out.URL.Query()
+		hadBypass := q.Has(BypassQueryParam) || q.Has(BypassQueryParamReason)
+		if hadBypass {
+			q.Del(BypassQueryParam)
+			q.Del(BypassQueryParamReason)
+			out.URL.RawQuery = q.Encode()
+		}
+	}
+	return out
 }
 
 // runObserveOnly performs a single pass-through RoundTrip, records observed
@@ -284,15 +593,38 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		)
 	}
 
+	key := t.keyFor(req)
+
 	// Log what ModeEnforce *would* have done given the current state, but
 	// always let the real request through.
-	if state, err := t.store.GetState(ctx, t.provider); err == nil && state == StateOpen {
+	if state, err := t.store.GetState(ctx, key); err == nil && state == StateOpen {
 		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
 		t.log.Info("circuit: log-mode would_have_fast_failed (circuit open, passing through)", fc.attrs()...)
 		t.emit("would_have_fast_failed", fc)
+	} else if t.cfg.PerProviderRollupThreshold > 0 {
+		if rec, ok := t.store.(RollupRecorder); ok {
+			if open, count, _ := rec.RollupOpen(ctx, t.provider,
+				t.cfg.PerProviderRollupThreshold,
+				t.cfg.PerProviderRollupWindowSeconds); open {
+				fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+				t.log.Info("circuit: log-mode would_have_fast_failed (rollup open, passing through)",
+					append(fc.attrs(),
+						"rollup_count", count,
+						"rollup_threshold", t.cfg.PerProviderRollupThreshold,
+					)...)
+				t.emit("would_have_fast_failed", fc)
+			}
+		}
 	}
 
-	resp, err := t.inner.RoundTrip(req)
+	// Strip bypass markers in log mode too — even though they have no
+	// effect on routing, they shouldn't leak upstream and pollute
+	// provider-side logs with proxy-internal diagnostics.
+	upstreamReq := req
+	if hasBypassMarkers(req) {
+		upstreamReq = stripBypassMarkers(req)
+	}
+	resp, err := t.inner.RoundTrip(upstreamReq)
 	class := ClassifyResponse(t.provider, resp, err)
 
 	switch class {
@@ -301,11 +633,12 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		// still reflect reality in shadow mode.  The Store is guaranteed
 		// to fail-open on Redis errors (returns StateClosed, no error),
 		// so this cannot cascade.
-		newState, recErr := t.store.RecordTerminalFailure(ctx, t.provider)
+		newState, openedNow, recErr := t.store.RecordTerminalFailure(ctx, key)
 		if recErr != nil {
 			t.log.Error("circuit: log-mode RecordTerminalFailure error",
-				"provider", t.provider, "error", recErr)
+				"key", key, "error", recErr)
 		}
+		t.maybeRecordRollup(ctx, key, openedNow)
 		fc := t.newFailureContext(req, resp, err)
 		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
 			append(fc.attrs(),
@@ -328,6 +661,123 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
+// maybeRecordRollup writes a key-open event to the per-provider rollup
+// window iff THIS RecordTerminalFailure call is the one that flipped
+// the per-key breaker Closed → Open AND the rollup feature is enabled.
+// Centralised so every call site stays consistent.
+func (t *Transport) maybeRecordRollup(ctx context.Context, key string, openedNow bool) {
+	if !openedNow || t.cfg.PerProviderRollupThreshold <= 0 {
+		return
+	}
+	rec, ok := t.store.(RollupRecorder)
+	if !ok {
+		return
+	}
+	if err := rec.RecordKeyOpenedForRollup(ctx, t.provider, key,
+		t.cfg.PerProviderRollupWindowSeconds); err != nil {
+		t.log.Warn("circuit: RecordKeyOpenedForRollup error (rollup may lag)",
+			"provider", t.provider, "key", key, "error", err)
+	}
+}
+
+// reArmRollup refreshes the rollup window timestamp for `key` even when
+// the breaker did not just transition Closed → Open.  Called on probe
+// failure so a long-running outage (same N keys continuously down for
+// hours) keeps tripping the rollup signal instead of silently aging
+// out.  Idempotent on (provider, key) within a window thanks to the
+// dedup-by-key behaviour of RecordKeyOpenedForRollup.
+func (t *Transport) reArmRollup(ctx context.Context, key string) {
+	if t.cfg.PerProviderRollupThreshold <= 0 {
+		return
+	}
+	rec, ok := t.store.(RollupRecorder)
+	if !ok {
+		return
+	}
+	if err := rec.RecordKeyOpenedForRollup(ctx, t.provider, key,
+		t.cfg.PerProviderRollupWindowSeconds); err != nil {
+		t.log.Warn("circuit: RecordKeyOpenedForRollup (re-arm) error",
+			"provider", t.provider, "key", key, "error", err)
+	}
+}
+
+// runBypass executes the request once with bypass semantics:
+//
+//   - never consults the per-key state, the rollup signal, or the probe slot;
+//   - never returns a synthetic 503;
+//   - still records an observed terminal failure (so the breaker keeps
+//     learning the upstream's true health from bypass traffic);
+//   - never closes an Open breaker on success (only a real half-open
+//     probe can — bypass requests are not "this provider has recovered"
+//     evidence).
+//
+// The bypass header / query param is stripped before the upstream call
+// so providers do not see proxy-internal diagnostics.
+func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response, error) {
+	ctx := req.Context()
+
+	// Buffer the body so we can extract the model.  Without this,
+	// server-side requests (which have GetBody == nil) would always
+	// fall back to the bare-provider key, meaning bypass failures would
+	// never feed the correct per-model breaker.
+	if err := t.cacheBody(req); err != nil {
+		if !errors.Is(err, errRetryBodyTooLarge) {
+			return nil, fmt.Errorf("circuit: cacheBody (bypass): %w", err)
+		}
+		t.log.Warn("circuit: bypass request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+			"provider", t.provider,
+			"path", req.URL.Path,
+			"content_length", req.ContentLength,
+			"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
+			"failure_kind", string(KindBodyTooLarge),
+		)
+	}
+
+	key := t.keyFor(req)
+	upstreamReq := stripBypassMarkers(req)
+
+	// Tag the metric with the normalised reason so operators can audit
+	// how the bypass safety valve is being used WITHOUT the
+	// dogstatsd tag-cardinality blowing up.  See
+	// Transport.normalizeBypassReason for the exact rules; in short:
+	// safe-character filter + length cap + optional allowlist → "other".
+	reasonTag := t.normalizeBypassReason(reason)
+
+	rtStart := time.Now()
+	resp, err := t.inner.RoundTrip(upstreamReq)
+	upstreamDur := time.Since(rtStart)
+
+	class := ClassifyResponse(t.provider, resp, err)
+	fc := t.newFailureContext(req, resp, err)
+	tags := append(fc.metricTags(), "reason:"+reasonTag, "outcome:"+string(class))
+	if t.metrics != nil {
+		_ = t.metrics.Incr("circuit.bypass", tags, 1.0)
+	}
+	t.log.Info("circuit: bypass requested by caller",
+		append(fc.attrs(),
+			"reason", reasonTag,
+			"outcome", string(class),
+			"upstream_ms", upstreamDur.Milliseconds(),
+		)...)
+
+	if class == FailureClassDegraded {
+		// Bypass requests still feed observability so operators can see
+		// real upstream health even when callers route around the
+		// breaker.  This may itself cause the per-key breaker to open;
+		// that is fine — the next non-bypass request will fast-fail and
+		// the next bypass request will keep going through.  The two
+		// modes are intentionally orthogonal.
+		_, openedNow, recErr := t.store.RecordTerminalFailure(ctx, key)
+		if recErr != nil {
+			t.log.Error("circuit: bypass RecordTerminalFailure error",
+				"key", key, "error", recErr)
+		}
+		t.maybeRecordRollup(ctx, key, openedNow)
+	}
+
+	return resp, err
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Core retry loops
 // ─────────────────────────────────────────────────────────────────────────────
@@ -342,6 +792,10 @@ const slowRequestThreshold = 5 * time.Second
 // runWithRetries executes the request with the configured retry policies and
 // records terminal failures in the circuit store.
 func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
+	if hasBypassMarkers(req) {
+		req = stripBypassMarkers(req)
+	}
+
 	ctx := req.Context()
 	startedAt := time.Now()
 
@@ -365,6 +819,26 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("circuit: cacheBody: %w", err)
 	}
 	cacheBodyDur := time.Since(cacheBodyStart)
+
+	// Re-check breaker state under the now-correct per-model key.  The
+	// initial check in RoundTrip had to defer checking the bare-provider
+	// key because req.GetBody was nil for incoming server-side requests
+	// until cacheBody ran, and we didn't want to prematurely fast-fail
+	// a request that might actually belong to a healthy per-model key.
+	// Now that cacheBody has run, effectiveStateForRequest can safely
+	// join the per-key state with provider rollup without starving
+	// half-open probes.
+	state, key := t.effectiveStateForRequest(req)
+	switch state {
+	case StateOpen:
+		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+		t.log.Warn("circuit: fast-fail per-model breaker open",
+			append(fc.attrs(), "mode", ModeEnforce, "stage", "post_cache_body")...)
+		t.emit("fast_fail", fc)
+		return t.degradedResponse(req), nil
+	case StateHalfOpen:
+		return t.runProbe(req, key)
+	}
 
 	var (
 		transientAttempts int
@@ -449,93 +923,185 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		lastResp = resp
 		lastErr = err
 
-		// ── Drain the response body before retrying so the connection is
-		//    returned to the pool cleanly.
-		if resp != nil {
-			io.Copy(io.Discard, resp.Body) //nolint:errcheck
-			resp.Body.Close()              //nolint:errcheck
-		}
+		// Drain the response body before retrying so the connection is
+		// returned to the pool cleanly.
+		drainResponseBody(resp)
 
 		retryAfterSec := retryAfterSeconds(resp)
 
 		// ── Rate-limit handling ───────────────────────────────────────────
 		if fc == FailureClassLocalRateLimit || fc == FailureClassGlobalRateLimit {
-			if rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
-				evt := t.newFailureContext(req, lastResp, lastErr)
-				t.log.Warn("circuit: rate-limit retries exhausted",
-					append(evt.attrs(),
-						"attempts", rateLimitAttempts,
-						"class", fc,
-					)...)
-				t.emit("rate_limit_exhausted", evt)
-
-				// Escalate sustained global rate limits to degraded.
-				if fc == FailureClassGlobalRateLimit && !firstRateLimitAt.IsZero() {
-					elapsed := time.Since(firstRateLimitAt).Seconds()
-					if int(elapsed) >= t.cfg.GlobalRateLimitEscalationWindow {
-						t.log.Warn("circuit: global rate-limit escalated to provider_degraded",
-							append(evt.attrs(), "elapsed_seconds", elapsed)...)
-						return t.handleTerminalFailure(ctx, req, lastResp, lastErr)
-					}
-				}
-				// Return a synthetic rate-limit error (no magic string — not
-				// degraded, just throttled).
-				return t.rateLimitResponse(fc), nil
+			st := &retryLoopState{
+				transientAttempts: transientAttempts,
+				rateLimitAttempts: rateLimitAttempts,
+				firstRateLimitAt:  firstRateLimitAt,
+				lastResp:          lastResp,
+				lastErr:           lastErr,
 			}
-			if fc == FailureClassGlobalRateLimit && firstRateLimitAt.IsZero() {
-				firstRateLimitAt = time.Now()
+			resp2, err2, done := t.handleRateLimitFailure(ctx, req, key, fc, retryAfterSec, st)
+			rateLimitAttempts = st.rateLimitAttempts
+			firstRateLimitAt = st.firstRateLimitAt
+			if done {
+				return resp2, err2
 			}
-			backoff := rateLimitBackoff(retryAfterSec, rateLimitAttempts)
-			t.log.Info("circuit: rate-limit backoff",
-				"provider", t.provider,
-				"class", fc,
-				"backoff_ms", backoff.Milliseconds(),
-				"attempt", rateLimitAttempts+1,
-			)
-			if err := t.sleep(ctx, backoff); err != nil {
-				return nil, err
-			}
-			rateLimitAttempts++
 			continue
 		}
 
 		// ── Degraded / transient handling ─────────────────────────────────
+		// NOTE on the bare `_ =` discards that appear in this block, in
+		// runProbe, and in the bypass path: every call into t.store
+		// (RecordTerminalFailure / RecordSuccess / RecordProbeFailed)
+		// is intentionally best-effort.  A Redis hiccup, lock-key
+		// contention, or transient network blip on the state-store
+		// path must never affect request flow — the worst outcome is a
+		// slightly stale circuit-breaker counter on one node, which
+		// the next call will re-record.  Same convention as t.emit
+		// above.  Where a return value IS used (e.g. `openedNow`) we
+		// still drop the error: if err != nil, openedNow is the zero
+		// value (false), so downstream branches behave safely.
 		if fc == FailureClassDegraded {
-			switch t.cfg.RetryContributionMode {
-			case "on":
-				t.log.Info("circuit: retried failure contributing to degradation score",
-					append(t.newFailureContext(req, resp, err).attrs(),
-						"attempt", transientAttempts)...)
-				t.store.RecordTerminalFailure(ctx, t.provider) //nolint:errcheck
-			case "log":
-				t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
-					append(t.newFailureContext(req, resp, err).attrs(),
-						"attempt", transientAttempts)...)
+			st := &retryLoopState{
+				transientAttempts: transientAttempts,
+				lastResp:          lastResp,
+				lastErr:           lastErr,
 			}
-
-			if transientAttempts >= t.cfg.MaxTransientRetries {
-				t.log.Warn("circuit: transient retries exhausted, recording terminal failure",
-					append(t.newFailureContext(req, lastResp, lastErr).attrs(),
-						"attempts", transientAttempts)...)
-				return t.handleTerminalFailure(ctx, req, lastResp, lastErr)
+			resp2, err2, done := t.handleDegradedFailure(ctx, req, key, resp, err, st)
+			transientAttempts = st.transientAttempts
+			if done {
+				return resp2, err2
 			}
-
-			backoff := transientBackoff(transientAttempts)
-			t.log.Info("circuit: transient backoff",
-				"provider", t.provider,
-				"backoff_ms", backoff.Milliseconds(),
-				"attempt", transientAttempts+1,
-			)
-			if err := t.sleep(ctx, backoff); err != nil {
-				return nil, err
-			}
-			transientAttempts++
 			continue
 		}
 
 		// ── Unknown / unclassifiable failure — pass through as-is ─────────
 		return resp, err
 	}
+}
+
+// retryLoopState is the mutable per-iteration state runWithRetries
+// hands to the per-failure-class handlers below.  It exists so the
+// handlers can update attempt counters and remember the most recent
+// upstream attempt without forcing runWithRetries to pass eight
+// separate pointer arguments.  Fields are mutated in place by the
+// handlers; the caller copies the updated counters back into its own
+// loop-scoped variables after the call returns.
+type retryLoopState struct {
+	transientAttempts int
+	rateLimitAttempts int
+	firstRateLimitAt  time.Time
+	lastResp          *http.Response // post-drain — only StatusCode / Header safe
+	lastErr           error
+}
+
+// handleRateLimitFailure runs the rate-limit branch of runWithRetries.
+//
+// The return tuple is (resp, err, done): when done is true the caller
+// returns (resp, err) immediately; when done is false the caller
+// continues the retry loop after st has been updated with the new
+// attempt count + firstRateLimitAt timestamp.
+//
+// Behaviour preserved verbatim from the original inline block:
+//  1. retries exhausted + sustained global rate limit → escalate to
+//     handleTerminalFailure (provider_degraded).
+//  2. retries exhausted otherwise → synthetic rate-limit response.
+//  3. not exhausted → log + sleep + increment + continue.
+func (t *Transport) handleRateLimitFailure(
+	ctx context.Context,
+	req *http.Request,
+	key string,
+	fc FailureClass,
+	retryAfterSec int,
+	st *retryLoopState,
+) (*http.Response, error, bool) {
+	if st.rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
+		evt := t.newFailureContext(req, st.lastResp, st.lastErr)
+		t.log.Warn("circuit: rate-limit retries exhausted",
+			append(evt.attrs(),
+				"attempts", st.rateLimitAttempts,
+				"class", fc,
+			)...)
+		t.emit("rate_limit_exhausted", evt)
+
+		// Escalate sustained global rate limits to degraded.
+		if fc == FailureClassGlobalRateLimit && !st.firstRateLimitAt.IsZero() {
+			elapsed := time.Since(st.firstRateLimitAt).Seconds()
+			if int(elapsed) >= t.cfg.GlobalRateLimitEscalationWindow {
+				t.log.Warn("circuit: global rate-limit escalated to provider_degraded",
+					append(evt.attrs(), "elapsed_seconds", elapsed)...)
+				resp, err := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr)
+				return resp, err, true
+			}
+		}
+		// Synthetic rate-limit error (no magic string — not degraded,
+		// just throttled).
+		return t.rateLimitResponse(fc), nil, true
+	}
+	if fc == FailureClassGlobalRateLimit && st.firstRateLimitAt.IsZero() {
+		st.firstRateLimitAt = time.Now()
+	}
+	backoff := rateLimitBackoff(retryAfterSec, st.rateLimitAttempts)
+	t.log.Info("circuit: rate-limit backoff",
+		"provider", t.provider,
+		"class", fc,
+		"backoff_ms", backoff.Milliseconds(),
+		"attempt", st.rateLimitAttempts+1,
+	)
+	if err := t.sleep(ctx, backoff); err != nil {
+		return nil, err, true
+	}
+	st.rateLimitAttempts++
+	return nil, nil, false
+}
+
+// handleDegradedFailure runs the transient/degraded branch of
+// runWithRetries.  Same (resp, err, done) contract as
+// handleRateLimitFailure above.
+//
+// Behaviour preserved verbatim from the original inline block:
+//  1. Per RetryContributionMode, optionally count this retried failure
+//     toward the degradation score (or log the counterfactual).
+//  2. retries exhausted → handleTerminalFailure.
+//  3. not exhausted → log + sleep + increment + continue.
+func (t *Transport) handleDegradedFailure(
+	ctx context.Context,
+	req *http.Request,
+	key string,
+	resp *http.Response,
+	err error,
+	st *retryLoopState,
+) (*http.Response, error, bool) {
+	switch t.cfg.RetryContributionMode {
+	case "on":
+		t.log.Info("circuit: retried failure contributing to degradation score",
+			append(t.newFailureContext(req, resp, err).attrs(),
+				"attempt", st.transientAttempts)...)
+		_, openedNow, _ := t.store.RecordTerminalFailure(ctx, key)
+		t.maybeRecordRollup(ctx, key, openedNow)
+	case "log":
+		t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
+			append(t.newFailureContext(req, resp, err).attrs(),
+				"attempt", st.transientAttempts)...)
+	}
+
+	if st.transientAttempts >= t.cfg.MaxTransientRetries {
+		t.log.Warn("circuit: transient retries exhausted, recording terminal failure",
+			append(t.newFailureContext(req, st.lastResp, st.lastErr).attrs(),
+				"attempts", st.transientAttempts)...)
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr)
+		return respT, errT, true
+	}
+
+	backoff := transientBackoff(st.transientAttempts)
+	t.log.Info("circuit: transient backoff",
+		"provider", t.provider,
+		"backoff_ms", backoff.Milliseconds(),
+		"attempt", st.transientAttempts+1,
+	)
+	if err := t.sleep(ctx, backoff); err != nil {
+		return nil, err, true
+	}
+	st.transientAttempts++
+	return nil, nil, false
 }
 
 // logTimingBreakdown emits a single per-request line showing where wall-clock
@@ -585,7 +1151,17 @@ func (t *Transport) logTimingBreakdown(
 }
 
 // runProbe executes a single half-open probe request (no retries).
-func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
+//
+// key is the per-request breaker key (provider:model or provider) — passed
+// in by the caller so the probe-slot acquisition, RecordSuccess, and
+// RecordProbeFailed all target the SAME key that GetState observed as
+// HalfOpen.  Recomputing it inside runProbe would risk drifting if the
+// extractor reads a different field from the cached body.
+func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, error) {
+	if hasBypassMarkers(req) {
+		req = stripBypassMarkers(req)
+	}
+
 	ctx := req.Context()
 
 	// Buffer the body up to MaxRetryableBodyBytes so the model extractor
@@ -601,34 +1177,16 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("circuit: cacheBody (probe): %w", err)
 	}
 
-	// Only one goroutine/process should probe at a time.  Both MemoryStore
-	// (single-process) and RedisStore (distributed) implement this via
-	// TryStartProbe, which takes a context so Redis ops are bounded by the
-	// request deadline.
-	type probeStarter interface {
-		TryStartProbe(ctx context.Context, provider string) bool
+	acquired, stopLease := t.acquireProbeSlot(ctx, key)
+	if !acquired {
+		// Another probe is already in flight — fast-fail this request.
+		evt := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
+		t.log.Info("circuit: half-open probe already in flight, fast-failing", evt.attrs()...)
+		t.emit("fast_fail", evt)
+		return t.degradedResponse(req), nil
 	}
-	if ps, ok := t.store.(probeStarter); ok {
-		if !ps.TryStartProbe(ctx, t.provider) {
-			// Another probe is already in flight — fast-fail this request.
-			evt := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
-			t.log.Info("circuit: half-open probe already in flight, fast-failing", evt.attrs()...)
-			t.emit("fast_fail", evt)
-			return t.degradedResponse(req), nil
-		}
-	}
-
-	// For distributed stores the probe slot is held by a TTL-bounded
-	// Redis key; if the upstream round-trip exceeds that TTL a parallel
-	// probe could win the slot.  KeepProbeAlive starts a background
-	// lease-refresher that extends the TTL until we're done.  MemoryStore
-	// does not expose this and is a no-op here.
-	type probeLeaser interface {
-		KeepProbeAlive(provider string) func()
-	}
-	if pl, ok := t.store.(probeLeaser); ok {
-		stop := pl.KeepProbeAlive(t.provider)
-		defer stop()
+	if stopLease != nil {
+		defer stopLease()
 	}
 
 	resp, err := t.inner.RoundTrip(req)
@@ -651,48 +1209,102 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 			append(t.newFailureContext(req, resp, err).attrs(),
 				"ctx_err", truncateError(ctxErr),
 			)...)
-		if resp != nil {
-			io.Copy(io.Discard, resp.Body) //nolint:errcheck
-			resp.Body.Close()              //nolint:errcheck
-		}
-		type probeReleaser interface {
-			ReleaseProbe(ctx context.Context, provider string) error
-		}
-		if pr, ok := t.store.(probeReleaser); ok {
-			// Use a detached, short-timeout context because the
-			// caller's context is already dead.
-			relCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			pr.ReleaseProbe(relCtx, t.provider) //nolint:errcheck
-			cancel()
-		}
+		drainResponseBody(resp)
+		t.releaseProbeSlotDetached(key)
 		return nil, err
 	}
 
 	fc := ClassifyResponse(t.provider, resp, err)
 
 	if fc == FailureClassNone {
-		probeStatus := 0
-		if resp != nil {
-			probeStatus = resp.StatusCode
+		return t.recordProbeSuccess(ctx, req, resp, err, key)
+	}
+	return t.recordProbeFailure(ctx, req, resp, err, key)
+}
+
+// acquireProbeSlot is the half-open coordination dance: take the
+// (single-flight) probe slot, then if the store supports background
+// lease refresh, start it and return a stop function the caller defers.
+// Returns acquired=false when another probe holds the slot.
+func (t *Transport) acquireProbeSlot(ctx context.Context, key string) (acquired bool, stopLease func()) {
+	type probeStarter interface {
+		TryStartProbe(ctx context.Context, key string) bool
+	}
+	if ps, ok := t.store.(probeStarter); ok {
+		if !ps.TryStartProbe(ctx, key) {
+			return false, nil
 		}
-		t.log.Info("circuit: probe succeeded, closing circuit",
-			"provider", t.provider,
-			"status_code", probeStatus,
-			"new_state", StateClosed.String(),
-		)
-		t.store.RecordSuccess(ctx, t.provider) //nolint:errcheck
-		return resp, err
 	}
 
+	// For distributed stores the probe slot is held by a TTL-bounded
+	// Redis key; if the upstream round-trip exceeds that TTL a parallel
+	// probe could win the slot.  KeepProbeAlive starts a background
+	// lease-refresher that extends the TTL until we're done.  MemoryStore
+	// does not expose this and is a no-op here (stopLease == nil).
+	type probeLeaser interface {
+		KeepProbeAlive(key string) func()
+	}
+	if pl, ok := t.store.(probeLeaser); ok {
+		return true, pl.KeepProbeAlive(key)
+	}
+	return true, nil
+}
+
+// releaseProbeSlotDetached releases the half-open probe slot using a
+// fresh short-lived context.  Called from the caller-aborted branch in
+// runProbe where the request context is already dead, so the release
+// itself must not piggyback on it.  Errors are intentionally swallowed:
+// the slot is TTL-bounded server-side and will fall off eventually.
+func (t *Transport) releaseProbeSlotDetached(key string) {
+	type probeReleaser interface {
+		ReleaseProbe(ctx context.Context, key string) error
+	}
+	pr, ok := t.store.(probeReleaser)
+	if !ok {
+		return
+	}
+	relCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = pr.ReleaseProbe(relCtx, key)
+}
+
+// recordProbeSuccess closes the per-key breaker after a healthy probe
+// response and drops the key out of the per-provider rollup window so
+// the rollup signal tracks "currently degraded" rather than "tripped
+// at any point in the last window".
+func (t *Transport) recordProbeSuccess(ctx context.Context, req *http.Request, resp *http.Response, err error, key string) (*http.Response, error) {
+	_ = req // currently unused; keep for parity with recordProbeFailure
+	probeStatus := 0
+	if resp != nil {
+		probeStatus = resp.StatusCode
+	}
+	t.log.Info("circuit: probe succeeded, closing circuit",
+		"provider", t.provider,
+		"cb_key", key,
+		"status_code", probeStatus,
+		"new_state", StateClosed.String(),
+	)
+	_ = t.store.RecordSuccess(ctx, key)
+	if t.cfg.PerProviderRollupThreshold > 0 {
+		if rec, ok := t.store.(RollupRecorder); ok {
+			_ = rec.ClearRollupKey(ctx, t.provider, key)
+		}
+	}
+	return resp, err
+}
+
+// recordProbeFailure re-opens the per-key breaker after a failed probe
+// and refreshes the key's rollup-window timestamp so a long-running
+// outage stays tripped instead of aging out after the original
+// Closed → Open event expires.
+func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, resp *http.Response, err error, key string) (*http.Response, error) {
 	evt := t.newFailureContext(req, resp, err)
 	t.log.Warn("circuit: probe failed, re-opening circuit",
 		append(evt.attrs(), "new_state", StateOpen.String())...)
 	t.emit("probe_failed", evt)
-	if resp != nil {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		resp.Body.Close()              //nolint:errcheck
-	}
-	t.store.RecordProbeFailed(ctx, t.provider) //nolint:errcheck
+	drainResponseBody(resp)
+	_ = t.store.RecordProbeFailed(ctx, key)
+	t.reArmRollup(ctx, key)
 	return t.degradedResponse(req), nil
 }
 
@@ -704,11 +1316,17 @@ func (t *Transport) runProbe(req *http.Request) (*http.Response, error) {
 // emitted log line and dogstatsd counter retain status_code, model,
 // failure_kind, and error context that would otherwise be lost between
 // retry exhaustion and synthetic-response emission.
-func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, lastResp *http.Response, lastErr error) (*http.Response, error) {
-	newState, err := t.store.RecordTerminalFailure(ctx, t.provider)
+//
+// `key` is the per-request breaker key threaded down from runWithRetries
+// so this call lands on the same per-model state machine that the
+// retry loop just exercised; recomputing it here would risk an
+// extractor drift between the two call sites.
+func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, key string, lastResp *http.Response, lastErr error) (*http.Response, error) {
+	newState, openedNow, err := t.store.RecordTerminalFailure(ctx, key)
 	if err != nil {
-		t.log.Error("circuit: RecordTerminalFailure error", "provider", t.provider, "error", err)
+		t.log.Error("circuit: RecordTerminalFailure error", "key", key, "error", err)
 	}
+	t.maybeRecordRollup(ctx, key, openedNow)
 
 	evt := t.newFailureContext(req, lastResp, lastErr)
 	attrs := append(evt.attrs(),
@@ -928,7 +1546,23 @@ func (t *Transport) testModeFromRequest(req *http.Request) string {
 
 // ProviderFromPath derives the provider name from the URL path prefix
 // (e.g. "/openai/v1/chat/completions" → "openai").
+//
+// The Bedrock SigV4 passthrough mounts the AWS-canonical "/model/..."
+// path in addition to "/bedrock/..." because boto3 signs requests
+// against the canonical hostname; without this rewrite the circuit
+// breaker observability and test-mode allowlist would see "model" as
+// a phantom provider when an SDK uses the passthrough.
+//
+// Compatibility routes for Gemini ("/v1/models/gemini..." and
+// "/v1beta/models/gemini...") return "gemini" — matching how
+// ProviderManager.ProviderForRequest resolves them.
 func ProviderFromPath(path string) string {
+	if strings.HasPrefix(path, "/model/") || path == "/model" {
+		return "bedrock"
+	}
+	if strings.HasPrefix(path, "/v1/models/gemini") || strings.HasPrefix(path, "/v1beta/models/gemini") {
+		return "gemini"
+	}
 	path = strings.TrimPrefix(path, "/")
 	if idx := strings.Index(path, "/"); idx > 0 {
 		return path[:idx]

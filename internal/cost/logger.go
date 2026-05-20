@@ -11,10 +11,17 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 )
 
-// FileTransport implements Transport interface for file-based cost tracking
+// FileTransport implements Transport interface for file-based cost tracking.
+//
+// The file handle is opened lazily on the first WriteRecord and kept open
+// across subsequent writes. Previously every record reopened the file
+// (Open/Encode/Close), which doubled the syscall count per cost record
+// and stalled the async tracker queue under load.
 type FileTransport struct {
 	outputFile string
 	fileMutex  sync.Mutex
+	file       *os.File
+	encoder    *json.Encoder
 }
 
 // NewFileTransport creates a new file-based transport
@@ -62,24 +69,52 @@ func (ft *FileTransport) WriteRecord(record *CostRecord) error {
 	ft.fileMutex.Lock()
 	defer ft.fileMutex.Unlock()
 
-	// Ensure output directory exists
-	dir := filepath.Dir(ft.outputFile)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	if ft.file == nil {
+		if err := ft.openLocked(); err != nil {
+			return err
+		}
 	}
 
-	// Open file in append mode
-	file, err := os.OpenFile(ft.outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("failed to open cost tracking file: %w", err)
-	}
-	defer file.Close()
-
-	// Write record as JSON line
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(record); err != nil {
+	if err := ft.encoder.Encode(record); err != nil {
+		// Best-effort: drop the handle so the next write retries the
+		// open path. Without this a write failure (e.g. log rotator
+		// unlinking the file under us) would silently keep failing
+		// against the stale fd.
+		_ = ft.file.Close()
+		ft.file = nil
+		ft.encoder = nil
 		return fmt.Errorf("failed to write cost record: %w", err)
 	}
 
 	return nil
+}
+
+// openLocked opens the underlying file in append mode and primes the
+// encoder. Caller must hold ft.fileMutex.
+func (ft *FileTransport) openLocked() error {
+	dir := filepath.Dir(ft.outputFile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+	f, err := os.OpenFile(ft.outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open cost tracking file: %w", err)
+	}
+	ft.file = f
+	ft.encoder = json.NewEncoder(f)
+	return nil
+}
+
+// Close releases the underlying file handle. Safe to call multiple times
+// and from a different goroutine than the writer.
+func (ft *FileTransport) Close() error {
+	ft.fileMutex.Lock()
+	defer ft.fileMutex.Unlock()
+	if ft.file == nil {
+		return nil
+	}
+	err := ft.file.Close()
+	ft.file = nil
+	ft.encoder = nil
+	return err
 }

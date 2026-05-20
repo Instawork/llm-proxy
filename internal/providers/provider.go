@@ -18,6 +18,30 @@ import (
 )
 
 // LLMResponseMetadata represents standardized response metadata across all providers
+// LLMResponseMetadata is the canonical post-response metadata snapshot
+// that every provider implementation populates and the cost tracker
+// consumes. Field-level provider coverage:
+//
+//	Field                       openai  anthropic  gemini  bedrock
+//	------------------------------------------------------------
+//	Model                       Y       Y          Y       Y
+//	InputTokens                 Y       Y          Y       Y
+//	OutputTokens                Y       Y          Y       Y
+//	TotalTokens                 Y       Y          Y       Y
+//	ThoughtTokens               -       extended*  Y       extended*
+//	CacheReadInputTokens        Y       Y          -       Y (Converse)
+//	CacheCreationInputTokens    -       Y          -       Y (Converse)
+//	FinishReason                Y       Y          Y       Y
+//	RequestID                   Y       Y          Y       -
+//
+// * Anthropic and Bedrock-Anthropic surface thinking tokens only when
+// `extended_thinking` is enabled on the request; otherwise the field
+// is zero. Gemini always populates ThoughtTokens for 2.0-pro+.
+//
+// Providers that do not surface a field MUST leave it at the zero value
+// — never invent or estimate — so the cost tracker can treat a zero
+// cache/thought field as "explicitly unsupported" instead of "missed
+// during parse".
 type LLMResponseMetadata struct {
 	// Model used for the request
 	Model string `json:"model"`
@@ -28,7 +52,8 @@ type LLMResponseMetadata struct {
 	TotalTokens   int `json:"total_tokens"`
 	ThoughtTokens int `json:"thought_tokens,omitempty"`
 
-	// Prompt-cache token breakdown (Anthropic-specific; zero for other providers)
+	// Prompt-cache token breakdown. See the provider-coverage table on
+	// the type docstring for which providers populate these.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 
@@ -126,19 +151,62 @@ func (pm *ProviderManager) GetProvider(name string) Provider {
 	return pm.providers[name]
 }
 
-// GetAllProviders returns all registered providers
+// GetAllProviders returns a defensive copy of the registered providers map.
+// Returning the internal map directly would let callers mutate the
+// registration set (e.g. tests that delete providers) and observe partial
+// state in IsStreamingRequest / ProviderForRequest.
 func (pm *ProviderManager) GetAllProviders() map[string]Provider {
-	return pm.providers
+	out := make(map[string]Provider, len(pm.providers))
+	for k, v := range pm.providers {
+		out[k] = v
+	}
+	return out
 }
 
-// IsStreamingRequest checks if the request is streaming for any provider
+// IsStreamingRequest checks if the request is streaming for the provider that
+// owns its path. Crucially, this does NOT iterate every registered provider
+// with an OR pattern: a /health request carrying Accept: text/event-stream
+// would otherwise match anthropic.IsStreamingRequest (which only inspects the
+// Accept header) and silently flip the request into the streaming wrapper.
+// We resolve the owning provider from the request path first; if no provider
+// claims the request, streaming is false.
 func (pm *ProviderManager) IsStreamingRequest(req *http.Request) bool {
-	for _, provider := range pm.providers {
-		if provider.IsStreamingRequest(req) {
-			return true
+	p := pm.ProviderForRequest(req)
+	if p == nil {
+		return false
+	}
+	return p.IsStreamingRequest(req)
+}
+
+// ProviderForRequest returns the Provider responsible for handling req based
+// on its URL path, or nil when no registered provider claims it. Match is by
+// the canonical "/<provider-name>/" prefix; Gemini's compatibility routes
+// (/v1beta/models/gemini..., /v1/models/gemini...) and Bedrock's SigV4
+// passthrough route (/model/...) are recognized via their respective entries.
+func (pm *ProviderManager) ProviderForRequest(req *http.Request) Provider {
+	if req == nil || req.URL == nil {
+		return nil
+	}
+	path := req.URL.Path
+	for name, provider := range pm.providers {
+		if strings.HasPrefix(path, "/"+name+"/") {
+			return provider
 		}
 	}
-	return false
+	// Gemini compatibility routes.
+	if g, ok := pm.providers["gemini"]; ok {
+		if strings.HasPrefix(path, "/v1beta/models/gemini") || strings.HasPrefix(path, "/v1/models/gemini") {
+			return g
+		}
+	}
+	// Bedrock SigV4 passthrough route (the client signed against /model/...,
+	// so the proxy mounts that root in addition to /bedrock/).
+	if b, ok := pm.providers["bedrock"]; ok {
+		if strings.HasPrefix(path, "/model/") {
+			return b
+		}
+	}
+	return nil
 }
 
 // GetHealthStatus returns the health status of all providers

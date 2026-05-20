@@ -39,61 +39,6 @@ func (hook *TestMetadataHook) ParseAndValidateMetadata() {
 	hook.OnMetadataParsed(metadata, err)
 }
 
-// ValidateMetadataFields provides common validation for metadata fields
-func ValidateMetadataFields(t *testing.T, metadata *LLMResponseMetadata, expectedProvider string, isStreaming bool) {
-	if metadata == nil {
-		t.Fatal("Metadata is nil")
-		return
-	}
-
-	if metadata.Provider != expectedProvider {
-		t.Errorf("Expected provider %s, got %s", expectedProvider, metadata.Provider)
-	}
-
-	if metadata.IsStreaming != isStreaming {
-		t.Errorf("Expected IsStreaming %v, got %v", isStreaming, metadata.IsStreaming)
-	}
-
-	if metadata.Model == "" {
-		t.Error("Model should not be empty")
-	}
-
-	// Validate token counts are not negative
-	if metadata.TotalTokens < 0 {
-		t.Error("Total tokens should not be negative")
-	}
-
-	if metadata.InputTokens < 0 {
-		t.Error("Input tokens should not be negative")
-	}
-
-	if metadata.OutputTokens < 0 {
-		t.Error("Output tokens should not be negative")
-	}
-
-	// For streaming responses, usage information might not be available in all chunks
-	// So we're more lenient and only check if tokens are non-negative
-	if isStreaming {
-		// For streaming, we might have partial or complete usage information
-		if metadata.TotalTokens > 0 {
-			t.Logf("Complete usage information found in streaming response")
-		} else {
-			t.Logf("Partial usage information in streaming response (expected for some chunks)")
-		}
-	} else {
-		// For non-streaming responses, we expect positive token counts
-		if metadata.TotalTokens <= 0 {
-			t.Error("Total tokens should be positive for non-streaming responses")
-		}
-		if metadata.InputTokens <= 0 {
-			t.Error("Input tokens should be positive for non-streaming responses")
-		}
-		if metadata.OutputTokens <= 0 {
-			t.Error("Output tokens should be positive for non-streaming responses")
-		}
-	}
-}
-
 // TestWithMetadataHook creates a test hook for metadata parsing
 func TestWithMetadataHook(provider Provider, response io.Reader, isStreaming bool, callback MetadataCallback) *TestMetadataHook {
 	return &TestMetadataHook{
@@ -138,6 +83,14 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 	geminiProvider := NewGeminiProxy()
 	manager.RegisterProvider(geminiProvider)
 
+	// Register Bedrock so smoke tests exercise its routing alongside the
+	// other providers. Previously only openai/anthropic/gemini were
+	// wired up here, which meant every test against /model/* or
+	// /bedrock/* would 404 from the test server and silently
+	// under-validate the bedrock-specific middleware paths.
+	bedrockProvider := NewBedrockProxy()
+	manager.RegisterProvider(bedrockProvider)
+
 	// Register routes centrally
 	for name, provider := range manager.GetAllProviders() {
 		// Direct provider routes
@@ -164,5 +117,11 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 	}).Methods("GET")
 
 	server := httptest.NewServer(r)
+	// Belt-and-suspenders: every caller already `defer server.Close()`s,
+	// but registering a Cleanup here guarantees that a future caller who
+	// forgets the defer (or whose test panics before reaching it) does
+	// not leak the listening socket past the test boundary. t.Cleanup
+	// runs even on panic; defer in the caller does not.
+	t.Cleanup(server.Close)
 	return server, manager
 }

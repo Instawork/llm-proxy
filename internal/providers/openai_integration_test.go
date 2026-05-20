@@ -56,6 +56,9 @@ var openaiTestModels = []openaiTestModel{
 
 // TestOpenAIIntegration_ChatCompletions_Models tests multiple OpenAI models using subtests
 func TestOpenAIIntegration_ChatCompletions_Models(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in -short mode")
+	}
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		t.Skip("OPENAI_API_KEY environment variable is not set")

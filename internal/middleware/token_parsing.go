@@ -22,11 +22,18 @@ import (
 // to process LLM response metadata.
 type MetadataCallback func(r *http.Request, metadata *providers.LLMResponseMetadata)
 
-// GetProviderFromRequest determines which provider to use based on the request path
+// GetProviderFromRequest determines which provider to use based on the
+// request path. Recognized prefixes:
+//   - /meta/<userID>/<provider>/...   meta-routing for user-scoped requests
+//   - /openai/...                     OpenAI native
+//   - /anthropic/...                  Anthropic native
+//   - /gemini/...                     Gemini native
+//   - /v1/models/gemini..., /v1beta/models/gemini...  Gemini compatibility
+//   - /bedrock/...                    Bedrock native (with /bedrock prefix)
+//   - /model/...                      Bedrock SigV4 passthrough
 func GetProviderFromRequest(providerManager *providers.ProviderManager, req *http.Request) providers.Provider {
 	path := req.URL.Path
 
-	// Handle /meta/:userID/provider/ pattern first
 	if strings.HasPrefix(path, "/meta/") {
 		parts := strings.Split(path, "/")
 		if len(parts) >= 4 { // ["", "meta", "userID", "provider", ...]
@@ -38,15 +45,16 @@ func GetProviderFromRequest(providerManager *providers.ProviderManager, req *htt
 		}
 	}
 
-	// Handle direct provider paths (legacy support)
 	switch {
 	case strings.HasPrefix(path, "/openai/"):
 		return providerManager.GetProvider("openai")
 	case strings.HasPrefix(path, "/anthropic/"):
 		return providerManager.GetProvider("anthropic")
-	case strings.HasPrefix(path, "/gemini/"):
+	case strings.HasPrefix(path, "/gemini/"),
+		strings.HasPrefix(path, "/v1/models/gemini"),
+		strings.HasPrefix(path, "/v1beta/models/gemini"):
 		return providerManager.GetProvider("gemini")
-	case strings.HasPrefix(path, "/bedrock/"):
+	case strings.HasPrefix(path, "/bedrock/"), strings.HasPrefix(path, "/model/"):
 		return providerManager.GetProvider("bedrock")
 	}
 
@@ -183,11 +191,21 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 	}
 }
 
+// maxCapturedBodyBytes caps the number of response-body bytes
+// responseCapture retains for post-stream token/usage parsing. Without a
+// cap, an adversarial or runaway streaming response (e.g. a model emitting
+// many megabytes of text/tool-call JSON) would grow rc.body indefinitely
+// and OOM the proxy under enough concurrent requests. 4 MiB is well above
+// any sensible final-event size from the supported providers but still
+// bounds worst-case per-request memory at ~4 MiB × inflight requests.
+const maxCapturedBodyBytes = 4 * 1024 * 1024
+
 // responseCapture captures the response body for parsing and measures TTFB.
 type responseCapture struct {
 	http.ResponseWriter
 
 	body         *bytes.Buffer
+	captureFull  bool // false once the capture buffer is at the cap
 	isStreaming  bool
 	provider     providers.Provider
 	requestStart time.Time
@@ -287,7 +305,19 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 	// The post-ServeHTTP block in TokenParsingMiddleware parses the full body
 	// (and the provider's parseStreamingResponse already handles truncated
 	// streams with a partial-metadata fallback), so we lose nothing.
-	rc.body.Write(b)
+	if !rc.captureFull {
+		remaining := maxCapturedBodyBytes - rc.body.Len()
+		if remaining <= 0 {
+			rc.captureFull = true
+			log.Printf("📦 response capture cap reached (%dB); dropping further bytes from metadata buffer", maxCapturedBodyBytes)
+		} else if len(b) <= remaining {
+			rc.body.Write(b)
+		} else {
+			rc.body.Write(b[:remaining])
+			rc.captureFull = true
+			log.Printf("📦 response capture cap reached (%dB); dropping further bytes from metadata buffer", maxCapturedBodyBytes)
+		}
+	}
 	return rc.ResponseWriter.Write(b)
 }
 

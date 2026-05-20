@@ -674,11 +674,14 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 		"table_name", apiKeyConfig.TableName,
 		"region", apiKeyConfig.Region)
 
-	// Create the API key store
+	// Create the API key store. AutoCreateTable is intentionally driven by
+	// the YAML config and defaults to false so a misconfigured production
+	// deploy cannot provision DynamoDB resources in the active AWS account.
 	store, err := apikeys.NewStore(apikeys.StoreConfig{
-		TableName: apiKeyConfig.TableName,
-		Region:    apiKeyConfig.Region,
-		Logger:    logger,
+		TableName:       apiKeyConfig.TableName,
+		Region:          apiKeyConfig.Region,
+		Logger:          logger,
+		AutoCreateTable: apiKeyConfig.AutoCreateTable,
 	})
 	if err != nil {
 		logger.Error("🔑 API Key Store: Failed to create API key store", "error", err)
@@ -859,6 +862,41 @@ func handleVersionFlag(yamlConfig *config.YAMLConfig) {
 }
 
 // runServer starts and runs the LLM proxy server
+// registerProviders constructs each provider proxy, registers it with the
+// global provider manager, and returns concrete handles needed by the
+// circuit-breaker wiring below. Bedrock is opt-in via
+// `providers.bedrock.enabled: true` so existing deployments are unaffected.
+func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
+	openAI *providers.OpenAIProxy,
+	anthropic *providers.AnthropicProxy,
+	gemini *providers.GeminiProxy,
+	bedrock *providers.BedrockProxy,
+) {
+	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
+	if disableGzip {
+		logger.Warn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
+	}
+
+	openAI = providers.NewOpenAIProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(openAI)
+
+	anthropic = providers.NewAnthropicProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(anthropic)
+
+	gemini = providers.NewGeminiProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(gemini)
+
+	if bedrockCfg, ok := yamlConfig.Providers["bedrock"]; ok && bedrockCfg.Enabled {
+		bedrock = providers.NewBedrockProxy(proxyOpts)
+		globalProviderManager.RegisterProvider(bedrock)
+		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock")
+		logger.Info("☁️  Bedrock provider: ENABLED", "region", bedrock.Region())
+	} else {
+		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
+	}
+	return openAI, anthropic, gemini, bedrock
+}
+
 func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Get port from environment variable or use default
 	port := os.Getenv("PORT")
@@ -903,38 +941,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Initialize circuit breaker
 	globalCircuitStore = initializeCircuitStore(yamlConfig)
 
-	// Register providers
-	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
-	if disableGzip {
-		logger.Warn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
-	}
-
-	openAIProvider := providers.NewOpenAIProxy(proxyOpts)
-	globalProviderManager.RegisterProvider(openAIProvider)
-
-	anthropicProvider := providers.NewAnthropicProxy(proxyOpts)
-	globalProviderManager.RegisterProvider(anthropicProvider)
-
-	geminiProvider := providers.NewGeminiProxy(proxyOpts)
-	globalProviderManager.RegisterProvider(geminiProvider)
-
-	// Bedrock is opt-in via `providers.bedrock.enabled: true` so existing
-	// deployments without an AWS Bedrock relationship are unaffected, and
-	// the staged rollout in plan/bedrock-gmail-gating can flip the flag
-	// per-environment without touching binaries.  The proxy itself is a
-	// transparent SigV4 passthrough — see internal/providers/bedrock.go for
-	// the contract.
-	var bedrockProvider *providers.BedrockProxy
-	if bedrockCfg, ok := yamlConfig.Providers["bedrock"]; ok && bedrockCfg.Enabled {
-		bedrockProvider = providers.NewBedrockProxy(proxyOpts)
-		globalProviderManager.RegisterProvider(bedrockProvider)
-		// Extend the breaker rollup list so /health and the wrapping loop
-		// see the new provider alongside the others.
-		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock")
-		logger.Info("☁️  Bedrock provider: ENABLED", "region", bedrockProvider.Region())
-	} else {
-		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
-	}
+	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
 
 	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
@@ -1100,9 +1107,17 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
 
+	// Server-level timeouts to bound resource usage and avoid Slowloris-style
+	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
+	// streams; per-request deadlines are still enforced by upstream provider
+	// transports and per-handler context.WithTimeout helpers.
 	server := &http.Server{
-		Addr:    "0.0.0.0:" + port,
-		Handler: r,
+		Addr:              "0.0.0.0:" + port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      0, // streaming: rely on per-handler ctx deadlines
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Set up graceful shutdown
@@ -1117,15 +1132,19 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Wait for shutdown signal
 	sig := <-sigChan
 	logger.Info("🛑 Received shutdown signal", "signal", sig.String())
+	gracefulShutdown(server)
+}
 
-	// Create a context with timeout for graceful shutdown
+// gracefulShutdown drains the HTTP server, stops async cost-tracking workers,
+// and releases any Redis-backed circuit-breaker resources. Each step is best
+// effort — failures are logged and shutdown proceeds — because at this point
+// the process is already on its way down.
+func gracefulShutdown(server *http.Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown the HTTP server
 	logger.Info("🔄 Shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("HTTP server shutdown failed", "error", err)
@@ -1133,16 +1152,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		logger.Info("✅ HTTP server shut down successfully")
 	}
 
-	// Stop async cost tracking workers and flush remaining records
 	if globalCostTracker != nil {
 		logger.Info("🔄 Stopping cost tracking workers and flushing queue...")
 		globalCostTracker.StopAsyncWorkers()
 		logger.Info("✅ Cost tracking workers stopped and queue flushed")
 	}
 
-	// Release circuit-breaker Redis connections so the pool drains cleanly.
-	// Best effort only: any error here is logged, not fatal, because at
-	// this point the HTTP server is already stopped.
 	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
 		if err := rs.Close(); err != nil {
 			logger.Warn("Circuit Breaker: Redis close failed", "error", err)
@@ -1169,10 +1184,23 @@ func main() {
 		handleConfigValidation(validateConfig)
 	}
 
-	// Load environment-based configuration (base.yml + environment-specific config)
+	// Load environment-based configuration (base.yml + environment-specific config).
+	//
+	// Outside of explicit local-dev (LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 or
+	// ENVIRONMENT=dev) we fail-fast on load errors rather than silently
+	// running with the in-binary defaults — a misconfigured staging/prod
+	// deploy must be visible at startup, not 15 minutes into traffic.
 	yamlConfig, err := config.LoadEnvironmentConfig()
 	if err != nil {
-		logger.Warn("Failed to load environment config, using defaults", "error", err)
+		env := os.Getenv("ENVIRONMENT")
+		allowDefault := os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
+		if !allowDefault {
+			logger.Error("Failed to load environment config; refusing to start with in-binary defaults",
+				"error", err, "environment", env,
+				"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to opt in to default config")
+			os.Exit(1)
+		}
+		logger.Warn("Failed to load environment config, using defaults (dev only)", "error", err)
 		yamlConfig = config.GetDefaultYAMLConfig()
 	}
 

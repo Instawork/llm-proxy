@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // ─── Mock inner transport ─────────────────────────────────────────────────
@@ -152,16 +154,20 @@ func TestTransport_FastFailWhenCircuitOpen(t *testing.T) {
 	}
 }
 
-func TestTransport_FastFailWhenCircuitOpen_DoesNotReadRequestBodyForModel(t *testing.T) {
+func TestTransport_RollupFastFailBuffersBodyBeforeModelExtraction(t *testing.T) {
 	cfg := Config{
-		Enabled:          true,
-		Mode:             ModeEnforce,
-		FailureThreshold: 1,
-		WindowSeconds:    60,
-		CooldownSeconds:  300,
+		Enabled:                        true,
+		Mode:                           ModeEnforce,
+		FailureThreshold:               1,
+		WindowSeconds:                  60,
+		CooldownSeconds:                300,
+		PerProviderRollupThreshold:     1,
+		PerProviderRollupWindowSeconds: 60,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
-	store.RecordTerminalFailure(context.Background(), "openai") //nolint:errcheck
+	// Open the rollup so the request fast-fails, but only after cacheBody
+	// has made the server-side body replayable for model extraction.
+	store.RecordKeyOpenedForRollup(context.Background(), "openai", "openai:other", 60) //nolint:errcheck
 
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		t.Fatal("inner transport must not be called when circuit is open")
@@ -171,8 +177,19 @@ func TestTransport_FastFailWhenCircuitOpen_DoesNotReadRequestBodyForModel(t *tes
 	tr := NewTransport(inner, store, cfg, "openai", nil,
 		WithModelExtractor(func(req *http.Request) string {
 			modelFnCalled = true
-			_, _ = io.ReadAll(req.Body)
-			return "should-not-be-used"
+			if req.GetBody == nil {
+				t.Fatal("rollup fast-fail should defer model extraction until cacheBody populated GetBody")
+			}
+			body, err := req.GetBody()
+			if err != nil {
+				t.Fatalf("GetBody: %v", err)
+			}
+			defer body.Close() //nolint:errcheck
+			b, _ := io.ReadAll(body)
+			if !strings.Contains(string(b), `"model":"gpt-4o"`) {
+				t.Fatalf("model extractor saw unexpected body: %q", b)
+			}
+			return "gpt-4o"
 		}),
 	)
 
@@ -185,8 +202,8 @@ func TestTransport_FastFailWhenCircuitOpen_DoesNotReadRequestBodyForModel(t *tes
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 fast-fail, got %d", resp.StatusCode)
 	}
-	if modelFnCalled {
-		t.Fatal("fast-fail observability must not invoke model extraction before cacheBody")
+	if !modelFnCalled {
+		t.Fatal("rollup fast-fail should extract the per-model key after cacheBody")
 	}
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -858,5 +875,20 @@ func TestTransport_CustomDegradedSignal(t *testing.T) {
 	}
 	if strings.Contains(string(b), DefaultDegradedSignal) {
 		t.Fatalf("default signal should NOT appear when custom one is set: %s", b)
+	}
+}
+
+func TestProviderFromPath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/openai/v1/chat/completions", "openai"},
+		{"openai/v1/chat", "openai"},
+		{"/anthropic/v1/messages", "anthropic"},
+		{"/gemini/", "gemini"},
+		{"single", "single"},
+		{"/single", "single"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, ProviderFromPath(c.in))
 	}
 }

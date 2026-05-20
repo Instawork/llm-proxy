@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
@@ -38,9 +39,20 @@ func TestCORSMiddleware_BasicHeaders(t *testing.T) {
 		t.Errorf("Expected Access-Control-Allow-Methods to be '%s', got '%s'", expectedMethods, recorder.Header().Get("Access-Control-Allow-Methods"))
 	}
 
-	expectedHeaders := "Content-Type, Authorization, Accept, Cache-Control"
-	if recorder.Header().Get("Access-Control-Allow-Headers") != expectedHeaders {
-		t.Errorf("Expected Access-Control-Allow-Headers to be '%s', got '%s'", expectedHeaders, recorder.Header().Get("Access-Control-Allow-Headers"))
+	// Allow-Headers must include every provider auth header browsers might
+	// send. We assert each token individually because the exact concatenation
+	// order isn't part of the contract; a missing token would silently break
+	// browser-based clients.
+	gotHeaders := recorder.Header().Get("Access-Control-Allow-Headers")
+	required := []string{
+		"Content-Type", "Authorization", "Accept", "Cache-Control",
+		"x-api-key", "anthropic-version", "x-goog-api-key",
+		"X-LLM-Proxy-Test-Mode",
+	}
+	for _, h := range required {
+		if !strings.Contains(gotHeaders, h) {
+			t.Errorf("Access-Control-Allow-Headers %q missing required token %q", gotHeaders, h)
+		}
 	}
 
 	// Check response status and body
@@ -156,6 +168,30 @@ func TestCORSMiddleware_HandlerError(t *testing.T) {
 
 	if recorder.Body.String() != "internal error" {
 		t.Errorf("Expected body 'internal error', got '%s'", recorder.Body.String())
+	}
+}
+
+// TestCORSMiddleware_StreamingRequest_ExposesContentTypeAndCacheControl
+// verifies that streaming requests get an Access-Control-Expose-Headers
+// response header so browsers can read the streaming-related response
+// headers. Without it, EventSource/fetch-stream consumers can't see the
+// SSE Content-Type and Cache-Control values.
+func TestCORSMiddleware_StreamingRequest_ExposesContentTypeAndCacheControl(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewAnthropicProxy())
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	chain := CORSMiddleware(pm)(handler)
+
+	req := httptest.NewRequest("POST", "/anthropic/v1/messages", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("Access-Control-Expose-Headers"); got != "Content-Type, Cache-Control" {
+		t.Fatalf("streaming request must set Access-Control-Expose-Headers; got %q", got)
 	}
 }
 

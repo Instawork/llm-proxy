@@ -114,6 +114,39 @@ type CircuitBreakerConfig struct {
 	// (see circuit.DefaultDegradedSignal).  Change it only if your clients
 	// already key off a different, project-specific tag.
 	DegradedSignal string `yaml:"degraded_signal,omitempty"`
+
+	// BypassAllowed gates whether the transport will honour the
+	// X-LLM-Proxy-Bypass-Circuit header / llm_proxy_bypass_circuit
+	// query parameter.  Modelled as *bool so an unset field defaults
+	// to TRUE (callers without a fallback should be able to opt out
+	// of fast-fail by default), and explicit `bypass_allowed: false`
+	// disables the safety valve entirely without ambiguity.  See the
+	// BypassHeader docstring in internal/circuit/types.go for the
+	// full rationale.
+	BypassAllowed *bool `yaml:"bypass_allowed,omitempty"`
+
+	// PerProviderRollupThreshold is the number of distinct per-key
+	// (typically per-model) breakers that must open within
+	// PerProviderRollupWindowSeconds before the entire provider is
+	// treated as Open and ALL keys for that provider are fast-failed.
+	// Zero (the default) disables the rollup feature, so behaviour
+	// matches v1 per-key keying.  Recommended production starting
+	// point: 3 with a 300-second window.
+	PerProviderRollupThreshold int `yaml:"per_provider_rollup_threshold,omitempty"`
+
+	// PerProviderRollupWindowSeconds is the sliding-window TTL for
+	// per-key open events used by the rollup signal.  Default: 300.
+	// Has no effect when PerProviderRollupThreshold == 0.
+	PerProviderRollupWindowSeconds int `yaml:"per_provider_rollup_window_seconds,omitempty"`
+
+	// BypassReasonAllowlist optionally restricts which inbound
+	// X-LLM-Proxy-Bypass-Reason values are emitted verbatim on
+	// `circuit.bypass` dogstatsd tags + the per-bypass log line.  Any
+	// reason NOT in this set is reported as "other".  Set to a small
+	// canonical vocabulary in production to keep tag cardinality
+	// bounded; empty (the default) accepts any well-formed reason.
+	// See circuit.Config.BypassReasonAllowlist for the full rationale.
+	BypassReasonAllowlist []string `yaml:"bypass_reason_allowlist,omitempty"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration
@@ -143,6 +176,9 @@ type FileTransportConfig struct {
 type DynamoDBTransportConfig struct {
 	TableName string `yaml:"table_name"`
 	Region    string `yaml:"region"`
+	// AutoCreateTable mirrors APIKeyManagementConfig.AutoCreateTable —
+	// local dev only. Production must pre-provision the table.
+	AutoCreateTable bool `yaml:"auto_create_table"`
 }
 
 // DatadogTransportConfig represents Datadog transport configuration
@@ -159,6 +195,11 @@ type APIKeyManagementConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	TableName string `yaml:"table_name"`
 	Region    string `yaml:"region"`
+	// AutoCreateTable, when true, allows the API key store to call
+	// CreateTable when the configured DynamoDB table is missing. This is
+	// only safe in local development; production/staging deployments must
+	// pre-provision the table via Terraform and leave this false.
+	AutoCreateTable bool `yaml:"auto_create_table"`
 }
 
 // RateLimitingConfig represents rate limiting feature configuration
@@ -200,8 +241,9 @@ type RedisConfig struct {
 	// or `rediss://...` for TLS).  Takes priority over Address/Password
 	// when set.  YAML unmarshalling does not expand `${VAR}` / `$VAR`
 	// tokens; callers may expand them later during wiring/initialization
-	// so secrets (e.g. Finch's ML_CACHE_URL SSM parameter) can be passed
-	// in via container environment without baking credentials into YAML.
+	// so secrets (e.g. a REDIS_URL rendered from a secret manager) can
+	// be passed in via container environment without baking credentials
+	// into YAML.
 	URL      string `yaml:"url"`
 	Address  string `yaml:"address"`
 	Password string `yaml:"password"`
@@ -595,6 +637,31 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
+	// Validate API key management configuration if enabled. Previously this
+	// block was missing, so a config that enabled api_key_management with
+	// empty table_name/region silently fell through and only failed inside
+	// apikeys.NewStore() at startup with a less specific error.
+	if c.Features.APIKeyManagement.Enabled {
+		if err := c.validateAPIKeyManagementConfig(); err != nil {
+			return fmt.Errorf("invalid api_key_management configuration: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validateAPIKeyManagementConfig validates the api_key_management feature
+// configuration. It enforces that table_name and region are explicitly set
+// so a misconfigured deployment cannot fall through to AWS default
+// resolution (and accidentally point at a different account or region).
+func (c *YAMLConfig) validateAPIKeyManagementConfig() error {
+	akm := c.Features.APIKeyManagement
+	if akm.TableName == "" {
+		return fmt.Errorf("table_name is required when api_key_management is enabled")
+	}
+	if akm.Region == "" {
+		return fmt.Errorf("region is required when api_key_management is enabled")
+	}
 	return nil
 }
 
@@ -748,6 +815,13 @@ func (c *YAMLConfig) validateCircuitBreakerConfig() error {
 	case "", "off", "log", "on":
 	default:
 		return fmt.Errorf("retry_contribution_mode must be one of off, log, on (got %q)", cb.RetryContributionMode)
+	}
+
+	if cb.PerProviderRollupThreshold < 0 {
+		return fmt.Errorf("per_provider_rollup_threshold cannot be negative (got %d)", cb.PerProviderRollupThreshold)
+	}
+	if cb.PerProviderRollupWindowSeconds < 0 {
+		return fmt.Errorf("per_provider_rollup_window_seconds cannot be negative (got %d)", cb.PerProviderRollupWindowSeconds)
 	}
 
 	return nil

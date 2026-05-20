@@ -2,23 +2,37 @@ package cost
 
 import (
 	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
 // TestDynamoDBTransportIntegration demonstrates how to use the DynamoDB transport
-// This is an integration test that requires AWS credentials and DynamoDB access
+// This is an integration test that requires AWS credentials and DynamoDB access.
+//
+// Skipped by default unless LLM_PROXY_RUN_INTEGRATION=1 is exported.
+// Without the explicit opt-in, `go test ./...` from a developer laptop
+// could otherwise dial real AWS DynamoDB (with whatever profile the
+// shell happens to have exported) — at best wasting credentials, at
+// worst quietly auto-creating tables in the wrong account if
+// AutoCreateTable were ever flipped on.
 func TestDynamoDBTransportIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	if os.Getenv("LLM_PROXY_RUN_INTEGRATION") != "1" {
+		t.Skip("Skipping DynamoDB integration test; set LLM_PROXY_RUN_INTEGRATION=1 to enable")
+	}
 
-	// Configuration for DynamoDB transport
+	// Configuration for DynamoDB transport. AutoCreateTable is explicitly
+	// false: integration runs must pre-provision the table out-of-band so
+	// a misconfigured test cannot create a production resource.
 	config := DynamoDBTransportConfig{
-		TableName: "llm-proxy-cost-tracking-test",
-		Region:    "us-west-2", // Change this to your preferred region
-		Logger:    slog.Default(),
+		TableName:       "llm-proxy-cost-tracking-test",
+		Region:          "us-west-2",
+		AutoCreateTable: false,
+		Logger:          slog.Default(),
 	}
 
 	// Create DynamoDB transport

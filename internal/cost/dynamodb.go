@@ -20,13 +20,25 @@ type DynamoDBTransportConfig struct {
 	TableName string
 	Region    string
 	Logger    *slog.Logger
+	// AutoCreateTable controls whether NewDynamoDBTransport will issue
+	// CreateTable when the configured table is missing. Defaults to false
+	// so staging/production deployments cannot accidentally provision
+	// resources in the active AWS account.
+	AutoCreateTable bool
+	// WriteTimeout bounds the per-record PutItem call. Defaults to 5s.
+	WriteTimeout time.Duration
 }
+
+// defaultDynamoDBWriteTimeout caps each PutItem to keep cost tracking
+// from monopolizing a request goroutine when sync writes are configured.
+const defaultDynamoDBWriteTimeout = 5 * time.Second
 
 // DynamoDBTransport implements Transport interface for DynamoDB-based cost tracking
 type DynamoDBTransport struct {
-	client    *dynamodb.Client
-	tableName string
-	logger    *slog.Logger
+	client       *dynamodb.Client
+	tableName    string
+	logger       *slog.Logger
+	writeTimeout time.Duration
 }
 
 // DynamoDBCostRecord represents a cost record as stored in DynamoDB
@@ -57,17 +69,23 @@ type DynamoDBCostRecord struct {
 	FinishReason string  `dynamodbav:"finish_reason,omitempty"`
 }
 
-// NewDynamoDBTransport creates a new DynamoDB-based transport
+// NewDynamoDBTransport creates a new DynamoDB-based transport.
+//
+// Startup uses a bounded context (30s) for AWS config + table verification
+// so a misconfigured account cannot hang the process indefinitely. If
+// cfg.AutoCreateTable is false (the default) the constructor only verifies
+// the table exists; otherwise it falls back to CreateTable.
 func NewDynamoDBTransport(cfg DynamoDBTransportConfig) (*DynamoDBTransport, error) {
-	// Load AWS configuration
-	awsConfig, err := config.LoadDefaultConfig(context.TODO(),
+	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	awsConfig, err := config.LoadDefaultConfig(startupCtx,
 		config.WithRegion(cfg.Region),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Create DynamoDB client
 	client := dynamodb.NewFromConfig(awsConfig)
 
 	logger := cfg.Logger
@@ -75,18 +93,38 @@ func NewDynamoDBTransport(cfg DynamoDBTransportConfig) (*DynamoDBTransport, erro
 		logger = slog.Default()
 	}
 
-	transport := &DynamoDBTransport{
-		client:    client,
-		tableName: cfg.TableName,
-		logger:    logger,
+	writeTimeout := cfg.WriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultDynamoDBWriteTimeout
 	}
 
-	// Ensure table exists
-	if err := transport.ensureTableExists(context.TODO()); err != nil {
-		return nil, fmt.Errorf("failed to ensure table exists: %w", err)
+	transport := &DynamoDBTransport{
+		client:       client,
+		tableName:    cfg.TableName,
+		logger:       logger,
+		writeTimeout: writeTimeout,
+	}
+
+	if cfg.AutoCreateTable {
+		if err := transport.ensureTableExists(startupCtx); err != nil {
+			return nil, fmt.Errorf("failed to ensure table exists: %w", err)
+		}
+	} else {
+		if err := transport.verifyTableExists(startupCtx); err != nil {
+			return nil, fmt.Errorf("dynamodb table %q is not accessible (pass AutoCreateTable: true in dev only): %w", cfg.TableName, err)
+		}
 	}
 
 	return transport, nil
+}
+
+// verifyTableExists checks that the configured table is reachable without
+// attempting to create it. Used for the default (production-safe) path.
+func (dt *DynamoDBTransport) verifyTableExists(ctx context.Context) error {
+	_, err := dt.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(dt.tableName),
+	})
+	return err
 }
 
 // FromConfig creates a DynamoDBTransport from configuration
@@ -102,9 +140,10 @@ func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slo
 			"region", cfg.DynamoDB.Region)
 
 		config := DynamoDBTransportConfig{
-			TableName: cfg.DynamoDB.TableName,
-			Region:    cfg.DynamoDB.Region,
-			Logger:    logger,
+			TableName:       cfg.DynamoDB.TableName,
+			Region:          cfg.DynamoDB.Region,
+			Logger:          logger,
+			AutoCreateTable: cfg.DynamoDB.AutoCreateTable,
 		}
 		return NewDynamoDBTransport(config)
 
@@ -122,14 +161,16 @@ func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slo
 			return nil, fmt.Errorf("dynamodb region not specified")
 		}
 
+		autoCreate, _ := dynamoConfig["auto_create_table"].(bool)
 		logger.Debug("💰 DynamoDB Transport: Creating from map config",
 			"table_name", tableName,
 			"region", region)
 
 		config := DynamoDBTransportConfig{
-			TableName: tableName,
-			Region:    region,
-			Logger:    logger,
+			TableName:       tableName,
+			Region:          region,
+			Logger:          logger,
+			AutoCreateTable: autoCreate,
 		}
 		return NewDynamoDBTransport(config)
 
@@ -144,9 +185,49 @@ func NewDynamoDBTransportFromConfig(transportConfig interface{}, logger *slog.Lo
 	return dt.FromConfig(transportConfig, logger)
 }
 
+// buildCostTableSchema returns the table creation input used by
+// ensureTableExists. Extracted so the (large) schema literal does not bury the
+// control flow in ensureTableExists.
+func (dt *DynamoDBTransport) buildCostTableSchema() *dynamodb.CreateTableInput {
+	stringAttr := func(name string) types.AttributeDefinition {
+		return types.AttributeDefinition{
+			AttributeName: aws.String(name),
+			AttributeType: types.ScalarAttributeTypeS,
+		}
+	}
+	gsi := func(name, pk, sk string) types.GlobalSecondaryIndex {
+		return types.GlobalSecondaryIndex{
+			IndexName: aws.String(name),
+			KeySchema: []types.KeySchemaElement{
+				{AttributeName: aws.String(pk), KeyType: types.KeyTypeHash},
+				{AttributeName: aws.String(sk), KeyType: types.KeyTypeRange},
+			},
+			Projection: &types.Projection{ProjectionType: types.ProjectionTypeAll},
+		}
+	}
+	return &dynamodb.CreateTableInput{
+		TableName: aws.String(dt.tableName),
+		KeySchema: []types.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: types.KeyTypeHash},
+			{AttributeName: aws.String("sk"), KeyType: types.KeyTypeRange},
+		},
+		AttributeDefinitions: []types.AttributeDefinition{
+			stringAttr("pk"), stringAttr("sk"),
+			stringAttr("gsi1pk"), stringAttr("gsi1sk"),
+			stringAttr("gsi2pk"), stringAttr("gsi2sk"),
+			stringAttr("gsi3pk"), stringAttr("gsi3sk"),
+		},
+		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+			gsi("ProviderModelIndex", "gsi1pk", "gsi1sk"),
+			gsi("UserProviderIndex", "gsi2pk", "gsi2sk"),
+			gsi("ModelProviderIndex", "gsi3pk", "gsi3sk"),
+		},
+		BillingMode: types.BillingModePayPerRequest,
+	}
+}
+
 // ensureTableExists creates the DynamoDB table if it doesn't exist
 func (dt *DynamoDBTransport) ensureTableExists(ctx context.Context) error {
-	// Check if table exists
 	_, err := dt.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(dt.tableName),
 	})
@@ -155,119 +236,15 @@ func (dt *DynamoDBTransport) ensureTableExists(ctx context.Context) error {
 		return nil
 	}
 
-	// Create table if it doesn't exist
 	dt.logger.Info("Creating DynamoDB table for cost tracking", "table", dt.tableName)
-
-	createInput := &dynamodb.CreateTableInput{
-		TableName: aws.String(dt.tableName),
-		KeySchema: []types.KeySchemaElement{
-			{
-				AttributeName: aws.String("pk"),
-				KeyType:       types.KeyTypeHash,
-			},
-			{
-				AttributeName: aws.String("sk"),
-				KeyType:       types.KeyTypeRange,
-			},
-		},
-		AttributeDefinitions: []types.AttributeDefinition{
-			{
-				AttributeName: aws.String("pk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("sk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi1pk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi1sk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi2pk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi2sk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi3pk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("gsi3sk"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-		},
-		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
-			{
-				IndexName: aws.String("ProviderModelIndex"),
-				KeySchema: []types.KeySchemaElement{
-					{
-						AttributeName: aws.String("gsi1pk"),
-						KeyType:       types.KeyTypeHash,
-					},
-					{
-						AttributeName: aws.String("gsi1sk"),
-						KeyType:       types.KeyTypeRange,
-					},
-				},
-				Projection: &types.Projection{
-					ProjectionType: types.ProjectionTypeAll,
-				},
-			},
-			{
-				IndexName: aws.String("UserProviderIndex"),
-				KeySchema: []types.KeySchemaElement{
-					{
-						AttributeName: aws.String("gsi2pk"),
-						KeyType:       types.KeyTypeHash,
-					},
-					{
-						AttributeName: aws.String("gsi2sk"),
-						KeyType:       types.KeyTypeRange,
-					},
-				},
-				Projection: &types.Projection{
-					ProjectionType: types.ProjectionTypeAll,
-				},
-			},
-			{
-				IndexName: aws.String("ModelProviderIndex"),
-				KeySchema: []types.KeySchemaElement{
-					{
-						AttributeName: aws.String("gsi3pk"),
-						KeyType:       types.KeyTypeHash,
-					},
-					{
-						AttributeName: aws.String("gsi3sk"),
-						KeyType:       types.KeyTypeRange,
-					},
-				},
-				Projection: &types.Projection{
-					ProjectionType: types.ProjectionTypeAll,
-				},
-			},
-		},
-		BillingMode: types.BillingModePayPerRequest,
-	}
-
-	_, err = dt.client.CreateTable(ctx, createInput)
-	if err != nil {
+	if _, err := dt.client.CreateTable(ctx, dt.buildCostTableSchema()); err != nil {
 		return fmt.Errorf("failed to create table: %w", err)
 	}
 
-	// Wait for table to become active
 	waiter := dynamodb.NewTableExistsWaiter(dt.client)
-	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{
+	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(dt.tableName),
-	}, 5*time.Minute)
-	if err != nil {
+	}, 5*time.Minute); err != nil {
 		return fmt.Errorf("failed waiting for table to become active: %w", err)
 	}
 
@@ -275,20 +252,22 @@ func (dt *DynamoDBTransport) ensureTableExists(ctx context.Context) error {
 	return nil
 }
 
-// WriteRecord writes a cost record to DynamoDB
+// WriteRecord writes a cost record to DynamoDB.
+//
+// Each PutItem is wrapped in a context with writeTimeout so that a stalled
+// DynamoDB endpoint cannot block the calling goroutine indefinitely; in
+// sync-tracker mode this is the request goroutine.
 func (dt *DynamoDBTransport) WriteRecord(record *CostRecord) error {
-	ctx := context.TODO()
+	ctx, cancel := context.WithTimeout(context.Background(), dt.writeTimeout)
+	defer cancel()
 
-	// Convert CostRecord to DynamoDBCostRecord
 	dynamoRecord := dt.toDynamoDBRecord(record)
 
-	// Marshal to DynamoDB item
 	item, err := attributevalue.MarshalMap(dynamoRecord)
 	if err != nil {
 		return fmt.Errorf("failed to marshal record: %w", err)
 	}
 
-	// Put item to DynamoDB
 	_, err = dt.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(dt.tableName),
 		Item:      item,

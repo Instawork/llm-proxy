@@ -189,13 +189,13 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 		t.Error("No streaming chunks received")
 	}
 
-	// Note: stream_options injection is not yet implemented
-	// When implemented, streaming requests should automatically include usage information
-	// For now, we'll just log whether usage was found
+	// The proxy MUST inject stream_options={"include_usage": true} on every
+	// streaming OpenAI request so the token-parsing middleware can build a
+	// CostRecord. Without injection the final SSE chunk has no `usage`
+	// field and the cost tracker reports 0 input/0 output tokens, which
+	// silently breaks billing for any streaming caller.
 	if !hasUsage {
-		t.Logf("⚠️ No usage information found in streaming response (stream_options injection not yet implemented)")
-		// Don't fail the test since the feature isn't implemented
-		// t.Errorf("Expected usage information due to stream_options injection, but none was found")
+		t.Fatalf("expected `usage` in at least one streamed chunk because the proxy must inject stream_options.include_usage=true; got none")
 	} else {
 		t.Logf("✅ Usage information found in streaming response")
 

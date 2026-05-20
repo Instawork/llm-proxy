@@ -76,6 +76,58 @@ const TestModeHeader = "X-LLM-Proxy-Test-Mode"
 //	base_url = "http://localhost:9002/gemini?llm_proxy_test_mode=force_degraded"
 const TestModeQueryParam = "llm_proxy_test_mode"
 
+// BypassHeader is the HTTP request header that asks the circuit transport to
+// skip its fast-fail / probe-slot guard and attempt the upstream call even
+// when the per-key breaker is Open or Half-Open.  Intended for callers that
+// have no provider/model fallback wired up and prefer "try anyway, accept the
+// upstream's real answer" over "fail instantly with a synthetic 503".
+//
+// Bypass requests still feed observability: any terminal failure they observe
+// is recorded against the breaker so dashboards stay accurate.  Successful
+// bypass calls do NOT close an Open circuit — only a real half-open probe can
+// — so an opportunistic bypass loop can never spoof recovery.
+//
+// Bypass is gated by Config.BypassAllowed (default true).  Operators can
+// disable it deployment-wide by setting `bypass_allowed: false` in YAML.
+const BypassHeader = "X-LLM-Proxy-Bypass-Circuit"
+
+// BypassQueryParam is the URL query parameter equivalent of BypassHeader,
+// for SDKs that cannot set custom HTTP headers and embed the option in the
+// base URL instead:
+//
+//	base_url = "http://localhost:9002/gemini?llm_proxy_bypass_circuit=1"
+const BypassQueryParam = "llm_proxy_bypass_circuit"
+
+// BypassReasonHeader carries an opaque short string that callers can use
+// to self-document WHY they bypassed the breaker on a given request (e.g.
+// "final_retry_tier", "no_fallback_configured", "manual_debug").  The value
+// is forwarded into the per-bypass log line and the `circuit.bypass`
+// dogstatsd counter as the `reason` tag, so operators can audit how the
+// bypass safety valve is being used.  Not required: an empty / missing
+// value tags as `reason:unspecified`.
+const BypassReasonHeader = "X-LLM-Proxy-Bypass-Reason"
+
+// BypassQueryParamReason is the URL query parameter equivalent of
+// BypassReasonHeader, for SDKs that cannot set headers.
+const BypassQueryParamReason = "llm_proxy_bypass_reason"
+
+// maxBypassReasonLength bounds how much of an inbound bypass reason we copy
+// into log lines and metric tags, to keep dogstatsd cardinality and slog
+// payload sizes bounded.  Anything past this is silently truncated.
+const maxBypassReasonLength = 64
+
+// BypassReasonUnspecified is the canonical reason tag used when the caller
+// did not provide one (or provided an empty value).  Centralised so the
+// log line, metric tag, and any future audit emitter all agree.
+const BypassReasonUnspecified = "unspecified"
+
+// BypassReasonOther is the canonical reason tag emitted when the caller
+// did supply a reason but the operator-configured allowlist
+// (Config.BypassReasonAllowlist) does not contain it.  Lets dashboards
+// keep a stable cardinality bound while still surfacing "someone bypassed
+// for a reason we did not pre-bless" as a separate bucket.
+const BypassReasonOther = "other"
+
 // Test mode header values.
 const (
 	// TestModeForceDegraded bypasses the provider and returns a degraded error
@@ -227,13 +279,13 @@ type Config struct {
 	//   1. RedisURL — a full `redis://[:password@]host:port[/db]` (or
 	//      `rediss://...` for TLS) URL.  Parsed via redis.ParseURL so
 	//      every option it supports is honoured.  Intended to be populated
-	//      from a secret (e.g. SSM) so we can share Finch's Redis
-	//      instance without duplicating password/hostname config.
+	//      from a deployment-managed secret so operators can share an
+	//      existing Redis instance without duplicating password/hostname config.
 	//   2. RedisAddress / RedisPassword / RedisDB — individual fields.
 	//
 	// If both are provided, RedisURL is parsed first and the individual
 	// fields overlay its result (so you can, for example, point the URL
-	// at Finch's cluster but explicitly pin DB to a dedicated circuit-
+	// at a shared cluster but explicitly pin DB to a dedicated circuit-
 	// breaker database).  RedisDB overlays the URL DB only when
 	// RedisDBSet is true, which lets an explicit DB 0 override a URL path.
 	RedisURL      string
@@ -267,9 +319,70 @@ type Config struct {
 	// we never hold an unbounded byte slice per request.  Zero or
 	// negative means "use DefaultMaxRetryableBodyBytes".
 	MaxRetryableBodyBytes int64
+
+	// BypassAllowed gates whether the transport will honour the
+	// X-LLM-Proxy-Bypass-Circuit header / llm_proxy_bypass_circuit
+	// query parameter.  When true (the default), a caller can set the
+	// header to a truthy value (1/true/yes) to request that the
+	// breaker NOT fast-fail this request even if the per-key circuit
+	// is currently Open or Half-Open — the real upstream response is
+	// returned instead.  Failures observed during a bypass still feed
+	// the breaker (so dashboards stay accurate); successful bypass
+	// calls do NOT close an open circuit (only a real half-open probe
+	// can).  Set to false to disable the safety valve entirely, e.g.
+	// in deployments where every caller is required to honour the
+	// breaker's fast-fail signal.
+	BypassAllowed bool
+
+	// PerProviderRollupThreshold controls the optional rollup signal
+	// that fires when N or more distinct per-key breakers (e.g. one
+	// per model) for the same provider open within the rollup window.
+	// Rationale: per-key keying isolates a single misbehaving model,
+	// but a true wholesale provider outage wants every model to fast-
+	// fail.  When this many keys for a single provider open inside
+	// PerProviderRollupWindowSeconds, the transport treats the entire
+	// provider as Open and fast-fails ALL keys for that provider until
+	// older entries age out of the window.
+	//
+	// Zero (the default) disables the rollup entirely so behaviour
+	// matches v1 per-key keying: the rollup is opt-in.  Recommended
+	// production value: 3 with a 300-second window — i.e. trip the
+	// provider rollup only when at least 3 different model breakers
+	// open in 5 minutes.
+	PerProviderRollupThreshold int
+
+	// PerProviderRollupWindowSeconds is the sliding-window TTL for
+	// per-key open events used by the rollup signal.  Default: 300.
+	// Has no effect when PerProviderRollupThreshold == 0.
+	PerProviderRollupWindowSeconds int
+
+	// BypassReasonAllowlist optionally restricts which
+	// X-LLM-Proxy-Bypass-Reason values appear verbatim on the
+	// `circuit.bypass` dogstatsd counter and the per-bypass log line.
+	// Any reason NOT in this set is normalised to BypassReasonOther
+	// before tagging.  Set this to a small canonical vocabulary to
+	// keep dogstatsd tag cardinality bounded against malicious or
+	// careless callers (e.g. one that tags a UUID per request).
+	//
+	// Empty (the default) means "accept any reason as-is" — relying
+	// only on the maxBypassReasonLength + safe-character normalisation
+	// to bound cardinality.  Recommended production vocabulary:
+	//
+	//   - "no_fallback_configured" - the calling agent has no fallback
+	//   - "manual_debug"           - operator override for one-off triage
+	//   - "final_retry_tier"       - last resort after all retries failed
+	//   - "force_real_upstream"    - integration test exercising real provider
+	BypassReasonAllowlist []string
 }
 
 // Defaults returns a Config with all zero fields replaced by sensible defaults.
+//
+// BypassAllowed has no defaulting here on purpose: distinguishing "operator
+// explicitly disabled bypass" from "operator did not set the field" requires
+// the YAML layer to use a *bool sentinel and pass an explicit value through
+// to circuit.Config.  Callers constructing Config in Go (mostly tests) get a
+// zero value (false) which is the strict-safe default — flip BypassAllowed
+// to true to opt into the safety valve.
 func (c Config) Defaults() Config {
 	switch c.Mode {
 	case "":
@@ -310,6 +423,12 @@ func (c Config) Defaults() Config {
 	if c.MaxRetryableBodyBytes <= 0 {
 		c.MaxRetryableBodyBytes = DefaultMaxRetryableBodyBytes
 	}
+	if c.PerProviderRollupWindowSeconds <= 0 {
+		c.PerProviderRollupWindowSeconds = 300
+	}
+	if c.PerProviderRollupThreshold < 0 {
+		c.PerProviderRollupThreshold = 0
+	}
 	return c
 }
 
@@ -339,6 +458,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.DegradedSignal) > MaxDegradedSignalLength {
 		return fmt.Errorf("circuit: degraded_signal length %d exceeds max %d", len(c.DegradedSignal), MaxDegradedSignalLength)
+	}
+	if c.PerProviderRollupThreshold < 0 {
+		return fmt.Errorf("circuit: per_provider_rollup_threshold cannot be negative (got %d)", c.PerProviderRollupThreshold)
+	}
+	if c.PerProviderRollupWindowSeconds < 0 {
+		return fmt.Errorf("circuit: per_provider_rollup_window_seconds cannot be negative (got %d)", c.PerProviderRollupWindowSeconds)
 	}
 	return nil
 }

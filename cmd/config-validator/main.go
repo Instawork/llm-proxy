@@ -84,8 +84,20 @@ const (
 // validateSemantics checks for logical errors that YAML parsing won't catch:
 //   - Pricing values must be within the sane range [minPricePerMillion, maxPricePerMillion]
 //   - Aliases must be unique within a provider (duplicate aliases cause non-deterministic routing)
+//   - Aliases must not collide with another provider's canonical model name
+//     or alias (cross-provider aliasing makes routing ambiguous)
+//   - When rate limiting is enabled with the redis backend, the Redis URL
+//     or address must be present (catches the bare `backend: redis` typo)
+//   - When circuit breaker is enabled with the redis backend, Redis cfg present
+//   - Cost-tracking transports of type=dynamodb must have a non-empty region
+//     and table_name (mirrors runtime validate; surfaces it at config-time)
 func validateSemantics(cfg *config.YAMLConfig) []string {
 	var errs []string
+
+	// Track aliases globally across providers so a stray duplicate
+	// (e.g. `gpt-4o` mapped under both openai and bedrock) is caught at
+	// validation time rather than at first-request routing.
+	globalAliases := make(map[string]string) // alias -> "provider/model"
 
 	for providerName, provider := range cfg.Providers {
 		if !provider.Enabled {
@@ -100,7 +112,7 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 				continue
 			}
 
-			// Check for duplicate aliases.
+			// Check for duplicate aliases within this provider.
 			for _, alias := range model.Aliases {
 				if existing, seen := seenAliases[alias]; seen {
 					errs = append(errs, fmt.Sprintf(
@@ -109,6 +121,17 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 					))
 				} else {
 					seenAliases[alias] = modelName
+				}
+
+				// Check for cross-provider alias collision.
+				fqcn := fmt.Sprintf("%s/%s", providerName, modelName)
+				if other, seen := globalAliases[alias]; seen && other != fqcn {
+					errs = append(errs, fmt.Sprintf(
+						"alias %q is registered by both %s and %s",
+						alias, other, fqcn,
+					))
+				} else {
+					globalAliases[alias] = fqcn
 				}
 			}
 
@@ -127,6 +150,38 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 			for alias, p := range mp.Overrides {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] input", alias), p.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] output", alias), p.Output)...)
+			}
+		}
+	}
+
+	// Cross-feature checks. These are duplicated against YAMLConfig.Validate
+	// on purpose: the validator runs in CI before deploy, and the runtime
+	// validators may evolve. Belt-and-suspenders is intentional.
+	if cfg.Features.RateLimiting.Enabled && cfg.Features.RateLimiting.Backend == "redis" {
+		if cfg.Features.RateLimiting.Redis == nil ||
+			(cfg.Features.RateLimiting.Redis.URL == "" && cfg.Features.RateLimiting.Redis.Address == "") {
+			errs = append(errs, "rate_limiting.backend=redis but rate_limiting.redis.{url,address} are both empty")
+		}
+	}
+	if cfg.Features.CircuitBreaker.Enabled {
+		// CircuitBreaker's runtime Validate handles backend=redis already;
+		// we only assert the high-level shape here so a YAML with a
+		// `circuit_breaker.redis:` block but no fields is caught.
+		if cfg.Features.CircuitBreaker.Redis != nil &&
+			cfg.Features.CircuitBreaker.Redis.URL == "" &&
+			cfg.Features.CircuitBreaker.Redis.Address == "" {
+			errs = append(errs, "circuit_breaker.redis is declared but both url and address are empty")
+		}
+	}
+	if cfg.Features.CostTracking.Enabled {
+		for i, t := range cfg.Features.CostTracking.Transports {
+			if t.Type == "dynamodb" && t.DynamoDB != nil {
+				if t.DynamoDB.Region == "" {
+					errs = append(errs, fmt.Sprintf("cost_tracking.transports[%d] dynamodb.region is required", i))
+				}
+				if t.DynamoDB.TableName == "" {
+					errs = append(errs, fmt.Sprintf("cost_tracking.transports[%d] dynamodb.table_name is required", i))
+				}
 			}
 		}
 	}

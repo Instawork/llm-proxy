@@ -1,41 +1,57 @@
 package middleware
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
-// isProviderRoute checks if the request is for a provider route
+// isProviderRoute checks if the request is for a provider route. Bedrock is
+// recognized via both /bedrock/* and /model/* (the SigV4 passthrough route).
+// The Gemini compatibility paths /v1/models/gemini* and /v1beta/models/gemini*
+// are also included so apikey validation and cost tracking treat them the
+// same as /gemini/* — previously these would log as "Non-tracked provider
+// route" with provider=nil.
 func isProviderRoute(path string) bool {
 	return strings.HasPrefix(path, "/openai/") ||
 		strings.HasPrefix(path, "/anthropic/") ||
-		strings.HasPrefix(path, "/gemini/")
+		strings.HasPrefix(path, "/gemini/") ||
+		strings.HasPrefix(path, "/bedrock/") ||
+		strings.HasPrefix(path, "/model/") ||
+		strings.HasPrefix(path, "/v1/models/gemini") ||
+		strings.HasPrefix(path, "/v1beta/models/gemini")
 }
 
-// isAPIEndpoint checks if the request is for an API endpoint that should be cost tracked
+// isAPIEndpoint checks if the request is for an API endpoint that should be
+// cost tracked. Bedrock's Converse / InvokeModel endpoints are recognized
+// via path suffix.
 func isAPIEndpoint(path string) bool {
 	return strings.Contains(path, "/chat/completions") ||
 		strings.Contains(path, "/completions") ||
 		strings.Contains(path, "/messages") ||
 		strings.Contains(path, ":generateContent") ||
-		strings.Contains(path, ":streamGenerateContent")
+		strings.Contains(path, ":streamGenerateContent") ||
+		strings.Contains(path, "/converse") ||
+		strings.Contains(path, "/converse-stream") ||
+		strings.Contains(path, "/invoke") ||
+		strings.Contains(path, "/invoke-with-response-stream")
 }
 
-// getProviderFromPath extracts provider name from the request path
+// getProviderFromPath extracts a provider name from the request path. This
+// delegates to circuit.ProviderFromPath so the bedrock passthrough rewrite
+// (/model/* → bedrock) and Gemini compat routes stay in one place.
 func getProviderFromPath(path string) string {
-	if strings.HasPrefix(path, "/openai/") {
-		return "openai"
-	} else if strings.HasPrefix(path, "/anthropic/") {
-		return "anthropic"
-	} else if strings.HasPrefix(path, "/gemini/") {
-		return "gemini"
+	name := circuit.ProviderFromPath(path)
+	switch name {
+	case "openai", "anthropic", "gemini", "bedrock":
+		return name
+	default:
+		return ""
 	}
-	return ""
 }
 
 // LoggingMiddleware logs all incoming requests and identifies non-tracked provider routes
@@ -85,7 +101,7 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 					reason = "Unknown reason"
 				}
 
-				slog.Log(context.TODO(), level, "Non-tracked provider route",
+				slog.Log(r.Context(), level, "Non-tracked provider route",
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", providerName),

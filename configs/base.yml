@@ -955,6 +955,14 @@ providers:
 
 # =============================================================================
 # DEFAULT RATE LIMITS (FALLBACKS)
+#
+# NOTE: the `defaults:` block below is currently unread by the loader —
+# the Go struct (internal/config/config.go YAMLConfig) does not bind it.
+# Effective per-scope fallbacks live in features.rate_limiting.limits and
+# features.rate_limiting.overrides. Keep this block updated as a
+# documentation source until a future change wires it into the struct
+# (then remove this NOTE). Same caveat applies to providers.*.default_limits
+# above: those fields are also unbound today.
 # =============================================================================
 
 defaults:

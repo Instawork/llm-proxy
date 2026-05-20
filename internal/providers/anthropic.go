@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,10 +35,11 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 		opt = opts[0]
 	}
 
-	// Parse the Anthropic API URL
+	// Parse the Anthropic API URL. See NewOpenAIProxy for rationale on
+	// using panic over log.Fatalf for malformed package constants.
 	targetURL, err := url.Parse(anthropicBaseURL)
 	if err != nil {
-		log.Fatalf("Failed to parse Anthropic API URL: %v", err)
+		panic(fmt.Sprintf("invalid anthropicBaseURL constant %q: %v", anthropicBaseURL, err))
 	}
 
 	// Create the reverse proxy
@@ -109,19 +109,14 @@ func (a *AnthropicProxy) GetName() string {
 	return "anthropic"
 }
 
-// IsStreamingRequest checks if the request is likely to be a streaming request for Anthropic
+// IsStreamingRequest checks if the request is likely to be a streaming
+// request for Anthropic. The cross-provider routing gate lives in
+// ProviderManager.IsStreamingRequest — see openai.go for the rationale.
 func (a *AnthropicProxy) IsStreamingRequest(req *http.Request) bool {
-	// Check for streaming in the Accept header first (fast check)
 	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
 		return true
 	}
 
-	// Only check Anthropic-specific endpoints
-	if !strings.HasPrefix(req.URL.Path, "/anthropic/") {
-		return false
-	}
-
-	// For Anthropic messages endpoint, check the request body for stream: true
 	if req.Method == "POST" && strings.Contains(req.URL.Path, "/messages") {
 		return a.checkStreamingInBody(req)
 	}
@@ -616,8 +611,10 @@ func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore)
 		return nil
 	}
 
-	// Validate and potentially replace the key
-	actualKey, provider, err := keyStore.ValidateAndGetActualKey(context.Background(), apiKey)
+	// Validate and potentially replace the key. Use the request context so
+	// client cancellation / handler-level deadlines propagate into the
+	// DynamoDB validation lookup.
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), apiKey)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}

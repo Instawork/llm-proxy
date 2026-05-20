@@ -81,4 +81,19 @@ temp/
 
 # Package manager
 node_modules/
-vendor/ 
+vendor/
+
+# CI configuration and local-only dev scaffolding — none of this needs
+# to be inside the production image, and shipping it bloats layers and
+# leaks build/CI metadata into the runtime image.
+.circleci/
+.cursor/
+.github/
+Makefile
+ai_docs/
+docker-compose.*.yml
+
+# Test data / fixtures should never end up in a production image.
+testdata/
+**/testdata/
+

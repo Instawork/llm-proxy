@@ -73,10 +73,15 @@ func TestProviderManager(t *testing.T) {
 		t.Error("Non-existent provider should return nil")
 	}
 
-	// Test getting all providers
+	// Test getting all providers. setupTestServer now registers
+	// openai/anthropic/gemini/bedrock; assert each is present rather
+	// than baking in the count so adding a future provider doesn't
+	// trip a regression check on this scaffolding test.
 	allProviders := providerManager.GetAllProviders()
-	if len(allProviders) != 3 {
-		t.Errorf("Expected 3 providers, got %d", len(allProviders))
+	for _, name := range []string{"openai", "anthropic", "gemini", "bedrock"} {
+		if _, ok := allProviders[name]; !ok {
+			t.Errorf("Expected provider %q to be registered", name)
+		}
 	}
 
 	t.Log("Provider manager test passed")

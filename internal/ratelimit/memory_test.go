@@ -2,10 +2,13 @@ package ratelimit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func baseCfg() *config.YAMLConfig {
@@ -225,4 +228,92 @@ func TestMemoryLimiterPerAPIKeyMinuteAndDay(t *testing.T) {
 	if res, _ := lim.CheckAndReserve(context.Background(), "dt2", ScopeKeys{APIKey: "k3"}, 10, day.Add(8*time.Minute)); res.Allowed {
 		t.Fatalf("second day token reservation per key should be blocked")
 	}
+}
+
+func TestMemoryLimiter_Adjust_AddsAndRefunds(t *testing.T) {
+	cfg := baseCfg()
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{UserID: "u-adjust"}
+	now := time.Now()
+
+	res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 50, now)
+	require.True(t, res.Allowed)
+
+	require.NoError(t, lim.Adjust(context.Background(), "1", scope, -30, now))
+
+	res2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 70, now)
+	assert.True(t, res2.Allowed)
+}
+
+func TestMemoryLimiter_Cancel_FreesRequestSlot(t *testing.T) {
+	cfg := baseCfg()
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{UserID: "u-cancel"}
+	now := time.Now()
+
+	res1, _ := lim.CheckAndReserve(context.Background(), "1", scope, 1, now)
+	require.True(t, res1.Allowed)
+	res2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 1, now)
+	require.True(t, res2.Allowed)
+
+	res3, _ := lim.CheckAndReserve(context.Background(), "3", scope, 1, now)
+	require.False(t, res3.Allowed)
+
+	require.NoError(t, lim.Cancel(context.Background(), "1", scope, 1, now))
+
+	res4, _ := lim.CheckAndReserve(context.Background(), "4", scope, 1, now)
+	assert.True(t, res4.Allowed)
+}
+
+func TestMemoryLimiter_PerModelOverrideMinute(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{}
+	cfg.Features.RateLimiting.Overrides.PerModel = map[string]config.LimitsConfig{
+		"gpt-4o": {RequestsPerMinute: 1, TokensPerMinute: 50},
+	}
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{Model: "gpt-4o"}
+	now := time.Now()
+	r1, _ := lim.CheckAndReserve(context.Background(), "1", scope, 1, now)
+	require.True(t, r1.Allowed)
+	r2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 1, now)
+	assert.False(t, r2.Allowed)
+}
+
+func TestMemoryLimiter_PerModelOverrideDay(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{
+		RequestsPerMinute: 1000,
+		TokensPerMinute:   1000000,
+	}
+	cfg.Features.RateLimiting.Overrides.PerModel = map[string]config.LimitsConfig{
+		"gpt-4o": {RequestsPerDay: 2, TokensPerDay: 500},
+	}
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{Model: "gpt-4o"}
+	now := time.Now()
+	r1, _ := lim.CheckAndReserve(context.Background(), "1", scope, 1, now)
+	require.True(t, r1.Allowed)
+	r2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 1, now)
+	require.True(t, r2.Allowed)
+	r3, _ := lim.CheckAndReserve(context.Background(), "3", scope, 1, now)
+	assert.False(t, r3.Allowed)
+}
+
+func TestMemoryLimiter_GlobalRequestsAndDayLimits(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{
+		RequestsPerMinute: 1000,
+		TokensPerMinute:   1000000,
+		RequestsPerDay:    1,
+		TokensPerDay:      1000,
+	}
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{UserID: strings.Repeat("g", 4)}
+	now := time.Now()
+
+	r1, _ := lim.CheckAndReserve(context.Background(), "1", scope, 1, now)
+	require.True(t, r1.Allowed)
+	r2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 1, now)
+	assert.False(t, r2.Allowed)
 }

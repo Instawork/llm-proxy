@@ -1,12 +1,15 @@
 package circuit
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func resp(status int, headers map[string]string) *http.Response {
@@ -224,4 +227,39 @@ func TestClassify_Anthropic_429_NoHeaders_Local(t *testing.T) {
 	if fc != FailureClassLocalRateLimit {
 		t.Fatalf("Anthropic 429 with no remaining headers should be LocalRateLimit, got %s", fc)
 	}
+}
+
+// TestClassifyResponse_DefaultBranches covers the default case in the
+// Anthropic and Gemini per-provider classifiers: 5xx codes not explicitly
+// listed in the switch (e.g. 599) should be Degraded, and non-auth 4xx codes
+// (e.g. 418) should be None. These are not covered by the other Classify_*
+// tests in this file.
+func TestClassifyResponse_DefaultBranches(t *testing.T) {
+	mkResp := func(status int) *http.Response {
+		return &http.Response{StatusCode: status, Header: make(http.Header)}
+	}
+
+	assert.Equal(t, FailureClassDegraded, ClassifyResponse("anthropic", mkResp(599), nil))
+	assert.Equal(t, FailureClassDegraded, ClassifyResponse("gemini", mkResp(599), nil))
+	assert.Equal(t, FailureClassNone, ClassifyResponse("anthropic", mkResp(418), nil))
+	assert.Equal(t, FailureClassNone, ClassifyResponse("gemini", mkResp(418), nil))
+}
+
+func TestClassifyFailureKind_TransportErrors(t *testing.T) {
+	cases := map[string]FailureKind{
+		"connection reset by peer":    KindConnectionReset,
+		"connection refused":          KindConnectionRefused,
+		"tls handshake failure":       KindTLSHandshake,
+		"no such host: example.com":   KindDNSFailure,
+		"dial tcp: i/o timeout":       KindIOTimeout,
+		"context deadline exceeded":   KindClientDeadline,
+		"some random transport error": KindUnknownTransport,
+	}
+	for msg, want := range cases {
+		got := ClassifyFailureKind("openai", nil, errors.New(msg))
+		assert.Equal(t, want, got, "msg=%q", msg)
+	}
+	assert.Equal(t, KindClientCanceled, ClassifyFailureKind("openai", nil, context.Canceled))
+	assert.Equal(t, KindClientDeadline, ClassifyFailureKind("openai", nil, context.DeadlineExceeded))
+	assert.Equal(t, KindNilResponse, ClassifyFailureKind("openai", nil, nil))
 }

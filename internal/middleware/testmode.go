@@ -19,10 +19,16 @@ import (
 // provider to the proxy, extend this map too.  (We prefer an explicit
 // allowlist over regex/sanitisation because the set of supported
 // providers is closed and small.)
+//
+// Bedrock is included because Bedrock requests can also be rejected by
+// the circuit breaker — when test mode force_degraded is sent to a
+// /bedrock/... or /model/... path, we want the synthetic 503 body to
+// carry "bedrock" instead of being silently coerced to "unknown".
 var knownProviders = map[string]struct{}{
 	"openai":    {},
 	"anthropic": {},
 	"gemini":    {},
+	"bedrock":   {},
 }
 
 // safeProviderName returns provider verbatim when it appears in
