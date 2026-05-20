@@ -40,7 +40,7 @@ type retryAttemptKey struct{}
 //     even after SDK / framework exception wrapping hides headers and status
 //     codes (see DefaultDegradedSignal for the full rationale).
 //
-// Per-key state-machine scoping
+// # Per-key state-machine scoping
 //
 // Historically the breaker tracked one state machine per provider.  Since
 // per-model keying landed it tracks one per `<provider>:<model>` key,

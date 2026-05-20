@@ -8,7 +8,7 @@ import (
 
 func TestGeminiExtractRequestModelAndMessages(t *testing.T) {
 	provider := NewGeminiProxy()
-	
+
 	// Test with v1beta path
 	body := `{"contents":[{"parts":[{"text":"hello"}]}]}`
 	req, _ := http.NewRequest("POST", "/v1beta/models/gemini-pro:generateContent", strings.NewReader(body))
@@ -38,7 +38,7 @@ func TestGeminiExtractRequestModelAndMessages(t *testing.T) {
 
 func TestOpenAIIsStreamingRequest(t *testing.T) {
 	provider := NewOpenAIProxy()
-	
+
 	req, _ := http.NewRequest("POST", "/openai/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	if !provider.IsStreamingRequest(req) {
@@ -54,7 +54,7 @@ func TestOpenAIIsStreamingRequest(t *testing.T) {
 
 func TestAnthropicIsStreamingRequest(t *testing.T) {
 	provider := NewAnthropicProxy()
-	
+
 	req, _ := http.NewRequest("POST", "/anthropic/v1/messages", strings.NewReader(`{"stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	if !provider.IsStreamingRequest(req) {
@@ -70,7 +70,7 @@ func TestAnthropicIsStreamingRequest(t *testing.T) {
 
 func TestGeminiIsStreamingRequest(t *testing.T) {
 	provider := NewGeminiProxy()
-	
+
 	req, _ := http.NewRequest("POST", "/v1beta/models/gemini-pro:streamGenerateContent", nil)
 	if !provider.IsStreamingRequest(req) {
 		t.Errorf("expected streamGenerateContent to be detected")

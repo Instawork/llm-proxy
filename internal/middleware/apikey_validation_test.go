@@ -21,7 +21,7 @@ func (m *mockAPIKeyStore) ValidateAndGetActualKey(ctx context.Context, key strin
 
 func TestAPIKeyValidationMiddleware(t *testing.T) {
 	pm := providers.NewProviderManager()
-	
+
 	// mock provider
 	op := providers.NewOpenAIProxy()
 	pm.RegisterProvider(op)

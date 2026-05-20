@@ -128,8 +128,8 @@ func TestRedisStore_StateTransitionsFromOpenToHalfOpenThenClosedAfterIdle(t *tes
 //     marker TTL → state should be HalfOpen.
 //  3. Calling RecordTerminalFailure (simulating a bypass-observed
 //     failure) and asserting:
-//       - state remains HalfOpen (not re-tripped to Open)
-//       - openedNow == false (so callers do not re-arm the rollup)
+//     - state remains HalfOpen (not re-tripped to Open)
+//     - openedNow == false (so callers do not re-arm the rollup)
 func TestRedisStore_RecordTerminalFailure_DoesNotReTripFromHalfOpen(t *testing.T) {
 	cfg := Config{
 		FailureThreshold: 1,
@@ -178,7 +178,6 @@ func TestRedisStore_RecordTerminalFailure_DoesNotReTripFromHalfOpen(t *testing.T
 		t.Fatalf("post-condition: state must remain HalfOpen, got %s", state)
 	}
 }
-
 
 func TestRedisStore_Probes(t *testing.T) {
 	cfg := Config{

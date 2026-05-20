@@ -57,4 +57,3 @@ func TestEstimateRequestTokens_BodyTooLarge_LogsAndUsesContentLength(t *testing.
 	assert.Equal(t, "", model)
 	assert.Equal(t, 1250, n)
 }
-

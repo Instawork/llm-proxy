@@ -100,7 +100,7 @@ func TestFormatPerChunkEvents(t *testing.T) {
 	})
 	t.Run("multi_count_uses_x", func(t *testing.T) {
 		got := formatPerChunkEvents(map[string]int64{
-			"event:ping":                 2,
+			"event:ping":                2,
 			"event:content_block_delta": 12,
 		})
 		// Sorted alphabetically.

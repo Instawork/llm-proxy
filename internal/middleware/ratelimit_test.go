@@ -409,11 +409,11 @@ func TestRateLimitingMiddleware_ExtractedModelFlowsIntoScopeKeys(t *testing.T) {
 // and >12 chars (truncated to the first 12).
 func TestPrefix_TruncatesAuthTokensForLogging(t *testing.T) {
 	cases := map[string]string{
-		"":                           "",
-		"short":                      "short",
-		"twelve-chars":               "twelve-chars", // exactly 12
-		"this-is-too-long":           "this-is-too-",
-		"verylongapikey-1234567890":  "verylongapik",
+		"":                          "",
+		"short":                     "short",
+		"twelve-chars":              "twelve-chars", // exactly 12
+		"this-is-too-long":          "this-is-too-",
+		"verylongapikey-1234567890": "verylongapik",
 	}
 	for in, want := range cases {
 		if got := prefix(in); got != want {

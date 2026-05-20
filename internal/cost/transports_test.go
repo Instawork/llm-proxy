@@ -227,15 +227,15 @@ func TestDynamoDBTransport_ToDynamoDBRecord_BuildsKeysAndTTL(t *testing.T) {
 	dt := &DynamoDBTransport{tableName: "t", logger: slog.Default()}
 	ts := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	rec := &CostRecord{
-		Timestamp:    ts,
-		RequestID:    "req-1",
-		UserID:       "user-1",
-		IPAddress:    "1.2.3.4",
-		Provider:     "openai",
-		Model:        "gpt-4o",
-		Endpoint:     "/v1/chat",
-		IsStreaming:  true,
-		InputTokens:  1, OutputTokens: 2, TotalTokens: 3,
+		Timestamp:   ts,
+		RequestID:   "req-1",
+		UserID:      "user-1",
+		IPAddress:   "1.2.3.4",
+		Provider:    "openai",
+		Model:       "gpt-4o",
+		Endpoint:    "/v1/chat",
+		IsStreaming: true,
+		InputTokens: 1, OutputTokens: 2, TotalTokens: 3,
 		InputCost: 0.1, OutputCost: 0.2, TotalCost: 0.3,
 		FinishReason: "stop",
 	}

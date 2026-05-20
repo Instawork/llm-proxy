@@ -293,4 +293,3 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 		assert.Equal(t, 2000, override.TokensPerMinute)
 	}
 }
-

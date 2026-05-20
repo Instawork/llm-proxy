@@ -30,7 +30,7 @@ func TestRedisLimiterRequestsPerMinute(t *testing.T) {
 
 	scope := ScopeKeys{Provider: "openai", Model: "gpt-4o", UserID: "u1"}
 	now := time.Now()
-	
+
 	if res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 10, now); !res.Allowed {
 		t.Fatalf("first should be allowed")
 	}

@@ -226,12 +226,12 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 
 // CreateGenericDirector creates a generic director function for reverse proxy requests.
 // This eliminates code duplication across all providers by handling the common logic:
-// - Setting the target host header
-// - Stripping the provider prefix from the path
-// - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
-//   upstream returns uncompressed responses. Useful for debugging SSE streams where
-//   plain-text event data is easier to inspect in logs. By default gzip is allowed.
-// - Logging the request with streaming detection
+//   - Setting the target host header
+//   - Stripping the provider prefix from the path
+//   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
+//     upstream returns uncompressed responses. Useful for debugging SSE streams where
+//     plain-text event data is easier to inspect in logs. By default gzip is allowed.
+//   - Logging the request with streaming detection
 func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request), disableGzip bool) func(*http.Request) {
 	return func(req *http.Request) {
 		// Call the original director first
