@@ -40,6 +40,33 @@ type LimitDetails struct {
 	Remaining int
 }
 
+// CounterSnapshot holds live counter values for one scoped rate-limit key.
+type CounterSnapshot struct {
+	Requests int `json:"requests"`
+	Tokens   int `json:"tokens"`
+}
+
+// LimitsSnapshot captures configured limits plus optional live counter state.
+type LimitsSnapshot struct {
+	Enabled   bool                      `json:"enabled"`
+	Backend   string                    `json:"backend"`
+	Limits    config.LimitsConfig       `json:"limits"`
+	Overrides config.RateLimitOverrides `json:"overrides,omitempty"`
+	Minute    *WindowSnapshot           `json:"minute,omitempty"`
+	Day       *WindowSnapshot           `json:"day,omitempty"`
+}
+
+// WindowSnapshot is one rolling window's counters keyed by scope string.
+type WindowSnapshot struct {
+	WindowStart string                     `json:"window_start"`
+	Counters    map[string]CounterSnapshot `json:"counters"`
+}
+
+// Snapshotter exposes live rate-limit counter state for observability dashboards.
+type Snapshotter interface {
+	Snapshot(now time.Time) LimitsSnapshot
+}
+
 // RateLimiter defines the minimum functionality for enforcing limits.
 type RateLimiter interface {
 	// CheckAndReserve attempts to atomically count 1 request and estTokens across

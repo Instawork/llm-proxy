@@ -1,91 +1,77 @@
 # Production Dockerfile for LLM Proxy
 # Multi-stage build with security hardening and optimization
 
-# Build arguments for versioning and metadata
 ARG GO_VERSION=1.24.5
 ARG ALPINE_VERSION=3.22
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 
-# Build stage
+FROM node:24.6-alpine AS web-builder
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-# Install build dependencies
 RUN apk add --no-cache \
     git \
     ca-certificates \
     tzdata
 
-# Set working directory
 WORKDIR /app
 
-# Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
-
-# Download dependencies with verification
 RUN go mod download && go mod verify
 
-# Copy source code
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY configs/ configs/
+COPY web/embed.go web/embed_stub.go ./web/
+COPY --from=web-builder /web/dist ./web/dist/
 
-# Build optimizations for production
 ENV CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64
 
-# Build the application with optimization flags
-RUN go build \
+RUN go build -tags embed_ui \
     -a \
     -installsuffix cgo \
     -ldflags="-w -s -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${VCS_REF}" \
     -o llm-proxy \
     ./cmd/llm-proxy
 
-# Verify the binary
 RUN ./llm-proxy --version || echo "Binary built successfully"
 
-# Runtime stage using Alpine for simplicity
 FROM alpine:${ALPINE_VERSION}
 
-# Install runtime dependencies
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     wget \
     && rm -rf /var/cache/apk/*
 
-# Create app user and group
 RUN addgroup -g 10001 -S llmproxy && \
     adduser -u 10001 -S llmproxy -G llmproxy
 
-# Set working directory
 WORKDIR /app
 
-# Create logs directory
 RUN mkdir -p logs && chown llmproxy:llmproxy logs
 
-# Copy binary with proper permissions
 COPY --from=builder --chown=llmproxy:llmproxy /app/llm-proxy ./llm-proxy
-
-# Copy config directory
 COPY --from=builder --chown=llmproxy:llmproxy /app/configs/ ./configs/
 
-# Switch to non-root user
 USER llmproxy:llmproxy
 
-# Set environment variables for production (ENVIRONMENT can be overridden at runtime)
 ENV GIN_MODE=release \
     LOG_LEVEL=info \
     LOG_FORMAT=json \
     PORT=80
 
-# Expose port
 EXPOSE 80
 
-# Add labels for metadata and security scanning
 LABEL \
     org.opencontainers.image.title="LLM Proxy" \
     org.opencontainers.image.description="Production-ready LLM Proxy service" \
@@ -96,9 +82,7 @@ LABEL \
     org.opencontainers.image.source="https://github.com/Instawork/llm-proxy" \
     org.opencontainers.image.licenses="MIT"
 
-# Health check with improved configuration for production
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
-# Use exec form for proper signal handling
-ENTRYPOINT ["/app/llm-proxy"] 
+ENTRYPOINT ["/app/llm-proxy"]

@@ -124,6 +124,21 @@ services:
       retries: 3
       start_period: 40s
 
+  # Vite dev server for the admin dashboard (optional local UI)
+  web:
+    image: node:22-alpine
+    container_name: llm-proxy-admin-web
+    profiles:
+      - admin-ui
+    working_dir: /app/web
+    volumes:
+      - ./web:/app/web
+    ports:
+      - "5173:5173"
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    networks:
+      - llm-proxy-network
+
 networks:
   llm-proxy-network:
     driver: bridge 

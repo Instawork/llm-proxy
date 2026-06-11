@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
+	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -990,65 +991,46 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 
-	// PII redaction sits between URL rewriting and api-key validation:
-	//
-	//   - URL rewriting must run first so /meta/<user>/openai/... has
-	//     already been normalised to /openai/... before the path filter
-	//     in shouldRedactRequest fires.
-	//
-	//   - It runs BEFORE LoggingMiddleware so structured logs that pull
-	//     the redacted-body excerpt from context see a stable value,
-	//     and BEFORE TokenParsingMiddleware so the cost-tracking
-	//     callback can reach for the redacted copy when a transport
-	//     wants to persist a request fingerprint.
-	//
-	// The middleware is gated by Features.PIIRedact.Enabled — until
-	// that flag flips in YAML, this block is a no-op.
-	if yamlConfig.Features.PIIRedact.Enabled {
-		analyzerURL := yamlConfig.Features.PIIRedact.AnalyzerURL
-		// Allow PRESIDIO_ANALYZER_URL to override the YAML setting,
-		// matching the docker-compose convention. Production ECS task
-		// definitions typically set the env var to localhost in the
-		// same task, so the YAML can stay generic.
+	// API key validation runs before PII redaction so per-key redact_pii
+	// overrides can be resolved from the DynamoDB record stashed in context.
+	if globalAPIKeyStore != nil {
+		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore))
+	}
+
+	piiCfg := yamlConfig.Features.PIIRedact
+	if piiCfg.Enabled || piiCfg.AllowPerKeyOverride {
+		analyzerURL := piiCfg.AnalyzerURL
 		if envURL := os.Getenv("PRESIDIO_ANALYZER_URL"); envURL != "" {
 			analyzerURL = envURL
 		}
 
 		redactCfg := redact.Config{
 			AnalyzerURL:    analyzerURL,
-			Timeout:        time.Duration(yamlConfig.Features.PIIRedact.TimeoutMs) * time.Millisecond,
-			ScoreThreshold: yamlConfig.Features.PIIRedact.ScoreThreshold,
-			EntityTypes:    yamlConfig.Features.PIIRedact.EntityTypes,
-			Language:       yamlConfig.Features.PIIRedact.Language,
+			Timeout:        time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			ScoreThreshold: piiCfg.ScoreThreshold,
+			EntityTypes:    piiCfg.EntityTypes,
+			Language:       piiCfg.Language,
 		}
 		redactor, err := redact.New(redactCfg)
 		if err != nil {
 			logger.Error("Failed to construct PII redactor; pii_redact feature disabled",
 				"error", err)
 		} else {
-			failClosed := yamlConfig.Features.PIIRedact.FailMode == "closed"
+			failClosed := piiCfg.FailMode == "closed"
 			r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
-				FailClosed:   failClosed,
-				MaxBodyBytes: yamlConfig.Features.PIIRedact.MaxBodyBytes,
-				Logger:       logger,
+				GlobalEnabled: piiCfg.Enabled,
+				FailClosed:    failClosed,
+				MaxBodyBytes:  piiCfg.MaxBodyBytes,
+				Logger:        logger,
 			}))
-			// Plumb the same redactor into the package-level helper used
-			// by provider response-body debug previews — without this,
-			// those previews fall back to length-only summaries even
-			// when redaction is otherwise enabled.
 			redact.SetGlobal(redactor)
-			logger.Info("🛡️  PII redaction enabled",
+			logger.Info("🛡️  PII redaction middleware installed",
+				"global_enabled", piiCfg.Enabled,
+				"allow_per_key_override", piiCfg.AllowPerKeyOverride,
 				"analyzer_url", analyzerURL,
-				"fail_mode", yamlConfig.Features.PIIRedact.FailMode,
-				"timeout_ms", yamlConfig.Features.PIIRedact.TimeoutMs,
-				"score_threshold", yamlConfig.Features.PIIRedact.ScoreThreshold,
+				"fail_mode", piiCfg.FailMode,
 			)
 		}
-	}
-
-	// Add API key validation middleware if API key management is enabled
-	if globalAPIKeyStore != nil {
-		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore))
 	}
 
 	// Add test-mode middleware when enabled (integration tests only).
@@ -1105,6 +1087,21 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// Health check endpoint
 	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
+
+	if yamlConfig.Features.AdminDashboard.Enabled {
+		var keyStore *apikeys.Store
+		if s, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+			keyStore = s
+		}
+		admin.RegisterRoutes(r, admin.Deps{
+			Logger:      logger,
+			YAMLConfig:  yamlConfig,
+			APIKeyStore: keyStore,
+			RateLimiter: globalRateLimiter,
+			HealthFunc:  healthHandler,
+		})
+		logger.Info("Admin dashboard: ENABLED")
+	}
 
 	// Register routes for all providers centrally
 	for name, provider := range globalProviderManager.GetAllProviders() {

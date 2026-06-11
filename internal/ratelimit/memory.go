@@ -137,6 +137,45 @@ func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, 
 	return nil
 }
 
+// Snapshot returns configured limits and current in-memory counter values.
+func (m *memoryLimiter) Snapshot(now time.Time) LimitsSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.rotateWindowsLocked(now)
+
+	rl := m.cfg.Features.RateLimiting
+	snap := LimitsSnapshot{
+		Enabled:   rl.Enabled,
+		Backend:   rl.Backend,
+		Limits:    rl.Limits,
+		Overrides: rl.Overrides,
+		Minute: &WindowSnapshot{
+			WindowStart: m.minTick.Format(time.RFC3339),
+			Counters:    copyCounterMap(m.minute),
+		},
+		Day: &WindowSnapshot{
+			WindowStart: m.dayTick.Format(time.RFC3339),
+			Counters:    copyCounterMap(m.day),
+		},
+	}
+	if snap.Backend == "" {
+		snap.Backend = "memory"
+	}
+	return snap
+}
+
+func copyCounterMap(src map[string]*counters) map[string]CounterSnapshot {
+	out := make(map[string]CounterSnapshot, len(src))
+	for k, c := range src {
+		if c == nil {
+			continue
+		}
+		out[k] = CounterSnapshot{Requests: c.Requests, Tokens: c.Tokens}
+	}
+	return out
+}
+
 func (m *memoryLimiter) rotateWindowsLocked(now time.Time) {
 	min := now.Truncate(time.Minute)
 	if !min.Equal(m.minTick) {
