@@ -1,0 +1,180 @@
+---
+# Presidio analyzer configuration for llm-proxy.
+#
+# IMPORTANT: this file is the recognizer config for the Presidio
+# analyzer sidecar.  An identical copy lives in the upstream Python
+# service that calls this proxy; the two MUST be kept in lockstep so
+# both sides agree on what is or isn't PII.  When we centralise this
+# (S3-served config or a small distribution package), drop the
+# duplication.
+#
+# Mounted read-only into the presidio-analyzer sidecar in docker
+# compose and (eventually) every ECS task using this image.
+# CRITICAL: the container path must use an UNDERSCORE
+# (``/app/presidio_analyzer/conf/default_recognizers.yaml``) — the
+# Presidio loader reads exactly that path via the
+# ``RECOGNIZER_REGISTRY_CONF_FILE`` env var.  The hyphenated path
+# ``/app/presidio-analyzer/conf/`` is a different directory that
+# Presidio ignores; mounting there silently no-ops and the analyzer
+# falls back to its stock recognizer set (UK_NHS, MAC_ADDRESS,
+# MEDICAL_LICENSE, URL, CRYPTO, DATE_TIME, ...) which produces noisy
+# false positives on routine application data — 10-digit numeric IDs
+# flag as UK_NHS at score 1.0, ISO timestamps flag as DATE_TIME at
+# 0.85, etc.  The wire-side ``DefaultEntityTypes`` allowlist in
+# ``internal/redact/redactor.go`` mitigates this in production by
+# never asking for those entity types, but mounting the right config
+# is still required for the custom recognizers below to fire at all.
+#
+# Schema (Presidio 2.2+ format):
+#   - ``recognizers:`` at the top level (NOT nested under
+#     ``recognizer_registry``).
+#   - Each entry uses ``supported_language: "en"`` (singular).
+#   - ``type: predefined`` entries cannot carry ``patterns:`` or
+#     ``context:`` — those are only for ``type: custom``.
+#   - ``deny_list:`` is per-recognizer (a list of literal strings to
+#     auto-flag), not a registry-wide field.
+#   - NLP engine / spaCy model configuration (``nlp_engine_name``,
+#     ``models``) belongs in default_analyzer.yaml / default.yaml
+#     inside the upstream image.  Putting either here causes
+#     Presidio to reject the whole file with "Invalid recognizer
+#     registry configuration" on boot.
+#
+# Verified against ``mcr.microsoft.com/presidio-analyzer:latest`` on
+# 2026-05-22.  If startup logs print "does not contain any of the
+# mandatory keys: ['recognizers']", the schema regressed — diff
+# against /app/presidio_analyzer/conf/example_recognizers.yaml inside
+# the upstream image.
+
+supported_languages:
+  - en
+
+# IGNORECASE | DOTALL | MULTILINE — slightly more permissive than the
+# upstream default so context-word boosts hit on case-insensitive
+# matches.
+global_regex_flags: 26
+
+recognizers:
+  # --- SEAL-tier: identity verification --------------------------------
+  - name: UsSsnRecognizer
+    supported_language: en
+    supported_entity: US_SSN
+    type: predefined
+
+  - name: UsItinRecognizer
+    supported_language: en
+    supported_entity: US_ITIN
+    type: predefined
+
+  - name: UsLicenseRecognizer
+    # Presidio's predefined class is named UsLicenseRecognizer (not
+    # UsDriversLicenseRecognizer); the supported_entity it emits is
+    # US_DRIVER_LICENSE.  Names matter for the loader.
+    supported_language: en
+    supported_entity: US_DRIVER_LICENSE
+    type: predefined
+
+  - name: UsPassportRecognizer
+    supported_language: en
+    supported_entity: US_PASSPORT
+    type: predefined
+
+  # --- REDACT-tier: payment rails --------------------------------------
+  - name: CreditCardRecognizer
+    supported_language: en
+    supported_entity: CREDIT_CARD
+    type: predefined
+
+  - name: UsBankRecognizer
+    supported_language: en
+    supported_entity: US_BANK_NUMBER
+    type: predefined
+
+  - name: IbanRecognizer
+    supported_language: en
+    supported_entity: IBAN_CODE
+    type: predefined
+
+  # --- MASK-tier: quasi-identifiers ------------------------------------
+  - name: EmailRecognizer
+    supported_language: en
+    supported_entity: EMAIL_ADDRESS
+    type: predefined
+    # Note: the proxy does NOT post-filter internal email domains —
+    # it emits ``[REDACTED:EMAIL_ADDRESS]`` for every email, including
+    # internal/corporate domains, because the proxy's purpose is
+    # log/storage redaction (defense in depth) and we don't want
+    # internal addresses leaking into Datadog or the cost-tracking
+    # transports either.
+
+  - name: PhoneRecognizer
+    supported_language: en
+    supported_entity: PHONE_NUMBER
+    type: predefined
+
+  - name: SpacyRecognizer
+    # SpacyRecognizer's ``supported_entities`` set is hard-coded to
+    # ``{PERSON}`` in the loader path the analyzer uses here. An older
+    # comment claimed this entry also produced LOCATION / NRP /
+    # ORGANIZATION / DATE_TIME — it does NOT.  The spaCy NLP engine
+    # emits raw NER labels for those classes via its ``ents`` analysis
+    # output, but Presidio only converts them to scored
+    # RecognizerResult instances when a matching recognizer is
+    # registered.  Without explicit ``Nlp*Recognizer`` entries below,
+    # the only entity this block produces is PERSON.  The wire-side
+    # ``DefaultEntityTypes`` allowlist in internal/redact/redactor.go
+    # only requests PERSON from this recognizer.
+    supported_language: en
+    supported_entity: PERSON
+    type: predefined
+
+  - name: IpRecognizer
+    supported_language: en
+    supported_entity: IP_ADDRESS
+    type: predefined
+
+  # --- Custom recognizers ----------------------------------------------
+  - name: DateOfBirthRecognizer
+    supported_language: en
+    supported_entity: DATE_OF_BIRTH
+    type: custom
+    patterns:
+      # MM/DD/YYYY or MM-DD-YYYY — score 0.4 alone (will not pass the
+      # 0.6 DATE_OF_BIRTH floor without context boost). Per-entity
+      # score-floor design is documented alongside the calling service's
+      # entity score-floor table.
+      - name: dob_slash
+        regex: '\b(0[1-9]|1[0-2])[\/\-](0[1-9]|[12]\d|3[01])[\/\-](19|20)\d{2}\b'
+        score: 0.4
+      # ISO date YYYY-MM-DD — same scoring intent
+      - name: dob_iso
+        regex: '\b(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b'
+        score: 0.4
+    context:
+      # Presidio splits the text on whitespace before checking context
+      # words, so an underscore-joined token (``date_of_birth``) only
+      # boosts when the user literally types ``date_of_birth`` (rare).
+      # Listing the words individually lets natural-language phrases
+      # ("what is your date of birth?") trigger the boost.
+      - born
+      - dob
+      - birth
+      - birthday
+      - birthdate
+      - date
+      - of
+
+  - name: UsStreetAddressRecognizer
+    supported_language: en
+    supported_entity: US_STREET_ADDRESS
+    type: custom
+    patterns:
+      # "123 Main St, San Francisco, CA 94105" — number + street +
+      # city + state + zip.  The pre-fix regex allowed commas inside
+      # the street segment AND was greedy across whitespace, so a
+      # sentence like
+      #   "12 reasons to visit San Francisco, CA 94105"
+      # falsely matched. The tighter shape below requires no embedded
+      # commas in the street tokens and bounded whitespace.
+      - name: full_address
+        regex: '\b\d{1,5}\s+[A-Za-z0-9][A-Za-z0-9\s\.\-]{0,80}?,\s*[A-Za-z][A-Za-z\s\.\-]{1,60}?,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b'
+        score: 0.6

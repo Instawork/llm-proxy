@@ -1,0 +1,192 @@
+services:
+  llm-proxy:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: llm-proxy-${ENVIRONMENT:-dev}
+    ports:
+      - "${LLM_PROXY_PORT:-9002}:9002"
+    volumes:
+      # Always mount source files for live development
+      - .:/app
+      - /app/bin  # Exclude bin directory to avoid conflicts
+      - /app/tmp  # air build output (linux binary) — keep out of host mount
+      - ./logs:/app/logs  # Ensure logs directory is writable
+    working_dir: /app
+    # air watches Go sources + YAML and rebuilds/restarts on change.
+    # See .air.toml. Falls back to `go run` only if air is unavailable.
+    command: ["air", "-c", ".air.toml"]
+    depends_on:
+      - dynamodb
+      - redis
+    environment:
+      - PORT=9002
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
+      - CGO_ENABLED=0
+      - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - LLM_PROXY_ADMIN_SESSION_SECRET=${LLM_PROXY_ADMIN_SESSION_SECRET:-dev-local-session-secret-not-for-prod}
+      - LLM_PROXY_ADMIN_DEV_USER_EMAIL=${LLM_PROXY_ADMIN_DEV_USER_EMAIL:-dev@example.com}
+      # Externally-visible origin for absolute share links. Defaults to the
+      # localhost-mapped port so shared URLs are clickable from the host
+      # browser instead of the internal `llm-proxy:9002` service name. In
+      # prod set this to your public origin, e.g. https://llm.example.com.
+      - ADMIN_PUBLIC_BASE_URL=${ADMIN_PUBLIC_BASE_URL:-http://localhost:${LLM_PROXY_PORT:-9002}}
+      # Local DynamoDB for API key management in docker-compose dev.
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-local}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-local}
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-http://dynamodb:8000}
+      # Override the YAML default analyzer_url for the docker-compose
+      # network. The sidecar service hostname `presidio` resolves only
+      # over this network; production ECS task definitions point at
+      # localhost in the same task instead.
+      - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - llm-proxy-network
+
+  # Redis for circuit breaker (DB 5), admin rollups (DB 6), and optional rate limits.
+  redis:
+    image: redis:7-alpine
+    container_name: llm-proxy-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # In-memory DynamoDB for local API key management (docker-compose dev).
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    container_name: llm-proxy-dynamodb
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "${DYNAMODB_PORT:-8000}:8000"
+    networks:
+      - llm-proxy-network
+
+  # ---------------------------------------------------------------------------
+  # Presidio analyzer sidecar — input PII redaction
+  # ---------------------------------------------------------------------------
+  # Opt-in only. The image is ~8 GB (spaCy models) and slow to start, so
+  # we don't bring it up on every `docker compose up`. Engineers working
+  # on PII redaction enable it explicitly:
+  #
+  #     docker compose --profile pii_redact up
+  #
+  # CI does the same in any test that flips features.pii_redact.enabled
+  # to true. configs/dev.yml enables pii_redact by default; restart
+  # llm-proxy after YAML changes. Use `make test-pii-up` so Presidio
+  # lands on the same compose network as the proxy.
+  #
+  # The audited recognizer scope lives in two places that MUST agree:
+  #   1. internal/redact/redactor.go ``DefaultEntityTypes`` — wire-side
+  #      filter; Presidio only scores recognizers whose supported_entity
+  #      is in this list.
+  #   2. recognizers.yaml (mounted below) — registry-side config; loads
+  #      only the recognizers we actually use, including the custom
+  #      ones (DATE_OF_BIRTH, US_STREET_ADDRESS) that don't ship in
+  #      the stock image.
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: llm-proxy-presidio
+    profiles:
+      - pii_redact
+    ports:
+      # Host mapping is for local debugging only — the proxy reaches the
+      # sidecar via the docker-compose network at http://presidio:3000.
+      - "${PRESIDIO_PORT:-5004}:3000"
+    volumes:
+      # CRITICAL: container path uses underscore, not hyphen. Presidio
+      # reads RECOGNIZER_REGISTRY_CONF_FILE (default
+      # ``presidio_analyzer/conf/default_recognizers.yaml``) at startup;
+      # mounting to the hyphenated path silently no-ops and the sidecar
+      # comes up with the stock recognizer set (UK_NHS, MAC_ADDRESS,
+      # MEDICAL_LICENSE, URL, CRYPTO, DATE_TIME included; DATE_OF_BIRTH /
+      # US_STREET_ADDRESS missing).
+      # The wire-side DefaultEntityTypes filter mitigates the noisy
+      # defaults but custom recognizers literally cannot fire
+      # without this mount.
+      - ./recognizers.yaml:/app/presidio_analyzer/conf/default_recognizers.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
+
+  # Datadog Agent for monitoring and metrics collection
+  datadog-agent:
+    image: datadog/agent:latest
+    container_name: llm-proxy-datadog-agent
+    profiles:
+      - monitoring
+      - datadog
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-datadoghq.com}
+      - DD_HOSTNAME=llm-proxy-${ENVIRONMENT:-dev}
+      - DD_TAGS=environment:${ENVIRONMENT:-dev},service:llm-proxy
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_LOG_LEVEL=INFO
+      - DD_APM_ENABLED=true
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+    ports:
+      - "8125:8125/udp"  # DogStatsD
+      - "8126:8126"      # APM
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./logs:/var/log/llm-proxy:ro
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "agent", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Vite dev server for the admin dashboard (optional local UI)
+  web:
+    image: node:22-alpine
+    container_name: llm-proxy-admin-web
+    profiles:
+      - admin-ui
+    working_dir: /app/web
+    volumes:
+      - ./web:/app/web
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_PROXY_TARGET=http://llm-proxy:9002
+    depends_on:
+      - llm-proxy
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    networks:
+      - llm-proxy-network
+
+networks:
+  llm-proxy-network:
+    driver: bridge 

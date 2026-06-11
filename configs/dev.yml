@@ -1,0 +1,112 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# Development configuration
+
+enabled: true
+
+features:
+  cost_tracking:
+    enabled: true
+    # Enable async processing for better performance in development
+    async: true
+    workers: 3 # Use fewer workers in dev environment
+    queue_size: 500 # Smaller queue size for development
+    flush_interval: 10 # Shorter flush interval for development (10 seconds)
+    transports:
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking.jsonl"
+      - type: "datadog"
+        datadog:
+          host: "datadog-agent"
+          port: "8125"
+          namespace: "llm"
+          tags: ["env:dev", "service:llm-proxy"]
+          sample_rate: 1.0
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys-dev"
+    region: "us-west-2"
+    # Dev only — auto-creates the DynamoDB table against whatever AWS
+    # creds are active. Staging/production must leave this false and
+    # pre-provision the table via Terraform.
+    auto_create_table: true
+  circuit_breaker:
+    enabled: true
+    backend: "redis"
+    redis:
+      address: "redis:6379"
+      db: 5
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    global_rate_limit_escalation_window: 300
+    retry_contribution_mode: "log"
+    test_mode_enabled: true
+  admin_dashboard:
+    enabled: true
+    dev_bypass_login: true
+    rollups:
+      enabled: true
+      redis:
+        address: "redis:6379"
+        db: 6
+      retention_days: 90
+      history_days: 30
+  pii_redact:
+    enabled: true
+    # docker-compose sets PRESIDIO_ANALYZER_URL=http://presidio:3000; this
+    # value satisfies config validation and matches the compose network name.
+    analyzer_url: "http://presidio:3000"
+    fail_mode: "open"
+    allow_per_key_override: true
+  rate_limiting:
+    enabled: true
+    backend: "redis"
+    estimation:
+      max_sample_bytes: 200000
+      bytes_per_token: 4
+      chars_per_token: 4
+      provider_chars_per_token:
+        openai: 5 # ~185–190 tokens per 1k chars (from scripts/token_estimation.py)
+        anthropic: 3 # ~290–315 tokens per 1k chars (from scripts/token_estimation.py)
+    limits:
+      # Global limits: 0 means unlimited in dev by default
+      requests_per_minute: 0
+      tokens_per_minute: 0
+      requests_per_day: 0
+      tokens_per_day: 0
+    overrides:
+      per_user:
+        # Example: apply a dev-only limit to a specific user id.
+        # Previously this block was nested under `rate_limiting.redis.per_user`
+        # which silently dropped on YAML unmarshal because RedisConfig has
+        # no per_user field. Anchored here matches RateLimitOverrides.
+        example-user:
+          requests_per_minute: 5
+          tokens_per_minute: 2000
+          requests_per_day: 100
+          tokens_per_day: 200000
+    # Redis-backed rate limiting. `redis:6379` is the docker-compose service
+    # hostname (localhost won't resolve inside the api container). DB 4 keeps
+    # rate-limit keys isolated from the circuit breaker (db 5) and admin
+    # rollups (db 6) sharing the same instance.
+    redis:
+      address: "redis:6379"
+      password: ""
+      db: 4
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Local Bedrock passthrough. Caller (the boto3 ``before-send`` hook in
+# ``agents/common/models/bedrock_session.py``) signs SigV4 against the real
+# AWS endpoint and redirects the wire request to this proxy; the proxy is
+# byte-for-byte transparent, so requests still authenticate against
+# whatever AWS identity the local shell has (``aws sso login`` etc.).
+providers:
+  bedrock:
+    enabled: true

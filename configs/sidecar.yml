@@ -1,0 +1,12 @@
+# Sidecar deployment config (llm-proxy container co-located with an app).
+# PII redaction and admin dashboard stay off — observability redaction runs
+# only on the standalone llm-proxy service.
+
+enabled: true
+
+features:
+  pii_redact:
+    enabled: false
+    allow_per_key_override: false
+  admin_dashboard:
+    enabled: false

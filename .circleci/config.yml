@@ -1,0 +1,220 @@
+version: 2.1
+
+# Define orbs for easier configuration
+orbs:
+  go: circleci/go@3.0.1
+  docker: circleci/docker@2.4.0
+
+# Define reusable commands
+commands:
+  setup_go_environment:
+    description: "Set up Go environment and dependencies"
+    steps:
+      - checkout
+      - go/install:
+          version: "1.24.5"
+          cache-key: 'go-mod-{{ .Environment.CACHE_VERSION }}-{{ checksum "go.mod" }}'
+      - run:
+          name: Download dependencies
+          command: make install
+      - run:
+          name: Install gofumpt
+          command: go install mvdan.cc/gofumpt@latest
+
+  setup_aws_and_docker:
+    description: "Setup AWS CLI and Docker for ECR operations"
+    steps:
+      - run:
+          name: Install AWS CLI
+          command: |
+            if ! command -v aws &> /dev/null; then
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              sudo ./aws/install
+            fi
+      - run:
+          name: Login to AWS ECR
+          command: |
+            : "${AWS_ECR_REGISTRY_ID:?AWS_ECR_REGISTRY_ID must be set on the AWS CircleCI context}"
+            AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
+            aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
+              | docker login --username AWS --password-stdin "${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - run:
+          name: Create ECR repository if it doesn't exist
+          command: |
+            AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
+            AWS_ECR_REPOSITORY_NAME="${AWS_ECR_REPOSITORY_NAME:-llm-proxy}"
+            aws ecr describe-repositories --region "${AWS_DEFAULT_REGION}" --repository-names "${AWS_ECR_REPOSITORY_NAME}" \
+              || aws ecr create-repository --region "${AWS_DEFAULT_REGION}" --repository-name "${AWS_ECR_REPOSITORY_NAME}"
+
+# Define jobs
+jobs:
+  lint:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run go vet
+          command: go vet ./...
+      - run:
+          name: Run go fmt check
+          command: |
+            if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+              echo "Go code is not formatted:"
+              gofmt -s -l .
+              exit 1
+            fi
+      - run:
+          name: Run gofumpt check
+          command: |
+            if [ "$(gofumpt -l . | wc -l)" -gt 0 ]; then
+              echo "Go code is not formatted with gofumpt:"
+              gofumpt -l .
+              exit 1
+            fi
+      - run:
+          name: Guard against raw body/chunk dumps in logs
+          command: make lint-pii-logs
+
+  unit-tests:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run config validator
+          command: go run ./cmd/config-validator/
+      - run:
+          name: Run unit tests
+          command: make test
+
+  integration-tests:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    steps:
+      - setup_go_environment
+      - run:
+          name: Run integration tests
+          command: make test-integration
+
+  build-and-push:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - setup_aws_and_docker
+      - run:
+          name: Build and push Docker image
+          command: |
+            # Get the short SHA for tagging
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            echo "Building image with SHA: ${GIT_SHA}"
+            ./scripts/build_for_ecr.sh -s ${GIT_SHA}
+            # Save the SHA for the deployment job
+            echo ${GIT_SHA} > /tmp/git_sha.txt
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - git_sha.txt
+
+  deploy-prod:
+    docker:
+      - image: cimg/python:3.11.8
+    steps:
+      - checkout
+      - add_ssh_keys
+      - attach_workspace:
+          at: /tmp
+      - run:
+          name: Install dependencies
+          command: |
+            pip install awscli
+      - run:
+          name: Deploy to production
+          command: |
+            export GIT_SHA=$(cat /tmp/git_sha.txt)
+            echo "Deploying SHA: ${GIT_SHA} to production"
+            ./scripts/deploy.sh production ${GIT_SHA}
+      - run:
+          name: Ping Slack Success
+          command: |
+            export GIT_SHA=$(cat /tmp/git_sha.txt)
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":white_check_mark: *production* deployment of *llm-proxy* has successfully deployed with SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_success
+      - run:
+          name: Ping Slack Failure
+          command: |
+            export GIT_SHA=$(cat /tmp/git_sha.txt)
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":red_circle: *production* deployment of *llm-proxy* has failed for SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_fail
+
+# Define workflows
+workflows:
+  version: 2
+  test-and-deploy:
+    jobs:
+      - lint:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
+      - unit-tests:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
+      - integration-tests:
+          context:
+            - LLMs
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
+      - build-and-push:
+          requires:
+            - lint
+            - unit-tests
+            - integration-tests
+          filters:
+            branches:
+              only:
+                - main
+            tags:
+              ignore: /.*/
+          context:
+            - AWS
+
+      - deploy-prod-hold:
+          type: approval
+          requires:
+            - build-and-push
+          filters:
+            branches:
+              only: main
+
+      - deploy-prod:
+          requires:
+            - deploy-prod-hold
+          filters:
+            branches:
+              only: main
+          context:
+            - AWS
+            - Slack

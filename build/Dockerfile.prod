@@ -1,0 +1,88 @@
+# Production Dockerfile for LLM Proxy
+# Multi-stage build with security hardening and optimization
+
+ARG GO_VERSION=1.24.5
+ARG ALPINE_VERSION=3.22
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+FROM node:24.6-alpine AS web-builder
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
+
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+COPY cmd/ cmd/
+COPY internal/ internal/
+COPY configs/ configs/
+COPY web/embed.go web/embed_stub.go ./web/
+COPY --from=web-builder /web/dist ./web/dist/
+
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64
+
+RUN go build -tags embed_ui \
+    -a \
+    -installsuffix cgo \
+    -ldflags="-w -s -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${VCS_REF}" \
+    -o llm-proxy \
+    ./cmd/llm-proxy
+
+RUN ./llm-proxy --version || echo "Binary built successfully"
+
+FROM alpine:${ALPINE_VERSION}
+
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    wget \
+    && rm -rf /var/cache/apk/*
+
+RUN addgroup -g 10001 -S llmproxy && \
+    adduser -u 10001 -S llmproxy -G llmproxy
+
+WORKDIR /app
+
+RUN mkdir -p logs && chown llmproxy:llmproxy logs
+
+COPY --from=builder --chown=llmproxy:llmproxy /app/llm-proxy ./llm-proxy
+COPY --from=builder --chown=llmproxy:llmproxy /app/configs/ ./configs/
+
+USER llmproxy:llmproxy
+
+ENV GIN_MODE=release \
+    LOG_LEVEL=info \
+    LOG_FORMAT=json \
+    PORT=80
+
+EXPOSE 80
+
+LABEL \
+    org.opencontainers.image.title="LLM Proxy" \
+    org.opencontainers.image.description="Production-ready LLM Proxy service" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.created="${BUILD_DATE}" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.vendor="Instawork" \
+    org.opencontainers.image.source="https://github.com/Instawork/llm-proxy" \
+    org.opencontainers.image.licenses="MIT"
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
+
+ENTRYPOINT ["/app/llm-proxy"]

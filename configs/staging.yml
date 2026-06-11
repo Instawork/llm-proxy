@@ -1,0 +1,60 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# Staging configuration
+
+enabled: true
+
+features:
+  cost_tracking:
+    enabled: true
+    # Staging: Test both DynamoDB and Datadog transports
+    transports:
+      - type: "dynamodb"
+        dynamodb:
+          table_name: "llm-proxy-cost-tracking"
+          region: "us-west-2"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys-staging"
+    region: "us-west-2"
+  # Circuit breaker: shadow/observe-only rollout in staging, matching
+  # production config so we can validate Redis connectivity and
+  # would-trip rates before flipping prod to `mode: enforce`.  DB 5 is
+  # pinned so `llm:cb:*` keys stay isolated from any application cache
+  # that may share the same Redis cluster.
+  circuit_breaker:
+    enabled: true
+    mode: "log"
+    backend: "redis"
+    redis:
+      url: "${REDIS_URL}"
+      db: 5
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    retry_contribution_mode: "log"
+    # Match production's bypass and rollup configuration so staging
+    # validates the same wiring + log lines before prod is flipped.
+    bypass_allowed: true
+    bypass_reason_allowlist:
+      - no_fallback_configured
+      - manual_debug
+      - final_retry_tier
+      - force_real_upstream
+    per_provider_rollup_threshold: 3
+    per_provider_rollup_window_seconds: 300
+  rate_limiting:
+    enabled: false
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Base config disables AWS Bedrock by default (see configs/base.yml).  Uncomment
+# the override below — and confirm the calling service's IAM role has bedrock:Invoke* /
+# Converse* grants for $AWS_REGION — to enable the SigV4 passthrough.
+# providers:
+#   bedrock:
+#     enabled: true

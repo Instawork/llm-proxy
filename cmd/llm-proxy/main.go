@@ -1,0 +1,1514 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/DataDog/datadog-go/v5/statsd"
+	"github.com/Instawork/llm-proxy/internal/admin"
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/circuit"
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/cost"
+	"github.com/Instawork/llm-proxy/internal/coststats"
+	"github.com/Instawork/llm-proxy/internal/middleware"
+	"github.com/Instawork/llm-proxy/internal/pii"
+	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
+	"github.com/Instawork/llm-proxy/internal/redact"
+	"github.com/Instawork/llm-proxy/internal/usagestats"
+	"github.com/gorilla/mux"
+)
+
+// CustomPrettyHandler implements a custom slog.Handler for pretty local output
+type CustomPrettyHandler struct {
+	level slog.Level
+	w     io.Writer
+}
+
+func NewCustomPrettyHandler(w io.Writer, level slog.Level) *CustomPrettyHandler {
+	return &CustomPrettyHandler{
+		level: level,
+		w:     w,
+	}
+}
+
+func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level
+}
+
+func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
+	timeStr := r.Time.Format("15:04:05")
+
+	// Build the message with all attributes inline
+	message := r.Message
+	var allAttrs []string
+
+	r.Attrs(func(a slog.Attr) bool {
+		allAttrs = append(allAttrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
+		return true
+	})
+
+	// Add attributes to the message if any exist
+	if len(allAttrs) > 0 {
+		message = fmt.Sprintf("%s; %s", message, strings.Join(allAttrs, ", "))
+	}
+
+	_, err := fmt.Fprintf(h.w, "%s [%s] %s\n", r.Level.String(), timeStr, message)
+	return err
+}
+
+func (h *CustomPrettyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h // Ignore attributes for pretty output
+}
+
+func (h *CustomPrettyHandler) WithGroup(name string) slog.Handler {
+	return h // Ignore groups for pretty output
+}
+
+var logger *slog.Logger
+
+const (
+	// Version of the LLM Proxy
+	version = "1.0.0"
+
+	// Default port for the proxy server
+	defaultPort = "9002"
+)
+
+// Global provider manager instance
+var globalProviderManager *providers.ProviderManager
+
+// Global cost tracker instance
+var globalCostTracker *cost.CostTracker
+
+// Global in-process cost spend rollup for the admin dashboard. Populated when
+// cost tracking is enabled; surfaced via /admin/api/cost stats.
+var globalCostStatsRecorder *coststats.Recorder
+
+// Global API key store instance
+var (
+	globalAPIKeyStore          providers.APIKeyStore
+	globalAPIKeyStoreInitError error
+)
+
+// Global rate limiter instance
+var globalRateLimiter ratelimit.RateLimiter
+
+// Global in-process PII redaction stats recorder. Populated when the PII
+// redaction middleware is installed; surfaced via /admin/api/pii. Stores
+// metadata only (entity types/counts, masked key IDs) — never raw PII.
+var globalPIIRecorder *pii.Recorder
+
+// Global usage stats for the admin Usage page (fed from cost tracking).
+var globalUsageStatsRecorder *usagestats.Recorder
+
+// Redis-backed admin dashboard daily rollups (charts survive restart).
+var (
+	globalAdminRollupStore *adminrollup.Store
+	globalAdminRollupStop  chan struct{}
+)
+
+// Global circuit breaker store instance
+var globalCircuitStore circuit.Store
+
+// Resolved circuit-breaker config after Defaults() is applied.  Captured at
+// startup so /health can surface the effective mode / backend / thresholds
+// without re-reading YAML.
+var globalCircuitConfig circuit.Config
+
+// Set to true when the configured backend was "redis" but the Redis store
+// could not be constructed and we transparently fell back to MemoryStore.
+// Surfaced in /health so operators can tell at a glance that the circuit
+// breaker is running without distributed coordination.
+var globalCircuitRedisFallback bool
+
+// Known provider names the circuit breaker tracks.  Kept as a single source
+// of truth so the wiring code, /health handler, and any future diagnostics
+// agree on the list.  Bedrock is appended at runtime in runServer when the
+// YAML provider block is enabled — keeping it off the default list means
+// existing deployments without a `providers.bedrock` section see no extra
+// /health rollup entries.
+var circuitBreakerProviders = []string{"openai", "anthropic", "gemini"}
+
+// redisPingTimeout bounds the blocking startup PING to Redis.  Long enough
+// to succeed on a warm connection across regions, short enough that a dead
+// Redis never holds up proxy startup past its health-check window.
+const redisPingTimeout = 2 * time.Second
+
+func init() {
+	logLevel := os.Getenv("LOG_LEVEL")
+	var level slog.Level
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	// Use pretty text format for local development, JSON for production
+	logFormat := os.Getenv("LOG_FORMAT")
+	var handler slog.Handler
+
+	if logFormat == "json" {
+		// JSON format for production/machine parsing with AWS CloudWatch compatible timestamp
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: level,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				// Format time with consistent RFC3339 format for better log parsing
+				// This is more precise and timezone-aware than the basic AWS format
+				if a.Key == slog.TimeKey && len(groups) == 0 {
+					return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05,"))
+				}
+				return a
+			},
+		})
+	} else {
+		// Custom pretty format for local development (default)
+		handler = NewCustomPrettyHandler(os.Stderr, level)
+	}
+
+	logger = slog.New(handler)
+
+	// Set our custom logger as the default slog logger
+	// This ensures that any slog.Info() calls throughout the codebase use our configured logger
+	slog.SetDefault(logger)
+}
+
+// initializeCostTracker creates and configures the cost tracker with pricing data from config
+func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
+	// Check if cost tracking is enabled
+	if !yamlConfig.Features.CostTracking.Enabled {
+		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
+		return nil
+	}
+
+	// Get all transport configurations
+	transportConfigs := yamlConfig.GetAllTransports()
+	if len(transportConfigs) == 0 {
+		logger.Error("💰 Cost Tracker: No transport configurations found")
+		return nil
+	}
+
+	logger.Info("💰 Cost Tracker: Initializing transports", "transport_count", len(transportConfigs))
+
+	// Create all configured transports
+	var transports []cost.Transport
+	var failedTransports []string
+
+	for i, transportConfig := range transportConfigs {
+		logger.Info("💰 Cost Tracker: Creating transport", "transport_index", i+1, "configured_type", transportConfig.Type)
+
+		// Log additional transport config details
+		switch transportConfig.Type {
+		case "dynamodb":
+			if transportConfig.DynamoDB != nil {
+				logger.Info("💰 Cost Tracker: DynamoDB configuration",
+					"table_name", transportConfig.DynamoDB.TableName,
+					"region", transportConfig.DynamoDB.Region)
+			}
+		case "file":
+			if transportConfig.File != nil {
+				logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
+			}
+		case "datadog":
+			if transportConfig.Datadog != nil {
+				logger.Info("💰 Cost Tracker: Datadog configuration",
+					"host", transportConfig.Datadog.Host,
+					"port", transportConfig.Datadog.Port,
+					"namespace", transportConfig.Datadog.Namespace)
+			}
+		}
+
+		transport, err := cost.CreateTransportFromConfig(&transportConfig, logger)
+		if err != nil {
+			// Log the failed config details
+			switch transportConfig.Type {
+			case "dynamodb":
+				if transportConfig.DynamoDB != nil {
+					logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
+						"configured_type", transportConfig.Type,
+						"table_name", transportConfig.DynamoDB.TableName,
+						"region", transportConfig.DynamoDB.Region,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			case "file":
+				if transportConfig.File != nil {
+					logger.Error("💰 Cost Tracker: Failed to create file transport",
+						"configured_type", transportConfig.Type,
+						"path", transportConfig.File.Path,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			case "datadog":
+				if transportConfig.Datadog != nil {
+					logger.Error("💰 Cost Tracker: Failed to create Datadog transport",
+						"configured_type", transportConfig.Type,
+						"host", transportConfig.Datadog.Host,
+						"port", transportConfig.Datadog.Port,
+						"error", err)
+				} else {
+					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				}
+			default:
+				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+			}
+			failedTransports = append(failedTransports, transportConfig.Type)
+			continue
+		}
+
+		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
+		transports = append(transports, transport)
+	}
+
+	// Check if we have at least one working transport
+	if len(transports) == 0 {
+		logger.Error("💰 Cost Tracker: No transports could be created, falling back to file transport")
+
+		// Fallback to file transport with env var or default
+		outputFile := os.Getenv("COST_TRACKING_FILE")
+		if outputFile == "" {
+			outputFile = "logs/cost-tracking.jsonl"
+		}
+
+		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
+		transport := cost.NewFileTransport(outputFile)
+		transports = append(transports, transport)
+		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
+	}
+
+	// Create cost tracker with all working transports
+	costTracker := cost.NewCostTracker(transports...)
+
+	// Log successful initialization
+	transportTypes := make([]string, len(transports))
+	for i := range transports {
+		if i < len(transportConfigs) {
+			transportTypes[i] = transportConfigs[i].Type
+		}
+	}
+
+	if len(failedTransports) > 0 {
+		logger.Warn("💰 Cost Tracker: Initialized with some transport failures",
+			"successful_transports", transportTypes,
+			"failed_transports", failedTransports)
+	} else {
+		logger.Info("💰 Cost Tracker: Initialized successfully",
+			"transport_types", transportTypes,
+			"transport_count", len(transports))
+	}
+
+	// Set up logger for the cost tracker
+	costTracker.SetLogger(logger)
+
+	// Configure async mode if enabled
+	if yamlConfig.Features.CostTracking.Async {
+		workers := yamlConfig.Features.CostTracking.Workers
+		if workers <= 0 {
+			workers = 5 // Default
+		}
+		queueSize := yamlConfig.Features.CostTracking.QueueSize
+		if queueSize <= 0 {
+			queueSize = 1000 // Default
+		}
+		flushInterval := yamlConfig.Features.CostTracking.FlushInterval
+		if flushInterval <= 0 {
+			flushInterval = 15 // Default
+		}
+
+		costTracker.ConfigureAsync(workers, queueSize, flushInterval)
+
+		// Start the async workers
+		if err := costTracker.StartAsyncWorkers(); err != nil {
+			logger.Error("💰 Cost Tracker: Failed to start async workers", "error", err)
+			logger.Warn("💰 Cost Tracker: Falling back to synchronous mode")
+			costTracker.SetSyncMode()
+		} else {
+			logger.Info("💰 Cost Tracker: Async mode enabled", "workers", workers, "queue_size", queueSize, "flush_interval_seconds", flushInterval)
+		}
+	} else {
+		logger.Info("💰 Cost Tracker: Synchronous mode enabled")
+	}
+
+	// Load pricing data from config for each provider and model
+	totalModelsConfigured := 0
+
+	for providerName, providerConfig := range yamlConfig.Providers {
+		if !providerConfig.Enabled {
+			continue
+		}
+
+		for modelName, modelConfig := range providerConfig.Models {
+			if !modelConfig.Enabled {
+				continue
+			}
+
+			if modelConfig.Pricing != nil {
+				// Convert YAML pricing to cost tracker format
+				modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
+				if !ok {
+					logger.Warn("Could not parse pricing", "provider", providerName, "model", modelName)
+					continue
+				}
+
+				var costTrackerPricing cost.ModelPricing
+				for _, tier := range modelPricing.Tiers {
+					costTrackerPricing.Tiers = append(costTrackerPricing.Tiers, cost.PricingTier{
+						Threshold: tier.Threshold,
+						Input:     tier.Input,
+						Output:    tier.Output,
+					})
+				}
+
+				if modelPricing.Overrides != nil {
+					costTrackerPricing.Overrides = make(map[string]struct {
+						Input  float64 `json:"input"`
+						Output float64 `json:"output"`
+					})
+					for alias, override := range modelPricing.Overrides {
+						costTrackerPricing.Overrides[alias] = struct {
+							Input  float64 `json:"input"`
+							Output float64 `json:"output"`
+						}{Input: override.Input, Output: override.Output}
+					}
+				}
+
+				// Set pricing for main model name
+				costTracker.SetPricingForModel(providerName, modelName, &costTrackerPricing)
+				totalModelsConfigured++
+
+				// Set pricing for all aliases
+				for _, alias := range modelConfig.Aliases {
+					costTracker.SetPricingForModel(providerName, alias, &costTrackerPricing)
+					totalModelsConfigured++
+				}
+			} else {
+				logger.Warn("Model has no pricing configured", "provider", providerName, "model", modelName)
+			}
+		}
+	}
+
+	logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
+
+	globalCostStatsRecorder = coststats.NewRecorder()
+	costTracker.SetStatsRecorder(globalCostStatsRecorder)
+	globalUsageStatsRecorder = usagestats.NewRecorder()
+	costTracker.SetUsageStatsRecorder(globalUsageStatsRecorder)
+
+	return costTracker
+}
+
+// isTestModeAllowed evaluates the three-condition gate that controls
+// whether the proxy honours X-LLM-Proxy-Test-Mode / llm_proxy_test_mode.
+// ALL THREE conditions must be satisfied:
+//  1. The circuit breaker feature is enabled (otherwise there is
+//     nothing for the test-mode flag to exercise, and any honouring
+//     of the header is pure attack surface).
+//  2. TestModeEnabled is true in YAML (explicit opt-in).
+//  3. LLM_PROXY_ALLOW_TEST_MODE=1 is set in the process environment
+//     (belt-and-suspenders guard against a misconfigured YAML in
+//     production).
+//
+// The result of this gate is plumbed into circuit.Config.TestModeEnabled
+// so the transport layer refuses to honour the test-mode signals when
+// any guard fails — without this, a client could smuggle synthetic
+// degraded responses past the middleware by sending a request that
+// hits the transport directly.
+func isTestModeAllowed(yc *config.YAMLConfig) bool {
+	return yc.Features.CircuitBreaker.Enabled &&
+		yc.Features.CircuitBreaker.TestModeEnabled &&
+		os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1"
+}
+
+// circuitConfigFromYAML converts the YAML circuit breaker config into the
+// internal circuit.Config (with defaults applied). Centralised so we don't
+// drift between the store-initialisation and transport-wrapping call sites.
+//
+// testModeAllowed must be the result of isTestModeAllowed for the same
+// yamlConfig.  It is threaded in rather than re-derived so every call
+// site sees an identical value (there is no scenario where one layer
+// should honour test-mode and another should not).
+func circuitConfigFromYAML(cb config.CircuitBreakerConfig, testModeAllowed bool) circuit.Config {
+	// BypassAllowed defaults to true when the YAML field is omitted, on
+	// the principle that callers without a fallback should be able to
+	// opt out of fast-fail by default.  An explicit `bypass_allowed:
+	// false` (which the *bool unmarshalling preserves) disables the
+	// safety valve entirely.
+	bypassAllowed := true
+	if cb.BypassAllowed != nil {
+		bypassAllowed = *cb.BypassAllowed
+	}
+	cfg := circuit.Config{
+		Enabled:                         cb.Enabled,
+		Mode:                            cb.Mode,
+		Backend:                         cb.Backend,
+		FailureThreshold:                cb.FailureThreshold,
+		WindowSeconds:                   cb.WindowSeconds,
+		CooldownSeconds:                 cb.CooldownSeconds,
+		MaxTransientRetries:             cb.MaxTransientRetries,
+		MaxRateLimitRetries:             cb.MaxRateLimitRetries,
+		RetryContributionMode:           cb.RetryContributionMode,
+		GlobalRateLimitEscalationWindow: cb.GlobalRateLimitEscalationWindow,
+		DegradedSignal:                  cb.DegradedSignal,
+		TestModeEnabled:                 testModeAllowed,
+		BypassAllowed:                   bypassAllowed,
+		PerProviderRollupThreshold:      cb.PerProviderRollupThreshold,
+		PerProviderRollupWindowSeconds:  cb.PerProviderRollupWindowSeconds,
+		BypassReasonAllowlist:           cb.BypassReasonAllowlist,
+	}
+	if cb.Redis != nil {
+		// Expand ${VAR} / $VAR tokens from the process environment so we
+		// can thread secrets (e.g. a REDIS_URL rendered from a secret
+		// manager by the deploy system) through without baking them
+		// into the YAML or requiring a separate secrets flavour.  Values
+		// without any `$` pass through unchanged.
+		cfg.RedisURL = os.ExpandEnv(cb.Redis.URL)
+		cfg.RedisAddress = os.ExpandEnv(cb.Redis.Address)
+		cfg.RedisPassword = os.ExpandEnv(cb.Redis.Password)
+		cfg.RedisDB = cb.Redis.DB
+		cfg.RedisDBSet = cb.Redis.DBSet
+	}
+	return cfg.Defaults()
+}
+
+// initializeCircuitStore creates the circuit breaker state store from config.
+//
+// Redis failures are intentionally non-fatal:
+//   - If NewRedisStore itself errors (e.g. malformed URL or failed PING), we
+//     log and fall back to a MemoryStore so the proxy still comes up.
+//   - If the Redis-backed store later encounters Redis errors, steady-state
+//     Store operations fail-open to StateClosed so transient outages self-heal.
+//
+// Net effect: a Redis outage degrades the circuit breaker to "per-instance
+// best effort" without ever taking the sidecar down.
+func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
+	cb := yamlConfig.Features.CircuitBreaker
+	if !cb.Enabled {
+		logger.Info("⚡ Circuit Breaker: disabled in config")
+		return nil
+	}
+
+	cfg := circuitConfigFromYAML(cb, isTestModeAllowed(yamlConfig))
+	if err := cfg.Validate(); err != nil {
+		logger.Error("⚡ Circuit Breaker: invalid configuration — falling back to memory store", "error", err)
+		cfg.Backend = "memory"
+	}
+
+	store, err := circuit.Factory(cfg)
+	if err != nil {
+		logger.Error(
+			"⚡ Circuit Breaker: store construction failed — falling back to memory store",
+			"backend", cfg.Backend,
+			"error", err,
+		)
+		store = circuit.NewMemoryStore(cfg)
+		globalCircuitRedisFallback = true
+	}
+
+	if rs, ok := store.(*circuit.RedisStore); ok {
+		pingCtx, cancel := context.WithTimeout(context.Background(), redisPingTimeout)
+		if pingErr := rs.Ping(pingCtx); pingErr != nil {
+			logger.Warn(
+				"⚡ Circuit Breaker: Redis PING failed at startup — proxy will continue (store fails open on Redis errors)",
+				"error", pingErr,
+			)
+		} else {
+			logger.Info("⚡ Circuit Breaker: Redis reachable")
+		}
+		cancel()
+	}
+
+	// Capture the resolved config so /health can report it without
+	// re-applying Defaults() on every request.
+	globalCircuitConfig = cfg.Defaults()
+
+	logger.Info(
+		"⚡ Circuit Breaker: initialized",
+		"backend", cfg.Backend,
+		"redis_fallback", globalCircuitRedisFallback,
+		"mode", cfg.Mode,
+		"failure_threshold", cfg.FailureThreshold,
+		"window_seconds", cfg.WindowSeconds,
+		"cooldown_seconds", cfg.CooldownSeconds,
+		"max_transient_retries", cfg.MaxTransientRetries,
+		"max_rate_limit_retries", cfg.MaxRateLimitRetries,
+		"retry_contribution_mode", cfg.RetryContributionMode,
+		"degraded_signal", cfg.DegradedSignal,
+		"bypass_allowed", cfg.BypassAllowed,
+		"bypass_reason_allowlist", cfg.BypassReasonAllowlist,
+		"per_provider_rollup_threshold", cfg.PerProviderRollupThreshold,
+		"per_provider_rollup_window_seconds", cfg.PerProviderRollupWindowSeconds,
+	)
+	return store
+}
+
+// wrapProviderWithCircuitBreaker injects a circuit-breaking transport into the
+// provider, keyed by providerName.  Optional opts (metrics sink, model
+// extractor, env tag) flow through to circuit.NewTransport.
+func wrapProviderWithCircuitBreaker(
+	p interface {
+		WrapTransport(func(http.RoundTripper) http.RoundTripper)
+	},
+	store circuit.Store,
+	cfg circuit.Config,
+	providerName string,
+	opts ...circuit.Option,
+) {
+	p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
+		return circuit.NewTransport(inner, store, cfg, providerName, logger, opts...)
+	})
+}
+
+// circuitDatadogConfig returns the Datadog transport config from the
+// cost-tracking section if one is configured, or nil otherwise.  We
+// reuse the cost-tracking Datadog config (host / port / namespace /
+// tags) for circuit metrics so all llm_proxy.* metrics share the same
+// agent address and base tags without operators having to declare
+// them twice.
+func circuitDatadogConfig(yamlConfig *config.YAMLConfig) *config.DatadogTransportConfig {
+	for i := range yamlConfig.Features.CostTracking.Transports {
+		tc := &yamlConfig.Features.CostTracking.Transports[i]
+		if tc.Type == "datadog" && tc.Datadog != nil {
+			return tc.Datadog
+		}
+	}
+	return nil
+}
+
+// initializeCircuitMetrics builds a dogstatsd-style sink for circuit
+// breaker metrics.  Returns nil when no Datadog transport is configured
+// or when the statsd client cannot be constructed; callers must treat
+// nil as "metrics disabled" (circuit.NewTransport substitutes a no-op
+// sink in that case so emit sites stay branchless).
+//
+// The returned client always carries the same namespace and global
+// tags as the cost-tracking transport, which means circuit metrics
+// land at e.g. "llm.circuit.terminal_failure" alongside
+// "llm.tokens.input" and inherit env / service / team tags from the
+// existing YAML.  No additional config knobs are introduced.
+func initializeCircuitMetrics(yamlConfig *config.YAMLConfig) circuit.MetricsSink {
+	ddCfg := circuitDatadogConfig(yamlConfig)
+	if ddCfg == nil {
+		logger.Info("⚡ Circuit Breaker: dogstatsd metrics disabled (no datadog transport in cost_tracking)")
+		return nil
+	}
+	host := ddCfg.Host
+	if host == "" {
+		host = "localhost"
+	}
+	port := ddCfg.Port
+	if port == "" {
+		port = "8125"
+	}
+	namespace := ddCfg.Namespace
+	if namespace == "" {
+		namespace = "llm"
+	}
+	addr := fmt.Sprintf("%s:%s", host, port)
+	client, err := statsd.New(
+		addr,
+		statsd.WithNamespace(namespace),
+		statsd.WithTags(ddCfg.Tags),
+	)
+	if err != nil {
+		// UDP send failures are best-effort by design (the cost
+		// tracker uses the same convention); a startup error means
+		// the address itself is malformed, which we surface but do
+		// not treat as fatal — the proxy must still serve traffic.
+		logger.Warn("⚡ Circuit Breaker: failed to create dogstatsd client; metrics disabled",
+			"error", err, "addr", addr)
+		return nil
+	}
+	logger.Info(
+		"⚡ Circuit Breaker: dogstatsd metrics enabled",
+		"addr", addr,
+		"namespace", namespace,
+		"tags", ddCfg.Tags,
+	)
+	return client
+}
+
+// circuitModelExtractor returns a ModelFromRequestFunc that dispatches to
+// the right provider's request-body parser by URL prefix.  Used by the
+// circuit transport on failure paths to enrich logs and metrics with
+// the LLM model name.  Returns "" for any unrecognised path so log
+// fields stay schema-stable rather than panicking on a stray request.
+//
+// bedrockProvider is optional (nil when the YAML disables Bedrock); when
+// nil we skip the Bedrock-specific branch entirely so we don't panic on a
+// stray `/bedrock/...` path that the router somehow let through.
+func circuitModelExtractor(
+	openAIProvider *providers.OpenAIProxy,
+	anthropicProvider *providers.AnthropicProxy,
+	geminiProvider *providers.GeminiProxy,
+	bedrockProvider *providers.BedrockProxy,
+) circuit.ModelFromRequestFunc {
+	return func(req *http.Request) string {
+		if req == nil || req.URL == nil {
+			return ""
+		}
+		path := req.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/openai/"),
+			strings.HasPrefix(path, "/v1/chat/"),
+			strings.HasPrefix(path, "/v1/responses"),
+			strings.HasPrefix(path, "/v1/completions"):
+			model, _ := openAIProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/anthropic/"),
+			strings.HasPrefix(path, "/v1/messages"):
+			model, _ := anthropicProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/gemini/"),
+			strings.HasPrefix(path, "/v1beta/models/"),
+			strings.HasPrefix(path, "/v1/models/"):
+			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/bedrock/"):
+			if bedrockProvider == nil {
+				return ""
+			}
+			model, _ := bedrockProvider.ExtractRequestModelAndMessages(req)
+			return model
+		}
+		return ""
+	}
+}
+
+// initializeAPIKeyStore creates and configures the API key store from config
+func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
+	// Check if API key management is enabled
+	if !yamlConfig.Features.APIKeyManagement.Enabled {
+		logger.Info("🔑 API Key Store: API key management is disabled in config")
+		return nil
+	}
+
+	// Get API key management configuration
+	apiKeyConfig := yamlConfig.Features.APIKeyManagement
+	if apiKeyConfig.TableName == "" || apiKeyConfig.Region == "" {
+		logger.Error("🔑 API Key Store: Missing required configuration (table_name or region)")
+		return nil
+	}
+
+	logger.Info("🔑 API Key Store: Initializing API key store",
+		"table_name", apiKeyConfig.TableName,
+		"region", apiKeyConfig.Region,
+		"endpoint_url", apiKeyConfig.EndpointURL)
+
+	endpointURL := apiKeyConfig.EndpointURL
+	if endpointURL == "" {
+		endpointURL = os.Getenv("AWS_ENDPOINT_URL")
+	}
+
+	// Create the API key store. AutoCreateTable is intentionally driven by
+	// the YAML config and defaults to false so a misconfigured production
+	// deploy cannot provision DynamoDB resources in the active AWS account.
+	store, err := apikeys.NewStore(apikeys.StoreConfig{
+		TableName:       apiKeyConfig.TableName,
+		Region:          apiKeyConfig.Region,
+		EndpointURL:     endpointURL,
+		Logger:          logger,
+		AutoCreateTable: apiKeyConfig.AutoCreateTable,
+	})
+	if err != nil {
+		globalAPIKeyStoreInitError = err
+		logger.Error("🔑 API Key Store: Failed to create API key store", "error", err)
+		return nil
+	}
+
+	logger.Info("🔑 API Key Store: Successfully initialized API key store")
+	return store
+}
+
+// piiSummaryFunc returns a snapshot closure for the admin /pii endpoint, or
+// newPerKeyOverrideProvider returns a cached PerKeyOverrideFunc that resolves
+// an iw: key's rate-limit overrides from its DynamoDB record. Results (hits
+// and misses) are cached with a short TTL so the hot path doesn't hit
+// DynamoDB on every request; a key whose limits change takes up to the TTL
+// to propagate.
+func newPerKeyOverrideProvider(store *apikeys.Store, logger *slog.Logger) ratelimit.PerKeyOverrideFunc {
+	const ttl = 30 * time.Second
+	type entry struct {
+		limits config.LimitsConfig
+		found  bool
+		exp    time.Time
+	}
+	var mu sync.Mutex
+	cache := make(map[string]entry)
+
+	return func(keyID string) (config.LimitsConfig, bool) {
+		now := time.Now()
+		mu.Lock()
+		if e, ok := cache[keyID]; ok && now.Before(e.exp) {
+			mu.Unlock()
+			return e.limits, e.found
+		}
+		mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		rec, err := store.GetKeyRecord(ctx, keyID)
+
+		e := entry{exp: now.Add(ttl)}
+		if err == nil && rec != nil {
+			if lc, found := apikeys.RateLimitOverrides(rec); found {
+				e.limits = lc
+				e.found = true
+			}
+		} else if err != nil {
+			logger.Debug("per-key rate-limit lookup failed", "key", apikeys.RedactKey(keyID), "error", err)
+		}
+
+		mu.Lock()
+		cache[keyID] = e
+		mu.Unlock()
+		return e.limits, e.found
+	}
+}
+
+// nil when PII redaction (and thus its recorder) was never installed.
+func piiSummaryFunc() func() map[string]interface{} {
+	if globalPIIRecorder == nil {
+		return nil
+	}
+	return globalPIIRecorder.Snapshot
+}
+
+// nil when cost tracking (and thus its stats recorder) was never installed.
+func costSummaryFunc() func() map[string]interface{} {
+	if globalCostStatsRecorder == nil {
+		return nil
+	}
+	return globalCostStatsRecorder.Snapshot
+}
+
+func usageSummaryFunc() func() map[string]interface{} {
+	if globalUsageStatsRecorder == nil {
+		return nil
+	}
+	return globalUsageStatsRecorder.Snapshot
+}
+
+func initAdminRollups(yamlConfig *config.YAMLConfig) {
+	rollupCfg := adminrollup.ConfigFromYAML(yamlConfig.Features.AdminDashboard)
+	rollupCfg.Logger = logger
+	store, err := adminrollup.NewStore(rollupCfg)
+	if err != nil {
+		logger.Warn("Admin rollups: disabled", "error", err)
+		return
+	}
+	if store == nil {
+		return
+	}
+	globalAdminRollupStore = store
+	logger.Info(
+		"Admin rollups: ENABLED",
+		"backend", store.Backend(),
+		"history_days", store.HistoryDays(),
+		"redis_db", rollupDBLabel(yamlConfig.Features.AdminDashboard.Rollups.Redis),
+	)
+
+	if globalCostStatsRecorder != nil {
+		globalCostStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCost))
+	}
+	if globalPIIRecorder != nil {
+		globalPIIRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricPII))
+	}
+	if globalUsageStatsRecorder != nil {
+		globalUsageStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUsage))
+	}
+	if globalCircuitStore != nil {
+		globalAdminRollupStop = make(chan struct{})
+		go adminrollup.RunCircuitArchiver(
+			store,
+			adminrollup.NewPersister(store, adminrollup.MetricCircuit),
+			globalCircuitStore,
+			circuitBreakerProviders,
+			globalCircuitConfig.PerProviderRollupThreshold,
+			globalCircuitConfig.PerProviderRollupWindowSeconds,
+			globalAdminRollupStop,
+		)
+	}
+}
+
+func rollupDBLabel(r *config.RedisConfig) int {
+	if r == nil {
+		return 0
+	}
+	return r.DB
+}
+
+// healthHandler provides a simple health check endpoint.
+//
+// When the circuit breaker is enabled, the response includes a
+// `circuit_breaker` block describing the effective mode, backend, whether
+// we fell back from Redis to in-memory, and per-provider state/failure
+// counts.  This is the canonical signal operators should key dashboards
+// and alerts off of.
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	providerHealth := globalProviderManager.GetHealthStatus()
+
+	var circuitBlock map[string]interface{}
+	if globalCircuitStore != nil {
+		perProvider := make(map[string]interface{}, len(circuitBreakerProviders))
+		totalFailures := 0
+		for _, name := range circuitBreakerProviders {
+			stats, err := globalCircuitStore.GetStats(r.Context(), name)
+			if err != nil {
+				// /health is unauthenticated, so we MUST NOT leak the
+				// raw error string (it can contain Redis URLs, host
+				// names, port numbers, or other infrastructure detail
+				// that helps an attacker enumerate the deployment).
+				// Operators get the full detail via the structured
+				// logger below.
+				logger.Warn(
+					"⚡ Circuit Breaker: GetStats error on /health",
+					"provider", name,
+					"error", err,
+				)
+				perProvider[name] = map[string]interface{}{
+					"error": "stats_unavailable",
+				}
+				continue
+			}
+			entry := map[string]interface{}{
+				"state":    stats.State.String(),
+				"failures": stats.Failures,
+			}
+			totalFailures += stats.Failures
+			if stats.CooldownUntil != nil {
+				entry["cooldown_until"] = stats.CooldownUntil.Unix()
+			}
+
+			// Per-provider rollup snapshot.  In per-model keying mode
+			// the bare-provider state above is rarely Open (it only
+			// trips when the model extractor cannot identify a model);
+			// the rollup is what tells operators how many models are
+			// currently degraded and which ones.  Surfacing both lets
+			// dashboards alert on the right signal.
+			if rec, ok := globalCircuitStore.(circuit.RollupRecorder); ok && globalCircuitConfig.PerProviderRollupThreshold > 0 {
+				keys, _ := rec.RolledUpKeys(r.Context(), name, globalCircuitConfig.PerProviderRollupWindowSeconds)
+				rollupOpen, count, _ := rec.RollupOpen(r.Context(), name,
+					globalCircuitConfig.PerProviderRollupThreshold,
+					globalCircuitConfig.PerProviderRollupWindowSeconds)
+				rollup := map[string]interface{}{
+					"enabled":        true,
+					"open":           rollupOpen,
+					"count":          count,
+					"threshold":      globalCircuitConfig.PerProviderRollupThreshold,
+					"window_seconds": globalCircuitConfig.PerProviderRollupWindowSeconds,
+				}
+				if len(keys) > 0 {
+					rollup["open_keys"] = keys
+				}
+				entry["rollup"] = rollup
+			}
+			perProvider[name] = entry
+
+			// Keep the legacy provider-level fields populated so any
+			// existing consumers that read providers[X].circuit_state
+			// don't break.
+			ph, _ := providerHealth[name].(map[string]interface{})
+			if ph == nil {
+				ph = make(map[string]interface{})
+			}
+			ph["circuit_state"] = stats.State.String()
+			ph["circuit_failures"] = stats.Failures
+			if stats.CooldownUntil != nil {
+				ph["circuit_cooldown_until"] = stats.CooldownUntil.Unix()
+			}
+			providerHealth[name] = ph
+		}
+		circuitBlock = map[string]interface{}{
+			"enabled":         true,
+			"mode":            globalCircuitConfig.Mode,
+			"backend":         globalCircuitConfig.Backend,
+			"redis_fallback":  globalCircuitRedisFallback,
+			"providers":       perProvider,
+			"total_failures":  totalFailures,
+			"degraded_signal": globalCircuitConfig.DegradedSignal,
+		}
+		// Daily-history enrichment hits Redis (MGET of all retained day keys
+		// + a merge write). /health is the container liveness probe and runs
+		// on a tight interval, so we MUST NOT couple it to Redis: a slow or
+		// down Redis would add latency / flap the probe even though the proxy
+		// itself is perfectly able to serve LLM traffic. Only do the Redis
+		// work when a caller explicitly opts in (the admin dashboard sends
+		// ?history=1); bare infra probes stay Redis-free.
+		if globalAdminRollupStore != nil && r.URL.Query().Get("history") == "1" {
+			cbSnap := adminrollup.SnapshotCircuit(
+				r.Context(),
+				globalCircuitStore,
+				circuitBreakerProviders,
+				globalCircuitConfig.PerProviderRollupThreshold,
+				globalCircuitConfig.PerProviderRollupWindowSeconds,
+			)
+			hctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			globalAdminRollupStore.MergeHistory(hctx, adminrollup.MetricCircuit, cbSnap)
+			cancel()
+			circuitBlock["daily_history"] = cbSnap["daily_history"]
+			circuitBlock["daily_history_available"] = cbSnap["daily_history_available"]
+		}
+	}
+
+	health := map[string]interface{}{
+		"status":    "healthy",
+		"timestamp": time.Now().Unix(),
+		"providers": providerHealth,
+		"features": map[string]bool{
+			"cost_tracking":   globalCostTracker != nil,
+			"circuit_breaker": globalCircuitStore != nil,
+		},
+	}
+	if circuitBlock != nil {
+		health["circuit_breaker"] = circuitBlock
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(health) //nolint:errcheck
+}
+
+// handleConfigValidation handles the --validate-config flag functionality
+func handleConfigValidation(validateConfigArg string) {
+	// Parse comma-separated file paths
+	filePaths := strings.Split(validateConfigArg, ",")
+	for i, path := range filePaths {
+		filePaths[i] = strings.TrimSpace(path)
+	}
+
+	fmt.Printf("Validating configuration files: %s\n", strings.Join(filePaths, ", "))
+
+	// Load and merge the configuration files using config package function
+	mergedConfig, err := config.LoadAndMergeConfigs(filePaths)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Configuration validation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print success message with summary
+	fmt.Printf("✅ Configuration validation successful!\n")
+	fmt.Printf("📊 Configuration summary:\n")
+	fmt.Printf("   - Enabled: %v\n", mergedConfig.Enabled)
+	fmt.Printf("   - Cost tracking: %v\n", mergedConfig.Features.CostTracking.Enabled)
+
+	if mergedConfig.Features.CostTracking.Enabled {
+		transports := mergedConfig.GetAllTransports()
+		fmt.Printf("   - Transports: %d configured\n", len(transports))
+		for i, transport := range transports {
+			fmt.Printf("     %d. Type: %s\n", i+1, transport.Type)
+		}
+	}
+
+	fmt.Printf("   - Providers: %d configured\n", len(mergedConfig.Providers))
+	for providerName, provider := range mergedConfig.Providers {
+		if provider.Enabled {
+			fmt.Printf("     - %s: %d models\n", providerName, len(provider.Models))
+		}
+	}
+
+	fmt.Printf("🎉 All configuration files are valid and merged successfully!\n")
+	os.Exit(0)
+}
+
+// handleVersionFlag handles the --version flag functionality
+func handleVersionFlag(yamlConfig *config.YAMLConfig) {
+	fmt.Printf("LLM Proxy version %s\n", version)
+	fmt.Println("Configuration:")
+
+	// Print configuration to stdout in a readable format
+	yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
+	// Also print as JSON for machine parsing
+	fmt.Println("\nConfiguration JSON:")
+	configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
+	if err != nil {
+		fmt.Printf("Error marshaling config to JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(configJSON))
+
+	fmt.Println("Build successful - configuration loaded without errors")
+	os.Exit(0)
+}
+
+// runServer starts and runs the LLM proxy server
+// registerProviders constructs each provider proxy, registers it with the
+// global provider manager, and returns concrete handles needed by the
+// circuit-breaker wiring below. Bedrock is opt-in via
+// `providers.bedrock.enabled: true` so existing deployments are unaffected.
+func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
+	openAI *providers.OpenAIProxy,
+	anthropic *providers.AnthropicProxy,
+	gemini *providers.GeminiProxy,
+	bedrock *providers.BedrockProxy,
+) {
+	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
+	if disableGzip {
+		logger.Warn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
+	}
+
+	openAI = providers.NewOpenAIProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(openAI)
+
+	anthropic = providers.NewAnthropicProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(anthropic)
+
+	gemini = providers.NewGeminiProxy(proxyOpts)
+	globalProviderManager.RegisterProvider(gemini)
+
+	if bedrockCfg, ok := yamlConfig.Providers["bedrock"]; ok && bedrockCfg.Enabled {
+		bedrock = providers.NewBedrockProxy(proxyOpts)
+		globalProviderManager.RegisterProvider(bedrock)
+		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock")
+		logger.Info("☁️  Bedrock provider: ENABLED", "region", bedrock.Region())
+	} else {
+		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
+	}
+	return openAI, anthropic, gemini, bedrock
+}
+
+func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
+	// Get port from environment variable or use default
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = defaultPort
+	}
+
+	// Log configuration
+	yamlConfig.LogConfiguration(logger)
+
+	// Create router
+	r := mux.NewRouter()
+
+	// Initialize global provider manager
+	globalProviderManager = providers.NewProviderManager()
+
+	// Initialize cost tracker
+	globalCostTracker = initializeCostTracker(yamlConfig)
+	if globalCostTracker != nil {
+		globalCostTracker.SetLogger(logger)
+	}
+
+	// Initialize API key store if enabled
+	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
+
+	// Initialize rate limiter if enabled
+	if yamlConfig.Features.RateLimiting.Enabled {
+		lim, err := ratelimit.Factory(yamlConfig)
+		if err != nil {
+			logger.Error("Failed to initialize rate limiter", "error", err)
+		} else {
+			globalRateLimiter = lim
+			// Layer dynamic per-key rate-limit overrides (from the API-key
+			// record) on top of static YAML overrides, if the backend and
+			// store both support it.
+			if ov, ok := lim.(ratelimit.PerKeyOverridable); ok {
+				if store, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+					ov.SetPerKeyOverride(newPerKeyOverrideProvider(store, logger))
+					logger.Info("Rate limiting: per-key overrides wired to API-key store")
+				}
+			}
+			logger.Info("Rate limiting: ENABLED",
+				"backend", yamlConfig.Features.RateLimiting.Backend,
+				"rpm", yamlConfig.Features.RateLimiting.Limits.RequestsPerMinute,
+				"tpm", yamlConfig.Features.RateLimiting.Limits.TokensPerMinute,
+				"rpd", yamlConfig.Features.RateLimiting.Limits.RequestsPerDay,
+				"tpd", yamlConfig.Features.RateLimiting.Limits.TokensPerDay)
+		}
+	}
+
+	// Initialize circuit breaker
+	globalCircuitStore = initializeCircuitStore(yamlConfig)
+
+	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
+
+	// Inject circuit-breaking transports when the feature is enabled.
+	if globalCircuitStore != nil {
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, isTestModeAllowed(yamlConfig))
+
+		// Build the optional observability sinks once, then share them
+		// across every provider's wrapped transport.  Both are nil-safe
+		// — circuit.NewTransport falls back to no-op behaviour if either
+		// is missing, which keeps test fixtures and Datadog-less
+		// deployments working unchanged.
+		circuitMetrics := initializeCircuitMetrics(yamlConfig)
+		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
+		opts := []circuit.Option{
+			circuit.WithModelExtractor(modelFn),
+		}
+		if circuitMetrics != nil {
+			opts = append(opts, circuit.WithMetrics(circuitMetrics))
+		}
+
+		// Pair each provider with its canonical name so the wiring loop
+		// iterates the same set of names that /health queries.
+		type namedProvider struct {
+			name string
+			p    interface {
+				WrapTransport(func(http.RoundTripper) http.RoundTripper)
+			}
+		}
+		namedProviders := []namedProvider{
+			{"openai", openAIProvider},
+			{"anthropic", anthropicProvider},
+			{"gemini", geminiProvider},
+		}
+		if bedrockProvider != nil {
+			namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
+		}
+		for _, np := range namedProviders {
+			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, opts...)
+		}
+		logger.Info(
+			"⚡ Circuit Breaker: transports wrapped for all providers",
+			"providers", circuitBreakerProviders,
+			"metrics_enabled", circuitMetrics != nil,
+		)
+	}
+
+	// Add middleware (order matters for streaming)
+	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
+
+	// API key validation runs before PII redaction so per-key redact_pii
+	// overrides can be resolved from the DynamoDB record stashed in context.
+	if globalAPIKeyStore != nil {
+		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
+	}
+
+	piiCfg := yamlConfig.Features.PIIRedact
+	if piiCfg.Enabled || piiCfg.AllowPerKeyOverride {
+		analyzerURL := piiCfg.AnalyzerURL
+		if envURL := os.Getenv("PRESIDIO_ANALYZER_URL"); envURL != "" {
+			analyzerURL = envURL
+		}
+
+		redactCfg := redact.Config{
+			AnalyzerURL:    analyzerURL,
+			Timeout:        time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			ScoreThreshold: piiCfg.ScoreThreshold,
+			EntityTypes:    piiCfg.EntityTypes,
+			Language:       piiCfg.Language,
+		}
+		redactor, err := redact.New(redactCfg)
+		if err != nil {
+			logger.Error("Failed to construct PII redactor; pii_redact feature disabled",
+				"error", err)
+		} else {
+			failClosed := piiCfg.FailMode == "closed"
+			globalPIIRecorder = pii.NewRecorder()
+			wirePlaceholders := true
+			if piiCfg.WirePlaceholders != nil {
+				wirePlaceholders = *piiCfg.WirePlaceholders
+			}
+			defaultAllowStreaming := true
+			if piiCfg.DefaultAllowStreaming != nil {
+				defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
+			}
+			r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
+				GlobalEnabled:         piiCfg.Enabled,
+				FailClosed:            failClosed,
+				MaxBodyBytes:          piiCfg.MaxBodyBytes,
+				Logger:                logger,
+				Recorder:              globalPIIRecorder,
+				WirePlaceholders:      wirePlaceholders,
+				DefaultAllowStreaming: defaultAllowStreaming,
+			}))
+			redact.SetGlobal(redactor)
+			logger.Info(
+				"🛡️  PII redaction middleware installed",
+				"global_enabled", piiCfg.Enabled,
+				"allow_per_key_override", piiCfg.AllowPerKeyOverride,
+				"wire_placeholders", wirePlaceholders,
+				"default_allow_streaming", defaultAllowStreaming,
+				"analyzer_url", analyzerURL,
+				"fail_mode", piiCfg.FailMode,
+			)
+		}
+	}
+
+	initAdminRollups(yamlConfig)
+
+	// Add test-mode middleware when enabled (integration tests only).
+	//
+	// We require THREE conditions before enabling this middleware, any one
+	// of which is sufficient to disable it:
+	//   1. The circuit breaker feature itself is Enabled.  Without it, the
+	//      test-mode header has nothing to toggle and only adds attack
+	//      surface.
+	//   2. TestModeEnabled is true in YAML.  This is the explicit opt-in
+	//      used by integration test configs.
+	//   3. LLM_PROXY_ALLOW_TEST_MODE=1 in the environment.  This belt-and-
+	//      suspenders guard ensures a production binary cannot accidentally
+	//      honour a test-mode header even if a misconfigured YAML slips
+	//      through review.
+	testModeAllowed := isTestModeAllowed(yamlConfig)
+	if testModeAllowed {
+		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, testModeAllowed)
+		r.Use(middleware.NewTestModeMiddleware(cbCfg.DegradedSignal))
+		logger.Warn("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
+	} else if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
+		logger.Warn(
+			"⚡ Circuit Breaker: test-mode requested in YAML but one or more guards not satisfied; middleware NOT installed",
+			"circuit_breaker_enabled", yamlConfig.Features.CircuitBreaker.Enabled,
+			"allow_env_set", os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1",
+		)
+	}
+
+	r.Use(middleware.LoggingMiddleware(globalProviderManager))
+	if globalRateLimiter != nil {
+		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter))
+	}
+	r.Use(middleware.CORSMiddleware(globalProviderManager))
+
+	// Create callbacks for cost tracking
+	var callbacks []middleware.MetadataCallback
+
+	// Add cost tracking callback if enabled
+	if globalCostTracker != nil {
+		costTrackingCallback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
+			if metadata.TotalTokens > 0 {
+				provider := middleware.GetProviderFromRequest(globalProviderManager, r)
+				userID := middleware.ExtractUserIDFromRequest(r, provider)
+				ipAddress := middleware.ExtractIPAddressFromRequest(r)
+				keyID := ""
+				if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
+					keyID = middleware.MaskKeyID(keyRecord.PK)
+				}
+				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {
+					logger.Warn("Failed to track request cost", "error", err)
+				}
+			}
+		}
+		callbacks = append(callbacks, costTrackingCallback)
+	}
+
+	r.Use(middleware.TokenParsingMiddleware(globalProviderManager, callbacks...)) // Add token parsing middleware with callbacks
+	r.Use(middleware.PIIResponseRestoreMiddleware(globalProviderManager))
+	r.Use(middleware.StreamingMiddleware(globalProviderManager))
+
+	// Health check endpoint
+	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
+
+	if yamlConfig.Features.AdminDashboard.Enabled {
+		// Override the PII-off bypass allowlist from config (falls back to the
+		// built-in default when unset) so roster changes don't need a deploy.
+		apikeys.SetPIIOffNonBedrockBypassAdmins(yamlConfig.Features.AdminDashboard.PIIOffBypassAdmins)
+		var keyStore *apikeys.Store
+		if s, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+			keyStore = s
+		}
+		admin.RegisterRoutes(r, admin.Deps{
+			Logger:           logger,
+			YAMLConfig:       yamlConfig,
+			APIKeyStore:      keyStore,
+			APIKeyStoreError: globalAPIKeyStoreInitError,
+			RateLimiter:      globalRateLimiter,
+			HealthFunc:       healthHandler,
+			PIISummary:       piiSummaryFunc(),
+			CostSummary:      costSummaryFunc(),
+			UsageSummary:     usageSummaryFunc(),
+		})
+		logger.Info("Admin dashboard: ENABLED")
+	}
+
+	// Register routes for all providers centrally
+	for name, provider := range globalProviderManager.GetAllProviders() {
+		// Direct provider routes
+		r.PathPrefix(fmt.Sprintf("/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+
+		// Meta routes with user ID pattern: /meta/{userID}/provider/
+		// These are handled by URLRewritingMiddleware which rewrites them to /provider/ before reaching here
+		r.PathPrefix(fmt.Sprintf("/meta/{userID}/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+
+		logger.Info("Registered provider routes", "provider", name,
+			"direct_path", fmt.Sprintf("/%s/", name),
+			"meta_path", fmt.Sprintf("/meta/{userID}/%s/", name))
+	}
+
+	// Register extra routes for all providers (e.g., compatibility routes)
+	for name, provider := range globalProviderManager.GetAllProviders() {
+		provider.RegisterExtraRoutes(r)
+		logger.Info("Registered extra routes for provider", "provider", name)
+	}
+
+	// Start server
+	logger.Info("Starting LLM Proxy server", "port", port)
+
+	// Log features
+	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
+	if globalCostTracker != nil {
+		features = append(features, "Cost tracking")
+	}
+	if globalRateLimiter != nil {
+		features = append(features, "Rate limiting")
+	}
+	if globalCircuitStore != nil {
+		features = append(features, "Circuit breaker")
+	}
+	logger.Info("Features enabled", "features", strings.Join(features, ", "))
+
+	logger.Info("Health check available", "url", "http://0.0.0.0:"+port+"/health")
+
+	// Log cost tracking status
+	if globalCostTracker != nil {
+		logger.Info("Cost tracking: ENABLED")
+	} else {
+		logger.Info("Cost tracking: DISABLED")
+	}
+
+	// Log registered providers
+	for name := range globalProviderManager.GetAllProviders() {
+		logger.Info("Registered provider", "provider", name)
+	}
+
+	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
+	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
+	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
+	if bedrockProvider != nil {
+		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
+	}
+	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
+
+	// Server-level timeouts to bound resource usage and avoid Slowloris-style
+	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
+	// streams; per-request deadlines are still enforced by upstream provider
+	// transports and per-handler context.WithTimeout helpers.
+	server := &http.Server{
+		Addr:              "0.0.0.0:" + port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      0, // streaming: rely on per-handler ctx deadlines
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Set up graceful shutdown
+	go func() {
+		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("Server failed to start", "error", err)
+		}
+	}()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	sig := <-sigChan
+	logger.Info("🛑 Received shutdown signal", "signal", sig.String())
+	gracefulShutdown(server)
+}
+
+// gracefulShutdown drains the HTTP server, stops async cost-tracking workers,
+// and releases any Redis-backed circuit-breaker resources. Each step is best
+// effort — failures are logged and shutdown proceeds — because at this point
+// the process is already on its way down.
+func gracefulShutdown(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	logger.Info("🔄 Shutting down HTTP server...")
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Error("HTTP server shutdown failed", "error", err)
+	} else {
+		logger.Info("✅ HTTP server shut down successfully")
+	}
+
+	if globalCostTracker != nil {
+		logger.Info("🔄 Stopping cost tracking workers and flushing queue...")
+		globalCostTracker.StopAsyncWorkers()
+		logger.Info("✅ Cost tracking workers stopped and queue flushed")
+	}
+
+	if globalCostStatsRecorder != nil {
+		globalCostStatsRecorder.FlushRollup()
+	}
+	if globalPIIRecorder != nil {
+		globalPIIRecorder.FlushRollup()
+	}
+	if globalUsageStatsRecorder != nil {
+		globalUsageStatsRecorder.FlushRollup()
+	}
+	if globalAdminRollupStop != nil {
+		close(globalAdminRollupStop)
+	}
+	if globalAdminRollupStore != nil {
+		if err := globalAdminRollupStore.Close(); err != nil {
+			logger.Warn("Admin rollups: Redis close failed", "error", err)
+		}
+	}
+
+	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
+		if err := rs.Close(); err != nil {
+			logger.Warn("Circuit Breaker: Redis close failed", "error", err)
+		} else {
+			logger.Info("✅ Circuit Breaker: Redis client closed")
+		}
+	}
+
+	logger.Info("👋 Server shutdown complete")
+}
+
+func main() {
+	// Parse command line flags
+	var showVersion bool
+	var validateConfig string
+	var disableGzip bool
+	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
+	flag.StringVar(&validateConfig, "validate-config", "", "Validate configuration files (comma-separated paths) and exit")
+	flag.BoolVar(&disableGzip, "disable-gzip", false, "Strip Accept-Encoding and disable transport compression (forces plain-text upstream bytes; useful for debugging SSE streams)")
+	flag.Parse()
+
+	// Handle config validation if requested
+	if validateConfig != "" {
+		handleConfigValidation(validateConfig)
+	}
+
+	// Load environment-based configuration (base.yml + environment-specific config).
+	//
+	// Outside of explicit local-dev (LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 or
+	// ENVIRONMENT=dev) we fail-fast on load errors rather than silently
+	// running with the in-binary defaults — a misconfigured staging/prod
+	// deploy must be visible at startup, not 15 minutes into traffic.
+	yamlConfig, err := config.LoadEnvironmentConfig()
+	if err != nil {
+		env := os.Getenv("ENVIRONMENT")
+		allowDefault := os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
+		if !allowDefault {
+			logger.Error("Failed to load environment config; refusing to start with in-binary defaults",
+				"error", err, "environment", env,
+				"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to opt in to default config")
+			os.Exit(1)
+		}
+		logger.Warn("Failed to load environment config, using defaults (dev only)", "error", err)
+		yamlConfig = config.GetDefaultYAMLConfig()
+	}
+
+	// Handle version flag if requested
+	if showVersion {
+		handleVersionFlag(yamlConfig)
+	}
+
+	// Start the server
+	runServer(yamlConfig, disableGzip)
+}

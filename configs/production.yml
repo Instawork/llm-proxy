@@ -1,0 +1,108 @@
+# LLM Proxy Configuration
+# This file configures rate limiting, cost tracking, and model-specific settings
+
+# Production configuration
+
+enabled: true
+
+features:
+  cost_tracking:
+    enabled: true
+    async: true
+    workers: 8
+    queue_size: 500
+    flush_interval: 15
+    transports:
+      - type: "dynamodb"
+        dynamodb:
+          table_name: "llm-proxy-cost-tracking"
+          region: "us-west-2"
+      - type: "datadog"
+        datadog:
+          host: "localhost"
+          port: "8125"
+          namespace: "llm"
+          tags: ["env:prod", "service:llm-proxy", "team:platform"]
+          sample_rate: 1.0
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking-backup.jsonl"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys"
+    region: "us-west-2"
+  # Circuit breaker: shadow/observe-only rollout against an externally
+  # provided Redis cluster.  The sidecar records counterfactual state +
+  # failure counts in Redis (under the `llm:cb:` prefix, DB 5) but never
+  # retries traffic, fast-fails, or synthesises 503s — operators can flip
+  # `mode: enforce` once the would-trip rates look sane.
+  #
+  # ${REDIS_URL} is populated from a deployment-managed secret in the
+  # ECS task definition; any transient Redis outage degrades the breaker
+  # to per-instance best-effort (fail-open) rather than tripping the
+  # proxy itself.
+  circuit_breaker:
+    enabled: true
+    mode: "log"
+    backend: "redis"
+    redis:
+      url: "${REDIS_URL}"
+      db: 5
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    retry_contribution_mode: "log"
+    # Bypass safety valve: callers without a fallback can set
+    # X-LLM-Proxy-Bypass-Circuit (or ?llm_proxy_bypass_circuit=1) to opt
+    # out of fast-fail.  Default is true; set to false to disable the
+    # safety valve entirely once every caller has fallback logic wired up.
+    bypass_allowed: true
+    # Bypass-reason allowlist: only these values are emitted verbatim on
+    # the `circuit.bypass` Datadog tag — anything else gets normalised to
+    # `other`.  Keeps tag cardinality bounded against noisy callers and
+    # standardises the dashboard vocabulary.  Comment out (or empty list)
+    # to accept any well-formed reason during early rollout.
+    bypass_reason_allowlist:
+      - no_fallback_configured
+      - manual_debug
+      - final_retry_tier
+      - force_real_upstream
+    # Per-provider rollup: when this many distinct per-model breakers
+    # open inside the rollup window, the entire provider is treated as
+    # Open and ALL keys for it fast-fail.  Set to 0 to disable (in which
+    # case behaviour matches per-model keying alone).  3 / 300s is the
+    # recommended starting point for prod — high enough that a single
+    # bad preview model doesn't trip wholesale enforcement, low enough
+    # that a real Gemini/OpenAI/Anthropic outage does.
+    per_provider_rollup_threshold: 3
+    per_provider_rollup_window_seconds: 300
+  rate_limiting:
+    enabled: false
+  pii_redact:
+    enabled: true
+    analyzer_url: "http://localhost:3000"
+    fail_mode: "open"
+    allow_per_key_override: true
+  admin_dashboard:
+    enabled: true
+    allowed_domain: "example.com"
+    rollups:
+      enabled: true
+      redis:
+        url: "${REDIS_URL}"
+        db: 6
+      retention_days: 90
+      history_days: 30
+
+# =============================================================================
+# PROVIDER OVERRIDES
+# =============================================================================
+# Base config disables AWS Bedrock by default (see configs/base.yml).  Flip the
+# override below — and confirm the calling service's IAM role has bedrock:Invoke* /
+# Converse* grants for $AWS_REGION — to enable the SigV4 passthrough after
+# staging validation.
+# providers:
+#   bedrock:
+#     enabled: true

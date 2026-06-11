@@ -1,0 +1,25 @@
+# air hot-reload config for the LLM proxy dev container.
+# Watches Go sources + YAML config; rebuilds and restarts on change.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # CGO_ENABLED=0 is set in docker-compose so this builds on alpine.
+  cmd = "go build -o ./tmp/main ./cmd/llm-proxy"
+  bin = "./tmp/main"
+  include_ext = ["go", "yml", "yaml"]
+  exclude_dir = ["web", "logs", "tmp", "bin", "build", ".git", "node_modules", ".cursor"]
+  exclude_regex = ["_test\\.go"]
+  # Coalesce rapid saves into a single rebuild.
+  delay = 800
+  stop_on_error = true
+  # Gracefully stop the old process before starting the new one so the
+  # 9002 listener is released cleanly.
+  send_interrupt = true
+  kill_delay = "2s"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true

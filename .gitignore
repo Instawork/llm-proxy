@@ -1,0 +1,46 @@
+# Compiled binaries
+bin/
+# Locally-built proxy binary (`go build -o llm-proxy ./cmd/llm-proxy`)
+/llm-proxy
+
+# Python bytecode caches (e.g. integration snippet runs)
+__pycache__/
+*.pyc
+
+# air hot-reload build output
+tmp/
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Live integration binary output
+integration/bin/
+integration/snippets/python/.venv/
+integration/snippets/python/.deps-hash
+integration/snippets/node/node_modules/
+integration/snippets/node/.deps-hash
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+logs/ 

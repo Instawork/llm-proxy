@@ -1,0 +1,10 @@
+{
+  "name": "llm-proxy-share-snippets",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@google/genai": "^1.30.0",
+    "openai": "^6.9.0"
+  }
+}
