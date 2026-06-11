@@ -51,6 +51,7 @@ type FeaturesConfig struct {
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
+	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 }
 
 // PIIRedactConfig configures the proxy-side PII redactor that calls the
@@ -115,6 +116,19 @@ type PIIRedactConfig struct {
 	// through". Lower this if sidecar latency becomes a problem;
 	// raise it if the WARN counter trends up in Datadog.
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+
+	// AllowPerKeyOverride installs the redactor middleware when true even if
+	// Enabled is false, so individual iw: keys can opt in via redact_pii.
+	AllowPerKeyOverride bool `yaml:"allow_per_key_override"`
+}
+
+// AdminDashboardConfig gates the /admin UI and JSON API.
+type AdminDashboardConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// AllowedDomain restricts Google OAuth sign-in (default: instawork.com).
+	AllowedDomain string `yaml:"allowed_domain"`
+	// DevCORSOrigin allows the Vite dev server to call the admin API.
+	DevCORSOrigin string `yaml:"dev_cors_origin"`
 }
 
 // CircuitBreakerConfig configures the proxy-side circuit breaker and retry
@@ -715,7 +729,7 @@ func (c *YAMLConfig) Validate() error {
 	// Validate PII redaction config if enabled so a typo in fail_mode or
 	// a missing analyzer_url is surfaced via --validate-config rather than
 	// at first request.
-	if c.Features.PIIRedact.Enabled {
+	if c.Features.PIIRedact.Enabled || c.Features.PIIRedact.AllowPerKeyOverride {
 		if err := c.validatePIIRedactConfig(); err != nil {
 			return fmt.Errorf("invalid pii_redact configuration: %w", err)
 		}
@@ -730,7 +744,7 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	r := c.Features.PIIRedact
 
 	if r.AnalyzerURL == "" {
-		return fmt.Errorf("analyzer_url is required when pii_redact is enabled")
+		return fmt.Errorf("analyzer_url is required when pii_redact is enabled or allow_per_key_override is true")
 	}
 
 	switch r.FailMode {

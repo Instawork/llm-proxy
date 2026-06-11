@@ -76,6 +76,9 @@ type APIKey struct {
 	Enabled bool `dynamodbav:"enabled"`
 	// Tags for organizational purposes
 	Tags map[string]string `dynamodbav:"tags,omitempty"`
+	// RedactPII overrides the global pii_redact.enabled flag when set.
+	// nil = inherit global default.
+	RedactPII *bool `dynamodbav:"redact_pii,omitempty"`
 }
 
 // Store handles API key storage in DynamoDB
@@ -224,8 +227,8 @@ func GenerateKey() (string, error) {
 	return KeyPrefix + hex.EncodeToString(bytes), nil
 }
 
-// CreateKey creates a new API key record
-func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string) (*APIKey, error) {
+// CreateKey creates a new API key record.
+func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string, redactPII *bool) (*APIKey, error) {
 	// Generate new key
 	newKey, err := GenerateKey()
 	if err != nil {
@@ -243,6 +246,7 @@ func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description 
 		UpdatedAt:      now,
 		Enabled:        true,
 		Tags:           tags,
+		RedactPII:      redactPII,
 	}
 
 	// Marshal to DynamoDB attribute values
@@ -270,9 +274,9 @@ func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description 
 	return apiKey, nil
 }
 
-// GetKey retrieves an API key by its iw: prefixed key
-func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
-	// Validate key format
+// GetKeyRecord retrieves an API key without enabled/expiry enforcement.
+// Used by admin tooling that must inspect or mutate disabled keys.
+func (s *Store) GetKeyRecord(ctx context.Context, key string) (*APIKey, error) {
 	if !strings.HasPrefix(key, KeyPrefix) {
 		return nil, fmt.Errorf("invalid key format: must start with %s", KeyPrefix)
 	}
@@ -286,7 +290,6 @@ func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
-
 	if result.Item == nil {
 		return nil, fmt.Errorf("API key not found")
 	}
@@ -295,24 +298,31 @@ func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
 	if err := attributevalue.UnmarshalMap(result.Item, &apiKey); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal API key: %w", err)
 	}
+	return &apiKey, nil
+}
 
-	// Check if key is expired
+// GetKey retrieves an API key by its iw: prefixed key
+func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
+	apiKey, err := s.GetKeyRecord(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
 	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
 		return nil, fmt.Errorf("API key has expired")
 	}
-
-	// Check if key is enabled
 	if !apiKey.Enabled {
 		return nil, fmt.Errorf("API key is disabled")
 	}
 
-	return &apiKey, nil
+	return apiKey, nil
 }
 
 // UpdateKey updates an existing API key
 func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]interface{}) error {
 	// Build update expression
 	var updateExpr strings.Builder
+	var removeParts []string
 	exprAttrValues := make(map[string]types.AttributeValue)
 	exprAttrNames := make(map[string]string)
 
@@ -347,7 +357,19 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 				av, _ := attributevalue.Marshal(tags)
 				exprAttrValues[":tags"] = av
 			}
+		case "redact_pii":
+			if value == nil {
+				removeParts = append(removeParts, "redact_pii")
+			} else {
+				updateExpr.WriteString(", redact_pii = :redact_pii")
+				exprAttrValues[":redact_pii"] = &types.AttributeValueMemberBOOL{Value: value.(bool)}
+			}
 		}
+	}
+
+	expression := updateExpr.String()
+	if len(removeParts) > 0 {
+		expression += " REMOVE " + strings.Join(removeParts, ", ")
 	}
 
 	input := &dynamodb.UpdateItemInput{
@@ -355,7 +377,7 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: key},
 		},
-		UpdateExpression:          aws.String(updateExpr.String()),
+		UpdateExpression:          aws.String(expression),
 		ExpressionAttributeValues: exprAttrValues,
 		ConditionExpression:       aws.String("attribute_exists(pk)"),
 	}
@@ -436,6 +458,14 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 	}
 
 	return keys, nil
+}
+
+// LookupProxyKey returns the DynamoDB record for an iw: bearer token.
+func (s *Store) LookupProxyKey(ctx context.Context, bearer string) (*APIKey, error) {
+	if !strings.HasPrefix(bearer, KeyPrefix) {
+		return nil, nil
+	}
+	return s.GetKey(ctx, bearer)
 }
 
 // ValidateAndGetActualKey validates an API key and returns the actual provider key

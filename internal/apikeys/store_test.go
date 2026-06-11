@@ -58,7 +58,7 @@ func TestNewStore_TableAlreadyExists(t *testing.T) {
 func TestStore_CreateAndGetKey(t *testing.T) {
 	store, _ := newFakeStore(t)
 
-	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "test key", 1000, map[string]string{"team": "platform"})
+	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "test key", 1000, map[string]string{"team": "platform"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	assert.True(t, strings.HasPrefix(created.PK, KeyPrefix))
@@ -92,7 +92,7 @@ func TestStore_GetKey_NotFound(t *testing.T) {
 
 func TestStore_UpdateKey_AllFields(t *testing.T) {
 	store, _ := newFakeStore(t)
-	created, err := store.CreateKey(context.Background(), "openai", "real-key-v1", "initial", 1000, nil)
+	created, err := store.CreateKey(context.Background(), "openai", "real-key-v1", "initial", 1000, nil, nil)
 	require.NoError(t, err)
 
 	expiresAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
@@ -119,7 +119,7 @@ func TestStore_UpdateKey_AllFields(t *testing.T) {
 
 func TestStore_DeleteKey(t *testing.T) {
 	store, _ := newFakeStore(t)
-	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "", 100, nil)
+	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "", 100, nil, nil)
 	require.NoError(t, err)
 
 	// Sanity: GetKey works pre-delete.
@@ -142,9 +142,9 @@ func TestStore_DeleteKey(t *testing.T) {
 
 func TestStore_ListKeys_ByProviderAndAll(t *testing.T) {
 	store, _ := newFakeStore(t)
-	_, err := store.CreateKey(context.Background(), "openai", "real-1", "", 100, nil)
+	_, err := store.CreateKey(context.Background(), "openai", "real-1", "", 100, nil, nil)
 	require.NoError(t, err)
-	_, err = store.CreateKey(context.Background(), "anthropic", "real-2", "", 100, nil)
+	_, err = store.CreateKey(context.Background(), "anthropic", "real-2", "", 100, nil, nil)
 	require.NoError(t, err)
 
 	all, err := store.ListKeys(context.Background(), "")
@@ -172,7 +172,7 @@ func TestStore_ValidateAndGetActualKey_Passthrough(t *testing.T) {
 
 func TestStore_ValidateAndGetActualKey_Lookup(t *testing.T) {
 	store, _ := newFakeStore(t)
-	created, err := store.CreateKey(context.Background(), "openai", "real-key-2", "", 100, nil)
+	created, err := store.CreateKey(context.Background(), "openai", "real-key-2", "", 100, nil, nil)
 	require.NoError(t, err)
 
 	actual, provider, err := store.ValidateAndGetActualKey(context.Background(), created.PK)
@@ -265,7 +265,7 @@ func TestStore_GetKey_ExpiredReturnsError(t *testing.T) {
 func TestStore_CreateKey_PutItemError(t *testing.T) {
 	store, fake := newFakeStore(t)
 	fake.FailOnce("PutItem", errors.New("ConditionalCheckFailedException"))
-	_, err := store.CreateKey(context.Background(), "openai", "real", "", 100, nil)
+	_, err := store.CreateKey(context.Background(), "openai", "real", "", 100, nil, nil)
 	require.Error(t, err)
 }
 

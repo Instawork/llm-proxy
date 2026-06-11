@@ -87,7 +87,7 @@ func TestIntegration_PIIRedactMiddleware_EndToEnd(t *testing.T) {
 		ctxFromNext = r.Context()
 	})
 
-	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{})(next)
+	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{GlobalEnabled: true})(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions",
@@ -154,7 +154,7 @@ func TestIntegration_PIIRedactMiddleware_FailOpenAgainstUnreachable(t *testing.T
 	next := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		called = true
 	})
-	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{FailClosed: false})(next)
+	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{GlobalEnabled: true, FailClosed: false})(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions",
@@ -196,7 +196,7 @@ func TestIntegration_PIIRedactMiddleware_FailClosedAgainstUnreachable(t *testing
 	next := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		called = true
 	})
-	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{FailClosed: true})(next)
+	handler := PIIRedactMiddleware(redactor, PIIRedactConfig{GlobalEnabled: true, FailClosed: true})(next)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/openai/v1/chat/completions",

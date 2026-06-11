@@ -52,6 +52,11 @@ features:
     # becomes a problem; raise it if the WARN counter trends up in
     # Datadog and you'd rather pay the redaction cost.
     max_body_bytes: 0
+    allow_per_key_override: false
+  admin_dashboard:
+    enabled: false
+    allowed_domain: "instawork.com"
+    dev_cors_origin: "http://localhost:5173"
 
 # =============================================================================
 # PROVIDER CONFIGURATIONS

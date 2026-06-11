@@ -80,6 +80,14 @@ features:
     per_provider_rollup_window_seconds: 300
   rate_limiting:
     enabled: false
+  pii_redact:
+    enabled: true
+    analyzer_url: "http://localhost:3000"
+    fail_mode: "open"
+    allow_per_key_override: true
+  admin_dashboard:
+    enabled: true
+    allowed_domain: "instawork.com"
 
 # =============================================================================
 # PROVIDER OVERRIDES

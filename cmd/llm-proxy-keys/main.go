@@ -22,18 +22,19 @@ const (
 func main() {
 	// Command-line flags
 	var (
-		configDir   = flag.String("config-dir", "configs", "Path to configuration directory")
-		environment = flag.String("env", "dev", "Environment (dev, staging, production)")
-		provider    = flag.String("provider", "", "Provider name (openai, anthropic, gemini)")
-		actualKey   = flag.String("key", "", "Actual provider API key")
-		description = flag.String("desc", "", "Description for the key")
-		costLimit   = flag.Int64("cost-limit", 10000, "Daily cost limit in cents (default: $100)")
-		listKeys    = flag.Bool("list", false, "List all API keys")
-		deleteKey   = flag.String("delete", "", "Delete an API key")
-		disableKey  = flag.String("disable", "", "Disable an API key")
-		enableKey   = flag.String("enable", "", "Enable an API key")
-		showKey     = flag.String("show", "", "Show details of a specific API key")
-		tags        = flag.String("tags", "", "Comma-separated key=value tags")
+		configDir     = flag.String("config-dir", "configs", "Path to configuration directory")
+		environment   = flag.String("env", "dev", "Environment (dev, staging, production)")
+		provider      = flag.String("provider", "", "Provider name (openai, anthropic, gemini)")
+		actualKey     = flag.String("key", "", "Actual provider API key")
+		description   = flag.String("desc", "", "Description for the key")
+		costLimit     = flag.Int64("cost-limit", 10000, "Daily cost limit in cents (default: $100)")
+		listKeys      = flag.Bool("list", false, "List all API keys")
+		deleteKey     = flag.String("delete", "", "Delete an API key")
+		disableKey    = flag.String("disable", "", "Disable an API key")
+		enableKey     = flag.String("enable", "", "Enable an API key")
+		showKey       = flag.String("show", "", "Show details of a specific API key")
+		tags          = flag.String("tags", "", "Comma-separated key=value tags")
+		redactPIIFlag = flag.String("redact-pii", "", "PII redaction override: true, false, or omit to inherit global")
 	)
 
 	flag.Usage = func() {
@@ -99,7 +100,7 @@ func main() {
 	case *enableKey != "":
 		handleEnable(ctx, store, *enableKey, logger)
 	case *provider != "" && *actualKey != "":
-		handleCreate(ctx, store, *provider, *actualKey, *description, *costLimit, *tags, logger)
+		handleCreate(ctx, store, *provider, *actualKey, *description, *costLimit, *tags, *redactPIIFlag, logger)
 	default:
 		flag.Usage()
 		os.Exit(1)
@@ -124,7 +125,7 @@ func loadConfig(configDir, environment string) (*config.YAMLConfig, error) {
 }
 
 // handleCreate creates a new API key
-func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr string, logger *slog.Logger) {
+func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, logger *slog.Logger) {
 	// Validate provider
 	validProviders := []string{"openai", "anthropic", "gemini"}
 	isValid := false
@@ -151,7 +152,21 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	}
 
 	// Create the key
-	apiKey, err := store.CreateKey(ctx, provider, actualKey, description, costLimit, tags)
+	var redactPII *bool
+	switch strings.ToLower(strings.TrimSpace(redactPIIFlag)) {
+	case "true", "1", "yes", "on":
+		v := true
+		redactPII = &v
+	case "false", "0", "no", "off":
+		v := false
+		redactPII = &v
+	case "":
+	default:
+		logger.Error("Invalid -redact-pii value; use true, false, or omit", "value", redactPIIFlag)
+		os.Exit(1)
+	}
+
+	apiKey, err := store.CreateKey(ctx, provider, actualKey, description, costLimit, tags, redactPII)
 	if err != nil {
 		logger.Error("Failed to create API key", "error", err)
 		os.Exit(1)

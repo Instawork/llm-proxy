@@ -1,35 +1,32 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
+type proxyKeyLookup interface {
+	LookupProxyKey(ctx context.Context, bearer string) (*apikeys.APIKey, error)
+}
+
 // APIKeyValidationMiddleware validates and potentially replaces API keys for
 // all providers.
-//
-// A request whose path *looks like* a provider route but for which no
-// matching provider is registered (e.g. /openai/... when openai is disabled
-// in config) MUST NOT be silently forwarded — that would allow the proxy to
-// 502/404 a request without ever rejecting an invalid key, exposing the
-// proxy's behavior to /scan attacks that probe whether a key is configured.
-// We reject such cases up-front with 502 Bad Gateway. Genuinely non-provider
-// paths (e.g. /health, /metrics) bypass validation as before.
 func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" {
+			if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/admin/") {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			provider := GetProviderFromRequest(providerManager, r)
 			if provider == nil {
-				// If the path looks like a provider route, refuse — see
-				// docstring above.
 				if isProviderRoute(r.URL.Path) {
 					log.Printf("❌ API key validation: provider route %q has no registered provider", r.URL.Path)
 					w.Header().Set("Content-Type", "application/json")
@@ -49,9 +46,26 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 					fmt.Fprintf(w, `{"error": "Invalid API key: %s"}`, err.Error())
 					return
 				}
+
+				if lookup, ok := keyStore.(proxyKeyLookup); ok {
+					if bearer := extractBearerToken(r); bearer != "" {
+						if record, err := lookup.LookupProxyKey(r.Context(), bearer); err == nil && record != nil {
+							r = r.WithContext(apikeys.WithContext(r.Context(), record))
+						}
+					}
+				}
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func extractBearerToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return ""
+	}
+	return strings.TrimPrefix(authHeader, bearerPrefix)
 }

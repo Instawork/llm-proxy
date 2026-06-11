@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -56,7 +57,7 @@ func (c *captureHandler) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 func TestPIIRedactMiddleware_NonProviderRouteSkipped(t *testing.T) {
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/health", "{}"))
 
@@ -68,7 +69,7 @@ func TestPIIRedactMiddleware_NonProviderRouteSkipped(t *testing.T) {
 func TestPIIRedactMiddleware_GETSkipped(t *testing.T) {
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodGet, "/openai/v1/chat/completions", ""))
 
@@ -80,7 +81,7 @@ func TestPIIRedactMiddleware_GETSkipped(t *testing.T) {
 func TestPIIRedactMiddleware_ModelsListSkipped(t *testing.T) {
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/openai/v1/models", "{}"))
 
@@ -101,7 +102,7 @@ func TestPIIRedactMiddleware_RedactsAndStashesInContext(t *testing.T) {
 		},
 	}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(
 		httptest.NewRecorder(),
@@ -130,7 +131,7 @@ func TestPIIRedactMiddleware_RedactsAndStashesInContext(t *testing.T) {
 func TestPIIRedactMiddleware_EmptyBodyShortCircuits(t *testing.T) {
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(
 		httptest.NewRecorder(),
@@ -152,7 +153,7 @@ func TestPIIRedactMiddleware_FailOpenPassesThroughOnError(t *testing.T) {
 		},
 	}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{FailClosed: false})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true, FailClosed: false})(cap)
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", `{"x":1}`))
@@ -178,7 +179,7 @@ func TestPIIRedactMiddleware_FailClosedReturns503OnError(t *testing.T) {
 		},
 	}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{FailClosed: true})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true, FailClosed: true})(cap)
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", `{"x":1}`))
@@ -204,8 +205,9 @@ func TestPIIRedactMiddleware_OversizeBodySkipped(t *testing.T) {
 	cap := &captureHandler{}
 	var logBuf bytes.Buffer
 	mw := PIIRedactMiddleware(r, PIIRedactConfig{
-		MaxBodyBytes: 1024,
-		Logger:       captureLogger(&logBuf),
+		GlobalEnabled: true,
+		MaxBodyBytes:  1024,
+		Logger:        captureLogger(&logBuf),
 	})(cap)
 
 	mw.ServeHTTP(
@@ -248,7 +250,7 @@ func TestPIIRedactMiddleware_DefaultMaxBodyBytesIs1MiB(t *testing.T) {
 	body := `{"x":"` + strings.Repeat("a", 1024*1024-16) + `"}`
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{ /* MaxBodyBytes: 0 → 1 MiB default */ })(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true /* MaxBodyBytes: 0 → 1 MiB default */})(cap)
 
 	mw.ServeHTTP(
 		httptest.NewRecorder(),
@@ -272,7 +274,7 @@ func TestPIIRedactMiddleware_BodyAvailableToUpstream(t *testing.T) {
 		},
 	}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true})(cap)
 
 	mw.ServeHTTP(
 		httptest.NewRecorder(),
@@ -314,7 +316,7 @@ func (s *slowRedactor) Redact(ctx context.Context, _ string) (redact.Result, err
 func TestPIIRedactMiddleware_TimeoutFailOpenReturns200(t *testing.T) {
 	r := &slowRedactor{delay: 50 * time.Millisecond}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{FailClosed: false})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true, FailClosed: false})(cap)
 
 	// Drive a context that's already past its deadline so slowRedactor
 	// returns ctx.Err() immediately — equivalent to the real
@@ -347,7 +349,7 @@ func TestPIIRedactMiddleware_TimeoutFailOpenReturns200(t *testing.T) {
 func TestPIIRedactMiddleware_TimeoutFailClosedReturns503(t *testing.T) {
 	r := &slowRedactor{delay: 50 * time.Millisecond}
 	cap := &captureHandler{}
-	mw := PIIRedactMiddleware(r, PIIRedactConfig{FailClosed: true})(cap)
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true, FailClosed: true})(cap)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 	defer cancel()
@@ -362,5 +364,40 @@ func TestPIIRedactMiddleware_TimeoutFailClosedReturns503(t *testing.T) {
 	}
 	if cap.reqSeen != nil {
 		t.Error("fail-closed must NOT invoke upstream on a redactor timeout")
+	}
+}
+
+func TestPIIRedactMiddleware_PerKeyOverrideMatrix(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"secret"}]}`
+	r := &fakeRedactor{mutate: func(in string) (redact.Result, error) {
+		return redact.Result{Text: "redacted"}, nil
+	}}
+
+	cases := []struct {
+		name   string
+		global bool
+		key    *apikeys.APIKey
+		called bool
+	}{
+		{"global on inherit", true, nil, true},
+		{"global off inherit", false, nil, false},
+		{"global off key on", false, func() *apikeys.APIKey { v := true; return &apikeys.APIKey{RedactPII: &v} }(), true},
+		{"global on key off", true, func() *apikeys.APIKey { v := false; return &apikeys.APIKey{RedactPII: &v} }(), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r.called = 0
+			cap := &captureHandler{}
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: tc.global})(cap)
+			req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+			if tc.key != nil {
+				req = req.WithContext(apikeys.WithContext(req.Context(), tc.key))
+			}
+			mw.ServeHTTP(httptest.NewRecorder(), req)
+			if (r.called > 0) != tc.called {
+				t.Fatalf("redactor called=%d want called=%v", r.called, tc.called)
+			}
+		})
 	}
 }

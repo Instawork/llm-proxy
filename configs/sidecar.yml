@@ -1,0 +1,12 @@
+# Sidecar deployment config (Finch ECS task llm-proxy container).
+# PII redaction and admin dashboard stay off — observability redaction runs
+# only on the standalone llm.instawork.com service.
+
+enabled: true
+
+features:
+  pii_redact:
+    enabled: false
+    allow_per_key_override: false
+  admin_dashboard:
+    enabled: false

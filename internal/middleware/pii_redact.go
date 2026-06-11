@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -42,6 +43,9 @@ type PIIRedactor interface {
 // internal/config.PIIRedactConfig for the YAML-facing shape; this is the
 // runtime-friendly form (durations resolved, fail-mode parsed).
 type PIIRedactConfig struct {
+	// GlobalEnabled is the YAML features.pii_redact.enabled value.
+	GlobalEnabled bool
+
 	// FailClosed: when true, abort the request with 503 if the redactor
 	// fails or times out. When false ("fail-open"), log a warning and
 	// pass the request through with no redacted-body in context — the
@@ -112,6 +116,12 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !shouldRedactRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			keyRecord, _ := apikeys.FromContext(r.Context())
+			if !apikeys.EffectiveRedactPII(cfg.GlobalEnabled, keyRecord) {
 				next.ServeHTTP(w, r)
 				return
 			}
