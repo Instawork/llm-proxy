@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
 
@@ -374,8 +376,12 @@ func (o *OpenAIProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Log the response body preview for debugging
-	log.Printf("🔍 Debug: OpenAI response body preview: %s", string(bodyBytes[:min(100, len(bodyBytes))]))
+	// Operator debug preview, routed through redact.LogPreview so that
+	// (1) when pii_redact is enabled, PII is collapsed to ``[REDACTED:...]``
+	// markers, and (2) when it isn't, the line still gives byte-length
+	// context but never raw model output. See internal/redact/log_helper.go.
+	log.Printf("🔍 Debug: OpenAI response body preview: %s",
+		redact.LogPreview(context.Background(), string(bodyBytes), 100))
 
 	var response OpenAIResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
@@ -744,8 +750,9 @@ func (o *OpenAIProxy) parseResponsesNonStreamingResponse(responseBody io.Reader)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Log the response body preview for debugging
-	log.Printf("🔍 Debug: OpenAI Responses API response body preview: %s", string(bodyBytes[:min(100, len(bodyBytes))]))
+	// See companion preview above (ParseResponseMetadata) — same rationale.
+	log.Printf("🔍 Debug: OpenAI Responses API response body preview: %s",
+		redact.LogPreview(context.Background(), string(bodyBytes), 100))
 
 	var response OpenAIResponsesAPIResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {

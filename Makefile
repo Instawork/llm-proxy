@@ -210,6 +210,50 @@ test-health:
 	@go test -v ./internal/providers -run "^Test(Health|Environment)" -short
 	@echo "$(GREEN)✓ Health check tests completed$(NC)"
 
+# ─── PII redaction integration ─────────────────────────────────────────────
+#
+# These tests dial a real Presidio analyzer sidecar instead of an
+# httptest fake. They prove the wire format Presidio
+# emits actually parses cleanly, and that scoping suppresses noisy
+# default recognizers (UK_NHS, DATE_TIME) at the wire boundary — where
+# the unit tests can't.
+#
+# The sidecar is opt-in via the docker-compose `pii_redact` profile,
+# and the tests skip with an actionable message when it isn't reachable.
+# `LLM_PROXY_PII_INTEGRATION=1` is the explicit gate so a CI job that
+# hasn't stood up the profile doesn't accidentally run them.
+.PHONY: test-pii-up
+test-pii-up:
+	@echo "$(BLUE)Bringing up Presidio analyzer sidecar (image is large; first start can take a few minutes)...$(NC)"
+	@docker compose --profile pii_redact up -d presidio
+	@echo "$(YELLOW)Waiting for /health to become reachable...$(NC)"
+	@for i in $$(seq 1 60); do \
+		if curl -fs -m 2 "http://localhost:$${PRESIDIO_PORT:-5004}/health" > /dev/null 2>&1; then \
+			echo "$(GREEN)✓ Presidio is healthy on http://localhost:$${PRESIDIO_PORT:-5004}$(NC)"; \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "$(RED)✗ Presidio did not become healthy in 120s; check `docker compose logs presidio`$(NC)"; \
+	exit 1
+
+.PHONY: test-pii-down
+test-pii-down:
+	@docker compose --profile pii_redact stop presidio || true
+	@echo "$(GREEN)✓ Presidio stopped$(NC)"
+
+.PHONY: test-pii
+test-pii:
+	@echo "$(BLUE)Running --pii integration tests (live Presidio analyzer)...$(NC)"
+	@LLM_PROXY_PII_INTEGRATION=1 \
+		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
+		go test -race -v \
+		./internal/redact/... \
+		./internal/middleware/... \
+		-run 'TestIntegration_' \
+		-timeout 60s
+	@echo "$(GREEN)✓ --pii integration tests completed$(NC)"
+
 # Run all tests including integration
 .PHONY: test-all
 test-all: test test-integration

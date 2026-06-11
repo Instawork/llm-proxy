@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 // MetadataCallback is a function that can be hooked into the TokenParsingMiddleware
@@ -104,13 +106,19 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 					log.Printf("Warning: failed to parse response metadata for %s: %v", provider.GetName(), err)
 					if captureWriter.body.Len() > 0 {
 						bodyBytes := captureWriter.body.Bytes()
+						// Both branches route through redact.LogPreview so
+						// raw model output is never persisted unredacted
+						// when pii_redact is enabled. The wording stays
+						// stable for the test fixtures that grep for
+						// "gzip-decompressed" / "Response body preview".
 						if len(bodyBytes) >= 2 && bodyBytes[0] == 0x1f && bodyBytes[1] == 0x8b {
 							if decompressed, e := decompressForPreview(bodyBytes); e == nil {
-								previewLen := min(200, len(decompressed))
-								log.Printf("🔍 Response body (gzip-decompressed): %s", string(decompressed[:previewLen]))
+								log.Printf("🔍 Response body (gzip-decompressed): %s",
+									redact.LogPreview(context.Background(), string(decompressed), 200))
 							}
 						} else {
-							log.Printf("🔍 Response body preview: %s", string(bodyBytes[:min(200, len(bodyBytes))]))
+							log.Printf("🔍 Response body preview: %s",
+								redact.LogPreview(context.Background(), string(bodyBytes), 200))
 						}
 					}
 				}

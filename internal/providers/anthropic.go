@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
 
@@ -296,8 +298,11 @@ func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLM
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Log the response body preview for debugging
-	log.Printf("🔍 Debug: Response body preview: %s", string(bodyBytes[:min(100, len(bodyBytes))]))
+	// Operator debug preview, routed through redact.LogPreview so the
+	// raw model output is never persisted to logs in plaintext when
+	// pii_redact is enabled. See internal/redact/log_helper.go.
+	log.Printf("🔍 Debug: Response body preview: %s",
+		redact.LogPreview(context.Background(), string(bodyBytes), 100))
 
 	var response AnthropicResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {

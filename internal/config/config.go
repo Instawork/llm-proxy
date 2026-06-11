@@ -50,6 +50,71 @@ type FeaturesConfig struct {
 	APIKeyManagement APIKeyManagementConfig `yaml:"api_key_management"`
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
+	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
+}
+
+// PIIRedactConfig configures the proxy-side PII redactor that calls the
+// Presidio analyzer sidecar before bodies are written to logs / cost
+// transports / Datadog. The redactor never modifies the request that
+// goes to the upstream LLM — only the copy persisted for observability.
+//
+// Default behaviour is "disabled". Until you have a reachable sidecar in
+// the same task definition (see live/production/services/llm-proxy in
+// the infrastructure repo), leave this off.
+type PIIRedactConfig struct {
+	// Enabled gates the feature. When false, the middleware is not
+	// installed and no /analyze calls happen.
+	Enabled bool `yaml:"enabled"`
+
+	// AnalyzerURL is the base URL of the Presidio analyzer sidecar.
+	// Required when Enabled is true. Production: localhost in the same
+	// ECS task. docker-compose: http://presidio:3000.
+	AnalyzerURL string `yaml:"analyzer_url"`
+
+	// FailMode controls behaviour when the sidecar errors or times out.
+	//
+	//   "open"   (default) — log a warning and pass the request through
+	//                        un-redacted. The upstream LLM still serves
+	//                        the user; only the persisted copy may be
+	//                        un-redacted for that single request.
+	//   "closed"           — abort the request with 503. Pick this only
+	//                        when the regulatory cost of an un-redacted
+	//                        log line outweighs availability.
+	FailMode string `yaml:"fail_mode"`
+
+	// TimeoutMs caps each /analyze round trip. Default: 200ms.
+	// Tune downward in production after baselining p95 sidecar latency.
+	TimeoutMs int `yaml:"timeout_ms"`
+
+	// ScoreThreshold is the minimum Presidio confidence score for a
+	// span to be redacted. Default: 0.5.
+	ScoreThreshold float64 `yaml:"score_threshold"`
+
+	// EntityTypes scopes which recognizers run. Empty falls back to the
+	// audited default list in redact.DefaultEntityTypes. Pass a subset
+	// to shave latency on known-safe payload shapes — never widen it
+	// here, since redact.New filters out anything that isn't already on
+	// the in-code allowlist (a code review is the only way to extend it).
+	EntityTypes []string `yaml:"entity_types,omitempty"`
+
+	// Language forwards to the /analyze ``language`` parameter.
+	// Default: "en".
+	Language string `yaml:"language"`
+
+	// MaxBodyBytes caps the request body size we'll send to /analyze.
+	// Bodies above this threshold short-circuit with a WARN log
+	// (tagged path / provider / body_bytes / max_body_bytes) and
+	// flow upstream un-redacted (no redacted copy in context, so any
+	// log/cost transport that fingerprints request bodies falls back
+	// to metadata only for that request).
+	//
+	// Default: 0 → middleware applies its own 1048576-byte (1 MiB)
+	// default. That fits virtually all chat / completions / embeddings
+	// shapes and most vision payloads — the design bias is "redact
+	// almost everything and only let truly unusual uploads slip
+	// through". Lower this if sidecar latency becomes a problem;
+	// raise it if the WARN counter trends up in Datadog.
+	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
 }
 
 // CircuitBreakerConfig configures the proxy-side circuit breaker and retry
@@ -647,6 +712,43 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
+	// Validate PII redaction config if enabled so a typo in fail_mode or
+	// a missing analyzer_url is surfaced via --validate-config rather than
+	// at first request.
+	if c.Features.PIIRedact.Enabled {
+		if err := c.validatePIIRedactConfig(); err != nil {
+			return fmt.Errorf("invalid pii_redact configuration: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validatePIIRedactConfig enforces shape constraints on the pii_redact
+// feature block. Only invoked when Enabled is true.
+func (c *YAMLConfig) validatePIIRedactConfig() error {
+	r := c.Features.PIIRedact
+
+	if r.AnalyzerURL == "" {
+		return fmt.Errorf("analyzer_url is required when pii_redact is enabled")
+	}
+
+	switch r.FailMode {
+	case "", "open", "closed":
+		// "" defaults to "open" at construction time.
+	default:
+		return fmt.Errorf("fail_mode must be one of open, closed (got %q)", r.FailMode)
+	}
+
+	if r.TimeoutMs < 0 {
+		return fmt.Errorf("timeout_ms cannot be negative")
+	}
+	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
+		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)
+	}
+	if r.MaxBodyBytes < 0 {
+		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
 	return nil
 }
 

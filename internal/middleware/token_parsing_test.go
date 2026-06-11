@@ -1052,8 +1052,17 @@ func TestTokenParsingMiddleware_InvokesCallbacks_SkipsNil(t *testing.T) {
 
 // TestTokenParsingMiddleware_ParseErrorWithGzipBody_LogsDecompressedPreview
 // covers the operator-debugging helper: when ParseResponseMetadata errors and
-// the captured body starts with the gzip magic, the middleware decompresses a
-// short preview into the log.
+// the captured body starts with the gzip magic, the middleware decompresses
+// a short preview into the log.
+//
+// Since the audit fix that routed previews through redact.LogPreview, the
+// expectation is that:
+//
+//   - The "gzip-decompressed" log header still fires (so operators still
+//     see that the path was exercised), AND
+//   - The raw body content NEVER appears in the log when no global
+//     Redactor is configured. We assert both halves: header present,
+//     payload absent.
 func TestTokenParsingMiddleware_ParseErrorWithGzipBody_LogsDecompressedPreview(t *testing.T) {
 	gz := mustGzip(t, []byte("hello-from-gzip-preview-payload"))
 	p := &configurableProvider{parseErr: errors.New("boom")}
@@ -1067,14 +1076,18 @@ func TestTokenParsingMiddleware_ParseErrorWithGzipBody_LogsDecompressedPreview(t
 	if !strings.Contains(logOut, "gzip-decompressed") {
 		t.Errorf("expected gzip-decompressed preview log; got %s", logOut)
 	}
-	if !strings.Contains(logOut, "hello-from-gzip-preview-payload") {
-		t.Errorf("expected decompressed text in preview log; got %s", logOut)
+	if strings.Contains(logOut, "hello-from-gzip-preview-payload") {
+		t.Errorf("body content leaked into log without a Redactor configured; got %s", logOut)
+	}
+	if !strings.Contains(logOut, "pii_redact disabled") {
+		t.Errorf("expected length-only summary marker; got %s", logOut)
 	}
 }
 
-// TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview covers
-// the same debug-preview branch for non-gzipped bodies — the raw bytes go
-// straight into the log.
+// TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview is the
+// non-gzip companion of the test above. Same audit invariant applies: the
+// preview log line fires, but body bytes do not appear when the global
+// Redactor is unset.
 func TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview(t *testing.T) {
 	p := &configurableProvider{parseErr: errors.New("boom")}
 	logOut, _ := driveTokenParsing(t, p, "/openai/v1/chat/completions",
@@ -1083,10 +1096,13 @@ func TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview(t *testin
 			_, _ = w.Write([]byte("plain-text-error-body"))
 		})
 	if !strings.Contains(logOut, "Response body preview") {
-		t.Errorf("expected raw preview log; got %s", logOut)
+		t.Errorf("expected preview log header; got %s", logOut)
 	}
-	if !strings.Contains(logOut, "plain-text-error-body") {
-		t.Errorf("expected plain body content in preview; got %s", logOut)
+	if strings.Contains(logOut, "plain-text-error-body") {
+		t.Errorf("body content leaked into log without a Redactor configured; got %s", logOut)
+	}
+	if !strings.Contains(logOut, "pii_redact disabled") {
+		t.Errorf("expected length-only summary marker; got %s", logOut)
 	}
 }
 

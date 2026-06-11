@@ -21,6 +21,37 @@ features:
     flush_interval: 15 # Interval in seconds to flush pending records (default: 15)
   rate_limiting:
     enabled: false
+  # ---------------------------------------------------------------------------
+  # PII redaction (Presidio analyzer sidecar)
+  # ---------------------------------------------------------------------------
+  # Off by default. When enabled, the proxy redacts request bodies before they
+  # are written to logs / cost transports / Datadog. The unredacted body still
+  # reaches the upstream LLM so model quality is preserved.
+  pii_redact:
+    enabled: false
+    # Sidecar URL. ECS: same task, localhost. Local dev: http://presidio:3000
+    # over the docker-compose network.
+    analyzer_url: ""
+    # "open"   - log a warning and pass through unredacted on sidecar errors.
+    # "closed" - abort the request with 503. Use only when regulatory cost
+    #            of an unredacted log line outweighs availability.
+    fail_mode: "open"
+    timeout_ms: 200
+    score_threshold: 0.5
+    # Empty -> use redact.DefaultEntityTypes. Narrow this list to save
+    # latency on known-safe payload shapes, never widen it here — the
+    # in-code allowlist filters out anything that isn't already audited.
+    # entity_types: ["US_SSN", "PERSON", "EMAIL_ADDRESS"]
+    language: "en"
+    # Bodies larger than this skip redaction with a WARN log (tagged
+    # path / provider / body_bytes / max_body_bytes) and pass through
+    # to the upstream LLM intact — no redacted copy is stashed in
+    # context. 0 = use the middleware default of 1048576 bytes (1 MiB),
+    # which fits virtually all chat / completions / embeddings shapes
+    # and most vision payloads. Lower this only if sidecar latency
+    # becomes a problem; raise it if the WARN counter trends up in
+    # Datadog and you'd rather pay the redaction cost.
+    max_body_bytes: 0
 
 # =============================================================================
 # PROVIDER CONFIGURATIONS

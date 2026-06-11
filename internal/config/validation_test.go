@@ -138,3 +138,61 @@ func TestValidateCircuitBreaker_AllBranches(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatePIIRedact_AllBranches mirrors the existing rate-limiting /
+// circuit-breaker matrices. Each row is a single field flip from a known
+// good baseline so a regression in the validator surfaces immediately
+// without a verbose error message.
+func TestValidatePIIRedact_AllBranches(t *testing.T) {
+	good := PIIRedactConfig{
+		AnalyzerURL:    "http://presidio:3000",
+		FailMode:       "open",
+		TimeoutMs:      200,
+		ScoreThreshold: 0.5,
+	}
+	cases := []struct {
+		name string
+		mut  func(*PIIRedactConfig)
+		ok   bool
+	}{
+		{"good baseline", func(_ *PIIRedactConfig) {}, true},
+		{"empty fail_mode defaults to open", func(c *PIIRedactConfig) { c.FailMode = "" }, true},
+		{"fail_mode closed", func(c *PIIRedactConfig) { c.FailMode = "closed" }, true},
+		{"fail_mode invalid", func(c *PIIRedactConfig) { c.FailMode = "panic" }, false},
+		{"missing analyzer_url", func(c *PIIRedactConfig) { c.AnalyzerURL = "" }, false},
+		{"timeout zero is fine", func(c *PIIRedactConfig) { c.TimeoutMs = 0 }, true},
+		{"timeout negative", func(c *PIIRedactConfig) { c.TimeoutMs = -1 }, false},
+		{"score threshold zero is fine", func(c *PIIRedactConfig) { c.ScoreThreshold = 0 }, true},
+		{"score threshold > 1", func(c *PIIRedactConfig) { c.ScoreThreshold = 1.5 }, false},
+		{"score threshold negative", func(c *PIIRedactConfig) { c.ScoreThreshold = -0.1 }, false},
+		{"entity types narrowed ok", func(c *PIIRedactConfig) { c.EntityTypes = []string{"US_SSN"} }, true},
+		{"max_body_bytes zero is fine (uses default)", func(c *PIIRedactConfig) { c.MaxBodyBytes = 0 }, true},
+		{"max_body_bytes positive ok", func(c *PIIRedactConfig) { c.MaxBodyBytes = 1024 * 1024 }, true},
+		{"max_body_bytes negative", func(c *PIIRedactConfig) { c.MaxBodyBytes = -1 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := good
+			tc.mut(&r)
+			c := &YAMLConfig{Features: FeaturesConfig{PIIRedact: r}}
+			err := c.validatePIIRedactConfig()
+			if tc.ok {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
+
+// TestValidate_PIIRedactGatedByEnabled confirms that when pii_redact is
+// disabled, the validator does not even look at the rest of the block —
+// matching the cost-tracking / rate-limiting / circuit-breaker pattern.
+func TestValidate_PIIRedactGatedByEnabled(t *testing.T) {
+	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+	c.Features.PIIRedact = PIIRedactConfig{Enabled: false, FailMode: "panic"}
+	require.NoError(t, c.Validate())
+
+	c.Features.PIIRedact.Enabled = true
+	require.Error(t, c.Validate())
+}

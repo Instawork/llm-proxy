@@ -19,6 +19,11 @@ services:
       - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
       - CGO_ENABLED=0
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      # Override the YAML default analyzer_url for the docker-compose
+      # network. The sidecar service hostname `presidio` resolves only
+      # over this network; production ECS task definitions point at
+      # localhost in the same task instead.
+      - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health"]
@@ -28,6 +33,58 @@ services:
       start_period: 40s
     networks:
       - llm-proxy-network
+
+  # ---------------------------------------------------------------------------
+  # Presidio analyzer sidecar — input PII redaction
+  # ---------------------------------------------------------------------------
+  # Opt-in only. The image is ~8 GB (spaCy models) and slow to start, so
+  # we don't bring it up on every `docker compose up`. Engineers working
+  # on PII redaction enable it explicitly:
+  #
+  #     docker compose --profile pii_redact up
+  #
+  # CI does the same in any test that flips features.pii_redact.enabled
+  # to true. The proxy's pii_redact YAML block stays disabled by default,
+  # so existing flows keep working unchanged.
+  #
+  # The audited recognizer scope lives in two places that MUST agree:
+  #   1. internal/redact/redactor.go ``DefaultEntityTypes`` — wire-side
+  #      filter; Presidio only scores recognizers whose supported_entity
+  #      is in this list.
+  #   2. recognizers.yaml (mounted below) — registry-side config; loads
+  #      only the recognizers we actually use, including the custom
+  #      Instawork ones (INSTAWORK_DOB, INSTAWORK_CHECKR_CANDIDATE_ID,
+  #      INSTAWORK_FULL_ADDRESS) that don't ship in the stock image.
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: llm-proxy-presidio
+    profiles:
+      - pii_redact
+    ports:
+      # Host mapping is for local debugging only — the proxy reaches the
+      # sidecar via the docker-compose network at http://presidio:3000.
+      - "${PRESIDIO_PORT:-5004}:3000"
+    volumes:
+      # CRITICAL: container path uses underscore, not hyphen. Presidio
+      # reads RECOGNIZER_REGISTRY_CONF_FILE (default
+      # ``presidio_analyzer/conf/default_recognizers.yaml``) at startup;
+      # mounting to the hyphenated path silently no-ops and the sidecar
+      # comes up with the stock recognizer set (UK_NHS, MAC_ADDRESS,
+      # MEDICAL_LICENSE, URL, CRYPTO, DATE_TIME included; INSTAWORK_DOB /
+      # INSTAWORK_CHECKR_CANDIDATE_ID / INSTAWORK_FULL_ADDRESS missing).
+      # The wire-side DefaultEntityTypes filter mitigates the noisy
+      # defaults but custom Instawork recognizers literally cannot fire
+      # without this mount.
+      - ./recognizers.yaml:/app/presidio_analyzer/conf/default_recognizers.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
 
   # Datadog Agent for monitoring and metrics collection
   datadog-agent:
