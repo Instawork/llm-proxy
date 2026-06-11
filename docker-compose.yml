@@ -19,6 +19,8 @@ services:
       - COST_TRACKING_FILE=/app/logs/cost-tracking.jsonl
       - CGO_ENABLED=0
       - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - LLM_PROXY_ADMIN_SESSION_SECRET=${LLM_PROXY_ADMIN_SESSION_SECRET:-dev-local-session-secret-not-for-prod}
+      - LLM_PROXY_ADMIN_DEV_USER_EMAIL=${LLM_PROXY_ADMIN_DEV_USER_EMAIL:-dev@instawork.com}
       # Override the YAML default analyzer_url for the docker-compose
       # network. The sidecar service hostname `presidio` resolves only
       # over this network; production ECS task definitions point at

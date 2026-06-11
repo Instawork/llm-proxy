@@ -16,7 +16,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const onLogout = async () => {
     await logout.mutateAsync();
-    window.location.href = "/admin/auth/login";
+    window.location.href = "/admin/login";
   };
 
   return (

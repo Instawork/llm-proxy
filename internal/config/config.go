@@ -129,6 +129,9 @@ type AdminDashboardConfig struct {
 	AllowedDomain string `yaml:"allowed_domain"`
 	// DevCORSOrigin allows the Vite dev server to call the admin API.
 	DevCORSOrigin string `yaml:"dev_cors_origin"`
+	// DevBypassLogin enables POST /admin/auth/dev-login for local development
+	// without Google OAuth. Must stay false outside dev configs.
+	DevBypassLogin bool `yaml:"dev_bypass_login"`
 }
 
 // CircuitBreakerConfig configures the proxy-side circuit breaker and retry

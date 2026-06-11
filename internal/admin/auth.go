@@ -6,11 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
@@ -33,19 +36,60 @@ type authConfig struct {
 }
 
 type authenticator struct {
-	oauthConfig    *oauth2.Config
-	verifier       *oidc.IDTokenVerifier
-	sessionStore   *sessions.CookieStore
-	allowedDomain  string
-	redirectURLEnv string
-	logger         *slog.Logger
+	oauthConfig       *oauth2.Config
+	verifier          *oidc.IDTokenVerifier
+	sessionStore      *sessions.CookieStore
+	allowedDomain     string
+	redirectURLEnv    string
+	devBypass         bool
+	devFrontendOrigin string
+	logger            *slog.Logger
 }
 
-func newAuthenticator(logger *slog.Logger, allowedDomain string) (*authenticator, error) {
+func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig) (*authenticator, error) {
+	allowedDomain := adminCfg.AllowedDomain
 	if allowedDomain == "" {
 		allowedDomain = "instawork.com"
 	}
-	cfg, err := loadAuthConfig(allowedDomain)
+
+	sessionSecret := os.Getenv("LLM_PROXY_ADMIN_SESSION_SECRET")
+	if sessionSecret == "" {
+		if adminCfg.DevBypassLogin {
+			sessionSecret = "dev-local-session-secret-not-for-prod"
+			logger.Warn("admin auth: using default dev session secret; set LLM_PROXY_ADMIN_SESSION_SECRET for a stable cookie")
+		} else {
+			return nil, fmt.Errorf("LLM_PROXY_ADMIN_SESSION_SECRET is required")
+		}
+	}
+
+	sessionStore := sessions.NewCookieStore([]byte(sessionSecret))
+	sessionStore.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   86400 * 7,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   os.Getenv("LLM_PROXY_ADMIN_SESSION_SECURE") == "1",
+	}
+
+	auth := &authenticator{
+		sessionStore:      sessionStore,
+		allowedDomain:     allowedDomain,
+		devBypass:         adminCfg.DevBypassLogin,
+		devFrontendOrigin: adminCfg.DevCORSOrigin,
+		logger:            logger,
+	}
+
+	clientID := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET")
+	if clientID == "" || clientSecret == "" {
+		if adminCfg.DevBypassLogin {
+			logger.Warn("admin auth: Google OAuth not configured; dev bypass login only")
+			return auth, nil
+		}
+		return nil, fmt.Errorf("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID and LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET are required")
+	}
+
+	cfg, err := loadAuthConfig(allowedDomain, clientID, clientSecret, sessionSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -56,42 +100,19 @@ func newAuthenticator(logger *slog.Logger, allowedDomain string) (*authenticator
 		return nil, fmt.Errorf("oidc provider: %w", err)
 	}
 
-	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.clientID})
-	oauthConfig := &oauth2.Config{
+	auth.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.clientID})
+	auth.oauthConfig = &oauth2.Config{
 		ClientID:     cfg.clientID,
 		ClientSecret: cfg.clientSecret,
 		RedirectURL:  cfg.redirectURL,
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 	}
-
-	sessionStore := sessions.NewCookieStore([]byte(cfg.sessionSecret))
-	sessionStore.Options = &sessions.Options{
-		Path:     "/",
-		MaxAge:   86400 * 7,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   os.Getenv("LLM_PROXY_ADMIN_SESSION_SECURE") == "1",
-	}
-
-	return &authenticator{
-		oauthConfig:    oauthConfig,
-		verifier:       verifier,
-		sessionStore:   sessionStore,
-		allowedDomain:  cfg.allowedDomain,
-		redirectURLEnv: cfg.redirectURL,
-		logger:         logger,
-	}, nil
+	auth.redirectURLEnv = cfg.redirectURL
+	return auth, nil
 }
 
-func loadAuthConfig(allowedDomain string) (authConfig, error) {
-	clientID := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID")
-	clientSecret := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET")
-	sessionSecret := os.Getenv("LLM_PROXY_ADMIN_SESSION_SECRET")
-	if clientID == "" || clientSecret == "" || sessionSecret == "" {
-		return authConfig{}, fmt.Errorf("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID, LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET, and LLM_PROXY_ADMIN_SESSION_SECRET are required")
-	}
-
+func loadAuthConfig(allowedDomain, clientID, clientSecret, sessionSecret string) (authConfig, error) {
 	domain := os.Getenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN")
 	if domain == "" {
 		if allowedDomain != "" {
@@ -122,6 +143,11 @@ func (a *authenticator) redirectURL(r *http.Request) string {
 }
 
 func (a *authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if a.oauthConfig == nil {
+		http.Error(w, "google oauth not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	state, err := randomState()
 	if err != nil {
 		a.logger.Error("admin auth: failed to generate oauth state", "error", err)
@@ -143,7 +169,79 @@ func (a *authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
+type devLoginRequest struct {
+	Redirect string `json:"redirect"`
+}
+
+func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
+	if !a.devBypass {
+		http.NotFound(w, r)
+		return
+	}
+
+	email := os.Getenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL")
+	if email == "" {
+		email = "dev@instawork.com"
+	}
+
+	redirectTarget := r.URL.Query().Get("redirect")
+	if redirectTarget == "" && r.Body != nil {
+		var req devLoginRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err == nil {
+			redirectTarget = req.Redirect
+		}
+	}
+
+	session, _ := a.sessionStore.Get(r, sessionName)
+	session.Values[sessionUserEmail] = email
+	session.Values[sessionUserName] = "Dev User"
+	if err := session.Save(r, w); err != nil {
+		a.logger.Error("admin auth: dev login session save failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	a.logger.Info("admin auth: dev bypass login", "email", email)
+
+	if safe, target := sanitizeRedirect(redirectTarget, a.devFrontendOrigin); safe {
+		writeJSON(w, http.StatusOK, map[string]string{"redirect": target, "email": email})
+		return
+	}
+
+	defaultRedirect := "/admin/"
+	if a.devFrontendOrigin != "" {
+		defaultRedirect = strings.TrimRight(a.devFrontendOrigin, "/") + "/admin/"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"redirect": defaultRedirect, "email": email})
+}
+
+func sanitizeRedirect(raw, devOrigin string) (bool, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false, ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false, ""
+	}
+	if devOrigin != "" {
+		dev, err := url.Parse(devOrigin)
+		if err == nil && strings.EqualFold(u.Scheme, dev.Scheme) && strings.EqualFold(u.Host, dev.Host) {
+			return true, raw
+		}
+	}
+	if strings.EqualFold(u.Hostname(), "localhost") || strings.EqualFold(u.Hostname(), "127.0.0.1") {
+		return true, raw
+	}
+	return false, ""
+}
+
 func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
+	if a.oauthConfig == nil {
+		http.Error(w, "google oauth not configured", http.StatusUnauthorized)
+		return
+	}
+
 	session, err := a.sessionStore.Get(r, sessionName)
 	if err != nil {
 		a.logger.Error("admin auth: session read failed", "error", err)
@@ -216,7 +314,11 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/admin/", http.StatusFound)
+	redirectTarget := "/admin/"
+	if a.devFrontendOrigin != "" {
+		redirectTarget = strings.TrimRight(a.devFrontendOrigin, "/") + "/admin/"
+	}
+	http.Redirect(w, r, redirectTarget, http.StatusFound)
 }
 
 func (a *authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {

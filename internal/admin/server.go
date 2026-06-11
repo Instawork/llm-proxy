@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/gorilla/mux"
 )
 
@@ -14,11 +15,11 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 		logger = slog.Default()
 	}
 
-	allowedDomain := ""
+	adminCfg := config.AdminDashboardConfig{}
 	if deps.YAMLConfig != nil {
-		allowedDomain = deps.YAMLConfig.Features.AdminDashboard.AllowedDomain
+		adminCfg = deps.YAMLConfig.Features.AdminDashboard
 	}
-	auth, err := newAuthenticator(logger, allowedDomain)
+	auth, err := newAuthenticator(logger, adminCfg)
 	if err != nil {
 		logger.Error("admin dashboard disabled: auth setup failed", "error", err)
 		return
@@ -28,9 +29,16 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 
 	adminRouter := r.PathPrefix("/admin").Subrouter()
 
-	adminRouter.HandleFunc("/auth/login", auth.handleLogin).Methods(http.MethodGet)
-	adminRouter.HandleFunc("/auth/callback", auth.handleCallback).Methods(http.MethodGet)
-	adminRouter.HandleFunc("/auth/logout", auth.handleLogout).Methods(http.MethodPost)
+	authRouter := adminRouter.PathPrefix("/auth").Subrouter()
+	if adminCfg.DevCORSOrigin != "" {
+		authRouter.Use(h.corsMiddleware)
+	}
+	authRouter.HandleFunc("/login", auth.handleLogin).Methods(http.MethodGet)
+	authRouter.HandleFunc("/callback", auth.handleCallback).Methods(http.MethodGet)
+	authRouter.HandleFunc("/logout", auth.handleLogout).Methods(http.MethodPost, http.MethodOptions)
+	if adminCfg.DevBypassLogin {
+		authRouter.HandleFunc("/dev-login", auth.handleDevLogin).Methods(http.MethodPost, http.MethodOptions)
+	}
 
 	api := adminRouter.PathPrefix("/api").Subrouter()
 	api.Use(h.corsMiddleware)

@@ -33,7 +33,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (response.status === 401) {
     const redirect = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = `/admin/auth/login?redirect=${redirect}`;
+    window.location.href = `/admin/login?redirect=${redirect}`;
     throw new APIClientError(401, "Unauthorized");
   }
 

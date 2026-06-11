@@ -2,25 +2,26 @@
 
 Vite + React admin UI for the LLM Proxy. The production build is embedded into the Go binary and served under `/admin/`.
 
-## Local development
+## Local development (Option A — Vite + Go API)
 
-1. Start the proxy with the admin dashboard enabled in config (`features.admin_dashboard.enabled: true`).
-2. Set `features.admin_dashboard.dev_cors_origin` to `http://localhost:5173` so the Vite dev server can call the API.
-3. Export OAuth/session env vars (see `internal/admin` docs in the main repo).
-4. Install and run the UI:
+1. From the repo root, start the proxy and Vite dev server:
 
 ```bash
-cd web
-npm install
-npm run dev
+docker compose --profile admin-ui up llm-proxy web
 ```
 
-Open http://localhost:5173/admin/ — API calls go to `http://localhost:9002` with cookies.
+2. `configs/dev.yml` enables the admin dashboard and **dev bypass login** (no Google OAuth required locally).
+3. Open http://localhost:5173/admin/ and click **Dev login (local session)**.
 
-Alternatively, use docker compose from the repo root:
+API calls go to `http://localhost:9002` with cookies. CORS is configured via `features.admin_dashboard.dev_cors_origin`.
+
+Optional Google OAuth for local testing: set `LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID`, `LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET`, and `LLM_PROXY_ADMIN_OAUTH_REDIRECT_URL=http://localhost:9002/admin/auth/callback`.
+
+Alternatively, run Vite on the host:
 
 ```bash
-docker compose up web llm-proxy
+docker compose up llm-proxy
+cd web && npm install && npm run dev
 ```
 
 ## Build

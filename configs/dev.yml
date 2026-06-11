@@ -43,6 +43,9 @@ features:
     global_rate_limit_escalation_window: 300
     retry_contribution_mode: "log"
     test_mode_enabled: true
+  admin_dashboard:
+    enabled: true
+    dev_bypass_login: true
   rate_limiting:
     enabled: true
     backend: "memory"
