@@ -39,7 +39,13 @@ func mountSPA(adminRouter *mux.Router) {
 			serveSPAIndex(w, dist)
 			return
 		}
-		if _, err := fs.Stat(dist, strings.TrimPrefix(path, "/")); err != nil {
+		rel := strings.TrimPrefix(path, "/")
+		if _, err := fs.Stat(dist, rel); err != nil {
+			// Missing hashed bundles must 404 — serving index.html breaks JS module loading.
+			if strings.HasPrefix(rel, "assets/") {
+				http.NotFound(w, r)
+				return
+			}
 			serveSPAIndex(w, dist)
 			return
 		}

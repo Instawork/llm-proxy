@@ -40,6 +40,11 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 		authRouter.HandleFunc("/dev-login", auth.handleDevLogin).Methods(http.MethodPost, http.MethodOptions)
 	}
 
+	publicAPI := adminRouter.PathPrefix("/api").Subrouter()
+	publicAPI.Use(h.corsMiddleware)
+	// Share read is public — the UUID in the URL is the capability token.
+	publicAPI.HandleFunc("/share/{id}", h.handleGetShare).Methods(http.MethodGet, http.MethodOptions)
+
 	api := adminRouter.PathPrefix("/api").Subrouter()
 	api.Use(h.corsMiddleware)
 	api.Use(auth.requireSession)
@@ -57,7 +62,6 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.HandleFunc("/usage", h.handleUsage).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/pii", h.handlePII).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/share", h.handleCreateShare).Methods(http.MethodPost, http.MethodOptions)
-	api.HandleFunc("/share/{id}", h.handleGetShare).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/share/{id}", h.handleDeleteShare).Methods(http.MethodDelete, http.MethodOptions)
 
 	mountSPA(adminRouter)

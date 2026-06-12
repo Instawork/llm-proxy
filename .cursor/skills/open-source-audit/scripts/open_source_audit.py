@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-
 DEFAULT_TERMS_FILE = Path(".cursor/open-source-audit/blocked-terms.txt")
 MAX_FILE_BYTES = 1_000_000
 HOOK_FINDING_LIMIT = 20
@@ -192,7 +191,37 @@ def line_is_allowed(line: str) -> bool:
     return any(token in line for token in PLACEHOLDER_ALLOWLIST)
 
 
-def scan_file(path: Path, root: Path, rules: list[tuple[str, re.Pattern[str]]]) -> list[Finding]:
+def load_module_path(root: Path) -> str:
+    go_mod = root / "go.mod"
+    if not go_mod.exists():
+        return ""
+    for line in go_mod.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("module "):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                return parts[1]
+    return ""
+
+
+def line_uses_self_module(line: str, module_path: str) -> bool:
+    """Skip blocked-term hits on canonical Go imports of this repository's module."""
+    if not module_path or module_path not in line:
+        return False
+    return bool(
+        re.search(
+            rf'["\']{re.escape(module_path)}(?:/[^"\']*)?["\']',
+            line,
+        )
+    )
+
+
+def scan_file(
+    path: Path,
+    root: Path,
+    rules: list[tuple[str, re.Pattern[str]]],
+    module_path: str,
+) -> list[Finding]:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -201,7 +230,7 @@ def scan_file(path: Path, root: Path, rules: list[tuple[str, re.Pattern[str]]]) 
     findings: list[Finding] = []
     rel_path = str(path.relative_to(root))
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if line_is_allowed(line):
+        if line_is_allowed(line) or line_uses_self_module(line, module_path):
             continue
         for rule_name, pattern in rules:
             match = pattern.search(line)
@@ -287,11 +316,12 @@ def main() -> int:
         *compile_term_rules(load_terms(root, term_files)),
     ]
 
+    module_path = load_module_path(root)
     files = tracked_files(root) if args.all else changed_files(root)
     findings: list[Finding] = []
     for path in files:
         if should_scan(path, root):
-            findings.extend(scan_file(path, root, rules))
+            findings.extend(scan_file(path, root, rules, module_path))
 
     findings.sort(key=lambda item: (item.path, item.line, item.rule))
 
@@ -311,4 +341,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
