@@ -28,6 +28,7 @@ func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 
 	yamlCfg := config.GetDefaultYAMLConfig()
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
+	yamlCfg.Features.AdminDashboard.DevCORSOrigin = "http://localhost:5173"
 
 	auth, err := newAuthenticator(slog.Default(), yamlCfg.Features.AdminDashboard)
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func TestHandleCreateShare(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["url"], "http://localhost:9002/admin/share/")
+	assert.Contains(t, resp["url"], "http://localhost:5173/admin/share/")
 	assert.Equal(t, "openai", resp["provider"])
 	assert.NotEmpty(t, resp["id"])
 	assert.NotNil(t, resp["expires_at"])
@@ -128,7 +129,7 @@ func TestHandleGetShare(t *testing.T) {
 	assert.NotEmpty(t, resp["expires_at"])
 }
 
-func TestHandleGetShare_Unauthorized(t *testing.T) {
+func TestHandleGetShare_PublicAccess(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()
 
@@ -140,11 +141,13 @@ func TestHandleGetShare_Unauthorized(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/share/"+link.ID(), nil)
 	req = mux.SetURLVars(req, map[string]string{"id": link.ID()})
 	rec := httptest.NewRecorder()
+	h.handleGetShare(rec, req)
 
-	unauth := h.auth.requireSession(http.HandlerFunc(h.handleGetShare))
-	unauth.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, key.PK, resp["key"])
 }
 
 func TestKeyToResponse_IncludesRateLimits(t *testing.T) {

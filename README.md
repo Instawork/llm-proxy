@@ -1,5 +1,7 @@
 # LLM Proxy
 
+[![CircleCI](https://circleci.com/gh/Instawork/llm-proxy.svg?style=svg)](https://circleci.com/gh/Instawork/llm-proxy)
+
 <img height="250" alt="Screenshot 2025-09-08 at 10 10 08 AM" src="https://github.com/user-attachments/assets/5c6ecf7f-14bf-4d67-ba48-f250c80e3205" />
 
 A simple, Go-based alternative to the `litellm` proxy, without all the extra stuff you don't need! A modular reverse proxy that forwards requests to various LLM providers (OpenAI, Anthropic, Gemini, AWS Bedrock) using Go and the Gorilla web toolkit.
@@ -138,11 +140,37 @@ print(llm.invoke("hello").content)
 
 ## Testing
 
+### Unit test coverage
+
+_Updated: 2026-06-12 — refresh with `make test-cover` (`go test -race ./internal/... -short -skip Integration`)._
+
+| Package | Coverage |
+|---------|----------|
+| **Total (`./internal/...`)** | **78.5%** |
+| `internal/admin` | 37.1% |
+| `internal/adminrollup` | 73.4% |
+| `internal/apikeys` | 85.1% |
+| `internal/circuit` | 85.3% |
+| `internal/config` | 88.5% |
+| `internal/cost` | 81.7% |
+| `internal/coststats` | 95.5% |
+| `internal/history` | 78.6% |
+| `internal/middleware` | 89.1% |
+| `internal/pii` | 81.6% |
+| `internal/providers` | 85.9% |
+| `internal/ratelimit` | 85.1% |
+| `internal/ratelimitstats` | 80.4% |
+| `internal/redact` | 89.3% |
+| `internal/usagestats` | 100.0% |
+
 The project includes comprehensive integration tests for all providers:
 
 ```bash
 # Run all tests
 make test-all
+
+# Run unit tests with coverage report (coverage.out)
+make test-cover
 
 # Run tests for specific providers
 make test-openai
@@ -188,7 +216,7 @@ that the client computes and the proxy forwards verbatim.
 - Disabled by default. Enable via config: see `configs/base.yml` and `configs/dev.yml`.
 - Supports provisional token estimation with post-response reconciliation using `X-LLM-Input-Tokens` (input tokens only).
 - Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
-- Redis backend is currently not supported; only the in-process memory backend is available.
+- Set `backend: "redis"` and configure `redis.url` (or `redis.address` for dev) for multi-instance rate limiting. Dev docker-compose uses logical DB 4 on the bundled Redis service; production uses `${REDIS_URL}` from SSM (`/llm-proxy/redis_url`).
 
 Minimal dev example (see `configs/dev.yml` for a full setup):
 
@@ -253,7 +281,7 @@ The 503 status and `X-Llm-Proxy-Error-Class` header are always set, but on their
 1. **5xx is ambiguous.** The proxy streams real provider 5xx responses straight through (Anthropic 529, OpenAI 500/502/503/504, Gemini 500/503, …). A client that only looks at status code cannot tell a passthrough upstream 503 from a proxy-synthesised "circuit open" 503 — they have very different retry / fallback semantics.
 2. **4xx is wrong.** The caller did nothing wrong; the upstream is degraded. 4xx would break SDK retry logic that (correctly) refuses to retry 4xx.
 3. **A novel status code (e.g. 599) is hostile.** Many reverse proxies, CDNs, and HTTP clients coerce unknown codes to 500 or strip them entirely. The OpenAI / Anthropic / Google SDKs all map any ≥500 response into a generic `APIError` / `ServerError` class, so a custom code buys you nothing downstream.
-4. **Custom headers get stripped by SDK exception wrappers.** By the time an HTTPS error propagates up through e.g. the OpenAI Python SDK or LangChain, the caller typically only sees `str(exception)` (the body). Response headers are usually only accessible if the caller catches a specific, provider-native exception type *before* any framework wraps it. A body substring survives every wrapping layer.
+4. **Custom headers get stripped by SDK exception wrappers.** By the time an HTTPS error propagates up through e.g. the OpenAI Python SDK or LangChain, the caller typically only sees `str(exception)` (the body). Response headers are usually only accessible if the caller catches a specific, provider-native exception type _before_ any framework wraps it. A body substring survives every wrapping layer.
 
 So the contract is **503 + header + body marker, and clients can key off any of them**. The body marker is the most reliable because exception message text is the lowest common denominator across every SDK stack.
 
@@ -516,6 +544,66 @@ Tests are organized by provider:
 - **`gemini_test.go`**: Gemini integration tests (streaming and non-streaming)
 - **`common_test.go`**: Health check and environment variable tests
 - **`test_helpers.go`**: Shared test utilities
+
+### Historical event archive (row history)
+
+Each observability domain (cost, PII, usage, rate limit) exposes three independent backends:
+
+- **Memory** — in-process `Recorder` snapshots for the admin dashboard
+- **Redis** — daily rollups via `features.admin_dashboard.rollups` (aggregates only)
+- **Row history** — buffered gzipped JSONL via `features.history` (raw events for later debugging)
+
+Row history is off by default (`backend: none`). When enabled, events buffer in memory and flush on **max records**, **max bytes**, a **time interval** (default 5 minutes), and **graceful shutdown** (SIGTERM/SIGINT). Rate-limit history archives **blocked requests only**; allowed traffic stays in memory + Redis aggregates.
+
+Config lives under `features.history` in YAML:
+
+```yaml
+features:
+  history:
+    backend: s3            # none | local | s3
+    role: sidecar          # sidecar | global (baked into filenames)
+    streams: [cost, pii, usage, ratelimit]
+    max_records: 1000
+    max_bytes: 8388608
+    max_age_seconds: 300
+    gzip: true
+    local:
+      dir: logs/history
+    s3:
+      bucket: instawork-llm-proxy-history
+      prefix: llm-proxy
+      region: us-east-1
+```
+
+Object keys are partition-friendly and multi-writer safe:
+
+`s3://<bucket>/<prefix>/<stream>/dt=YYYY-MM-DD/hour=HH/<ts>-<role>-<instanceID>-<seq>-<rand>.jsonl.gz`
+
+`instanceID` resolves from `HISTORY_INSTANCE_ID`, then `HOSTNAME`, then the host name (sanitized).
+
+#### Athena (JSON SerDe)
+
+One external table per stream. Example for cost events:
+
+```sql
+CREATE EXTERNAL TABLE llm_proxy_cost (
+  timestamp string, provider string, model string, endpoint string,
+  input_tokens int, output_tokens int, total_tokens int, total_cost double,
+  user_id string, request_id string
+)
+PARTITIONED BY (dt string, hour string)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 's3://instawork-llm-proxy-history/llm-proxy/cost/'
+TBLPROPERTIES (
+  'projection.enabled'='true',
+  'projection.dt.type'='date', 'projection.dt.format'='yyyy-MM-dd',
+  'projection.dt.range'='2026-01-01,NOW', 'projection.dt.interval'='1','projection.dt.interval.unit'='DAYS',
+  'projection.hour.type'='integer', 'projection.hour.range'='0,23', 'projection.hour.digits'='2',
+  'storage.location.template'='s3://instawork-llm-proxy-history/llm-proxy/cost/dt=${dt}/hour=${hour}/'
+);
+```
+
+Repeat for `pii`, `usage`, and `ratelimit` streams by changing the `LOCATION` and `storage.location.template` path segment. Query `role` and `instanceID` from the `"$path"` pseudo-column when needed.
 
 ### Middleware
 

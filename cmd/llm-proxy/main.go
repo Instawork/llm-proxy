@@ -23,10 +23,12 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/coststats"
+	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
+	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/Instawork/llm-proxy/internal/usagestats"
 	"github.com/gorilla/mux"
@@ -106,6 +108,12 @@ var (
 
 // Global rate limiter instance
 var globalRateLimiter ratelimit.RateLimiter
+
+// Global rate-limit stats recorder (memory + optional redis/history rollups).
+var globalRateLimitStatsRecorder *ratelimitstats.Recorder
+
+// Shared row-history sink (local JSONL or S3).
+var globalHistorySink *history.Sink
 
 // Global in-process PII redaction stats recorder. Populated when the PII
 // redaction middleware is installed; surfaced via /admin/api/pii. Stores
@@ -808,6 +816,44 @@ func usageSummaryFunc() func() map[string]interface{} {
 	return globalUsageStatsRecorder.Snapshot
 }
 
+func rateLimitSummaryFunc() func() map[string]interface{} {
+	if globalRateLimitStatsRecorder == nil {
+		return nil
+	}
+	return globalRateLimitStatsRecorder.Snapshot
+}
+
+func initHistory(yamlConfig *config.YAMLConfig) {
+	hc := yamlConfig.Features.History
+	if hc.Backend == "" || strings.EqualFold(hc.Backend, "none") {
+		logger.Info("History sink: disabled (backend: none)")
+		return
+	}
+	sink, err := history.New(history.ConfigFromYAML(hc, logger))
+	if err != nil {
+		logger.Warn("History sink: disabled", "error", err)
+		return
+	}
+	if sink == nil {
+		return
+	}
+	globalHistorySink = sink
+	streams := hc.Streams
+	if globalCostStatsRecorder != nil && history.StreamEnabled(streams, history.StreamCost) {
+		globalCostStatsRecorder.BindHistory(sink, history.StreamCost)
+	}
+	if globalPIIRecorder != nil && history.StreamEnabled(streams, history.StreamPII) {
+		globalPIIRecorder.BindHistory(sink, history.StreamPII)
+	}
+	if globalUsageStatsRecorder != nil && history.StreamEnabled(streams, history.StreamUsage) {
+		globalUsageStatsRecorder.BindHistory(sink, history.StreamUsage)
+	}
+	if globalRateLimitStatsRecorder != nil && history.StreamEnabled(streams, history.StreamRateLimit) {
+		globalRateLimitStatsRecorder.BindHistory(sink, history.StreamRateLimit)
+	}
+	logger.Info("History sink: ENABLED", "backend", hc.Backend, "streams", streams)
+}
+
 func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	rollupCfg := adminrollup.ConfigFromYAML(yamlConfig.Features.AdminDashboard)
 	rollupCfg.Logger = logger
@@ -835,6 +881,9 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	}
 	if globalUsageStatsRecorder != nil {
 		globalUsageStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUsage))
+	}
+	if globalRateLimitStatsRecorder != nil {
+		globalRateLimitStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricRateLimit))
 	}
 	if globalCircuitStore != nil {
 		globalAdminRollupStop = make(chan struct{})
@@ -1119,6 +1168,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			logger.Error("Failed to initialize rate limiter", "error", err)
 		} else {
 			globalRateLimiter = lim
+			globalRateLimitStatsRecorder = ratelimitstats.NewRecorder()
 			// Layer dynamic per-key rate-limit overrides (from the API-key
 			// record) on top of static YAML overrides, if the backend and
 			// store both support it.
@@ -1247,6 +1297,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	initAdminRollups(yamlConfig)
+	initHistory(yamlConfig)
 
 	// Add test-mode middleware when enabled (integration tests only).
 	//
@@ -1276,7 +1327,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	r.Use(middleware.LoggingMiddleware(globalProviderManager))
 	if globalRateLimiter != nil {
-		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter))
+		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter, globalRateLimitStatsRecorder))
 	}
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
 
@@ -1327,6 +1378,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			PIISummary:       piiSummaryFunc(),
 			CostSummary:      costSummaryFunc(),
 			UsageSummary:     usageSummaryFunc(),
+			RateLimitSummary: rateLimitSummaryFunc(),
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}
@@ -1419,6 +1471,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	gracefulShutdown(server)
 }
 
+// closeGlobalHistorySink flushes buffered row history on shutdown.
+func closeGlobalHistorySink() error {
+	if globalHistorySink == nil {
+		return nil
+	}
+	return globalHistorySink.Close()
+}
+
 // gracefulShutdown drains the HTTP server, stops async cost-tracking workers,
 // and releases any Redis-backed circuit-breaker resources. Each step is best
 // effort — failures are logged and shutdown proceeds — because at this point
@@ -1448,6 +1508,17 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalUsageStatsRecorder != nil {
 		globalUsageStatsRecorder.FlushRollup()
+	}
+	if globalRateLimitStatsRecorder != nil {
+		globalRateLimitStatsRecorder.FlushRollup()
+	}
+	if globalHistorySink != nil {
+		logger.Info("🔄 Flushing history sink...")
+		if err := closeGlobalHistorySink(); err != nil {
+			logger.Warn("History sink: close failed", "error", err)
+		} else {
+			logger.Info("✅ History sink flushed")
+		}
 	}
 	if globalAdminRollupStop != nil {
 		close(globalAdminRollupStop)

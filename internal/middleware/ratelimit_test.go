@@ -60,7 +60,7 @@ func TestRateLimitingRequestsPerMinute(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
-	h := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -114,7 +114,7 @@ func TestRateLimitingTokensPerMinute(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
-	h := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Simulate final token count header set by TokenParsingMiddleware (input tokens only)
 		w.Header().Set("X-LLM-Input-Tokens", "25")
 		w.WriteHeader(200)
@@ -174,7 +174,7 @@ func TestRateLimitingUserScoped(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
-	h := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -235,7 +235,7 @@ func TestRateLimitingMiddleware_DisabledConfig_ReturnsNoOp(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			handlerCalled := 0
-			h := RateLimitingMiddleware(pm, tc.cfg, tc.limiter)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := RateLimitingMiddleware(pm, tc.cfg, tc.limiter, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				handlerCalled++
 				w.WriteHeader(200)
 			}))
@@ -261,7 +261,7 @@ func TestRateLimitingMiddleware_NoMatchingProvider_PassesThrough(t *testing.T) {
 	pm := providers.NewProviderManager() // no providers registered
 
 	handlerCalled := false
-	h := RateLimitingMiddleware(pm, cfg, ratelimit.NewMemoryLimiter(cfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, ratelimit.NewMemoryLimiter(cfg), nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(200)
 	}))
@@ -307,7 +307,7 @@ func TestRateLimitingMiddleware_CheckAndReserveError_FailsOpen(t *testing.T) {
 	pm.RegisterProvider(&fakeProvider{})
 
 	handlerRan := false
-	h := RateLimitingMiddleware(pm, cfg, erroringLimiter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, erroringLimiter{}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlerRan = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -349,7 +349,7 @@ func TestRateLimitingMiddleware_AdjustError_LoggedButRequestSucceeds(t *testing.
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
-	chain := RateLimitingMiddleware(pm, cfg, adjustErroringLimiter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	chain := RateLimitingMiddleware(pm, cfg, adjustErroringLimiter{}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Setting the input-tokens header is what triggers Adjust to run.
 		w.Header().Set("X-LLM-Input-Tokens", "42")
 		w.WriteHeader(http.StatusOK)
@@ -401,7 +401,7 @@ func TestRateLimitingMiddleware_CancelsReservationOnUpstream5xx(t *testing.T) {
 	pm.RegisterProvider(&fakeProvider{})
 
 	lim := &cancelRecordingLimiter{}
-	chain := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	chain := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 
@@ -427,7 +427,7 @@ func TestRateLimitingMiddleware_DoesNotCancelOnSuccess(t *testing.T) {
 	pm.RegisterProvider(&fakeProvider{})
 
 	lim := &cancelRecordingLimiter{}
-	chain := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	chain := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -465,7 +465,7 @@ func TestRateLimitingMiddleware_ExtractedModelFlowsIntoScopeKeys(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&modelExtractingProvider{})
 
-	h := RateLimitingMiddleware(pm, cfg, ratelimit.NewMemoryLimiter(cfg))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, ratelimit.NewMemoryLimiter(cfg), nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	}))
 
@@ -523,7 +523,7 @@ func TestRateLimitingAPIKeyScoped(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
-	h := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	}))

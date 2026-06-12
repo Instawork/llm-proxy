@@ -74,6 +74,28 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
+  # ---------------------------------------------------------------------------
+  # Row history (gzipped JSONL archive — independent of Redis rollups)
+  # ---------------------------------------------------------------------------
+  # Off by default. When enabled, raw per-request events are buffered and
+  # flushed to local disk or S3 for later Athena debugging. Redis rollups
+  # (admin_dashboard.rollups) remain aggregates-only.
+  # history:
+  #   backend: s3            # none | local | s3
+  #   role: sidecar          # sidecar | global (baked into filenames)
+  #   # instance_id: ""      # optional; else HISTORY_INSTANCE_ID / HOSTNAME
+  #   streams: [cost, pii, usage, ratelimit]
+  #   max_records: 1000
+  #   max_bytes: 8388608
+  #   max_age_seconds: 300   # 5-minute time chunk
+  #   gzip: true
+  #   local:                 # required when backend: local
+  #     dir: logs/history
+  #   s3:                    # required when backend: s3
+  #     bucket: instawork-llm-proxy-history
+  #     prefix: llm-proxy
+  #     region: us-east-1
+  #     # endpoint_url: http://localhost:4566  # MinIO/localstack
 
 # =============================================================================
 # PROVIDER CONFIGURATIONS

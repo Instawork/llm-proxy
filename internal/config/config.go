@@ -52,6 +52,7 @@ type FeaturesConfig struct {
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
+	History          HistoryConfig          `yaml:"history"`
 }
 
 // PIIRedactConfig configures the proxy-side PII redactor that calls the
@@ -142,12 +143,12 @@ type AdminDashboardConfig struct {
 	// without Google OAuth. Must stay false outside dev configs.
 	DevBypassLogin bool `yaml:"dev_bypass_login"`
 	// PublicBaseURL is the externally-visible origin of the proxy
-	// (e.g. https://llm.example.com). Used to build absolute links such
-	// as share URLs and SDK base URLs so they don't leak internal
-	// hostnames (llm-proxy:9002). Falls back to the ADMIN_PUBLIC_BASE_URL
-	// env var, then to http://localhost:{PORT} in dev (when DevCORSOrigin
-	// or DevBypassLogin is set), then to the inbound request's scheme+host.
-	// No trailing slash.
+	// (e.g. https://llm.example.com). Used for SDK/proxy base URLs in share
+	// responses so links don't leak internal hostnames (llm-proxy:9002).
+	// Share *page* URLs use DevCORSOrigin when dev_bypass_login is true.
+	// Falls back to the ADMIN_PUBLIC_BASE_URL env var, then to
+	// http://localhost:{PORT} in dev (when DevCORSOrigin or DevBypassLogin
+	// is set), then to the inbound request's scheme+host. No trailing slash.
 	PublicBaseURL string `yaml:"public_base_url"`
 	// Rollups persists daily admin metrics to Redis for historical charts.
 	Rollups AdminRollupsConfig `yaml:"rollups"`
@@ -172,6 +173,43 @@ type AdminRollupsConfig struct {
 	RetentionDays int `yaml:"retention_days"`
 	// HistoryDays number of prior days returned in daily_history (default 30).
 	HistoryDays int `yaml:"history_days"`
+}
+
+// HistoryConfig configures durable raw-event row history (local JSONL or S3).
+// Independent of admin_dashboard.rollups (Redis aggregates).
+type HistoryConfig struct {
+	// Backend selects row storage: "none" (default), "local", or "s3".
+	Backend string `yaml:"backend"`
+	// Role distinguishes deployment shape in filenames: "sidecar" or "global".
+	Role string `yaml:"role"`
+	// InstanceID overrides auto-detected instance identity (else HISTORY_INSTANCE_ID / HOSTNAME).
+	InstanceID string `yaml:"instance_id"`
+	// Streams limits which event families are archived; empty means all.
+	Streams []string `yaml:"streams,omitempty"`
+	// MaxRecords flush threshold (default 1000).
+	MaxRecords int `yaml:"max_records"`
+	// MaxBytes flush threshold (default 8 MiB).
+	MaxBytes int `yaml:"max_bytes"`
+	// MaxAgeSeconds time-based flush interval (default 300).
+	MaxAgeSeconds int `yaml:"max_age_seconds"`
+	// Gzip compresses each chunk (default true when omitted).
+	Gzip *bool `yaml:"gzip,omitempty"`
+
+	Local *HistoryLocalConfig `yaml:"local,omitempty"`
+	S3    *HistoryS3Config    `yaml:"s3,omitempty"`
+}
+
+// HistoryLocalConfig is used when history.backend is "local".
+type HistoryLocalConfig struct {
+	Dir string `yaml:"dir"`
+}
+
+// HistoryS3Config is used when history.backend is "s3".
+type HistoryS3Config struct {
+	Bucket      string `yaml:"bucket"`
+	Prefix      string `yaml:"prefix"`
+	Region      string `yaml:"region"`
+	EndpointURL string `yaml:"endpoint_url"`
 }
 
 // CircuitBreakerConfig configures the proxy-side circuit breaker and retry

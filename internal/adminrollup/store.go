@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	MetricCost    = "cost"
-	MetricPII     = "pii"
-	MetricUsage   = "usage"
-	MetricCircuit = "circuit"
+	MetricCost      = "cost"
+	MetricPII       = "pii"
+	MetricUsage     = "usage"
+	MetricCircuit   = "circuit"
+	MetricRateLimit = "ratelimit"
 
 	keyPrefix = "llm:admin:"
 

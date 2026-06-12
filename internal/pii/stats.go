@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/history"
 )
 
 // MaxRecentEvents bounds the recent-events ring buffer so memory stays
@@ -56,6 +57,7 @@ type Recorder struct {
 	// Shared Redis rollup lifecycle; promoted methods satisfy the recorder's
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
+	history.Binding
 }
 
 type piiFlushed struct {
@@ -215,6 +217,7 @@ func (r *Recorder) RecordRedaction(
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
+	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.piiDeltaLocked()

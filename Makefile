@@ -78,6 +78,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Testing:$(NC)"
 	@echo "  test           - Run unit tests"
+	@echo "  test-cover     - Run unit tests and write coverage.out"
 	@echo "  test-verbose   - Run unit tests with verbose output"
 	@echo "  test-integration - Run integration tests (requires API keys)"
 	@echo "  test-openai    - Run OpenAI tests only"
@@ -174,6 +175,13 @@ test:
 	@echo "$(BLUE)Running unit tests (race detector enabled)...$(NC)"
 	@go test -race -v ./internal/... -short -skip "Integration"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
+
+.PHONY: test-cover
+test-cover:
+	@echo "$(BLUE)Running unit tests with coverage (race detector enabled)...$(NC)"
+	@go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... -short -skip "Integration"
+	@go tool cover -func=coverage.out | tail -1
+	@echo "$(GREEN)✓ Unit tests with coverage completed$(NC)"
 
 .PHONY: test-verbose
 test-verbose:
