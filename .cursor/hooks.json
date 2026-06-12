@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": ".cursor/skills/open-source-audit/scripts/open_source_audit.py --changed --hook",
+        "timeout": 15,
+        "failClosed": false,
+        "loop_limit": 1
+      }
+    ]
+  }
+}

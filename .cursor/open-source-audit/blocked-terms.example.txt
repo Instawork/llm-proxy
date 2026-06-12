@@ -1,0 +1,5 @@
+# One private term per line.
+# Copy this file to blocked-terms.txt and keep the real file local.
+private-product-name
+private-team-name
+private-domain.example

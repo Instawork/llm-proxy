@@ -44,3 +44,6 @@ Thumbs.db
 
 # Log files
 logs/ 
+
+# Local open-source audit configuration
+.cursor/open-source-audit/blocked-terms.txt
