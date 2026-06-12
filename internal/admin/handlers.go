@@ -404,6 +404,19 @@ func (h *handler) publicBaseURL(r *http.Request) string {
 	return scheme + "://" + host
 }
 
+// publicAdminUIBaseURL returns the origin for browser-facing admin SPA links
+// (e.g. share pages). In local dev with Vite, prefers dev_cors_origin so
+// generated URLs open the dev server; SDK/proxy base URLs still use publicBaseURL.
+func (h *handler) publicAdminUIBaseURL(r *http.Request) string {
+	if h.deps.YAMLConfig != nil {
+		admin := h.deps.YAMLConfig.Features.AdminDashboard
+		if admin.DevCORSOrigin != "" && admin.DevBypassLogin {
+			return strings.TrimRight(admin.DevCORSOrigin, "/")
+		}
+	}
+	return h.publicBaseURL(r)
+}
+
 // providerBasePath maps a provider to the SDK-facing base path on the proxy.
 // These mirror the provider proxy mounts (/{provider}/...). The returned
 // path is what a user sets as their SDK base URL.
@@ -456,7 +469,7 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]interface{}{
 		"id":         link.ID(),
-		"url":        h.publicBaseURL(r) + "/admin/share/" + link.ID(),
+		"url":        h.publicAdminUIBaseURL(r) + "/admin/share/" + link.ID(),
 		"provider":   link.Provider,
 		"created_at": link.CreatedAt,
 	}

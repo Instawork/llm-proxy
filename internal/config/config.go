@@ -143,12 +143,12 @@ type AdminDashboardConfig struct {
 	// without Google OAuth. Must stay false outside dev configs.
 	DevBypassLogin bool `yaml:"dev_bypass_login"`
 	// PublicBaseURL is the externally-visible origin of the proxy
-	// (e.g. https://llm.example.com). Used to build absolute links such
-	// as share URLs and SDK base URLs so they don't leak internal
-	// hostnames (llm-proxy:9002). Falls back to the ADMIN_PUBLIC_BASE_URL
-	// env var, then to http://localhost:{PORT} in dev (when DevCORSOrigin
-	// or DevBypassLogin is set), then to the inbound request's scheme+host.
-	// No trailing slash.
+	// (e.g. https://llm.example.com). Used for SDK/proxy base URLs in share
+	// responses so links don't leak internal hostnames (llm-proxy:9002).
+	// Share *page* URLs use DevCORSOrigin when dev_bypass_login is true.
+	// Falls back to the ADMIN_PUBLIC_BASE_URL env var, then to
+	// http://localhost:{PORT} in dev (when DevCORSOrigin or DevBypassLogin
+	// is set), then to the inbound request's scheme+host. No trailing slash.
 	PublicBaseURL string `yaml:"public_base_url"`
 	// Rollups persists daily admin metrics to Redis for historical charts.
 	Rollups AdminRollupsConfig `yaml:"rollups"`

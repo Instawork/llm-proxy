@@ -28,6 +28,7 @@ func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 
 	yamlCfg := config.GetDefaultYAMLConfig()
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
+	yamlCfg.Features.AdminDashboard.DevCORSOrigin = "http://localhost:5173"
 
 	auth, err := newAuthenticator(slog.Default(), yamlCfg.Features.AdminDashboard)
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func TestHandleCreateShare(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["url"], "http://localhost:9002/admin/share/")
+	assert.Contains(t, resp["url"], "http://localhost:5173/admin/share/")
 	assert.Equal(t, "openai", resp["provider"])
 	assert.NotEmpty(t, resp["id"])
 	assert.NotNil(t, resp["expires_at"])
