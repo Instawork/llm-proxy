@@ -367,7 +367,7 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 	// dev.yml defines an `example-user` override at the correct anchor.
 	override, ok := cfg.Features.RateLimiting.Overrides.PerUser["example-user"]
 	assert.True(t, ok, "features.rate_limiting.overrides.per_user.example-user missing — likely mis-nested under redis:")
-		if ok {
+	if ok {
 		assert.Equal(t, 5, override.RequestsPerMinute, "per_user override decoded with wrong limits")
 		assert.Equal(t, 2000, override.TokensPerMinute)
 	}
