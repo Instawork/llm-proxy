@@ -71,6 +71,12 @@ services:
   dynamodb:
     image: amazon/dynamodb-local:latest
     container_name: llm-proxy-dynamodb
+    # Newer amazon/dynamodb-local images run as the non-root `dynamodblocal`
+    # (uid 1000) user, which cannot write to the root-owned mounted volume at
+    # /data — DynamoDB Local then fails with "unable to open database file" and
+    # every CreateTable hangs until the client deadline. Run as root so the
+    # SQLite-backed shared DB file can be created in the persisted volume.
+    user: root
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
     volumes:
       - llm-proxy-dynamodb-data:/data
