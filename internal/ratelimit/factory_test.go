@@ -49,10 +49,12 @@ func TestFactory_RedisBackend(t *testing.T) {
 	assert.NotNil(t, rl)
 }
 
-func TestFactory_UnknownBackend_ReturnsNil(t *testing.T) {
+func TestFactory_UnknownBackend_ReturnsError(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Features.RateLimiting.Backend = "unknown"
 	rl, err := Factory(cfg)
-	require.NoError(t, err)
+	// An unknown backend with rate limiting enabled is a misconfiguration and
+	// must fail fast rather than silently disabling enforcement.
+	require.Error(t, err)
 	assert.Nil(t, rl)
 }

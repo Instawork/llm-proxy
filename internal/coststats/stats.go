@@ -96,9 +96,15 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 		return
 	}
 	oldDay := r.dayKey
-	r.FlushRollup()
-	r.ArchiveDayFromAggregates(adminrollup.MetricCost, oldDay, costRollupCaps)
 	r.dayKey = day
+	// Flush pending debounced deltas synchronously (persister mutex only — does
+	// not take r.mu) so this instance's last old-day deltas land in Redis
+	// before the archive goroutine snapshots. Only the archive runs async so a
+	// UTC rollover never blocks concurrent RecordRequest on r.mu for seconds.
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCost, oldDay, costRollupCaps)
+	}()
 	r.flushed = costFlushed{}
 	r.spendTodayUSD = 0
 	r.inputSpendTodayUSD = 0

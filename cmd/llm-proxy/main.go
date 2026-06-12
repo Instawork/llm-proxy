@@ -1466,6 +1466,18 @@ func gracefulShutdown(server *http.Server) {
 		}
 	}
 
+	// Release the rate limiter's Redis client (the memory backend is a no-op
+	// and does not implement io.Closer). Mirrors the circuit-breaker cleanup.
+	if globalRateLimiter != nil {
+		if closer, ok := globalRateLimiter.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				logger.Warn("Rate limiter: Redis close failed", "error", err)
+			} else {
+				logger.Info("✅ Rate limiter: Redis client closed")
+			}
+		}
+	}
+
 	logger.Info("👋 Server shutdown complete")
 }
 

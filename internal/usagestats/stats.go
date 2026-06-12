@@ -62,9 +62,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 		return
 	}
 	oldDay := r.dayKey
-	r.FlushRollup()
-	r.ArchiveDayFromAggregates(adminrollup.MetricUsage, oldDay, usageRollupCaps)
 	r.dayKey = day
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricUsage, oldDay, usageRollupCaps)
+	}()
 	r.flushed = usageFlushed{}
 	r.global = scopeUsage{}
 	r.byModel = make(map[string]*scopeUsage)

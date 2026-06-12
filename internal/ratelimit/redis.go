@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,10 +196,15 @@ func secToMinuteEnd(t time.Time) int {
 }
 
 func secToDayEnd(t time.Time) int {
+	// Use the UTC calendar day so the rate-limit "day" window aligns with the
+	// admin rollups and the in-memory limiter (which truncate on UTC). Using
+	// the local TZ here meant the daily window and its TTL could roll at a
+	// different instant than the rest of the system if the process TZ drifted
+	// from UTC.
+	t = t.UTC()
 	y, m, d := t.Date()
-	loc := t.Location()
-	end := time.Date(y, m, d, 23, 59, 59, int(time.Second-time.Nanosecond), loc)
-	return int(time.Until(end).Seconds()) + 1
+	end := time.Date(y, m, d, 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	return int(end.Sub(t).Seconds()) + 1
 }
 
 var luaCheckAndReserve = redis.NewScript(`
@@ -302,6 +308,67 @@ for i = 0, pairsCount - 1 do
 end
 return {1}
 `)
+
+// snapshotTimeout bounds the Redis SCAN+HGETALL done for the admin dashboard
+// so a slow/large keyspace can never stall the admin API request.
+const snapshotTimeout = 2 * time.Second
+
+// Snapshot implements Snapshotter for the Redis backend so the admin dashboard
+// shows live fleet-wide counters (not just configured limits). It SCANs the
+// rl:min:* and rl:day:* hashes on the rate-limit DB and reports each scope's
+// current req/tok. Best-effort: on any Redis error it returns the configured
+// limits with empty counters rather than failing the admin request.
+func (r *redisLimiter) Snapshot(now time.Time) LimitsSnapshot {
+	rl := r.cfg.Features.RateLimiting
+	snap := LimitsSnapshot{
+		Enabled:   rl.Enabled,
+		Backend:   "redis",
+		Limits:    rl.Limits,
+		Overrides: rl.Overrides,
+		Minute: &WindowSnapshot{
+			WindowStart: now.UTC().Truncate(time.Minute).Format(time.RFC3339),
+			Counters:    map[string]CounterSnapshot{},
+		},
+		Day: &WindowSnapshot{
+			WindowStart: now.UTC().Truncate(24 * time.Hour).Format(time.RFC3339),
+			Counters:    map[string]CounterSnapshot{},
+		},
+	}
+	if r.rdb == nil {
+		return snap
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+	defer cancel()
+	r.scanCounters(ctx, "rl:min:", snap.Minute.Counters)
+	r.scanCounters(ctx, "rl:day:", snap.Day.Counters)
+	return snap
+}
+
+// scanCounters loads every "<prefix><scope>" hash into out keyed by the bare
+// scope string (matching the memory limiter's counter keys, e.g. "global",
+// "user:alice"). Errors abort the scan and leave out partially populated.
+func (r *redisLimiter) scanCounters(ctx context.Context, prefix string, out map[string]CounterSnapshot) {
+	var cursor uint64
+	for {
+		keys, next, err := r.rdb.Scan(ctx, cursor, prefix+"*", 200).Result()
+		if err != nil {
+			return
+		}
+		for _, k := range keys {
+			h, err := r.rdb.HGetAll(ctx, k).Result()
+			if err != nil {
+				return
+			}
+			req, _ := strconv.Atoi(h["req"])
+			tok, _ := strconv.Atoi(h["tok"])
+			out[strings.TrimPrefix(k, prefix)] = CounterSnapshot{Requests: req, Tokens: tok}
+		}
+		cursor = next
+		if cursor == 0 {
+			return
+		}
+	}
+}
 
 func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) (ReservationResult, error) {
 	scopeKeys := r.scopeKeys(scope)

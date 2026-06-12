@@ -84,9 +84,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 		return
 	}
 	oldDay := r.dayKey
-	r.FlushRollup()
-	r.ArchiveDayFromAggregates(adminrollup.MetricPII, oldDay, piiRollupCaps)
 	r.dayKey = day
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricPII, oldDay, piiRollupCaps)
+	}()
 	r.flushed = piiFlushed{}
 	r.requestsScanned = 0
 	r.requestsWithPII = 0

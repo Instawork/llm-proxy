@@ -10,6 +10,12 @@ import (
 // a slow rollup store can never stall an admin API request.
 const mergeHistoryTimeout = 2 * time.Second
 
+// archiveTimeout bounds the Redis read+write+delete done when archiving a
+// completed UTC day's hash aggregates. It is larger than mergeHistoryTimeout
+// because the archive does more work (build today data, write the daily JSON,
+// delete the per-dimension hashes) and runs off the request path on rollover.
+const archiveTimeout = 5 * time.Second
+
 // RecorderBinding is an embeddable helper that gives metric recorders
 // (coststats, usagestats, pii) the shared Redis rollup lifecycle: attach a
 // store/persister once at startup, queue today's snapshot, archive a completed
@@ -71,9 +77,33 @@ func (b *RecorderBinding) ArchiveDayFromAggregates(metric, day string, caps TopN
 	if s == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mergeHistoryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), archiveTimeout)
 	defer cancel()
-	_ = s.ArchiveDailyFromAggregates(ctx, metric, day, caps)
+	if err := s.ArchiveDailyFromAggregates(ctx, metric, day, caps); err != nil {
+		s.logger.Warn("admin rollup: archive from aggregates failed", "metric", metric, "day", day, "error", err)
+	}
+}
+
+// ArchiveDayFromAggregatesElected archives hash-backed today data, but only the
+// instance that wins the per-day archiver election performs the archive+delete.
+// This prevents multiple sidecars from racing the same archive (and the
+// delete-then-recreate hazard where one writer removes today's hashes while
+// another is still flushing a debounced delta into them). Callers should still
+// FlushRollup() first so their own pending deltas land before the winner
+// snapshots the completed day. No-op if unbound.
+func (b *RecorderBinding) ArchiveDayFromAggregatesElected(metric, day string, caps TopNCaps) {
+	s, _ := b.deps()
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), archiveTimeout)
+	defer cancel()
+	if !s.TryElectArchiver(ctx, metric, day, archiverHolderID()) {
+		return
+	}
+	if err := s.ArchiveDailyFromAggregates(ctx, metric, day, caps); err != nil {
+		s.logger.Warn("admin rollup: elected archive failed", "metric", metric, "day", day, "error", err)
+	}
 }
 
 // MergeToday overlays fleet-wide today totals from Redis (no-op if unbound).

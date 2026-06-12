@@ -136,9 +136,20 @@ func buildDimRows(h map[string]float64, fields []string) map[string]map[string]f
 	return out
 }
 
-func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64) map[string]interface{} {
+func flattenCostByKey(h map[string]float64) map[string]float64 {
+	out := make(map[string]float64)
+	for k, v := range h {
+		member, field, ok := parseDimMemberField(k)
+		if !ok || field != "spend_usd" {
+			continue
+		}
+		out[member] = v
+	}
+	return out
+}
+
+func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64, caps TopNCaps) map[string]interface{} {
 	provRows := buildDimRows(byProvider, nil)
-	keyRows := buildDimRows(byKey, nil)
 
 	byProviderOut := make([]map[string]interface{}, 0, len(provRows))
 	for name, fields := range provRows {
@@ -154,13 +165,26 @@ func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[str
 		return a > b
 	})
 
-	byKeyOut := make([]map[string]interface{}, 0, len(keyRows))
-	for keyID, fields := range keyRows {
-		row := map[string]interface{}{"key_id": keyID}
-		for f, v := range fields {
-			row[f] = v
+	keyRows := buildDimRows(byKey, nil)
+	topKeys, otherSpend := topNWithOther(flattenCostByKey(byKey), caps.ByKey)
+	byKeyOut := make([]map[string]interface{}, 0, len(topKeys)+1)
+	for _, p := range topKeys {
+		fields := keyRows[p.Name]
+		row := map[string]interface{}{"key_id": p.Name}
+		if fields != nil {
+			for f, v := range fields {
+				row[f] = v
+			}
+		} else {
+			row["spend_usd"] = p.Val
 		}
 		byKeyOut = append(byKeyOut, row)
+	}
+	if otherSpend > 0 {
+		byKeyOut = append(byKeyOut, map[string]interface{}{
+			"key_id":    "other_key",
+			"spend_usd": otherSpend,
+		})
 	}
 
 	data := map[string]interface{}{
