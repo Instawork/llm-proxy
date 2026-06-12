@@ -67,11 +67,13 @@ services:
       retries: 5
       start_period: 5s
 
-  # In-memory DynamoDB for local API key management (docker-compose dev).
+  # File-backed DynamoDB Local for API keys / share links (persists across restarts).
   dynamodb:
     image: amazon/dynamodb-local:latest
     container_name: llm-proxy-dynamodb
-    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    volumes:
+      - llm-proxy-dynamodb-data:/data
     ports:
       - "${DYNAMODB_PORT:-8000}:8000"
     networks:
@@ -189,4 +191,7 @@ services:
 
 networks:
   llm-proxy-network:
-    driver: bridge 
+    driver: bridge
+
+volumes:
+  llm-proxy-dynamodb-data:
