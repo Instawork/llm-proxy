@@ -67,8 +67,8 @@ func TestMergeTodayUsageAggregates(t *testing.T) {
 		Totals: map[string]float64{"requests": 10, "tokens": 1000},
 		Dimensions: map[string]map[string]float64{
 			"by_model": {
-				DimMemberField("gpt-4", "requests"): 6,
-				DimMemberField("gpt-4", "tokens"):   600,
+				DimMemberField("gpt-4", "requests"):  6,
+				DimMemberField("gpt-4", "tokens"):    600,
 				DimMemberField("claude", "requests"): 4,
 				DimMemberField("claude", "tokens"):   400,
 			},

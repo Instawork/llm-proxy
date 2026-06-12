@@ -25,13 +25,13 @@ import (
 const testOAuthClientID = "test-oauth-client-id"
 
 type testOIDCServer struct {
-	t          *testing.T
-	server     *httptest.Server
-	issuer     string
-	privateKey *rsa.PrivateKey
-	kid        string
-	lastCode     string
-	tokenClaims  idTokenClaims
+	t           *testing.T
+	server      *httptest.Server
+	issuer      string
+	privateKey  *rsa.PrivateKey
+	kid         string
+	lastCode    string
+	tokenClaims idTokenClaims
 }
 
 func newTestOIDCServer(t *testing.T) *testOIDCServer {
@@ -159,11 +159,11 @@ func newTestOAuthAuthenticator(t *testing.T, oidcSrv *testOIDCServer, allowedDom
 			},
 			Scopes: []string{oidc.ScopeOpenID, "email", "profile"},
 		},
-		verifier:       provider.Verifier(&oidc.Config{ClientID: testOAuthClientID}),
-		sessionStore:   sessionStore,
-		allowedDomain:  allowedDomain,
+		verifier:          provider.Verifier(&oidc.Config{ClientID: testOAuthClientID}),
+		sessionStore:      sessionStore,
+		allowedDomain:     allowedDomain,
 		devFrontendOrigin: "http://localhost:5173",
-		logger:         testLogger(),
+		logger:            testLogger(),
 	}
 }
 
@@ -493,10 +493,10 @@ func TestRegisterRoutes_OAuthLoginRoute(t *testing.T) {
 			},
 			Scopes: []string{oidc.ScopeOpenID, "email", "profile"},
 		},
-		verifier:     provider.Verifier(&oidc.Config{ClientID: testOAuthClientID}),
-		sessionStore: sessions.NewCookieStore([]byte("test-secret-at-least-32-bytes-long")),
+		verifier:      provider.Verifier(&oidc.Config{ClientID: testOAuthClientID}),
+		sessionStore:  sessions.NewCookieStore([]byte("test-secret-at-least-32-bytes-long")),
 		allowedDomain: "example.com",
-		logger:       testLogger(),
+		logger:        testLogger(),
 	}
 
 	r := mux.NewRouter()
