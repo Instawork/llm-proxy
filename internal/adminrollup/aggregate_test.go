@@ -227,6 +227,76 @@ func TestArchiveDailyFromAggregates(t *testing.T) {
 	require.Empty(t, totals, "today hash keys should be removed after archive")
 }
 
+func TestMergeTodayCostWithByKey(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	day := time.Now().UTC().Format("2006-01-02")
+
+	p := NewPersister(store, MetricCost)
+	p.QueueDelta(day, Delta{
+		Totals: map[string]float64{
+			"spend_usd": 2.0,
+			"requests":  1,
+		},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {
+				DimMemberField("iw:abc", "spend_usd"): 2.0,
+				DimMemberField("iw:abc", "requests"):  1,
+			},
+			"by_provider": {
+				DimMemberField("openai", "spend_usd"): 2.0,
+				DimMemberField("openai", "requests"):  1,
+			},
+		},
+	})
+	p.FlushNow()
+
+	snap := map[string]interface{}{}
+	store.MergeToday(ctx, MetricCost, day, snap, TopNCaps{ByKey: 100})
+	byKey, ok := snap["by_key"].([]map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, byKey, 1)
+	require.Equal(t, "iw:abc", byKey[0]["key_id"])
+}
+
+func TestParseDimMemberFieldInvalid(t *testing.T) {
+	_, _, ok := parseDimMemberField("no-separator")
+	require.False(t, ok)
+}
+
+func TestFlattenScopeDimSkipsNonTokenFields(t *testing.T) {
+	out := flattenScopeDim(map[string]float64{
+		"scope|requests": 5,
+		"scope|tokens":   99,
+		"plain":          1,
+	})
+	require.Len(t, out, 1)
+	require.InDelta(t, 99, out["scope"], 0.001)
+}
+
+func TestUsageMergeTodayIncludesByProvider(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	day := time.Now().UTC().Format("2006-01-02")
+
+	p := NewPersister(store, MetricUsage)
+	p.QueueDelta(day, Delta{
+		Totals: map[string]float64{"requests": 1, "tokens": 10},
+		Dimensions: map[string]map[string]float64{
+			"by_provider": {
+				DimMemberField("anthropic", "tokens"): 10,
+			},
+		},
+	})
+	p.FlushNow()
+
+	snap := map[string]interface{}{}
+	store.MergeToday(ctx, MetricUsage, day, snap, TopNCaps{})
+	byProv, ok := snap["by_provider"].(map[string]map[string]float64)
+	require.True(t, ok)
+	require.InDelta(t, 10, byProv["anthropic"]["tokens"], 0.001)
+}
+
 func TestTryElectArchiverMemoryBackend(t *testing.T) {
 	store, err := NewStore(Config{
 		Enabled:       true,

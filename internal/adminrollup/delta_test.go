@@ -63,3 +63,19 @@ func TestPersisterMergesPendingDeltas(t *testing.T) {
 	require.InDelta(t, 5, totals["requests"], 0.001)
 	require.InDelta(t, 150, totals["tokens"], 0.001)
 }
+
+func TestDeltaEmpty(t *testing.T) {
+	require.True(t, (Delta{}).empty())
+	require.True(t, Delta{Totals: map[string]float64{}, Dimensions: map[string]map[string]float64{}}.empty())
+	require.False(t, Delta{Totals: map[string]float64{"x": 1}}.empty())
+	require.False(t, Delta{Dimensions: map[string]map[string]float64{"d": {"m": 1}}}.empty())
+}
+
+func TestApplyDeltaEmptyNoOp(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.ApplyDelta(ctx, MetricCost, "2026-06-12", Delta{}))
+	totals, err := store.loadHash(ctx, totalsKey(MetricCost, "2026-06-12"))
+	require.NoError(t, err)
+	require.Empty(t, totals)
+}

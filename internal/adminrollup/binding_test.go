@@ -1,7 +1,9 @@
 package adminrollup
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/alicebob/miniredis/v2"
@@ -77,4 +79,32 @@ func TestRecorderBindingQueueDeltaFlush(t *testing.T) {
 
 	require.True(t, mr.DB(6).Exists(totalsKey(MetricUsage, "2026-06-11")),
 		"FlushRollup should have persisted hash-backed today totals")
+}
+
+func TestRecorderBindingMergeTodayAndArchiveFromAggregates(t *testing.T) {
+	store := testStore(t)
+	persister := NewPersister(store, MetricUsage)
+	var b RecorderBinding
+	b.BindRollup(store, persister)
+
+	day := time.Now().UTC().Format("2006-01-02")
+	b.QueueDelta(day, Delta{Totals: map[string]float64{"requests": 4, "tokens": 40}})
+	b.FlushRollup()
+
+	snap := map[string]interface{}{"available": true}
+	b.MergeToday(MetricUsage, day, snap, TopNCaps{ByKey: 100})
+	require.Equal(t, int64(4), snap["requests_today"])
+	require.Equal(t, int64(40), snap["tokens_today"])
+
+	b.ArchiveDayFromAggregates(MetricUsage, day, TopNCaps{ByKey: 100})
+	history, err := store.LoadHistory(context.Background(), MetricUsage)
+	require.NoError(t, err)
+	var archived bool
+	for _, row := range history {
+		if row.Day == day {
+			archived = true
+			require.InDelta(t, 4, row.Data["requests_today"], 0.001)
+		}
+	}
+	require.True(t, archived)
 }
