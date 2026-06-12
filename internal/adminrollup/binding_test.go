@@ -51,7 +51,7 @@ func TestRecorderBindingArchiveAndMergeHistory(t *testing.T) {
 	require.Equal(t, "2026-06-10", rows[0]["day"])
 }
 
-func TestRecorderBindingQueueTodayFlush(t *testing.T) {
+func TestRecorderBindingQueueDeltaFlush(t *testing.T) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(mr.Close)
@@ -69,14 +69,12 @@ func TestRecorderBindingQueueTodayFlush(t *testing.T) {
 	var b RecorderBinding
 	b.BindRollup(store, persister)
 
-	// QueueToday is debounced; FlushRollup forces the pending write out now.
-	b.QueueToday("2026-06-11", map[string]interface{}{
-		"requests_today": int64(3),
-		"tokens_today":   int64(300),
+	// QueueDelta is debounced; FlushRollup forces the pending write out now.
+	b.QueueDelta("2026-06-11", Delta{
+		Totals: map[string]float64{"requests": 3, "tokens": 300},
 	})
 	b.FlushRollup()
 
-	// The debounced "today" key should now exist in Redis.
-	require.True(t, mr.DB(6).Exists(todayKey(MetricUsage, "2026-06-11")),
-		"FlushRollup should have persisted the pending today key")
+	require.True(t, mr.DB(6).Exists(totalsKey(MetricUsage, "2026-06-11")),
+		"FlushRollup should have persisted hash-backed today totals")
 }

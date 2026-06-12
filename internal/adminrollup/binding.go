@@ -50,12 +50,41 @@ func (b *RecorderBinding) QueueToday(day string, data map[string]interface{}) {
 	}
 }
 
+// QueueDelta schedules a debounced atomic merge of today's delta (no-op if unbound).
+func (b *RecorderBinding) QueueDelta(day string, d Delta) {
+	if _, p := b.deps(); p != nil {
+		p.QueueDelta(day, d)
+	}
+}
+
 // ArchiveDay writes a completed day's data to the daily key immediately
 // (no-op if unbound). Used on UTC day rollover.
 func (b *RecorderBinding) ArchiveDay(day string, data map[string]interface{}) {
 	if _, p := b.deps(); p != nil {
 		p.ArchiveImmediately(day, data)
 	}
+}
+
+// ArchiveDayFromAggregates archives hash-backed today data (no-op if unbound).
+func (b *RecorderBinding) ArchiveDayFromAggregates(metric, day string, caps TopNCaps) {
+	s, _ := b.deps()
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mergeHistoryTimeout)
+	defer cancel()
+	_ = s.ArchiveDailyFromAggregates(ctx, metric, day, caps)
+}
+
+// MergeToday overlays fleet-wide today totals from Redis (no-op if unbound).
+func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]interface{}, caps TopNCaps) {
+	s, _ := b.deps()
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mergeHistoryTimeout)
+	defer cancel()
+	s.MergeToday(ctx, metric, day, snap, caps)
 }
 
 // MergeHistory folds persisted daily history into a live snapshot under a

@@ -50,12 +50,21 @@ type Recorder struct {
 	byProvider map[string]int64
 	byKey      map[string]int64
 
-	recent []recentEntry
+	recent  []recentEntry
+	flushed piiFlushed
 
 	// Shared Redis rollup lifecycle; promoted methods satisfy the recorder's
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
 }
+
+type piiFlushed struct {
+	requestsScanned, requestsWithPII, entitiesTotal int64
+	failOpen, failClosed, oversize                  int64
+	byEntity, byProvider, byKey                     map[string]int64
+}
+
+var piiRollupCaps = adminrollup.TopNCaps{ByKey: 100}
 
 // NewRecorder returns a ready-to-use Recorder.
 func NewRecorder() *Recorder {
@@ -74,8 +83,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	if r.dayKey == day {
 		return
 	}
-	r.ArchiveDay(r.dayKey, r.rollupDataLocked())
+	oldDay := r.dayKey
+	r.FlushRollup()
+	r.ArchiveDayFromAggregates(adminrollup.MetricPII, oldDay, piiRollupCaps)
 	r.dayKey = day
+	r.flushed = piiFlushed{}
 	r.requestsScanned = 0
 	r.requestsWithPII = 0
 	r.entitiesTotal = 0
@@ -203,10 +215,60 @@ func (r *Recorder) RecordRedaction(
 	}
 
 	dayKey := r.dayKey
-	rollup := r.rollupDataLocked()
+	delta := r.piiDeltaLocked()
+	r.advancePIIFlushedLocked()
 	r.mu.Unlock()
 
-	r.QueueToday(dayKey, rollup)
+	r.QueueDelta(dayKey, delta)
+}
+
+func (r *Recorder) piiDeltaLocked() adminrollup.Delta {
+	d := adminrollup.Delta{
+		Totals: map[string]float64{
+			"requests_scanned":  float64(r.requestsScanned - r.flushed.requestsScanned),
+			"requests_with_pii": float64(r.requestsWithPII - r.flushed.requestsWithPII),
+			"entities_total":    float64(r.entitiesTotal - r.flushed.entitiesTotal),
+			"fail_open":         float64(r.failOpen - r.flushed.failOpen),
+			"fail_closed":       float64(r.failClosed - r.flushed.failClosed),
+			"oversize":          float64(r.oversize - r.flushed.oversize),
+		},
+		Dimensions: map[string]map[string]float64{
+			"by_entity":   intMapDelta(r.byEntity, r.flushed.byEntity),
+			"by_provider": intMapDelta(r.byProvider, r.flushed.byProvider),
+			"by_key":      intMapDelta(r.byKey, r.flushed.byKey),
+		},
+	}
+	return d
+}
+
+func intMapDelta(cur, prev map[string]int64) map[string]float64 {
+	out := make(map[string]float64)
+	for k, v := range cur {
+		if dv := float64(v - prev[k]); dv != 0 {
+			out[k] = dv
+		}
+	}
+	return out
+}
+
+func (r *Recorder) advancePIIFlushedLocked() {
+	r.flushed.requestsScanned = r.requestsScanned
+	r.flushed.requestsWithPII = r.requestsWithPII
+	r.flushed.entitiesTotal = r.entitiesTotal
+	r.flushed.failOpen = r.failOpen
+	r.flushed.failClosed = r.failClosed
+	r.flushed.oversize = r.oversize
+	r.flushed.byEntity = copyIntMap(r.byEntity)
+	r.flushed.byProvider = copyIntMap(r.byProvider)
+	r.flushed.byKey = copyIntMap(r.byKey)
+}
+
+func copyIntMap(m map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // Snapshot returns a JSON-serialisable view of the current aggregates for
@@ -224,9 +286,10 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 
 	_, detectionRate := r.detectionRateLocked()
 
+	dayKey := r.dayKey
 	snap := map[string]interface{}{
 		"available":         true,
-		"day":               r.dayKey,
+		"day":               dayKey,
 		"started_at":        r.startedAt.Unix(),
 		"requests_scanned":  r.requestsScanned,
 		"requests_with_pii": r.requestsWithPII,
@@ -242,6 +305,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	}
 	r.mu.RUnlock()
 
+	r.MergeToday(adminrollup.MetricPII, dayKey, snap, piiRollupCaps)
 	r.MergeHistory(adminrollup.MetricPII, snap)
 	return snap
 }

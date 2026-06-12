@@ -80,6 +80,15 @@ features:
     per_provider_rollup_window_seconds: 300
   rate_limiting:
     enabled: false
+    backend: "redis"
+    redis:
+      url: "${REDIS_URL}"
+      db: 4
+    limits:
+      requests_per_minute: 0
+      tokens_per_minute: 0
+      requests_per_day: 0
+      tokens_per_day: 0
   pii_redact:
     enabled: true
     analyzer_url: "http://localhost:3000"

@@ -2,6 +2,7 @@ package adminrollup
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/circuit"
@@ -155,6 +156,10 @@ func RunCircuitArchiver(
 			now := time.Now().UTC()
 			day := now.Format("2006-01-02")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if !store.TryElectArchiver(ctx, MetricCircuit, day, archiverHolderID()) {
+				cancel()
+				continue
+			}
 			snap := SnapshotCircuit(ctx, cbStore, providers, rollupThreshold, rollupWindowSec)
 			cancel()
 
@@ -170,4 +175,11 @@ func RunCircuitArchiver(
 			persister.QueueToday(day, peak.payload())
 		}
 	}
+}
+
+func archiverHolderID() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "llm-proxy"
 }
