@@ -567,8 +567,11 @@ func loadYAMLConfigWithoutValidation(filename string) (*YAMLConfig, error) {
 	return &config, nil
 }
 
-// LoadEnvironmentConfig loads base configuration and overlays environment-specific configuration
-// based on the ENVIRONMENT variable (defaults to "dev")
+// LoadEnvironmentConfig loads base configuration and overlays environment-specific
+// configuration based on the ENVIRONMENT variable (defaults to "dev"). When
+// LLM_PROXY_CONFIG_PROFILE is set, its YAML file is merged last — e.g.
+// ENVIRONMENT=production + LLM_PROXY_CONFIG_PROFILE=sidecar keeps prod infra
+// settings while applying the sidecar feature toggles.
 func LoadEnvironmentConfig() (*YAMLConfig, error) {
 	configDir := "configs"
 
@@ -585,21 +588,36 @@ func LoadEnvironmentConfig() (*YAMLConfig, error) {
 	}
 	slog.Info("Loading environment configuration", "environment", env)
 
+	mergedConfig := baseConfig
+
 	// Load environment-specific configuration (skip validation since it's just overrides)
 	envConfigPath := filepath.Join(configDir, fmt.Sprintf("%s.yml", env))
 	envConfig, err := loadYAMLConfigWithoutValidation(envConfigPath)
 	if err != nil {
 		// If environment config doesn't exist, just use base config
-		if os.IsNotExist(err) {
-			return baseConfig, nil
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to load environment configuration for %s: %w", env, err)
 		}
-		return nil, fmt.Errorf("failed to load environment configuration for %s: %w", env, err)
+	} else {
+		mergedConfig, err = mergeConfigs(mergedConfig, envConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge configurations: %w", err)
+		}
 	}
 
-	// Merge environment config into base config
-	mergedConfig, err := mergeConfigs(baseConfig, envConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to merge configurations: %w", err)
+	profile := os.Getenv("LLM_PROXY_CONFIG_PROFILE")
+	if profile != "" {
+		slog.Info("Loading config profile overlay", "profile", profile)
+		profileConfigPath := filepath.Join(configDir, fmt.Sprintf("%s.yml", profile))
+		if _, err := os.Stat(profileConfigPath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("config profile %q not found at %s", profile, profileConfigPath)
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to stat config profile %s: %w", profile, err)
+		}
+		mergedConfig, err = mergeConfigFromYAMLFile(mergedConfig, profileConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge config profile %s: %w", profile, err)
+		}
 	}
 
 	return mergedConfig, nil
@@ -646,6 +664,53 @@ func mergeConfigs(base, env *YAMLConfig) (*YAMLConfig, error) {
 	}
 
 	// Validate and parse pricing
+	if err := mergedConfig.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid merged configuration: %w", err)
+	}
+
+	if err := mergedConfig.ParsePricing(); err != nil {
+		return nil, fmt.Errorf("failed to parse pricing in merged configuration: %w", err)
+	}
+
+	return &mergedConfig, nil
+}
+
+// mergeConfigFromYAMLFile deep-merges a YAML file into base. Only keys present
+// in the file participate — partial overlays (e.g. configs/sidecar.yml) do not
+// inject zero-value feature toggles from a struct round-trip.
+func mergeConfigFromYAMLFile(base *YAMLConfig, filename string) (*YAMLConfig, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
+	}
+
+	var overlayMap map[string]interface{}
+	if err := yaml.Unmarshal(data, &overlayMap); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML config %s: %w", filename, err)
+	}
+
+	baseBytes, err := yaml.Marshal(base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal base config: %w", err)
+	}
+
+	var baseMap map[string]interface{}
+	if err := yaml.Unmarshal(baseBytes, &baseMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal base config to map: %w", err)
+	}
+
+	mergedMap := deepMerge(baseMap, overlayMap)
+
+	mergedBytes, err := yaml.Marshal(mergedMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged config: %w", err)
+	}
+
+	var mergedConfig YAMLConfig
+	if err := yaml.Unmarshal(mergedBytes, &mergedConfig); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal merged config: %w", err)
+	}
+
 	if err := mergedConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid merged configuration: %w", err)
 	}
