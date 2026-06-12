@@ -566,6 +566,9 @@ func (h *handler) handleRateLimits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.Overrides = sanitizeRateLimitOverrides(resp.Overrides)
+	if h.deps.RateLimitSummary != nil {
+		resp.Stats = h.deps.RateLimitSummary()
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }

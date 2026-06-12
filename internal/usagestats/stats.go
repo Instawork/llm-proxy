@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/history"
 )
 
 type scopeUsage struct {
@@ -30,6 +31,18 @@ type Recorder struct {
 	// Shared Redis rollup lifecycle; promoted methods satisfy the recorder's
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
+	history.Binding
+}
+
+type usageEvent struct {
+	Time         int64  `json:"time"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model,omitempty"`
+	KeyID        string `json:"key_id,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	TotalTokens  int    `json:"total_tokens"`
 }
 
 // NewRecorder returns a recorder for the current UTC day.
@@ -100,6 +113,18 @@ func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTok
 	if userID != "" {
 		r.add(r.byUser, scopeKey("user", userID), tokens)
 	}
+	entry := usageEvent{
+		Time:         now.Unix(),
+		Provider:     provider,
+		Model:        model,
+		KeyID:        keyID,
+		UserID:       userID,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+	r.EmitHistory(entry)
+
 	dayKey := r.dayKey
 	rollup := r.rollupDataLocked()
 	r.mu.Unlock()

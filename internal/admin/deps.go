@@ -20,4 +20,5 @@ type Deps struct {
 	CostSummary      func() map[string]interface{}
 	PIISummary       func() map[string]interface{}
 	UsageSummary     func() map[string]interface{}
+	RateLimitSummary func() map[string]interface{}
 }

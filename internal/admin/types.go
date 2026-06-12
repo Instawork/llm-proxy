@@ -107,6 +107,7 @@ type RateLimitsResponse struct {
 	Limits    config.LimitsConfig       `json:"limits,omitempty"`
 	Overrides config.RateLimitOverrides `json:"overrides,omitempty"`
 	Snapshot  *ratelimit.LimitsSnapshot `json:"snapshot,omitempty"`
+	Stats     map[string]interface{}    `json:"stats,omitempty"`
 }
 
 func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {

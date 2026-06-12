@@ -12,11 +12,13 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
+	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 )
 
 // RateLimitingMiddleware enforces rate limits using the provided limiter.
 // It does a provisional token reservation based on estimation and reconciles after response parsing.
-func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfig, limiter ratelimit.RateLimiter) func(http.Handler) http.Handler {
+// stats is optional; when set it records decisions for admin rollups and row history.
+func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfig, limiter ratelimit.RateLimiter, stats *ratelimitstats.Recorder) func(http.Handler) http.Handler {
 	if limiter == nil || cfg == nil || !cfg.Features.RateLimiting.Enabled {
 		return func(next http.Handler) http.Handler { return next }
 	}
@@ -65,10 +67,29 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 					w.Header().Set("X-RateLimit-Limit", fmtInt(res.Details.Limit))
 					w.Header().Set("X-RateLimit-Remaining", fmtInt(res.Details.Remaining))
 				}
+				if stats != nil {
+					metric, window, scopeKey := "", "", ""
+					limit, remaining := 0, 0
+					if res.Details != nil {
+						metric = res.Details.Metric
+						window = res.Details.Window
+						scopeKey = res.Details.ScopeKey
+						limit = res.Details.Limit
+						remaining = res.Details.Remaining
+					}
+					stats.RecordDecision(
+						prov.GetName(), model, apiKey, userID,
+						false, res.Reason, metric, window, scopeKey, limit, remaining,
+					)
+				}
 				log.Printf("ratelimit: throttle provider=%s model=%s user=%s key_prefix=%s reason=%s",
 					prov.GetName(), model, userID, prefix(apiKey), res.Reason)
 				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
+			}
+
+			if stats != nil {
+				stats.RecordDecision(prov.GetName(), model, apiKey, userID, true, "", "", "", "", 0, 0)
 			}
 
 			log.Printf("ratelimit: allow provider=%s model=%s user=%s key_prefix=%s est_tokens=%d",

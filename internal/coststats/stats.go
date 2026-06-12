@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/history"
 )
 
 // MaxRecentEvents bounds the recent-requests ring buffer.
@@ -67,6 +68,7 @@ type Recorder struct {
 	// ArchiveDay/MergeHistory). Promoted methods satisfy the recorder's
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
+	history.Binding
 }
 
 // NewRecorder returns a ready-to-use Recorder scoped to the current UTC day.
@@ -182,6 +184,7 @@ func (r *Recorder) RecordRequest(
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
+	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	rollup := r.rollupDataLocked()
