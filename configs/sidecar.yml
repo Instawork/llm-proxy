@@ -12,3 +12,5 @@ features:
     allow_per_key_override: false
   admin_dashboard:
     enabled: false
+  history:
+    role: sidecar

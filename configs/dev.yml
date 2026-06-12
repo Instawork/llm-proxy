@@ -98,6 +98,16 @@ features:
       address: "redis:6379"
       password: ""
       db: 4
+  history:
+    backend: local
+    role: global
+    streams: [cost, pii, usage, ratelimit]
+    max_records: 100
+    max_bytes: 1048576
+    max_age_seconds: 60
+    gzip: true
+    local:
+      dir: logs/history
 
 # =============================================================================
 # PROVIDER OVERRIDES

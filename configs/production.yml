@@ -104,6 +104,18 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
+  history:
+    backend: s3
+    role: global
+    streams: [cost, pii, usage, ratelimit]
+    max_records: 1000
+    max_bytes: 8388608
+    max_age_seconds: 300
+    gzip: true
+    s3:
+      bucket: instawork-llm-proxy-history
+      prefix: llm-proxy
+      region: us-west-2
 
 # =============================================================================
 # PROVIDER OVERRIDES

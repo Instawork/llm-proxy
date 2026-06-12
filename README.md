@@ -216,7 +216,7 @@ that the client computes and the proxy forwards verbatim.
 - Disabled by default. Enable via config: see `configs/base.yml` and `configs/dev.yml`.
 - Supports provisional token estimation with post-response reconciliation using `X-LLM-Input-Tokens` (input tokens only).
 - Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
-- Redis backend is currently not supported; only the in-process memory backend is available.
+- Set `backend: "redis"` and configure `redis.url` (or `redis.address` for dev) for multi-instance rate limiting. Dev docker-compose uses logical DB 4 on the bundled Redis service; production uses `${REDIS_URL}` from SSM (`/llm-proxy/redis_url`).
 
 Minimal dev example (see `configs/dev.yml` for a full setup):
 
