@@ -126,6 +126,93 @@ func todayKey(metric, day string) string {
 	return fmt.Sprintf("%s%s:today:%s", keyPrefix, metric, day)
 }
 
+// ApplyDelta atomically folds an instance delta into today's hash aggregates.
+func (s *Store) ApplyDelta(ctx context.Context, metric, day string, d Delta) error {
+	if s == nil || d.empty() {
+		return nil
+	}
+	return s.be.applyDelta(ctx, metric, day, d, todayTTL)
+}
+
+// TryElectArchiver returns true when this instance wins a short-lived lock to
+// write circuit daily peaks (one writer per metric/day).
+func (s *Store) TryElectArchiver(ctx context.Context, metric, day, holder string) bool {
+	if s == nil {
+		return false
+	}
+	key := fmt.Sprintf("%s%s:archiver:%s", keyPrefix, metric, day)
+	ok, err := s.be.trySetNX(ctx, key, holder, 26*time.Hour)
+	return err == nil && ok
+}
+
+func (s *Store) loadHash(ctx context.Context, key string) (map[string]float64, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return s.be.hgetall(ctx, key)
+}
+
+func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps TopNCaps) (map[string]interface{}, bool) {
+	totals, err := s.loadHash(ctx, totalsKey(metric, day))
+	if err != nil || len(totals) == 0 {
+		return nil, false
+	}
+	switch metric {
+	case MetricCost:
+		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
+		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
+		return costDataFromAggregates(totals, byProv, byKey, caps), true
+	case MetricUsage:
+		byModel, _ := s.loadHash(ctx, dimKey(metric, day, "by_model"))
+		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
+		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
+		byUser, _ := s.loadHash(ctx, dimKey(metric, day, "by_user"))
+		return usageDataFromAggregates(totals, byModel, byProv, byKey, byUser, caps), true
+	case MetricPII:
+		byEntity, _ := s.loadHash(ctx, dimKey(metric, day, "by_entity"))
+		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
+		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
+		return piiDataFromAggregates(totals, byEntity, byProv, byKey, caps), true
+	default:
+		return nil, false
+	}
+}
+
+// MergeToday overlays fleet-wide today totals from Redis onto a live snapshot.
+func (s *Store) MergeToday(ctx context.Context, metric, day string, snap map[string]interface{}, caps TopNCaps) {
+	if s == nil || snap == nil {
+		return
+	}
+	data, ok := s.buildTodayData(ctx, metric, day, caps)
+	if !ok {
+		return
+	}
+	for k, v := range data {
+		snap[k] = v
+	}
+}
+
+// ArchiveDailyFromAggregates copies completed hash aggregates to the daily JSON
+// key and removes today's hash keys.
+func (s *Store) ArchiveDailyFromAggregates(ctx context.Context, metric, day string, caps TopNCaps) error {
+	if s == nil {
+		return nil
+	}
+	data, ok := s.buildTodayData(ctx, metric, day, caps)
+	if !ok {
+		return nil
+	}
+	if err := s.ArchiveDaily(ctx, metric, day, data); err != nil {
+		return err
+	}
+	_ = s.be.del(ctx, totalsKey(metric, day))
+	for _, dim := range []string{"by_provider", "by_key", "by_model", "by_user", "by_entity"} {
+		_ = s.be.del(ctx, dimKey(metric, day, dim))
+	}
+	_ = s.be.del(ctx, todayKey(metric, day))
+	return nil
+}
+
 // SaveToday writes the in-progress UTC day blob with a bounded TTL so an
 // orphaned today key (restart across midnight) self-expires; a live day is
 // rewritten long before todayTTL elapses.
@@ -173,14 +260,19 @@ func (s *Store) LoadHistory(ctx context.Context, metric string) ([]DayRecord, er
 	}
 	days = append(days, today)
 
+	byDay := make(map[string]DayRecord)
 	keys := make([]string, 0, len(days)*2)
 	keyDays := make([]string, 0, len(days)*2)
 	for _, d := range days {
 		keys = append(keys, dailyKey(metric, d))
 		keyDays = append(keyDays, d)
 		if d == today {
-			keys = append(keys, todayKey(metric, d))
-			keyDays = append(keyDays, d)
+			if agg, ok := s.buildTodayData(ctx, metric, d, TopNCaps{ByKey: 100, ByUser: 100}); ok {
+				byDay[d] = DayRecord{Day: d, Data: agg}
+			} else {
+				keys = append(keys, todayKey(metric, d))
+				keyDays = append(keyDays, d)
+			}
 		}
 	}
 
@@ -189,7 +281,6 @@ func (s *Store) LoadHistory(ctx context.Context, metric string) ([]DayRecord, er
 		return nil, err
 	}
 
-	byDay := make(map[string]DayRecord)
 	for i, raw := range vals {
 		if raw == nil {
 			continue

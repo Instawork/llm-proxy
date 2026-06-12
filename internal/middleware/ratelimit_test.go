@@ -296,24 +296,31 @@ func (erroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.Sc
 	return nil
 }
 
-// TestRateLimitingMiddleware_CheckAndReserveError_Returns500 verifies that a
-// limiter outage during reservation surfaces as HTTP 500 rather than failing
-// open or panicking.  The inner handler must not run.
-func TestRateLimitingMiddleware_CheckAndReserveError_Returns500(t *testing.T) {
+// TestRateLimitingMiddleware_CheckAndReserveError_FailsOpen verifies that a
+// limiter outage during reservation fails OPEN: the request is allowed through
+// to the handler rather than surfacing as a wholesale HTTP 500. A transient
+// Redis blip must not take down all LLM traffic, mirroring the circuit
+// breaker's fail-open behavior when its store is unreachable.
+func TestRateLimitingMiddleware_CheckAndReserveError_FailsOpen(t *testing.T) {
 	cfg := makeCfg()
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
 
+	handlerRan := false
 	h := RateLimitingMiddleware(pm, cfg, erroringLimiter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("handler must not be called when limiter errors")
+		handlerRan = true
+		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("limiter error must surface as 500; got %d", rr.Code)
+	if !handlerRan {
+		t.Fatal("handler must run when limiter errors (fail open)")
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("limiter error must fail open with handler status; got %d", rr.Code)
 	}
 }
 
@@ -359,6 +366,78 @@ func TestRateLimitingMiddleware_AdjustError_LoggedButRequestSucceeds(t *testing.
 	}
 	if !strings.Contains(logOut, "ratelimit: adjust error") {
 		t.Errorf("Adjust error must be logged; got %s", logOut)
+	}
+}
+
+// cancelRecordingLimiter allows reservations and records whether Cancel was
+// called, with the estTokens it received. Used to verify the middleware
+// releases a reservation when the upstream hard-fails.
+type cancelRecordingLimiter struct {
+	cancelCalled bool
+	cancelTokens int
+}
+
+func (l *cancelRecordingLimiter) CheckAndReserve(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) (ratelimit.ReservationResult, error) {
+	return ratelimit.ReservationResult{Allowed: true, ReservationID: id}, nil
+}
+
+func (l *cancelRecordingLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
+	return nil
+}
+
+func (l *cancelRecordingLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
+	l.cancelCalled = true
+	l.cancelTokens = estTokens
+	return nil
+}
+
+// TestRateLimitingMiddleware_CancelsReservationOnUpstream5xx asserts that when
+// the handler responds 5xx (and no input-token header is set), the middleware
+// releases the reservation so a failed upstream call doesn't permanently
+// consume the caller's request/token quota for the window.
+func TestRateLimitingMiddleware_CancelsReservationOnUpstream5xx(t *testing.T) {
+	cfg := makeCfg()
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	lim := &cancelRecordingLimiter{}
+	chain := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{"model":"gpt-4o","messages":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected upstream status 502 to pass through; got %d", rr.Code)
+	}
+	if !lim.cancelCalled {
+		t.Fatal("Cancel must be called to release the reservation on a 5xx upstream")
+	}
+}
+
+// TestRateLimitingMiddleware_DoesNotCancelOnSuccess asserts that a successful
+// (2xx) response does NOT release the reservation — the request really
+// happened and must count against the limit.
+func TestRateLimitingMiddleware_DoesNotCancelOnSuccess(t *testing.T) {
+	cfg := makeCfg()
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	lim := &cancelRecordingLimiter{}
+	chain := RateLimitingMiddleware(pm, cfg, lim)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{"model":"gpt-4o","messages":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if lim.cancelCalled {
+		t.Fatal("Cancel must NOT be called on a successful (2xx) response")
 	}
 }
 

@@ -26,11 +26,22 @@ type Recorder struct {
 	byProv  map[string]*scopeUsage
 	byKey   map[string]*scopeUsage
 	byUser  map[string]*scopeUsage
+	flushed usageFlushed
 
 	// Shared Redis rollup lifecycle; promoted methods satisfy the recorder's
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
 }
+
+type usageFlushed struct {
+	global  scopeUsage
+	byModel map[string]scopeUsage
+	byProv  map[string]scopeUsage
+	byKey   map[string]scopeUsage
+	byUser  map[string]scopeUsage
+}
+
+var usageRollupCaps = adminrollup.TopNCaps{ByKey: 100, ByUser: 100}
 
 // NewRecorder returns a recorder for the current UTC day.
 func NewRecorder() *Recorder {
@@ -50,8 +61,13 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	if r.dayKey == day {
 		return
 	}
-	r.ArchiveDay(r.dayKey, r.rollupDataLocked())
+	oldDay := r.dayKey
 	r.dayKey = day
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricUsage, oldDay, usageRollupCaps)
+	}()
+	r.flushed = usageFlushed{}
 	r.global = scopeUsage{}
 	r.byModel = make(map[string]*scopeUsage)
 	r.byProv = make(map[string]*scopeUsage)
@@ -101,10 +117,69 @@ func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTok
 		r.add(r.byUser, scopeKey("user", userID), tokens)
 	}
 	dayKey := r.dayKey
-	rollup := r.rollupDataLocked()
+	delta := r.usageDeltaLocked()
+	r.advanceUsageFlushedLocked()
 	r.mu.Unlock()
 
-	r.QueueToday(dayKey, rollup)
+	r.QueueDelta(dayKey, delta)
+}
+
+func (r *Recorder) usageDeltaLocked() adminrollup.Delta {
+	d := adminrollup.Delta{
+		Totals: map[string]float64{
+			"requests": float64(r.global.Requests - r.flushed.global.Requests),
+			"tokens":   float64(r.global.Tokens - r.flushed.global.Tokens),
+		},
+		Dimensions: map[string]map[string]float64{
+			"by_model":    usageScopeDelta(r.byModel, r.flushed.byModel),
+			"by_provider": usageScopeDelta(r.byProv, r.flushed.byProv),
+			"by_key":      usageScopeDelta(r.byKey, r.flushed.byKey),
+			"by_user":     usageScopeDelta(r.byUser, r.flushed.byUser),
+		},
+	}
+	return d
+}
+
+func usageScopeDelta(cur map[string]*scopeUsage, prev map[string]scopeUsage) map[string]float64 {
+	out := make(map[string]float64)
+	for key, u := range cur {
+		p := prev[key]
+		if dr := float64(u.Requests - p.Requests); dr != 0 {
+			out[adminrollup.DimMemberField(key, "requests")] = dr
+		}
+		if dt := float64(u.Tokens - p.Tokens); dt != 0 {
+			out[adminrollup.DimMemberField(key, "tokens")] = dt
+		}
+	}
+	return out
+}
+
+func (r *Recorder) advanceUsageFlushedLocked() {
+	if r.flushed.byModel == nil {
+		r.flushed.byModel = make(map[string]scopeUsage)
+	}
+	if r.flushed.byProv == nil {
+		r.flushed.byProv = make(map[string]scopeUsage)
+	}
+	if r.flushed.byKey == nil {
+		r.flushed.byKey = make(map[string]scopeUsage)
+	}
+	if r.flushed.byUser == nil {
+		r.flushed.byUser = make(map[string]scopeUsage)
+	}
+	r.flushed.global = r.global
+	for k, v := range r.byModel {
+		r.flushed.byModel[k] = *v
+	}
+	for k, v := range r.byProv {
+		r.flushed.byProv[k] = *v
+	}
+	for k, v := range r.byKey {
+		r.flushed.byKey[k] = *v
+	}
+	for k, v := range r.byUser {
+		r.flushed.byUser[k] = *v
+	}
 }
 
 func scopeMap(m map[string]*scopeUsage) map[string]scopeUsage {
@@ -180,9 +255,10 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		return map[string]interface{}{"available": false}
 	}
 	r.mu.RLock()
+	dayKey := r.dayKey
 	snap := map[string]interface{}{
 		"available":      true,
-		"day":            r.dayKey,
+		"day":            dayKey,
 		"started_at":     r.startedAt.Unix(),
 		"requests_today": r.global.Requests,
 		"tokens_today":   r.global.Tokens,
@@ -192,6 +268,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	}
 	r.mu.RUnlock()
 
+	r.MergeToday(adminrollup.MetricUsage, dayKey, snap, usageRollupCaps)
 	r.MergeHistory(adminrollup.MetricUsage, snap)
 	return snap
 }
