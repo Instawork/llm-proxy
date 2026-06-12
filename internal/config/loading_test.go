@@ -54,6 +54,78 @@ providers:
 	require.Contains(t, cfg.Providers["openai"].Models["gpt-4o"].Aliases, "g4")
 }
 
+func TestLoadEnvironmentConfig_ConfigProfileOverlay(t *testing.T) {
+	tmpRoot := t.TempDir()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(tmpRoot))
+
+	configDir := filepath.Join(tmpRoot, "configs")
+	writeYAML(t, configDir, "base.yml", `
+enabled: true
+features:
+  pii_redact:
+    enabled: false
+  admin_dashboard:
+    enabled: false
+providers:
+  openai:
+    enabled: true
+`)
+	writeYAML(t, configDir, "production.yml", `
+features:
+  pii_redact:
+    enabled: true
+    analyzer_url: "http://localhost:3000"
+  admin_dashboard:
+    enabled: true
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    window_seconds: 120
+    cooldown_seconds: 300
+`)
+	writeYAML(t, configDir, "sidecar.yml", `
+features:
+  pii_redact:
+    enabled: false
+  admin_dashboard:
+    enabled: false
+`)
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "sidecar")
+	cfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.False(t, cfg.Features.PIIRedact.Enabled)
+	assert.False(t, cfg.Features.AdminDashboard.Enabled)
+	assert.True(t, cfg.Features.CircuitBreaker.Enabled)
+}
+
+func TestLoadEnvironmentConfig_MissingConfigProfileErrors(t *testing.T) {
+	tmpRoot := t.TempDir()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(tmpRoot))
+
+	configDir := filepath.Join(tmpRoot, "configs")
+	writeYAML(t, configDir, "base.yml", `
+enabled: true
+providers:
+  openai:
+    enabled: true
+`)
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "missing-profile")
+	_, err = LoadEnvironmentConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-profile")
+}
+
 func TestLoadEnvironmentConfig_DefaultEnvIsDev(t *testing.T) {
 	tmpRoot := t.TempDir()
 	cwd, _ := os.Getwd()
@@ -295,8 +367,35 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 	// dev.yml defines an `example-user` override at the correct anchor.
 	override, ok := cfg.Features.RateLimiting.Overrides.PerUser["example-user"]
 	assert.True(t, ok, "features.rate_limiting.overrides.per_user.example-user missing — likely mis-nested under redis:")
-	if ok {
+		if ok {
 		assert.Equal(t, 5, override.RequestsPerMinute, "per_user override decoded with wrong limits")
 		assert.Equal(t, 2000, override.TokensPerMinute)
 	}
+}
+
+func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	if _, err := os.Stat(configsDir); err != nil {
+		t.Skipf("configs dir not found (%s) — skipping", configsDir)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "sidecar")
+	cfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Features.CircuitBreaker.Enabled,
+		"production infra (circuit breaker) must survive the sidecar profile overlay")
+	assert.False(t, cfg.Features.PIIRedact.Enabled,
+		"sidecar profile must disable PII redaction")
+	assert.False(t, cfg.Features.AdminDashboard.Enabled,
+		"sidecar profile must disable the admin dashboard")
 }

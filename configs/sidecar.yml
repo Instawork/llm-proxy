@@ -1,6 +1,8 @@
-# Sidecar deployment config (llm-proxy container co-located with an app).
-# PII redaction and admin dashboard stay off — observability redaction runs
-# only on the standalone llm-proxy service.
+# Sidecar deployment profile (llm-proxy container co-located with an app).
+# Set LLM_PROXY_CONFIG_PROFILE=sidecar alongside ENVIRONMENT=production (or
+# staging) so deploy identity and infra settings stay on the env file while
+# PII redaction and the admin dashboard stay off here — observability redaction
+# runs only on the standalone llm-proxy service.
 
 enabled: true
 

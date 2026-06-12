@@ -174,6 +174,8 @@ that the client computes and the proxy forwards verbatim.
 
 ## Configuration
 
+- `ENVIRONMENT`: Selects the deploy overlay YAML (`configs/{ENVIRONMENT}.yml`, default `dev`).
+- `LLM_PROXY_CONFIG_PROFILE`: Optional second overlay merged after the env file (e.g. `sidecar` for co-located containers in the same task — keeps `ENVIRONMENT=production` while disabling PII redaction and the admin dashboard via `configs/sidecar.yml`).
 - `PORT`: Environment variable to set the server port (default: 9002)
 - `AWS_REGION`: Region for the upstream Bedrock endpoint host (default:
   `us-west-2`). Only consulted when `providers.bedrock.enabled` is true.
@@ -186,7 +188,7 @@ that the client computes and the proxy forwards verbatim.
 - Disabled by default. Enable via config: see `configs/base.yml` and `configs/dev.yml`.
 - Supports provisional token estimation with post-response reconciliation using `X-LLM-Input-Tokens` (input tokens only).
 - Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
- - Redis backend is currently not supported; only the in-process memory backend is available.
+- Redis backend is currently not supported; only the in-process memory backend is available.
 
 Minimal dev example (see `configs/dev.yml` for a full setup):
 
@@ -434,6 +436,47 @@ Each provider implements its own:
 - Response metadata parsing
 
 ## Development
+
+### Local development: Docker + the admin dashboard
+
+Local dev runs the Go proxy, its datastores, and the admin dashboard from
+Docker Compose:
+
+1. **Start the full dev stack**:
+
+   ```bash
+   make docker-compose-up        # ENVIRONMENT=dev docker compose up -d
+   ```
+
+   This starts four containers: `llm-proxy` (the Go server, live-reloaded via
+   `air` on `:9002`), `redis` (circuit breaker / rate limiting / admin
+   rollups), `dynamodb` (local API-key + cost-tracking tables), and `web` (the
+   Vite admin dashboard on `:5173`). Check them with `docker compose ps`; tail
+   logs with `make docker-compose-logs`.
+
+2. **Open the admin dashboard**:
+
+   | URL | Served by | Use when |
+   | --- | --- | --- |
+   | `http://localhost:9002/admin/` | The Go proxy (embedded build) | You just want to click around; matches production exactly. No extra process. |
+   | `http://localhost:5173/admin/` | The Vite dev server from Docker Compose | You're editing `web/` and want hot reload. |
+
+   If you prefer to run Vite directly on the host, stop the `web` container and
+   start the same dev server from `web/`:
+
+   ```bash
+   cd web
+   npm install        # first time only
+   npm run dev        # serves http://localhost:5173/admin/
+   ```
+
+   Vite proxies `/admin/api` and `/admin/auth` to the Go proxy at `:9002`
+   (override with `VITE_API_PROXY_TARGET`), so the proxy containers must be up
+   for the dashboard to load data or log in.
+
+> **`localhost:5173` refused to connect?** Check that the `web` container is
+> running with `docker compose ps`, or use the embedded SPA at
+> `http://localhost:9002/admin/` instead.
 
 ### Available Make Commands
 
