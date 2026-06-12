@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRedactScopeKey(t *testing.T) {
@@ -27,6 +29,33 @@ func TestRedactScopeKey(t *testing.T) {
 			assert.Equal(t, tc.want, RedactScopeKey(tc.in))
 		})
 	}
+}
+
+func TestSanitizeLimitsSnapshot_RedactsScopes(t *testing.T) {
+	snap := ratelimit.LimitsSnapshot{
+		Minute: &ratelimit.WindowSnapshot{
+			Counters: map[string]ratelimit.CounterSnapshot{
+				"key:iw:abcdefghijklmnop": {Requests: 2, Tokens: 10},
+				"global":                  {Requests: 1},
+			},
+		},
+	}
+	sanitizeLimitsSnapshot(&snap)
+	require.Contains(t, snap.Minute.Counters, "key:••••mnop")
+	require.Contains(t, snap.Minute.Counters, "global")
+}
+
+func TestSanitizeRateLimitOverrides_RedactsKeys(t *testing.T) {
+	out := sanitizeRateLimitOverrides(config.RateLimitOverrides{
+		PerKey: map[string]config.LimitsConfig{
+			"iw:long-secret-value": {RequestsPerMinute: 5},
+		},
+		PerUser: map[string]config.LimitsConfig{
+			"alice@example.com": {TokensPerDay: 1000},
+		},
+	})
+	require.Contains(t, out.PerKey, "key:••••alue")
+	require.Contains(t, out.PerUser, "user:••••.com")
 }
 
 func TestMergeRedactedCounters_CollapsesSameSuffix(t *testing.T) {
