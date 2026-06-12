@@ -214,6 +214,31 @@ func TestRedisLimiter_DynamicPerKeyOverride(t *testing.T) {
 	assert.False(t, res.Allowed)
 }
 
+func TestRedisLimiter_SnapshotReportsLiveCounters(t *testing.T) {
+	cfg := baseCfg()
+	lim, _ := newRedisLimiterForTest(t, cfg)
+
+	snapshotter, ok := lim.(Snapshotter)
+	require.True(t, ok, "redis limiter must implement Snapshotter")
+
+	scope := ScopeKeys{Provider: "openai", Model: "gpt-4o", UserID: "snapuser"}
+	now := time.Now()
+	res, err := lim.CheckAndReserve(context.Background(), "1", scope, 17, now)
+	require.NoError(t, err)
+	require.True(t, res.Allowed)
+
+	snap := snapshotter.Snapshot(now)
+	assert.Equal(t, "redis", snap.Backend)
+	require.NotNil(t, snap.Minute)
+
+	got := snap.Minute.Counters["user:snapuser"]
+	assert.Equal(t, 1, got.Requests)
+	assert.Equal(t, 17, got.Tokens)
+
+	global := snap.Minute.Counters["global"]
+	assert.Equal(t, 1, global.Requests)
+}
+
 func TestNewRedisLimiter_NilRedisConfigErrors(t *testing.T) {
 	cfg := config.GetDefaultYAMLConfig()
 	cfg.Features.RateLimiting.Enabled = true

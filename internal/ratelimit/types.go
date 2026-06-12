@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -113,5 +114,8 @@ func Factory(cfg *config.YAMLConfig) (RateLimiter, error) {
 		// Redis implementation added separately
 		return NewRedisLimiter(cfg)
 	}
-	return nil, nil
+	// An unknown backend with rate limiting enabled is a misconfiguration: a
+	// typo like "reddis" previously returned (nil, nil) and silently disabled
+	// enforcement. Fail fast at startup instead.
+	return nil, fmt.Errorf("unknown rate limiting backend %q (expected \"memory\" or \"redis\")", backend)
 }

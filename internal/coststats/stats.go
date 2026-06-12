@@ -63,6 +63,7 @@ type Recorder struct {
 	byKey      map[string]*keySpend
 	byProvider map[string]*providerSpend
 	recent     []recentEntry
+	flushed    costFlushed
 
 	// Shared Redis rollup lifecycle (BindRollup/FlushRollup/QueueToday/
 	// ArchiveDay/MergeHistory). Promoted methods satisfy the recorder's
@@ -70,6 +71,15 @@ type Recorder struct {
 	adminrollup.RecorderBinding
 	history.Binding
 }
+
+type costFlushed struct {
+	spendUSD, inputSpendUSD, outputSpendUSD float64
+	requests, inputTokens, outputTokens     int64
+	byProvider                              map[string]providerSpend
+	byKey                                   map[string]keySpend
+}
+
+var costRollupCaps = adminrollup.TopNCaps{ByKey: 100}
 
 // NewRecorder returns a ready-to-use Recorder scoped to the current UTC day.
 func NewRecorder() *Recorder {
@@ -87,8 +97,17 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	if r.dayKey == day {
 		return
 	}
-	r.ArchiveDay(r.dayKey, r.rollupDataLocked())
+	oldDay := r.dayKey
 	r.dayKey = day
+	// Flush pending debounced deltas synchronously (persister mutex only — does
+	// not take r.mu) so this instance's last old-day deltas land in Redis
+	// before the archive goroutine snapshots. Only the archive runs async so a
+	// UTC rollover never blocks concurrent RecordRequest on r.mu for seconds.
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCost, oldDay, costRollupCaps)
+	}()
+	r.flushed = costFlushed{}
 	r.spendTodayUSD = 0
 	r.inputSpendTodayUSD = 0
 	r.outputSpendTodayUSD = 0
@@ -187,10 +206,79 @@ func (r *Recorder) RecordRequest(
 	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
-	rollup := r.rollupDataLocked()
+	delta := r.costDeltaLocked()
+	r.advanceCostFlushedLocked()
 	r.mu.Unlock()
 
-	r.QueueToday(dayKey, rollup)
+	r.QueueDelta(dayKey, delta)
+}
+
+func (r *Recorder) costDeltaLocked() adminrollup.Delta {
+	d := adminrollup.Delta{
+		Totals: map[string]float64{
+			"spend_usd":        r.spendTodayUSD - r.flushed.spendUSD,
+			"input_spend_usd":  r.inputSpendTodayUSD - r.flushed.inputSpendUSD,
+			"output_spend_usd": r.outputSpendTodayUSD - r.flushed.outputSpendUSD,
+			"requests":         float64(r.requestsToday - r.flushed.requests),
+			"input_tokens":     float64(r.inputTokensToday - r.flushed.inputTokens),
+			"output_tokens":    float64(r.outputTokensToday - r.flushed.outputTokens),
+		},
+		Dimensions: map[string]map[string]float64{
+			"by_provider": {},
+			"by_key":      {},
+		},
+	}
+	for name, ps := range r.byProvider {
+		prev := r.flushed.byProvider[name]
+		addDim(d.Dimensions["by_provider"], name, "spend_usd", ps.SpendUSD-prev.SpendUSD)
+		addDim(d.Dimensions["by_provider"], name, "input_spend_usd", ps.InputSpendUSD-prev.InputSpendUSD)
+		addDim(d.Dimensions["by_provider"], name, "output_spend_usd", ps.OutputSpendUSD-prev.OutputSpendUSD)
+		addDim(d.Dimensions["by_provider"], name, "requests", float64(ps.Requests-prev.Requests))
+		addDim(d.Dimensions["by_provider"], name, "input_tokens", float64(ps.InputTokens-prev.InputTokens))
+		addDim(d.Dimensions["by_provider"], name, "output_tokens", float64(ps.OutputTokens-prev.OutputTokens))
+	}
+	for scope, ks := range r.byKey {
+		prev := r.flushed.byKey[scope]
+		member := scope
+		if ks.KeyID != "" {
+			member = ks.KeyID
+		}
+		addDim(d.Dimensions["by_key"], member, "spend_usd", ks.SpendUSD-prev.SpendUSD)
+		addDim(d.Dimensions["by_key"], member, "input_spend_usd", ks.InputSpendUSD-prev.InputSpendUSD)
+		addDim(d.Dimensions["by_key"], member, "output_spend_usd", ks.OutputSpendUSD-prev.OutputSpendUSD)
+		addDim(d.Dimensions["by_key"], member, "requests", float64(ks.Requests-prev.Requests))
+		addDim(d.Dimensions["by_key"], member, "input_tokens", float64(ks.InputTokens-prev.InputTokens))
+		addDim(d.Dimensions["by_key"], member, "output_tokens", float64(ks.OutputTokens-prev.OutputTokens))
+	}
+	return d
+}
+
+func addDim(m map[string]float64, member, field string, v float64) {
+	if v == 0 {
+		return
+	}
+	m[adminrollup.DimMemberField(member, field)] = v
+}
+
+func (r *Recorder) advanceCostFlushedLocked() {
+	if r.flushed.byProvider == nil {
+		r.flushed.byProvider = make(map[string]providerSpend)
+	}
+	if r.flushed.byKey == nil {
+		r.flushed.byKey = make(map[string]keySpend)
+	}
+	r.flushed.spendUSD = r.spendTodayUSD
+	r.flushed.inputSpendUSD = r.inputSpendTodayUSD
+	r.flushed.outputSpendUSD = r.outputSpendTodayUSD
+	r.flushed.requests = r.requestsToday
+	r.flushed.inputTokens = r.inputTokensToday
+	r.flushed.outputTokens = r.outputTokensToday
+	for name, ps := range r.byProvider {
+		r.flushed.byProvider[name] = *ps
+	}
+	for scope, ks := range r.byKey {
+		r.flushed.byKey[scope] = *ks
+	}
 }
 
 func spendList(m map[string]*keySpend) []keySpend {
@@ -233,9 +321,10 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		recent[len(r.recent)-1-i] = e
 	}
 
+	dayKey := r.dayKey
 	snap := map[string]interface{}{
 		"available":              true,
-		"day":                    r.dayKey,
+		"day":                    dayKey,
 		"started_at":             r.startedAt.Unix(),
 		"spend_today_usd":        r.spendTodayUSD,
 		"input_spend_today_usd":  r.inputSpendTodayUSD,
@@ -249,6 +338,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	}
 	r.mu.RUnlock()
 
+	r.MergeToday(adminrollup.MetricCost, dayKey, snap, costRollupCaps)
 	r.MergeHistory(adminrollup.MetricCost, snap)
 	return snap
 }
