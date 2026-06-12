@@ -13,4 +13,5 @@ features:
   admin_dashboard:
     enabled: false
   history:
+    backend: none
     role: sidecar
