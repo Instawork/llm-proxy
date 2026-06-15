@@ -31,11 +31,9 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys"
     region: "us-west-2"
-  # Circuit breaker: shadow/observe-only rollout against an externally
-  # provided Redis cluster.  The sidecar records counterfactual state +
-  # failure counts in Redis (under the `llm:cb:` prefix, DB 5) but never
-  # retries traffic, fast-fails, or synthesises 503s — operators can flip
-  # `mode: enforce` once the would-trip rates look sane.
+  # Circuit breaker: enforce mode.  Retries transient failures (up to
+  # max_transient_retries), fast-fails open circuits with a synthetic 503,
+  # and counts retry contributions toward the failure window.
   #
   # ${REDIS_URL} is populated from a deployment-managed secret in the
   # ECS task definition; any transient Redis outage degrades the breaker
@@ -43,7 +41,7 @@ features:
   # proxy itself.
   circuit_breaker:
     enabled: true
-    mode: "log"
+    mode: "enforce"
     backend: "redis"
     redis:
       url: "${REDIS_URL}"
@@ -53,7 +51,7 @@ features:
     cooldown_seconds: 300
     max_transient_retries: 2
     max_rate_limit_retries: 2
-    retry_contribution_mode: "log"
+    retry_contribution_mode: "on"
     # Bypass safety valve: callers without a fallback can set
     # X-LLM-Proxy-Bypass-Circuit (or ?llm_proxy_bypass_circuit=1) to opt
     # out of fast-fail.  Default is true; set to false to disable the

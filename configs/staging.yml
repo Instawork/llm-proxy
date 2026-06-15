@@ -18,14 +18,10 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-staging"
     region: "us-west-2"
-  # Circuit breaker: shadow/observe-only rollout in staging, matching
-  # production config so we can validate Redis connectivity and
-  # would-trip rates before flipping prod to `mode: enforce`.  DB 5 is
-  # pinned so `llm:cb:*` keys stay isolated from any application cache
-  # that may share the same Redis cluster.
+  # Circuit breaker: enforce mode (matching production).
   circuit_breaker:
     enabled: true
-    mode: "log"
+    mode: "enforce"
     backend: "redis"
     redis:
       url: "${REDIS_URL}"
@@ -35,7 +31,7 @@ features:
     cooldown_seconds: 300
     max_transient_retries: 2
     max_rate_limit_retries: 2
-    retry_contribution_mode: "log"
+    retry_contribution_mode: "on"
     # Match production's bypass and rollup configuration so staging
     # validates the same wiring + log lines before prod is flipped.
     bypass_allowed: true

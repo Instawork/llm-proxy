@@ -34,8 +34,8 @@ func TestCircuitBreaker_EnvConfigsLoad(t *testing.T) {
 	}{
 		// Production and staging must stay observe-only until an
 		// operator intentionally flips them and updates this test.
-		{"production.yml", true, "log", "redis"},
-		{"staging.yml", true, "log", "redis"},
+		{"production.yml", true, "enforce", "redis"},
+		{"staging.yml", true, "enforce", "redis"},
 		// Dev is free to enforce + use memory; just assert it parses.
 		{"dev.yml", true, "", ""},
 		// Base is the shared root; no circuit-breaker assertions.
