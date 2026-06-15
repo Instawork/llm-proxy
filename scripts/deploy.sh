@@ -43,9 +43,12 @@ aws configure set region "${AWS_DEFAULT_REGION}"
 ECR_URL_PREFIX="${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 IMAGE_URL="${ECR_URL_PREFIX}/${AWS_ECR_REPOSITORY_NAME}:${GIT_SHA}"
 
-# Default resource values for production
-CPU=512
-MEMORY=1024
+# Default resource values for production (llm-proxy container only; presidio
+# sidecar sizing lives in the infrastructure locals). These must keep the
+# derived Fargate task_cpu/task_memory (llm-proxy + presidio) on a valid
+# Fargate tier: 1024 + presidio 1024 = 2048 cpu, 2048 + presidio 4096 = 6144 mem.
+CPU=1024
+MEMORY=2048
 
 echo "==========================================="
 echo "Deploying LLM Proxy to ${DEPLOY_ENV}"
