@@ -15,6 +15,31 @@ import (
 	"time"
 )
 
+// skipOnInsufficientQuota skips (rather than fails) an OpenAI integration test
+// when the upstream returns a hard billing-quota 429. That condition means the
+// OpenAI account/org is out of funds — an external operational state, not a
+// regression in this proxy — so failing CI on it only masks real signal. Any
+// other non-200 still falls through to the caller's t.Fatalf. This intentionally
+// matches only code == "insufficient_quota"; transient 429 rate limits and all
+// other errors keep failing the build.
+func skipOnInsufficientQuota(t *testing.T, status int, body []byte) {
+	t.Helper()
+	if status != http.StatusTooManyRequests {
+		return
+	}
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return
+	}
+	if envelope.Error.Code == "insufficient_quota" {
+		t.Skipf("skipping: OpenAI account out of quota (insufficient_quota); not a proxy regression. Response: %s", string(body))
+	}
+}
+
 // openaiTestModel represents a model configuration for testing
 type openaiTestModel struct {
 	name        string
@@ -227,6 +252,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
+				skipOnInsufficientQuota(t, resp.StatusCode, body)
 				t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 			}
 
@@ -408,6 +434,7 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
+				skipOnInsufficientQuota(t, resp.StatusCode, body)
 				t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 			}
 
@@ -497,6 +524,7 @@ func testOpenAIChatCompletionsNonStreaming(t *testing.T, server *httptest.Server
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnInsufficientQuota(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
@@ -581,6 +609,7 @@ func testOpenAIChatCompletionsStreaming(t *testing.T, server *httptest.Server, p
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnInsufficientQuota(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
@@ -688,6 +717,7 @@ func testOpenAIResponsesNonStreaming(t *testing.T, server *httptest.Server, prov
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnInsufficientQuota(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
@@ -766,6 +796,7 @@ func testOpenAIResponsesStreaming(t *testing.T, server *httptest.Server, provide
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnInsufficientQuota(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
