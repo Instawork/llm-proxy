@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/config"
 )
 
@@ -120,8 +121,8 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 	if cfg.RedisURL != want {
 		t.Fatalf("production.yml REDIS_URL expansion broken: want %q, got %q", want, cfg.RedisURL)
 	}
-	if cfg.Mode != "log" {
-		t.Fatalf("production.yml cb.mode should be 'log' until explicitly flipped, got %q", cfg.Mode)
+	if cfg.Mode != "enforce" {
+		t.Fatalf("production.yml cb.mode should be 'enforce' (circuit breaker actively enforcing in prod), got %q", cfg.Mode)
 	}
 	if cfg.Backend != "redis" {
 		t.Fatalf("production.yml cb.backend should be 'redis', got %q", cfg.Backend)
@@ -131,5 +132,41 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 	}
 	if !cfg.RedisDBSet {
 		t.Fatal("production.yml cb.redis.db should be recorded as explicitly set")
+	}
+}
+
+// TestSidecarProfile_WritesRollupsWithoutDashboard locks in the sidecar
+// contract: the dashboard HTTP server is OFF, but rollup writing stays ON so
+// sidecars publish usage/cost/etc to the shared Redis the standalone dashboard
+// reads. Regression guard for the base+production+sidecar deep-merge plus the
+// decoupling of rollups from admin_dashboard.enabled.
+func TestSidecarProfile_WritesRollupsWithoutDashboard(t *testing.T) {
+	t.Setenv("REDIS_URL", "redis://:pw@cache.internal:6379/6")
+
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	merged, err := config.LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "production.yml"),
+		filepath.Join(configsDir, "sidecar.yml"),
+	})
+	if err != nil {
+		t.Fatalf("load sidecar configs: %v", err)
+	}
+
+	admin := merged.Features.AdminDashboard
+	if admin.Enabled {
+		t.Fatal("sidecar: admin_dashboard.enabled must be false (no HTTP dashboard server)")
+	}
+	if !admin.Rollups.Enabled {
+		t.Fatal("sidecar: admin_dashboard.rollups.enabled must stay true (inherited) so sidecars write rollups")
+	}
+	if rc := adminrollup.ConfigFromYAML(admin); !rc.Enabled {
+		t.Fatal("sidecar: rollup store must be enabled even though the dashboard server is off")
+	}
+	if admin.Rollups.Redis == nil || admin.Rollups.Redis.DB != 6 {
+		t.Fatalf("sidecar: rollups must target the shared Redis db 6, got %+v", admin.Rollups.Redis)
 	}
 }

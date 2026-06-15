@@ -20,8 +20,13 @@ func TestConfigFromYAML(t *testing.T) {
 	require.Equal(t, 90, cfg.RetentionDays)
 	require.Equal(t, 30, cfg.HistoryDays)
 
-	// Disabled dashboard forces rollups off even when rollups.enabled is true.
+	// Rollup writing is decoupled from the dashboard server: rollups stay ON when
+	// the dashboard is disabled (the sidecar case — write rollups, no HTTP server).
 	admin.Enabled = false
+	require.True(t, ConfigFromYAML(admin).Enabled)
+
+	// rollups.enabled is the sole gate; off means no writes regardless of server.
+	admin.Rollups.Enabled = false
 	require.False(t, ConfigFromYAML(admin).Enabled)
 }
 

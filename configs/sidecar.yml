@@ -1,8 +1,16 @@
 # Sidecar deployment profile (llm-proxy container co-located with an app).
 # Set LLM_PROXY_CONFIG_PROFILE=sidecar alongside ENVIRONMENT=production (or
 # staging) so deploy identity and infra settings stay on the env file while
-# PII redaction and the admin dashboard stay off here — observability redaction
-# runs only on the standalone llm-proxy service.
+# PII redaction and the admin dashboard HTTP server stay off here — observability
+# redaction and the dashboard UI run only on the standalone llm-proxy service.
+#
+# This file deep-merges over the environment file (e.g. production.yml), but the
+# merge replaces whole nested blocks it names. So sidecars STILL write usage/cost/
+# ratelimit/circuit rollups to the shared Redis (rollups are gated on
+# rollups.enabled, not admin_dashboard.enabled) — but because we override the
+# admin_dashboard block below, the rollups sub-block must be restated here. The
+# standalone dashboard then reflects all sidecar traffic; we just don't serve the
+# UI from here.
 
 enabled: true
 
@@ -11,7 +19,20 @@ features:
     enabled: false
     allow_per_key_override: false
   admin_dashboard:
+    # HTTP dashboard server off (UI served only by the standalone service)...
     enabled: false
+    # ...but rollup WRITES stay on so sidecars publish usage/cost/ratelimit/
+    # circuit aggregates to the shared Redis the standalone dashboard reads.
+    # Must match the standalone (production.yml) Redis db so writes land on the
+    # same keys. Set explicitly here because the deep-merge replaces the whole
+    # admin_dashboard block rather than inheriting nested rollups.
+    rollups:
+      enabled: true
+      redis:
+        url: "${REDIS_URL}"
+        db: 6
+      retention_days: 90
+      history_days: 30
   history:
     backend: none
     role: sidecar

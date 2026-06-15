@@ -369,9 +369,15 @@ func newRedisClient(r *config.RedisConfig) (*redis.Client, error) {
 }
 
 // ConfigFromYAML builds rollup config from admin_dashboard.rollups.
+//
+// Rollup writing is gated ONLY on rollups.enabled — intentionally independent
+// of admin_dashboard.enabled (which gates the HTTP dashboard server). This lets
+// sidecars (dashboard off) still publish usage/cost/ratelimit/circuit rollups to
+// the shared Redis that the standalone dashboard reads, so the dashboard reflects
+// all proxy traffic, not just the rarely-hit standalone service.
 func ConfigFromYAML(admin config.AdminDashboardConfig) Config {
 	return Config{
-		Enabled:       admin.Enabled && admin.Rollups.Enabled,
+		Enabled:       admin.Rollups.Enabled,
 		Backend:       admin.Rollups.Backend,
 		Redis:         admin.Rollups.Redis,
 		RetentionDays: admin.Rollups.RetentionDays,
