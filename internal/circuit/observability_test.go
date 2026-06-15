@@ -268,6 +268,48 @@ func TestObserveOnly_TerminalFailureLogContainsStructuredAttrs(t *testing.T) {
 	}
 }
 
+// TestFastFailMetric_TagsCaller verifies the caller-label dimension wired
+// via WithCallerExtractor lands on both the log line and the dogstatsd tag
+// set, so operators can attribute degraded responses to a downstream
+// client (e.g. "finch-prod").
+func TestFastFailMetric_TagsCaller(t *testing.T) {
+	buf := &bytes.Buffer{}
+	log := captureLogs(buf)
+	metrics := &fakeMetrics{}
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("inner transport must not be called when the circuit is open")
+		return nil, nil
+	})
+	cfg := Config{Enabled: true, Mode: ModeEnforce}.Defaults()
+	store := NewMemoryStore(cfg)
+	// Force the bare-provider breaker open so the next request fast-fails.
+	if err := store.ForceOpen(context.Background(), "openai", cfg.CooldownSeconds); err != nil {
+		t.Fatalf("ForceOpen: %v", err)
+	}
+	tr := NewTransport(
+		inner, store, cfg, "openai", log,
+		WithMetrics(metrics),
+		WithCallerExtractor(func(*http.Request) string { return "finch-prod" }),
+	)
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gpt-4o"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+
+	calls := metrics.findByName("circuit.fast_fail")
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 circuit.fast_fail metric, got %d (%+v)", len(calls), metrics.calls)
+	}
+	if _, ok := tagSet(calls[0].Tags)["caller:finch-prod"]; !ok {
+		t.Fatalf("missing tag caller:finch-prod on circuit.fast_fail (tags=%v)", calls[0].Tags)
+	}
+}
+
 // TestObserveOnly_TerminalFailureMetric_TransportError_TagsClientDeadline
 // is the explicit fixture for the "tag context.DeadlineExceeded
 // distinctly" requirement: a deadline-exceeded transport error must

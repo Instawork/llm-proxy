@@ -57,6 +57,7 @@ type Transport struct {
 	log      *slog.Logger
 	metrics  MetricsSink
 	modelFn  ModelFromRequestFunc
+	callerFn CallerFromRequestFunc
 }
 
 // NewTransport wraps inner with circuit-breaker behaviour for provider.
@@ -109,6 +110,7 @@ type failureContext struct {
 	Provider    string
 	Model       string
 	CBKey       string
+	Caller      string
 	Path        string
 	Method      string
 	StatusCode  int
@@ -142,6 +144,12 @@ func (t *Transport) newFailureContext(req *http.Request, resp *http.Response, er
 		// and allowing extractors to fall back to req.Body there can turn an
 		// open circuit into an unbounded body read just for observability.
 		fc.Model = t.modelFn(req)
+	}
+	if t.callerFn != nil && req != nil {
+		// Best-effort caller label (e.g. proxy API-key description). Reads
+		// from the request context only — no body access — so it is safe on
+		// synthetic fast-fail paths that run before cacheBody.
+		fc.Caller = t.callerFn(req)
 	}
 	fc.CBKey = composeKey(fc.Provider, fc.Model)
 	return fc
@@ -200,6 +208,7 @@ func (fc failureContext) attrs() []any {
 		"provider", fc.Provider,
 		"model", fc.Model,
 		"cb_key", fc.CBKey,
+		"caller", fc.Caller,
 		"path", fc.Path,
 		"method", fc.Method,
 		"status_code", fc.StatusCode,
@@ -219,6 +228,12 @@ func (fc failureContext) attrs() []any {
 // derivable from `provider:model` via concatenation and including it
 // would double-count cardinality without adding any new dimension.
 //
+// caller is the API-key description (a human label like "finch-prod"),
+// so operators can attribute degraded responses to a downstream client.
+// Its cardinality is bounded by the number of provisioned proxy keys —
+// low and operator-controlled — and is length-capped via
+// normalizeTagValue as defence-in-depth; empty becomes "unknown".
+//
 // Tag values are length-capped via normalizeTagValue to prevent
 // pathological model IDs (e.g. an attacker passing a 4096-char string
 // or a one-off fine-tune SKU) from blowing up the Datadog cardinality
@@ -229,6 +244,7 @@ func (fc failureContext) metricTags() []string {
 	return []string{
 		"provider:" + normalizeTagValue(fc.Provider),
 		"model:" + normalizeTagValue(fc.Model),
+		"caller:" + normalizeTagValue(fc.Caller),
 		"status_code:" + strconv.Itoa(fc.StatusCode),
 		"failure_kind:" + normalizeTagValue(string(fc.Kind)),
 	}
