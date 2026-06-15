@@ -12,10 +12,12 @@ import (
 )
 
 func adminDistFS() fs.FS {
+	// web.FS() (embed_ui build) already returns the tree rooted at dist/, so its
+	// root holds index.html and assets/. Don't fs.Sub(uiFS, "dist") again — that
+	// points at a nonexistent dist/dist/ and, because fs.Sub doesn't stat, yields
+	// a non-nil-but-broken FS that makes every file open 404.
 	if uiFS := web.FS(); uiFS != nil {
-		if dist, err := fs.Sub(uiFS, "dist"); err == nil {
-			return dist
-		}
+		return uiFS
 	}
 	if st, err := os.Stat("web/dist/index.html"); err == nil && !st.IsDir() {
 		return os.DirFS("web/dist")
