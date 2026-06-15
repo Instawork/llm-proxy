@@ -209,6 +209,9 @@ func (f *fakeCircuitStore) RecordSuccess(context.Context, string) error { return
 func (f *fakeCircuitStore) RecordProbeFailed(context.Context, string) error {
 	return nil
 }
+func (f *fakeCircuitStore) ForceOpen(context.Context, string, int) error {
+	return nil
+}
 func (f *fakeCircuitStore) GetStats(context.Context, string) (*circuit.ProviderStats, error) {
 	return nil, f.statsErr
 }
