@@ -83,11 +83,20 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 	case 500, 502, 503, 504:
 		return FailureClassDegraded
 	case 429:
-		return classifyRateLimitScope(
-			resp.Header.Get("x-ratelimit-remaining-requests"),
-			resp.Header.Get("x-ratelimit-remaining-tokens"),
-			resp.Header.Get("retry-after"),
-		)
+		// OpenAI uses 429 for two distinct conditions:
+		//   - rate_limit_reached: transient; always includes x-ratelimit-* and/or Retry-After
+		//   - insufficient_quota: billing cap exhausted; no ratelimit headers at all
+		// Retrying insufficient_quota is wasteful and delays the caller from
+		// falling back to another provider.  Treat it as GlobalRateLimit so the
+		// circuit escalates promptly and Finch's fallback_model fires.
+		rr := resp.Header.Get("x-ratelimit-remaining-requests")
+		rt := resp.Header.Get("x-ratelimit-remaining-tokens")
+		ra := resp.Header.Get("retry-after")
+		if rr == "" && rt == "" && ra == "" {
+			// No ratelimit headers → insufficient_quota (billing exhausted).
+			return FailureClassGlobalRateLimit
+		}
+		return classifyRateLimitScope(rr, rt, ra)
 	case 401, 403:
 		return FailureClassNone
 	default:

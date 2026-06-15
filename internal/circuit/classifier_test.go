@@ -95,6 +95,27 @@ func TestClassify_OpenAI_429_Global(t *testing.T) {
 	}
 }
 
+func TestClassify_OpenAI_429_InsufficientQuota(t *testing.T) {
+	// OpenAI insufficient_quota (billing cap exhausted) returns 429 with no
+	// x-ratelimit-* headers and no Retry-After.  Retrying is pointless; treat
+	// as GlobalRateLimit so the circuit escalates and callers fall back fast.
+	fc := ClassifyResponse("openai", resp(429, nil), nil)
+	if fc != FailureClassGlobalRateLimit {
+		t.Fatalf("OpenAI 429 with no ratelimit headers (insufficient_quota) should be GlobalRateLimit, got %s", fc)
+	}
+}
+
+func TestClassify_OpenAI_429_Local(t *testing.T) {
+	// Normal rate-limit with capacity remaining on one bucket → local.
+	fc := ClassifyResponse("openai", resp(429, map[string]string{
+		"x-ratelimit-remaining-requests": "10",
+		"x-ratelimit-remaining-tokens":   "0",
+	}), nil)
+	if fc != FailureClassLocalRateLimit {
+		t.Fatalf("want LocalRateLimit, got %s", fc)
+	}
+}
+
 func TestClassify_OpenAI_429_LongRetryAfter(t *testing.T) {
 	// Long Retry-After → global rate limit.
 	fc := ClassifyResponse("openai", resp(429, map[string]string{
