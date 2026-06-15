@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,18 @@ func resp(status int, headers map[string]string) *http.Response {
 		h.Set(k, v)
 	}
 	return &http.Response{StatusCode: status, Header: h, Body: http.NoBody}
+}
+
+func respWithBody(status int, headers map[string]string, body string) *http.Response {
+	h := make(http.Header)
+	for k, v := range headers {
+		h.Set(k, v)
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
 }
 
 func TestClassifyResponse_Success(t *testing.T) {
@@ -95,13 +108,33 @@ func TestClassify_OpenAI_429_Global(t *testing.T) {
 	}
 }
 
-func TestClassify_OpenAI_429_InsufficientQuota(t *testing.T) {
-	// OpenAI insufficient_quota (billing cap exhausted) returns 429 with no
-	// x-ratelimit-* headers and no Retry-After.  Retrying is pointless; treat
-	// as GlobalRateLimit so the circuit escalates and callers fall back fast.
+func TestClassify_OpenAI_429_InsufficientQuota_Body(t *testing.T) {
+	// Primary path: JSON body contains error.code = "insufficient_quota".
+	// This is the authoritative signal regardless of headers.
+	body := `{"error":{"message":"You exceeded your current quota...","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`
+	fc := ClassifyResponse("openai", respWithBody(429, nil, body), nil)
+	if fc != FailureClassGlobalRateLimit {
+		t.Fatalf("OpenAI 429 with insufficient_quota body should be GlobalRateLimit, got %s", fc)
+	}
+}
+
+func TestClassify_OpenAI_429_InsufficientQuota_BodyRestoredAfterPeek(t *testing.T) {
+	// Verify peekOpenAIErrorCode restores the body so the caller can still
+	// read the full response after classification.
+	body := `{"error":{"message":"You exceeded your current quota...","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`
+	r := respWithBody(429, nil, body)
+	ClassifyResponse("openai", r, nil)
+	got, err := io.ReadAll(r.Body)
+	if err != nil || string(got) != body {
+		t.Fatalf("body not restored after peek: err=%v body=%q", err, got)
+	}
+}
+
+func TestClassify_OpenAI_429_InsufficientQuota_FallbackHeuristic(t *testing.T) {
+	// Fallback path: body is empty / unreadable, no ratelimit headers → heuristic.
 	fc := ClassifyResponse("openai", resp(429, nil), nil)
 	if fc != FailureClassGlobalRateLimit {
-		t.Fatalf("OpenAI 429 with no ratelimit headers (insufficient_quota) should be GlobalRateLimit, got %s", fc)
+		t.Fatalf("OpenAI 429 with no body and no ratelimit headers should be GlobalRateLimit, got %s", fc)
 	}
 }
 

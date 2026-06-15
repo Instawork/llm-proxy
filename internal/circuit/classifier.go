@@ -1,7 +1,9 @@
 package circuit
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,16 +86,19 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 		return FailureClassDegraded
 	case 429:
 		// OpenAI uses 429 for two distinct conditions:
-		//   - rate_limit_reached: transient; always includes x-ratelimit-* and/or Retry-After
-		//   - insufficient_quota: billing cap exhausted; no ratelimit headers at all
-		// Retrying insufficient_quota is wasteful and delays the caller from
-		// falling back to another provider.  Treat it as GlobalRateLimit so the
-		// circuit escalates promptly and Finch's fallback_model fires.
+		//   - rate_limit_reached: transient; headers always present
+		//   - insufficient_quota: billing cap exhausted; no headers, body has code="insufficient_quota"
+		//
+		// Primary check: read the JSON error code from the body (authoritative).
+		// Secondary check: if the body is unreadable / unparseable, fall back to
+		// the missing-header heuristic as a best-effort defence.
+		if peekOpenAIErrorCode(resp) == "insufficient_quota" {
+			return FailureClassGlobalRateLimit
+		}
 		rr := resp.Header.Get("x-ratelimit-remaining-requests")
 		rt := resp.Header.Get("x-ratelimit-remaining-tokens")
 		ra := resp.Header.Get("retry-after")
 		if rr == "" && rt == "" && ra == "" {
-			// No ratelimit headers → insufficient_quota (billing exhausted).
 			return FailureClassGlobalRateLimit
 		}
 		return classifyRateLimitScope(rr, rt, ra)
@@ -105,6 +110,33 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 		}
 		return FailureClassNone
 	}
+}
+
+// peekOpenAIErrorCode reads up to openAIPeekBytes from resp.Body, extracts
+// the top-level error.code field, and restores the body so downstream
+// consumers still see the full response.  Returns "" on any read or parse
+// failure (fail-open — caller falls back to header heuristics).
+const openAIPeekBytes = 512
+
+func peekOpenAIErrorCode(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, openAIPeekBytes))
+	// Restore body: stitch what we read back onto the remaining stream.
+	resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), resp.Body))
+	if len(buf) == 0 {
+		return ""
+	}
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Error.Code
 }
 
 func classifyGemini(status int, resp *http.Response) FailureClass {
