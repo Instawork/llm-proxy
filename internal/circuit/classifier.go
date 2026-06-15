@@ -122,9 +122,18 @@ func peekOpenAIErrorCode(resp *http.Response) string {
 	if resp == nil || resp.Body == nil {
 		return ""
 	}
-	buf, _ := io.ReadAll(io.LimitReader(resp.Body, openAIPeekBytes))
+	orig := resp.Body
+	buf, _ := io.ReadAll(io.LimitReader(orig, openAIPeekBytes))
 	// Restore body: stitch what we read back onto the remaining stream.
-	resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), resp.Body))
+	// Preserve the original Closer so closing resp.Body still releases the
+	// upstream connection (io.NopCloser would swallow Close and leak it).
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.MultiReader(bytes.NewReader(buf), orig),
+		Closer: orig,
+	}
 	if len(buf) == 0 {
 		return ""
 	}

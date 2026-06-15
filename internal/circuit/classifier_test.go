@@ -130,6 +130,28 @@ func TestClassify_OpenAI_429_InsufficientQuota_BodyRestoredAfterPeek(t *testing.
 	}
 }
 
+type closeTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTrackingBody) Close() error { c.closed = true; return nil }
+
+func TestClassify_OpenAI_429_PeekPreservesCloser(t *testing.T) {
+	// The peeked body must keep the original Closer so closing resp.Body
+	// still releases the upstream connection (io.NopCloser would leak it).
+	body := `{"error":{"code":"insufficient_quota"}}`
+	ctb := &closeTrackingBody{Reader: strings.NewReader(body)}
+	r := &http.Response{StatusCode: 429, Header: make(http.Header), Body: ctb}
+	ClassifyResponse("openai", r, nil)
+	if err := r.Body.Close(); err != nil {
+		t.Fatalf("close error: %v", err)
+	}
+	if !ctb.closed {
+		t.Fatal("original body Close() was not propagated — connection would leak")
+	}
+}
+
 func TestClassify_OpenAI_429_InsufficientQuota_FallbackHeuristic(t *testing.T) {
 	// Fallback path: body is empty / unreadable, no ratelimit headers → heuristic.
 	fc := ClassifyResponse("openai", resp(429, nil), nil)
