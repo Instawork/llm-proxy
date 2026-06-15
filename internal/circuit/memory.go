@@ -260,6 +260,24 @@ func (s *MemoryStore) RecordSuccess(_ context.Context, key string) error {
 	return nil
 }
 
+// ForceOpen transitions key straight to Open for one cooldown period,
+// bypassing the failure-count threshold.  Recovery then rides the normal
+// Open → HalfOpen → probe lifecycle (stateUnlocked promotes to HalfOpen once
+// the cooldown elapses).  See Store.ForceOpen for the rationale.
+func (s *MemoryStore) ForceOpen(_ context.Context, key string, cooldownSeconds int) error {
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = s.cfg.CooldownSeconds
+	}
+	e := s.entry(key)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.state = StateOpen
+	e.cooldownUntil = s.now().Add(time.Duration(cooldownSeconds) * time.Second)
+	e.probeInFlight = false
+	e.probeStartAt = time.Time{}
+	return nil
+}
+
 // RecordProbeFailed re-opens the circuit after a failed half-open probe.
 func (s *MemoryStore) RecordProbeFailed(_ context.Context, key string) error {
 	e := s.entry(key)

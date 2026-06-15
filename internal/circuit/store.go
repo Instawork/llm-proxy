@@ -32,6 +32,18 @@ type Store interface {
 	// transitions the circuit back to Open for another full cooldown period.
 	RecordProbeFailed(ctx context.Context, key string) error
 
+	// ForceOpen transitions key straight to Open for one cooldown period,
+	// bypassing the failure-count threshold.  It is for authoritative,
+	// non-transient failures where a SINGLE event proves the breaker should
+	// trip immediately — e.g. OpenAI 429 insufficient_quota, a billing cap
+	// that makes every request fail until an operator tops up.  Opening the
+	// bare-provider key this way fast-fails the whole provider, and recovery
+	// then rides the normal Open → HalfOpen → single-probe → Closed lifecycle:
+	// after cooldownSeconds exactly one probe re-tests the upstream; success
+	// closes it, failure re-opens for another cooldown.  Idempotent / safe to
+	// call when already Open (it refreshes the cooldown).
+	ForceOpen(ctx context.Context, key string, cooldownSeconds int) error
+
 	// GetStats returns health statistics for the key (used in /health).
 	GetStats(ctx context.Context, key string) (*ProviderStats, error)
 }
@@ -56,6 +68,7 @@ type RollupRecorder interface {
 	// provider outage (multiple model breakers tripping concurrently)
 	// fast-fails every model for the provider, not just the keys that
 	// happened to trip.
+	//
 	RollupOpen(ctx context.Context, provider string, threshold, windowSeconds int) (open bool, count int, err error)
 
 	// ClearRollupKey removes openedKey from the rollup window for

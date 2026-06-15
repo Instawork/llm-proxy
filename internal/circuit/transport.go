@@ -211,8 +211,8 @@ func (fc failureContext) attrs() []any {
 // metricTags returns the dogstatsd tag set matching attrs().
 //
 // Empty model is rewritten to "unknown" because Datadog silently drops
-// tags with empty values, which would make the rest of the tag list
-// shift and break facet filters.  All other empty values are
+// tags with empty values, which would offset the rest of the tag list
+// and break facet filters.  All other empty values are
 // preserved (status_code:0 for transport errors, etc.).
 //
 // cb_key is intentionally omitted from the metric tag set: it is
@@ -239,7 +239,7 @@ func (fc failureContext) metricTags() []string {
 // truncated to that length to keep cardinality bounded. Returning the
 // truncated form (instead of dropping the tag entirely) preserves the
 // shape of the tag list so downstream facet filters do not silently
-// shift indices.
+// misalign indices.
 func normalizeTagValue(v string) string {
 	if v == "" {
 		return "unknown"
@@ -401,6 +401,24 @@ func (t *Transport) effectiveStateForRequest(req *http.Request) (State, string) 
 	// the rollup can add).  HalfOpen requests should be allowed through
 	// as probes — the rollup fast-failing them would prevent recovery,
 	// which is exactly the opposite of what we want.
+	//
+	// Provider-wide forced-open overlay (e.g. OpenAI insufficient_quota): a
+	// single account-wide failure opens the BARE-provider breaker via
+	// Store.ForceOpen.  Join it here so every per-model request fast-fails,
+	// and — crucially — route its half-open probe through the provider key so
+	// recovery rides the normal single-probe lifecycle (after cooldown one
+	// request re-tests the upstream; success closes it, failure re-opens it).
+	if state == StateClosed && key != t.provider {
+		if pState, err := t.store.GetState(ctx, t.provider); err == nil {
+			switch pState {
+			case StateOpen:
+				return StateOpen, t.provider
+			case StateHalfOpen:
+				return StateHalfOpen, t.provider
+			}
+		}
+	}
+
 	if state == StateClosed && t.cfg.PerProviderRollupThreshold > 0 {
 		if rec, ok := t.store.(RollupRecorder); ok {
 			open, count, _ := rec.RollupOpen(
@@ -921,6 +939,42 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 
 		// ── Success ───────────────────────────────────────────────────────
 		if fc == FailureClassNone {
+			t.logTimingBreakdown(req, startedAt, cacheBodyDur, upstreamDur, attempt+1, resp)
+			return resp, err
+		}
+
+		// ── Insufficient quota / billing cap — open the whole provider ───────
+		// OpenAI 429 insufficient_quota is an account-wide billing cap, not a
+		// model-specific throttle: while it persists EVERY model for the
+		// provider will fail identically until billing is topped up.  That is
+		// functionally a provider outage, so a single occurrence trips the
+		// provider-level rollup immediately (bypassing the N-distinct-key
+		// threshold) — every subsequent OpenAI request then fast-fails with a
+		// synthetic 503 so callers can fall over instead of each eating the
+		// full-latency error.
+		//
+		// The triggering request itself still returns the REAL upstream
+		// response (status + body, undrained) so this caller sees the
+		// actionable insufficient_quota error code.  Retrying is pointless and
+		// is therefore skipped.  The forced-open marker auto-expires after the
+		// rollup window, at which point traffic is allowed through to re-probe;
+		// if quota is still exhausted the next failure re-arms it.
+		if fc == FailureClassInsufficientQuota {
+			evt := t.newFailureContext(req, resp, err)
+			// Open the BARE-provider breaker so every OpenAI model fast-fails
+			// until recovery.  ForceOpen uses one cooldown period, after which
+			// the breaker auto-promotes to HalfOpen and a single probe re-tests
+			// the upstream — if quota is still exhausted that probe re-opens it,
+			// otherwise it closes.  (No retry here: retrying a billing cap is
+			// pointless.)
+			if fErr := t.store.ForceOpen(ctx, t.provider, t.cfg.CooldownSeconds); fErr != nil {
+				t.log.Warn("circuit: ForceOpen (insufficient_quota) error",
+					"provider", t.provider, "error", fErr)
+			}
+			t.log.Warn("circuit: insufficient_quota — forcing provider open, passing upstream response through",
+				append(evt.attrs(),
+					"cooldown_seconds", t.cfg.CooldownSeconds)...)
+			t.emit("insufficient_quota_force_open", evt)
 			t.logTimingBreakdown(req, startedAt, cacheBodyDur, upstreamDur, attempt+1, resp)
 			return resp, err
 		}

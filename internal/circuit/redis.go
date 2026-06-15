@@ -78,8 +78,8 @@ const redisStorePingTimeout = 2 * time.Second
 //     DB to keep `llm:cb:*` keys isolated.
 //
 // NewRedisStore validates connectivity with a short PING before returning.
-// Steady-state ops still fail-open to StateClosed on Redis errors, so a Redis
-// outage after startup can never cascade into a proxy outage.
+// Steady-state operations still fail-open to StateClosed on Redis errors, so a
+// Redis outage after startup can never cascade into a proxy outage.
 func NewRedisStore(cfg Config) (*RedisStore, error) {
 	cfg = cfg.Defaults()
 
@@ -354,6 +354,30 @@ func (s *RedisStore) RecordProbeFailed(ctx context.Context, key string) error {
 	pipe.Del(ctx, s.probeKey(key))
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+// ForceOpen transitions key straight to Open for one cooldown period,
+// bypassing the failure-count threshold.  Mirrors RecordProbeFailed's open
+// transition (state key with cooldown TTL + half-open marker) so recovery
+// rides the normal Open → HalfOpen → probe lifecycle.  See Store.ForceOpen.
+func (s *RedisStore) ForceOpen(ctx context.Context, key string, cooldownSeconds int) error {
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = s.cfg.CooldownSeconds
+	}
+	cd := time.Duration(cooldownSeconds) * time.Second
+	hoTTL := time.Duration(cooldownSeconds*halfOpenMarkerTTLMultiplier) * time.Second
+	pipe := s.rdb.Pipeline()
+	pipe.Set(ctx, s.stateKey(key), "open", cd)
+	pipe.Set(ctx, s.halfOpenKey(key), "1", hoTTL)
+	pipe.Del(ctx, s.probeKey(key))
+	if _, err := pipe.Exec(ctx); err != nil {
+		s.log.Warn(
+			"circuit.RedisStore: ForceOpen failed (provider will NOT fast-fail account-wide)",
+			"key", key,
+			"error", err,
+		)
+	}
+	return nil
 }
 
 // GetStats returns a snapshot of circuit stats for the key.

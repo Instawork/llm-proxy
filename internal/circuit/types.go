@@ -197,6 +197,16 @@ const (
 	// counter and can open the circuit.
 	FailureClassDegraded FailureClass = "provider_degraded"
 
+	// FailureClassInsufficientQuota is a billing / hard-quota exhaustion on the
+	// account (e.g. OpenAI 429 with error.code = "insufficient_quota").  Unlike
+	// a rate limit it is NOT transient: the provider will keep rejecting until
+	// billing is topped up or the quota resets, so retrying is pointless and a
+	// synthetic 429 would hide the actionable error code from the caller.  The
+	// transport therefore passes the real upstream response straight through
+	// (no retry, no synthetic body) and does NOT credit the circuit breaker —
+	// a billing problem is not a provider outage.
+	FailureClassInsufficientQuota FailureClass = "insufficient_quota"
+
 	// FailureClassNone signals that the response was successful or that the
 	// failure type is unknown/not classifiable as transient.
 	FailureClassNone FailureClass = ""

@@ -113,8 +113,8 @@ func TestClassify_OpenAI_429_InsufficientQuota_Body(t *testing.T) {
 	// This is the authoritative signal regardless of headers.
 	body := `{"error":{"message":"You exceeded your current quota...","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`
 	fc := ClassifyResponse("openai", respWithBody(429, nil, body), nil)
-	if fc != FailureClassGlobalRateLimit {
-		t.Fatalf("OpenAI 429 with insufficient_quota body should be GlobalRateLimit, got %s", fc)
+	if fc != FailureClassInsufficientQuota {
+		t.Fatalf("OpenAI 429 with insufficient_quota body should be InsufficientQuota, got %s", fc)
 	}
 }
 

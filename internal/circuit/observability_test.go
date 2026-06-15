@@ -142,6 +142,12 @@ func TestClassifyFailureKind_429_LocalVsGlobal(t *testing.T) {
 	if got := ClassifyFailureKind("anthropic", global, nil); got != KindHTTP429Global {
 		t.Fatalf("global 429 → want %q, got %q", KindHTTP429Global, got)
 	}
+
+	// Quota: OpenAI 429 whose body carries error.code=insufficient_quota.
+	quota := respWithBody(429, nil, `{"error":{"code":"insufficient_quota"}}`)
+	if got := ClassifyFailureKind("openai", quota, nil); got != KindHTTP429Quota {
+		t.Fatalf("insufficient_quota 429 → want %q, got %q", KindHTTP429Quota, got)
+	}
 }
 
 func TestClassifyTransportErrorKind_DistinctLabels(t *testing.T) {

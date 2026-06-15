@@ -92,8 +92,12 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 		// Primary check: read the JSON error code from the body (authoritative).
 		// Secondary check: if the body is unreadable / unparseable, fall back to
 		// the missing-header heuristic as a best-effort defence.
+		//
+		// insufficient_quota is a billing cap, not a transient throttle: classify
+		// it separately so the transport passes the real error through instead of
+		// retrying and masking it behind a synthetic rate-limit 429.
 		if peekOpenAIErrorCode(resp) == "insufficient_quota" {
-			return FailureClassGlobalRateLimit
+			return FailureClassInsufficientQuota
 		}
 		rr := resp.Header.Get("x-ratelimit-remaining-requests")
 		rt := resp.Header.Get("x-ratelimit-remaining-tokens")
@@ -284,6 +288,7 @@ const (
 	KindHTTP5xxOther      FailureKind = "http_5xx_other"
 	KindHTTP429Local      FailureKind = "http_429_local"
 	KindHTTP429Global     FailureKind = "http_429_global"
+	KindHTTP429Quota      FailureKind = "http_429_quota"
 	KindHTTP4xx           FailureKind = "http_4xx"
 	KindClientCanceled    FailureKind = "client_canceled"
 	KindClientDeadline    FailureKind = "client_deadline_exceeded"
@@ -349,10 +354,14 @@ func ClassifyFailureKind(provider string, resp *http.Response, err error) Failur
 		// ClassifyResponse so dashboards can break 429s out from each
 		// other without re-deriving the global/local bucket.
 		fc := ClassifyResponse(provider, resp, err)
-		if fc == FailureClassGlobalRateLimit {
+		switch fc {
+		case FailureClassInsufficientQuota:
+			return KindHTTP429Quota
+		case FailureClassGlobalRateLimit:
 			return KindHTTP429Global
+		default:
+			return KindHTTP429Local
 		}
-		return KindHTTP429Local
 	}
 	if status >= 500 {
 		return KindHTTP5xxOther

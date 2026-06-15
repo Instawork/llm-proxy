@@ -479,6 +479,158 @@ func TestTransport_GlobalRateLimitExhausted_SetsErrorClassHeader(t *testing.T) {
 	}
 }
 
+func TestTransport_InsufficientQuota_PassesUpstreamResponseThrough(t *testing.T) {
+	// OpenAI 429 with error.code=insufficient_quota is a billing cap, not a
+	// transient throttle.  The TRIGGERING request must still receive the real
+	// upstream response (status + body) unchanged, without retrying or
+	// synthesising a generic rate-limit body — so this caller sees the
+	// actionable error code.  (The account-wide fast-fail of SUBSEQUENT
+	// requests is covered by TestTransport_InsufficientQuota_ForcesProviderOpen.)
+	const quotaBody = `{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`
+	var calls int
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		calls++
+		r := makeResp(429)
+		r.Body = io.NopCloser(strings.NewReader(quotaBody))
+		return r, nil
+	})
+	tr := newTestTransport(inner)
+
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("insufficient_quota must not be retried; inner called %d times, want 1", calls)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", resp.StatusCode)
+	}
+	// The synthetic rate-limit marker must NOT be present — the real body wins.
+	if got := resp.Header.Get("X-Llm-Proxy-Error-Class"); got != "" {
+		t.Fatalf("want no synthetic error-class header, got %q", got)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(got) != quotaBody {
+		t.Fatalf("upstream quota body not passed through.\n got: %s\nwant: %s", got, quotaBody)
+	}
+}
+
+func TestTransport_InsufficientQuota_ForcesProviderOpen(t *testing.T) {
+	// A single insufficient_quota response is account-wide: it must force the
+	// whole OpenAI provider Open so that EVERY subsequent request (including a
+	// different model) fast-fails with a synthetic 503 + DegradedSignal,
+	// without ever touching the upstream — even though the count-based rollup
+	// is disabled (PerProviderRollupThreshold defaults to 0 in newTestTransport).
+	const quotaBody = `{"error":{"message":"You exceeded your current quota.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`
+	var calls int
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		calls++
+		r := makeResp(429)
+		r.Body = io.NopCloser(strings.NewReader(quotaBody))
+		return r, nil
+	})
+	tr := newTestTransport(inner)
+
+	// 1st request trips the force-open.
+	if _, err := tr.RoundTrip(dummyRequest()); err != nil {
+		t.Fatalf("unexpected error on triggering request: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("triggering request: inner called %d times, want 1", calls)
+	}
+
+	// 2nd request must be fast-failed by the forced-open provider rollup —
+	// inner must NOT be called again.
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("unexpected error on fast-failed request: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("subsequent request must fast-fail without hitting upstream; inner called %d times, want 1", calls)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want synthetic 503 after force-open, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte(DefaultDegradedSignal)) {
+		t.Fatalf("fast-fail body should carry DegradedSignal, got %s", body)
+	}
+}
+
+func TestTransport_InsufficientQuota_RecoversViaProbeAfterCooldown(t *testing.T) {
+	// After insufficient_quota forces the provider Open, recovery rides the
+	// normal Open → HalfOpen → single-probe → Closed lifecycle: once the
+	// cooldown elapses exactly one request probes OpenAI; if quota is restored
+	// the probe succeeds and closes the breaker so all models flow again.
+	const quotaBody = `{"error":{"message":"quota","type":"insufficient_quota","code":"insufficient_quota"}}`
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    5,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 1,
+		MaxRateLimitRetries: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	clock := time.Now()
+	store.SetClockForTesting(func() time.Time { return clock })
+
+	quotaExhausted := true
+	var calls int
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		calls++
+		if quotaExhausted {
+			r := makeResp(429)
+			r.Body = io.NopCloser(strings.NewReader(quotaBody))
+			return r, nil
+		}
+		return makeResp(200), nil
+	})
+	tr := NewTransport(inner, store, cfg, "openai", nil,
+		WithModelExtractor(func(_ *http.Request) string { return "gpt-4o" }))
+
+	// 1) Trigger the force-open.
+	if _, err := tr.RoundTrip(dummyRequest()); err != nil {
+		t.Fatalf("triggering request: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("after trigger: calls=%d, want 1", calls)
+	}
+
+	// 2) Within cooldown: fast-fail, upstream untouched.
+	if resp, _ := tr.RoundTrip(dummyRequest()); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("within cooldown want 503, got %d", resp.StatusCode)
+	}
+	if calls != 1 {
+		t.Fatalf("within cooldown must not hit upstream: calls=%d, want 1", calls)
+	}
+
+	// 3) Cooldown elapses and quota is restored: the next request probes and
+	//    succeeds, closing the breaker.
+	clock = clock.Add(301 * time.Second)
+	quotaExhausted = false
+	resp, err := tr.RoundTrip(dummyRequest())
+	if err != nil {
+		t.Fatalf("probe request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("probe should succeed with 200, got %d", resp.StatusCode)
+	}
+	if calls != 2 {
+		t.Fatalf("probe should hit upstream exactly once more: calls=%d, want 2", calls)
+	}
+
+	// 4) Breaker closed: subsequent traffic flows normally.
+	if st, _ := store.GetState(context.Background(), "openai"); st != StateClosed {
+		t.Fatalf("provider breaker should be Closed after successful probe, got %s", st)
+	}
+}
+
 func TestTransport_RateLimitRetry(t *testing.T) {
 	attempts := 0
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
