@@ -191,6 +191,23 @@ func TestLoadAuthConfig_EnvOverrides(t *testing.T) {
 	assert.Equal(t, "cid", cfg.clientID)
 }
 
+func TestNewAuthenticator_AllowedDomainHonorsEnvOverride(t *testing.T) {
+	// Regression: the env override must reach auth.allowedDomain (what
+	// isAllowedUser checks), not just cfg.allowedDomain. Previously the env was
+	// resolved into cfg but auth.allowedDomain kept the YAML value, so every
+	// real-org login was rejected as "forbidden". DevBypassLogin keeps this
+	// network-free (returns before the Google OIDC call).
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "instawork.com")
+	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
+		DevBypassLogin: true,
+		AllowedDomain:  "example.com",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "instawork.com", auth.allowedDomain)
+	assert.True(t, auth.isAllowedUser("alice@instawork.com", "instawork.com"))
+	assert.False(t, auth.isAllowedUser("alice@example.com", "example.com"))
+}
+
 func TestIsAllowedUser(t *testing.T) {
 	auth := &authenticator{allowedDomain: "example.com"}
 	assert.True(t, auth.isAllowedUser("alice@example.com", ""))

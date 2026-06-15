@@ -94,7 +94,7 @@ features:
     allow_per_key_override: false
   admin_dashboard:
     enabled: true
-    allowed_domain: "example.com"
+    allowed_domain: "instawork.com"
     rollups:
       enabled: true
       redis:

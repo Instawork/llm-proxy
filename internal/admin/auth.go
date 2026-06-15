@@ -49,7 +49,15 @@ type authenticator struct {
 }
 
 func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig) (*authenticator, error) {
-	allowedDomain := adminCfg.AllowedDomain
+	// Resolve the allowed sign-in domain with the env var taking precedence over
+	// the YAML value, then fall back to example.com. Doing it here (not just in
+	// loadAuthConfig) ensures auth.allowedDomain — the value isAllowedUser checks —
+	// honors the override in every path, including dev-bypass which returns before
+	// loadAuthConfig runs.
+	allowedDomain := os.Getenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN")
+	if allowedDomain == "" {
+		allowedDomain = adminCfg.AllowedDomain
+	}
 	if allowedDomain == "" {
 		allowedDomain = "example.com"
 	}
