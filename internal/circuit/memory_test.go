@@ -29,6 +29,21 @@ func TestMemoryStore_InitialStateClosed(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_ForceOpenRecordsFailureForObservability(t *testing.T) {
+	s := NewMemoryStore(defaultConfig())
+	ctx := context.Background()
+
+	require.NoError(t, s.ForceOpen(ctx, "openai", 0))
+
+	stats, err := s.GetStats(ctx, "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateOpen, stats.State)
+	// Regression: ForceOpen must credit a failure so the dashboard charts
+	// (which plot GetStats.Failures / total_failures) reflect the forced-open
+	// event instead of showing state=open with an empty graph.
+	require.Equal(t, 1, stats.Failures)
+}
+
 func TestMemoryStore_CircuitOpensAtThreshold(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.FailureThreshold = 3
