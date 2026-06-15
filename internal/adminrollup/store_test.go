@@ -35,14 +35,17 @@ func TestSaveTodayAndArchiveDaily(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
+	// Use a day inside the HistoryDays window (relative to now); a hardcoded
+	// date eventually falls outside the window and LoadHistory drops it.
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	data := map[string]interface{}{"spend_today_usd": 1.23, "requests_today": int64(5)}
-	require.NoError(t, store.SaveToday(ctx, MetricCost, "2026-06-10", data))
-	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, "2026-06-10", data))
+	require.NoError(t, store.SaveToday(ctx, MetricCost, day, data))
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, day, data))
 
 	history, err := store.LoadHistory(ctx, MetricCost)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
-	require.Equal(t, "2026-06-10", history[0].Day)
+	require.Equal(t, day, history[0].Day)
 	require.InDelta(t, 1.23, history[0].Data["spend_today_usd"].(float64), 0.001)
 }
 

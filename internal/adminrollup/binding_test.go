@@ -36,8 +36,11 @@ func TestRecorderBindingArchiveAndMergeHistory(t *testing.T) {
 	var b RecorderBinding
 	b.BindRollup(store, persister)
 
-	// Archive a completed day directly (day-rollover path).
-	b.ArchiveDay("2026-06-10", map[string]interface{}{
+	// Archive a completed day directly (day-rollover path). Use a day inside
+	// the HistoryDays window (relative to now); a hardcoded date eventually
+	// falls outside the window and MergeHistory drops it.
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	b.ArchiveDay(day, map[string]interface{}{
 		"spend_today_usd": 2.50,
 		"requests_today":  int64(7),
 	})
@@ -50,7 +53,7 @@ func TestRecorderBindingArchiveAndMergeHistory(t *testing.T) {
 	rows, ok := snap["daily_history"].([]map[string]interface{})
 	require.True(t, ok, "daily_history should be rows")
 	require.Len(t, rows, 1)
-	require.Equal(t, "2026-06-10", rows[0]["day"])
+	require.Equal(t, day, rows[0]["day"])
 }
 
 func TestRecorderBindingQueueDeltaFlush(t *testing.T) {
