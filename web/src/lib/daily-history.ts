@@ -257,6 +257,75 @@ export function aggNameCount(
     .sort((a, b) => b.count - a.count);
 }
 
+/** Sum a numeric field across each UTC day in the range. */
+export function sumScalarField(
+  rows: DailyHistoryRow[] | undefined,
+  range: RangeKey,
+  field: string,
+): number {
+  return sliceRange(rows, range).reduce((sum, row) => sum + asNum(row[field]), 0);
+}
+
+/** Peak numeric field across each UTC day in the range (for rolling-window gauges). */
+export function maxScalarField(
+  rows: DailyHistoryRow[] | undefined,
+  range: RangeKey,
+  field: string,
+): number {
+  const slice = sliceRange(rows, range);
+  if (!slice.length) return 0;
+  return Math.max(0, ...slice.map((row) => asNum(row[field])));
+}
+
+/** UTC midnight unix seconds at the start of the oldest day in range. */
+export function rangeStartUnix(range: RangeKey): number {
+  const days = range === "today" ? 1 : rangeDays(range);
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return Math.floor(start.getTime() / 1000);
+}
+
+// --- Circuit activity (daily counter totals) ---------------------------------
+
+export interface CircuitActivityAgg {
+  checks_total: number;
+  blocked_open: number;
+  probes_started: number;
+  probes_succeeded: number;
+  probes_failed: number;
+  circuits_opened: number;
+}
+
+const CIRCUIT_ACTIVITY_FIELDS = [
+  "checks_total",
+  "blocked_open",
+  "probes_started",
+  "probes_succeeded",
+  "probes_failed",
+  "circuits_opened",
+] as const;
+
+export function aggCircuitActivity(
+  rows: DailyHistoryRow[] | undefined,
+  range: RangeKey,
+): CircuitActivityAgg {
+  const out: CircuitActivityAgg = {
+    checks_total: 0,
+    blocked_open: 0,
+    probes_started: 0,
+    probes_succeeded: 0,
+    probes_failed: 0,
+    circuits_opened: 0,
+  };
+  for (const row of sliceRange(rows, range)) {
+    for (const field of CIRCUIT_ACTIVITY_FIELDS) {
+      out[field] += asNum(row[field]);
+    }
+  }
+  return out;
+}
+
 // --- Circuit providers (map name -> {failures}) -----------------------------
 
 export function aggCircuitProviders(

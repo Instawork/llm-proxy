@@ -195,6 +195,25 @@ func TestMemoryStore_GetStats(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_GetProviderStats_AggregatesPerModelKeys(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.WindowSeconds = 60
+	s := NewMemoryStore(cfg)
+	ctx := context.Background()
+
+	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")          //nolint:errcheck
+	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")          //nolint:errcheck
+	s.RecordTerminalFailure(ctx, "gemini:gemini-1-flash-preview")    //nolint:errcheck
+
+	bare, err := s.GetStats(ctx, "gemini")
+	require.NoError(t, err)
+	require.Equal(t, 0, bare.Failures)
+
+	agg, err := s.GetProviderStats(ctx, "gemini")
+	require.NoError(t, err)
+	require.Equal(t, 3, agg.Failures)
+}
+
 func TestMemoryStore_GetStatsPrunesExpiredFailures(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.WindowSeconds = 1

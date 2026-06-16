@@ -639,6 +639,10 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 
 	key := t.keyFor(req)
 
+	if t.activity != nil {
+		t.activity.RecordCheck()
+	}
+
 	// Log what ModeEnforce *would* have done given the current state, but
 	// always let the real request through.
 	if state, err := t.store.GetState(ctx, key); err == nil && state == StateOpen {
@@ -782,6 +786,10 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 
 	key := t.keyFor(req)
 	upstreamReq := stripBypassMarkers(req)
+
+	if t.activity != nil {
+		t.activity.RecordCheck()
+	}
 
 	// Tag the metric with the normalised reason so operators can audit
 	// how the bypass safety valve is being used WITHOUT the

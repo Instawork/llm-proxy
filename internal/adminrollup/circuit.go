@@ -104,7 +104,7 @@ func SnapshotCircuit(
 	providerOut := make(map[string]interface{}, len(providers))
 	total := 0
 	for _, name := range providers {
-		stats, err := store.GetStats(ctx, name)
+		stats, err := circuit.ProviderStatsFor(ctx, store, name)
 		if err != nil {
 			continue
 		}

@@ -58,7 +58,7 @@ func TestRedisRecorder_RecordCheck(t *testing.T) {
 	assert.Equal(t, int64(2), snap["checks_total"])
 }
 
-func TestRedisRecorder_SharedAcrossRecorders(t *testing.T) {
+func TestRedisRecorder_SharedRecentEventsAcrossRecorders(t *testing.T) {
 	r1, mr := newRedisRecorderForTest(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -68,7 +68,6 @@ func TestRedisRecorder_SharedAcrossRecorders(t *testing.T) {
 	r2.RecordProbeClosed("gemini", "gemini", 200)
 
 	snap := r2.Snapshot()
-	assert.Equal(t, int64(1), snap["probes_started"])
 	assert.Equal(t, int64(1), snap["probes_succeeded"])
 
 	events := snap["recent_events"].([]activityEvent)

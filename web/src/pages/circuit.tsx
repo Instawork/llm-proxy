@@ -8,6 +8,7 @@ import {
   RangeToggle,
   SectionPanel,
   trendChartSource,
+  type DataSource,
 } from "../components/ui/data-source";
 import PageHeader, {
   ErrorAlert,
@@ -17,12 +18,17 @@ import PageHeader, {
   StatusBadge,
 } from "../components/ui/page-header";
 import { useHealth, useCircuitActivity } from "../hooks/queries";
-import type { CircuitActivityEvent } from "../types";
+import type { CircuitActivityEvent, DailyHistoryRow } from "../types";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
+  aggCircuitActivity,
+  aggCircuitProviders,
   DAILY_HISTORY_SUBTITLE,
+  maxScalarField,
+  pickToday,
   type RangeKey,
   RANGE_OPTIONS,
+  rangeStartUnix,
   circuitProviderSeries,
   scalarSeries,
 } from "../lib/daily-history";
@@ -66,35 +72,145 @@ function formatEventTime(unix: number): string {
   return new Date(unix * 1000).toLocaleString();
 }
 
+function activityFieldPick(
+  range: RangeKey,
+  field: keyof ReturnType<typeof aggCircuitActivity>,
+  live: number | undefined,
+  history: DailyHistoryRow[] | undefined,
+  hasRedis: boolean,
+) {
+  if (range === "today") {
+    return pickToday(live, history, field, hasRedis);
+  }
+  if (hasRedis && history?.length) {
+    return { value: aggCircuitActivity(history, range)[field], source: "redis" as const };
+  }
+  return { value: live ?? 0, source: "memory" as const };
+}
+
 export default function CircuitPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useHealth();
   const activityQuery = useCircuitActivity();
   const [range, setRange] = useState<RangeKey>("today");
 
   const activity = activityQuery.data;
-  const recentEvents = activity?.recent_events ?? [];
+  const allRecentEvents = activity?.recent_events ?? [];
 
   const providers = data?.circuit_breaker?.providers ?? {};
   const names = Object.keys(providers);
   const cb = data?.circuit_breaker;
-  const history = cb?.daily_history;
-  const hasRedis = Boolean(cb?.daily_history_available);
-  const totalFailures =
+  const failureHistory = cb?.daily_history;
+  const hasFailureRedis = Boolean(cb?.daily_history_available);
+
+  const activityHistory = activity?.daily_history;
+  const hasActivityRedis = Boolean(activity?.daily_history_available);
+
+  const liveTotalFailures =
     cb?.total_failures ?? Object.values(providers).reduce((s, p) => s + (p.failures ?? 0), 0);
-  const failureHistory = useHistory(data ? totalFailures : undefined);
-  const dailyFailures = useMemo(
-    () => scalarSeries(history, "total_failures", range),
-    [history, range],
+
+  const totalFailures =
+    range === "today"
+      ? liveTotalFailures
+      : hasFailureRedis
+        ? maxScalarField(failureHistory, range, "total_failures")
+        : liveTotalFailures;
+
+  const failureStatSource: DataSource =
+    range === "today" ? circuitLiveSource(cb?.backend) : hasFailureRedis ? "redis" : "memory";
+
+  const failureStatHint =
+    range === "today" ? "Current 120s window" : `Peak daily window · ${rangeLabel(range)}`;
+
+  const providerFailurePeaks = useMemo(() => {
+    const map = new Map<string, number>();
+    if (range !== "today" && hasFailureRedis) {
+      for (const row of aggCircuitProviders(failureHistory, range)) {
+        map.set(row.name, row.count);
+      }
+    }
+    return map;
+  }, [range, hasFailureRedis, failureHistory]);
+
+  const providerFailureValues = names.map((n) =>
+    range === "today" || !hasFailureRedis
+      ? (providers[n].failures ?? 0)
+      : (providerFailurePeaks.get(n) ?? 0),
   );
-  const useDailyChart = Boolean(hasRedis && range !== "today" && dailyFailures.available);
 
-  const providerSeries = useMemo(() => circuitProviderSeries(history, range), [history, range]);
-  const showProviderHistory = hasRedis && range !== "today" && providerSeries.providers.length > 0;
+  const failureHistoryTrend = useHistory(range === "today" ? liveTotalFailures : undefined);
+  const dailyFailures = useMemo(
+    () => scalarSeries(failureHistory, "total_failures", range),
+    [failureHistory, range],
+  );
+  const useDailyFailureChart = Boolean(hasFailureRedis && range !== "today" && dailyFailures.available);
 
-  const liveSource = circuitLiveSource(cb?.backend);
-  const activitySource = circuitLiveSource(activity?.backend ?? cb?.backend);
+  const providerSeries = useMemo(() => circuitProviderSeries(failureHistory, range), [failureHistory, range]);
+  const showProviderHistory = hasFailureRedis && range !== "today" && providerSeries.providers.length > 0;
+
+  const checksPick = activityFieldPick(
+    range,
+    "checks_total",
+    activity?.checks_total,
+    activityHistory,
+    hasActivityRedis,
+  );
+  const blockedPick = activityFieldPick(
+    range,
+    "blocked_open",
+    activity?.blocked_open,
+    activityHistory,
+    hasActivityRedis,
+  );
+  const probesPick = activityFieldPick(
+    range,
+    "probes_started",
+    activity?.probes_started,
+    activityHistory,
+    hasActivityRedis,
+  );
+  const probesOkPick = activityFieldPick(
+    range,
+    "probes_succeeded",
+    activity?.probes_succeeded,
+    activityHistory,
+    hasActivityRedis,
+  );
+  const probesFailPick = activityFieldPick(
+    range,
+    "probes_failed",
+    activity?.probes_failed,
+    activityHistory,
+    hasActivityRedis,
+  );
+
+  const dailyChecks = useMemo(
+    () => scalarSeries(activityHistory, "checks_total", range),
+    [activityHistory, range],
+  );
+  const useDailyActivityChart = Boolean(
+    hasActivityRedis && range !== "today" && dailyChecks.available,
+  );
+
+  const activitySource: DataSource =
+    range === "today" ? circuitLiveSource(activity?.backend ?? cb?.backend) : hasActivityRedis ? "redis" : "memory";
+
   const activityHint =
-    activity?.backend === "redis" ? "Shared across tasks via Redis" : "Since process start";
+    range === "today"
+      ? activity?.backend === "redis"
+        ? "Fleet total · UTC day"
+        : "Since process start"
+      : `Summed UTC days · ${rangeLabel(range)}`;
+
+  const recentEvents = useMemo(() => {
+    if (range === "today") return allRecentEvents;
+    const cutoff = rangeStartUnix(range);
+    return allRecentEvents.filter((e) => e.time >= cutoff);
+  }, [allRecentEvents, range]);
+
+  const refetchAll = () => {
+    refetch();
+    activityQuery.refetch();
+  };
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -109,7 +225,11 @@ export default function CircuitPage() {
         actions={
           <div className="flex items-center gap-3">
             <RangeToggle value={range} options={RANGE_OPTIONS} onChange={setRange} />
-            <LiveIndicator updatedAt={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} />
+            <LiveIndicator
+              updatedAt={Math.max(dataUpdatedAt, activityQuery.dataUpdatedAt)}
+              fetching={isFetching || activityQuery.isFetching}
+              onRefresh={refetchAll}
+            />
           </div>
         }
       />
@@ -132,28 +252,38 @@ export default function CircuitPage() {
             </>
           }
           hint="Live breaker state store"
-          source={liveSource}
+          source={circuitLiveSource(cb?.backend)}
           valueClassName="text-lg"
         />
-        <LiveStat title="Total failures" value={totalFailures} hint="Current window" source={liveSource} />
+        <LiveStat
+          title="Total failures"
+          value={totalFailures}
+          hint={failureStatHint}
+          source={failureStatSource}
+        />
       </div>
 
       {activity?.available ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <LiveStat title="State checks" value={activity.checks_total ?? 0} hint={activityHint} source={activitySource} />
-          <LiveStat title="Blocked (open)" value={activity.blocked_open ?? 0} source={activitySource} />
-          <LiveStat title="Recovery probes" value={activity.probes_started ?? 0} hint="After cooldown" source={activitySource} />
+          <LiveStat title="State checks" value={checksPick.value} hint={activityHint} source={activitySource} />
+          <LiveStat title="Blocked (open)" value={blockedPick.value} source={activitySource} />
+          <LiveStat
+            title="Recovery probes"
+            value={probesPick.value}
+            hint={range === "today" ? "After cooldown" : undefined}
+            source={activitySource}
+          />
           <LiveStat
             title="Probes succeeded"
-            value={activity.probes_succeeded ?? 0}
-            hint="Circuit closed"
+            value={probesOkPick.value}
+            hint={range === "today" ? "Circuit closed" : undefined}
             source={activitySource}
             valueClassName="text-success"
           />
           <LiveStat
             title="Probes failed"
-            value={activity.probes_failed ?? 0}
-            hint="Circuit re-opened"
+            value={probesFailPick.value}
+            hint={range === "today" ? "Circuit re-opened" : undefined}
             source={activitySource}
             valueClassName="text-error"
           />
@@ -163,26 +293,35 @@ export default function CircuitPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard
           title="Failure trend"
-          subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-          source={trendChartSource(useDailyChart)}
+          subtitle={useDailyFailureChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
+          source={trendChartSource(useDailyFailureChart)}
         >
-          {useDailyChart ? (
+          {useDailyFailureChart ? (
             <BarChart
               labels={dailyFailures.labels}
               values={dailyFailures.values}
-              label="Daily failures"
+              label="Daily peak failures"
               colors={dailyFailures.labels.map(() => chartPalette.error())}
             />
           ) : (
-            <TrendChart points={failureHistory} label="Failures" color={chartPalette.error()} />
+            <TrendChart points={failureHistoryTrend} label="Failures" color={chartPalette.error()} />
           )}
         </ChartCard>
-        <ChartCard title="Failures by provider" subtitle="Current count" source={liveSource}>
+        <ChartCard
+          title="Failures by provider"
+          subtitle={
+            range === "today"
+              ? "Current 120s window"
+              : `Peak daily window · ${rangeLabel(range)} · ${DAILY_HISTORY_SUBTITLE}`
+          }
+          source={failureStatSource}
+        >
           <BarChart
             labels={names}
-            values={names.map((n) => providers[n].failures ?? 0)}
+            values={providerFailureValues}
             label="Failures"
             colors={names.map((n) => stateColor(providers[n].state ?? "closed"))}
+            horizontal
           />
         </ChartCard>
       </div>
@@ -206,10 +345,29 @@ export default function CircuitPage() {
         </ChartCard>
       ) : null}
 
+      {activity?.available && useDailyActivityChart ? (
+        <ChartCard
+          title="State checks"
+          subtitle={`Daily UTC totals · ${rangeLabel(range)} · ${DAILY_HISTORY_SUBTITLE}`}
+          source="redis"
+        >
+          <BarChart
+            labels={dailyChecks.labels}
+            values={dailyChecks.values}
+            label="Checks"
+            colors={dailyChecks.labels.map(() => chartPalette.primary())}
+          />
+        </ChartCard>
+      ) : null}
+
       {activity?.available ? (
         <SectionPanel
           title="Recovery activity"
-          subtitle="Half-open probes after cooldown windows end (shared when Redis-backed)"
+          subtitle={
+            range === "today"
+              ? "Half-open probes after cooldown windows end (shared when Redis-backed)"
+              : `Events since ${rangeLabel(range)} · ring buffer may truncate older entries`
+          }
           source={activitySource}
         >
           <div className="overflow-x-auto">
@@ -254,8 +412,8 @@ export default function CircuitPage() {
                 {recentEvents.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="text-center text-base-content/50">
-                      No recovery probes yet — events appear when a cooldown ends and the breaker
-                      probes upstream, or when requests are blocked while open.
+                      No recovery probes in this window — events appear when a cooldown ends and the
+                      breaker probes upstream, or when requests are blocked while open.
                     </td>
                   </tr>
                 ) : null}
@@ -265,14 +423,22 @@ export default function CircuitPage() {
         </SectionPanel>
       ) : null}
 
-      <SectionPanel title="Providers" subtitle="Live trip state and failure counters" source={liveSource}>
+      <SectionPanel
+        title="Providers"
+        subtitle={
+          range === "today"
+            ? "Live trip state and current-window failure counts"
+            : `Live trip state · peak daily failures · ${rangeLabel(range)}`
+        }
+        source={range === "today" ? circuitLiveSource(cb?.backend) : failureStatSource}
+      >
         <div className="overflow-x-auto">
           <table className="table table-zebra">
             <thead>
               <tr>
                 <th>Provider</th>
                 <th>State</th>
-                <th>Failures</th>
+                <th>{range === "today" ? "Failures" : "Peak failures"}</th>
                 <th>Rollup</th>
                 <th>Threshold</th>
               </tr>
@@ -281,6 +447,10 @@ export default function CircuitPage() {
               {names.map((name) => {
                 const p = providers[name];
                 const state = p.state ?? p.error ?? "unknown";
+                const failures =
+                  range === "today" || !hasFailureRedis
+                    ? (p.failures ?? "—")
+                    : (providerFailurePeaks.get(name) ?? 0);
                 return (
                   <tr key={name}>
                     <td>
@@ -293,7 +463,7 @@ export default function CircuitPage() {
                         inactiveLabel={state}
                       />
                     </td>
-                    <td>{p.failures ?? "—"}</td>
+                    <td>{failures}</td>
                     <td>{p.rollup?.open ? "open" : p.rollup?.enabled ? "closed" : "—"}</td>
                     <td>{p.rollup?.threshold ?? "—"}</td>
                   </tr>

@@ -928,6 +928,9 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	if globalRateLimitStatsRecorder != nil {
 		globalRateLimitStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricRateLimit))
 	}
+	if globalCircuitStatsRecorder != nil {
+		globalCircuitStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCircuitActivity))
+	}
 	if globalCircuitStore != nil {
 		globalAdminRollupStop = make(chan struct{})
 		go adminrollup.RunCircuitArchiver(
@@ -964,7 +967,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		perProvider := make(map[string]interface{}, len(circuitBreakerProviders))
 		totalFailures := 0
 		for _, name := range circuitBreakerProviders {
-			stats, err := globalCircuitStore.GetStats(r.Context(), name)
+			stats, err := circuit.ProviderStatsFor(r.Context(), globalCircuitStore, name)
 			if err != nil {
 				// /health is unauthenticated, so we MUST NOT leak the
 				// raw error string (it can contain Redis URLs, host
@@ -1587,6 +1590,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalRateLimitStatsRecorder != nil {
 		globalRateLimitStatsRecorder.FlushRollup()
+	}
+	if globalCircuitStatsRecorder != nil {
+		globalCircuitStatsRecorder.FlushRollup()
 	}
 	if globalHistorySink != nil {
 		logger.Info("🔄 Flushing history sink...")

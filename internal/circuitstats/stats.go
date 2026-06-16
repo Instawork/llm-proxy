@@ -1,7 +1,8 @@
 // Package circuitstats records circuit-breaker activity for the admin dashboard:
 // state checks, fast-fails while open, and half-open probe outcomes when a
-// cooldown window ends. Use NewRecorder for local dev; NewRedisRecorder shares
-// counters and recent events across ECS tasks via the circuit-breaker Redis DB.
+// cooldown window ends. Counters are published to admin rollups (Redis DB 6)
+// so sidecars aggregate fleet-wide; recent events may also be mirrored on the
+// circuit-breaker Redis DB when a shared client is available.
 package circuitstats
 
 import (
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -35,12 +37,23 @@ type activityEvent struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
-// Recorder accumulates rolling circuit activity. Without a Redis client each
-// sidecar keeps its own counters; with Redis (NewRedisRecorder) activity is
-// shared cluster-wide under llm:cb:activity:* keys.
+type activityFlushed struct {
+	checksTotal     int64
+	blockedOpen     int64
+	probesStarted   int64
+	probesSucceeded int64
+	probesFailed    int64
+	circuitsOpened  int64
+	byProvider      map[string]int64
+}
+
+// Recorder accumulates rolling circuit activity. Each instance keeps local
+// counters and publishes deltas to admin rollups; optional Redis mirrors the
+// recent-events ring across tasks on the circuit-breaker DB.
 type Recorder struct {
 	mu        sync.RWMutex
 	startedAt time.Time
+	dayKey    string
 
 	checksTotal     int64
 	blockedOpen     int64
@@ -51,7 +64,10 @@ type Recorder struct {
 
 	byProvider map[string]int64
 
-	recent []activityEvent
+	recent  []activityEvent
+	flushed activityFlushed
+
+	adminrollup.RecorderBinding
 
 	rdb *redis.Client
 	log *slog.Logger
@@ -59,10 +75,34 @@ type Recorder struct {
 
 // NewRecorder returns a recorder scoped to this process.
 func NewRecorder() *Recorder {
+	now := time.Now().UTC()
 	return &Recorder{
-		startedAt:  time.Now().UTC(),
+		startedAt:  now,
+		dayKey:     now.Format("2006-01-02"),
 		byProvider: make(map[string]int64),
 	}
+}
+
+func (r *Recorder) maybeRollDay(now time.Time) {
+	day := now.UTC().Format("2006-01-02")
+	if r.dayKey == day {
+		return
+	}
+	oldDay := r.dayKey
+	r.dayKey = day
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCircuitActivity, oldDay, adminrollup.TopNCaps{})
+	}()
+	r.flushed = activityFlushed{}
+	r.checksTotal = 0
+	r.blockedOpen = 0
+	r.probesStarted = 0
+	r.probesSucceeded = 0
+	r.probesFailed = 0
+	r.circuitsOpened = 0
+	r.byProvider = make(map[string]int64)
+	r.recent = nil
 }
 
 func (r *Recorder) appendEvent(e activityEvent) {
@@ -78,87 +118,124 @@ func (r *Recorder) bumpProvider(provider string) {
 	}
 }
 
-// RecordFastFail records a request blocked because the breaker is open.
-func (r *Recorder) RecordFastFail(provider, key string) {
+func (r *Recorder) activityDeltaLocked() adminrollup.Delta {
+	d := adminrollup.Delta{
+		Totals: map[string]float64{
+			"checks_total":     float64(r.checksTotal - r.flushed.checksTotal),
+			"blocked_open":     float64(r.blockedOpen - r.flushed.blockedOpen),
+			"probes_started":   float64(r.probesStarted - r.flushed.probesStarted),
+			"probes_succeeded": float64(r.probesSucceeded - r.flushed.probesSucceeded),
+			"probes_failed":    float64(r.probesFailed - r.flushed.probesFailed),
+			"circuits_opened":  float64(r.circuitsOpened - r.flushed.circuitsOpened),
+		},
+	}
+	if provDelta := int64MapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
+		if d.Dimensions == nil {
+			d.Dimensions = make(map[string]map[string]float64)
+		}
+		d.Dimensions["by_provider"] = provDelta
+	}
+	return d
+}
+
+func int64MapDelta(cur map[string]int64, prev map[string]int64) map[string]float64 {
+	out := make(map[string]float64)
+	for k, v := range cur {
+		p := prev[k]
+		if dr := float64(v - p); dr != 0 {
+			out[k] = dr
+		}
+	}
+	return out
+}
+
+func (r *Recorder) advanceFlushedLocked() {
+	if r.flushed.byProvider == nil {
+		r.flushed.byProvider = make(map[string]int64)
+	}
+	r.flushed.checksTotal = r.checksTotal
+	r.flushed.blockedOpen = r.blockedOpen
+	r.flushed.probesStarted = r.probesStarted
+	r.flushed.probesSucceeded = r.probesSucceeded
+	r.flushed.probesFailed = r.probesFailed
+	r.flushed.circuitsOpened = r.circuitsOpened
+	for k, v := range r.byProvider {
+		r.flushed.byProvider[k] = v
+	}
+}
+
+func (r *Recorder) publishLocked() {
+	dayKey := r.dayKey
+	delta := r.activityDeltaLocked()
+	r.advanceFlushedLocked()
+	r.mu.Unlock()
+	r.QueueDelta(dayKey, delta)
+	r.mu.Lock()
+}
+
+func (r *Recorder) recordActivity(counterField, provider string, e activityEvent, apply func()) {
 	if r == nil {
 		return
 	}
 	now := time.Now().UTC()
+	e.Time = now.Unix()
+
+	r.mu.Lock()
+	r.maybeRollDay(now)
+	apply()
+	r.bumpProvider(provider)
+	r.appendEvent(e)
+	r.publishLocked()
+	r.mu.Unlock()
+
+	if r.redisEnabled() {
+		r.recordRedisEvent(counterField, provider, e)
+	}
+}
+
+// RecordFastFail records a request blocked because the breaker is open.
+func (r *Recorder) RecordFastFail(provider, key string) {
 	e := activityEvent{
-		Time:     now.Unix(),
 		Provider: provider,
 		Key:      key,
 		Kind:     EventFastFail,
 		NewState: "open",
 	}
-	if r.redisEnabled() {
-		r.recordRedisEvent("blocked_open", provider, e)
-		return
-	}
-	r.mu.Lock()
-	r.blockedOpen++
-	r.bumpProvider(provider)
-	r.appendEvent(e)
-	r.mu.Unlock()
+	r.recordActivity("blocked_open", provider, e, func() {
+		r.blockedOpen++
+	})
 }
 
 // RecordProbe records a half-open probe dispatched to the upstream provider.
 func (r *Recorder) RecordProbe(provider, key string) {
-	if r == nil {
-		return
-	}
-	now := time.Now().UTC()
 	e := activityEvent{
-		Time:     now.Unix(),
 		Provider: provider,
 		Key:      key,
 		Kind:     EventProbe,
 		NewState: "half_open",
 	}
-	if r.redisEnabled() {
-		r.recordRedisEvent("probes_started", provider, e)
-		return
-	}
-	r.mu.Lock()
-	r.probesStarted++
-	r.bumpProvider(provider)
-	r.appendEvent(e)
-	r.mu.Unlock()
+	r.recordActivity("probes_started", provider, e, func() {
+		r.probesStarted++
+	})
 }
 
 // RecordProbeClosed records a successful half-open probe (circuit closed).
 func (r *Recorder) RecordProbeClosed(provider, key string, statusCode int) {
-	if r == nil {
-		return
-	}
-	now := time.Now().UTC()
 	e := activityEvent{
-		Time:       now.Unix(),
 		Provider:   provider,
 		Key:        key,
 		Kind:       EventProbeClosed,
 		NewState:   "closed",
 		StatusCode: statusCode,
 	}
-	if r.redisEnabled() {
-		r.recordRedisEvent("probes_succeeded", provider, e)
-		return
-	}
-	r.mu.Lock()
-	r.probesSucceeded++
-	r.bumpProvider(provider)
-	r.appendEvent(e)
-	r.mu.Unlock()
+	r.recordActivity("probes_succeeded", provider, e, func() {
+		r.probesSucceeded++
+	})
 }
 
 // RecordProbeReopened records a failed half-open probe (circuit open again).
 func (r *Recorder) RecordProbeReopened(provider, key string, statusCode int, failureKind string) {
-	if r == nil {
-		return
-	}
-	now := time.Now().UTC()
 	e := activityEvent{
-		Time:        now.Unix(),
 		Provider:    provider,
 		Key:         key,
 		Kind:        EventProbeReopened,
@@ -166,40 +243,23 @@ func (r *Recorder) RecordProbeReopened(provider, key string, statusCode int, fai
 		StatusCode:  statusCode,
 		FailureKind: failureKind,
 	}
-	if r.redisEnabled() {
-		r.recordRedisEvent("probes_failed", provider, e)
-		return
-	}
-	r.mu.Lock()
-	r.probesFailed++
-	r.bumpProvider(provider)
-	r.appendEvent(e)
-	r.mu.Unlock()
+	r.recordActivity("probes_failed", provider, e, func() {
+		r.probesFailed++
+	})
 }
 
 // RecordOpened records a circuit trip (failure threshold or force-open).
 func (r *Recorder) RecordOpened(provider, key, reason string) {
-	if r == nil {
-		return
-	}
-	now := time.Now().UTC()
 	e := activityEvent{
-		Time:     now.Unix(),
 		Provider: provider,
 		Key:      key,
 		Kind:     EventOpened,
 		NewState: "open",
 		Reason:   reason,
 	}
-	if r.redisEnabled() {
-		r.recordRedisEvent("circuits_opened", provider, e)
-		return
-	}
-	r.mu.Lock()
-	r.circuitsOpened++
-	r.bumpProvider(provider)
-	r.appendEvent(e)
-	r.mu.Unlock()
+	r.recordActivity("circuits_opened", provider, e, func() {
+		r.circuitsOpened++
+	})
 }
 
 // RecordCheck increments the state-check counter (one per routing decision).
@@ -207,13 +267,16 @@ func (r *Recorder) RecordCheck() {
 	if r == nil {
 		return
 	}
+	now := time.Now().UTC()
+	r.mu.Lock()
+	r.maybeRollDay(now)
+	r.checksTotal++
+	r.publishLocked()
+	r.mu.Unlock()
+
 	if r.redisEnabled() {
 		r.incrRedisCheckAsync()
-		return
 	}
-	r.mu.Lock()
-	r.checksTotal++
-	r.mu.Unlock()
 }
 
 // Snapshot returns JSON for the admin API.
@@ -221,14 +284,18 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
 		return map[string]interface{}{"available": false}
 	}
-	if r.redisEnabled() {
-		return r.snapshotRedis()
-	}
-	return r.snapshotMemory()
+	r.mu.RLock()
+	dayKey := r.dayKey
+	snap := r.snapshotMemoryLocked()
+	r.mu.RUnlock()
+
+	r.MergeToday(adminrollup.MetricCircuitActivity, dayKey, snap, adminrollup.TopNCaps{})
+	r.MergeHistory(adminrollup.MetricCircuitActivity, snap)
+	r.mergeRedisRecentEvents(snap)
+	return snap
 }
 
-func (r *Recorder) snapshotMemory() map[string]interface{} {
-	r.mu.RLock()
+func (r *Recorder) snapshotMemoryLocked() map[string]interface{} {
 	recent := make([]activityEvent, len(r.recent))
 	for i, e := range r.recent {
 		recent[len(r.recent)-1-i] = e
@@ -237,9 +304,14 @@ func (r *Recorder) snapshotMemory() map[string]interface{} {
 	for k, v := range r.byProvider {
 		byProvider[k] = v
 	}
-	snap := map[string]interface{}{
+	backend := "memory"
+	if r.redisEnabled() {
+		backend = "redis"
+	}
+	return map[string]interface{}{
 		"available":        true,
-		"backend":          "memory",
+		"backend":          backend,
+		"day":              r.dayKey,
 		"started_at":       r.startedAt.Unix(),
 		"checks_total":     r.checksTotal,
 		"blocked_open":     r.blockedOpen,
@@ -250,6 +322,4 @@ func (r *Recorder) snapshotMemory() map[string]interface{} {
 		"by_provider":      byProvider,
 		"recent_events":    recent,
 	}
-	r.mu.RUnlock()
-	return snap
 }

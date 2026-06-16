@@ -146,6 +146,7 @@ export interface CircuitActivityEvent {
 export interface CircuitActivityResponse {
   available?: boolean;
   backend?: string;
+  day?: string;
   started_at?: number;
   checks_total?: number;
   blocked_open?: number;
@@ -155,6 +156,8 @@ export interface CircuitActivityResponse {
   circuits_opened?: number;
   by_provider?: Record<string, number>;
   recent_events?: CircuitActivityEvent[];
+  daily_history?: DailyHistoryRow[];
+  daily_history_available?: boolean;
 }
 
 export interface RateLimitConfig {

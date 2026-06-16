@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -19,8 +18,9 @@ const (
 	redisOpTimeout = 500 * time.Millisecond
 )
 
-// recordEventScript atomically bumps a counter, optional per-provider tally,
-// appends a JSON event, trims the list, and sets started_at once.
+// recordEventScript appends a JSON event and trims the list. Counter totals
+// live in admin rollups; this script keeps legacy counter fields best-effort
+// for operators inspecting the circuit-breaker Redis DB directly.
 var recordEventScript = redis.NewScript(`
 local counters = KEYS[1]
 local events = KEYS[2]
@@ -40,8 +40,8 @@ redis.call('HSETNX', counters, 'started_at', started_at)
 return 1
 `)
 
-// NewRedisRecorder returns a recorder that shares activity across tasks via
-// Redis (same DB as the circuit breaker). The client is not closed by the
+// NewRedisRecorder returns a recorder that mirrors recent events across tasks
+// via Redis (same DB as the circuit breaker). The client is not closed by the
 // recorder — the circuit store owns it.
 func NewRedisRecorder(client *redis.Client, log *slog.Logger) *Recorder {
 	if log == nil {
@@ -49,6 +49,7 @@ func NewRedisRecorder(client *redis.Client, log *slog.Logger) *Recorder {
 	}
 	return &Recorder{
 		startedAt:  time.Now().UTC(),
+		dayKey:     time.Now().UTC().Format("2006-01-02"),
 		byProvider: make(map[string]int64),
 		rdb:        client,
 		log:        log,
@@ -96,37 +97,22 @@ func (r *Recorder) incrRedisCheckAsync() {
 	}()
 }
 
-func (r *Recorder) snapshotRedis() map[string]interface{} {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func (r *Recorder) mergeRedisRecentEvents(snap map[string]interface{}) {
+	if !r.redisEnabled() || snap == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), redisOpTimeout)
 	defer cancel()
 
-	pipe := r.rdb.Pipeline()
-	countersCmd := pipe.HGetAll(ctx, redisCountersKey)
-	eventsCmd := pipe.LRange(ctx, redisEventsKey, 0, MaxRecentEvents-1)
-	if _, err := pipe.Exec(ctx); err != nil {
+	rawEvents, err := r.rdb.LRange(ctx, redisEventsKey, 0, MaxRecentEvents-1).Result()
+	if err != nil {
 		if r.log != nil {
-			r.log.Warn("circuitstats: redis snapshot failed", "error", err)
+			r.log.Warn("circuitstats: redis recent events read failed", "error", err)
 		}
-		return r.snapshotMemory()
+		return
 	}
-
-	counters, err := countersCmd.Result()
-	if err != nil {
-		return r.snapshotMemory()
-	}
-	rawEvents, err := eventsCmd.Result()
-	if err != nil {
-		return r.snapshotMemory()
-	}
-
-	byProvider := make(map[string]int64)
-	for field, val := range counters {
-		if strings.HasPrefix(field, redisProviderPFX) {
-			provider := strings.TrimPrefix(field, redisProviderPFX)
-			if n, parseErr := strconv.ParseInt(val, 10, 64); parseErr == nil {
-				byProvider[provider] = n
-			}
-		}
+	if len(rawEvents) == 0 {
+		return
 	}
 
 	recent := make([]activityEvent, 0, len(rawEvents))
@@ -136,28 +122,5 @@ func (r *Recorder) snapshotRedis() map[string]interface{} {
 			recent = append(recent, e)
 		}
 	}
-
-	startedAt := parseCounter(counters["started_at"])
-	if startedAt == 0 {
-		startedAt = r.startedAt.Unix()
-	}
-
-	return map[string]interface{}{
-		"available":        true,
-		"backend":          "redis",
-		"started_at":       startedAt,
-		"checks_total":     parseCounter(counters["checks_total"]),
-		"blocked_open":     parseCounter(counters["blocked_open"]),
-		"probes_started":   parseCounter(counters["probes_started"]),
-		"probes_succeeded": parseCounter(counters["probes_succeeded"]),
-		"probes_failed":    parseCounter(counters["probes_failed"]),
-		"circuits_opened":  parseCounter(counters["circuits_opened"]),
-		"by_provider":      byProvider,
-		"recent_events":    recent,
-	}
-}
-
-func parseCounter(s string) int64 {
-	n, _ := strconv.ParseInt(s, 10, 64)
-	return n
+	snap["recent_events"] = recent
 }
