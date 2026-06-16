@@ -20,6 +20,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/circuit"
+	"github.com/Instawork/llm-proxy/internal/circuitstats"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/coststats"
@@ -131,6 +132,9 @@ var (
 
 // Global circuit breaker store instance
 var globalCircuitStore circuit.Store
+
+// In-process circuit activity (checks, probes, fast-fails) for the admin UI.
+var globalCircuitStatsRecorder *circuitstats.Recorder
 
 // Resolved circuit-breaker config after Defaults() is applied.  Captured at
 // startup so /health can surface the effective mode / backend / thresholds
@@ -853,6 +857,13 @@ func rateLimitSummaryFunc() func() map[string]interface{} {
 	return globalRateLimitStatsRecorder.Snapshot
 }
 
+func circuitActivitySummaryFunc() func() map[string]interface{} {
+	if globalCircuitStatsRecorder == nil {
+		return nil
+	}
+	return globalCircuitStatsRecorder.Snapshot
+}
+
 func initHistory(yamlConfig *config.YAMLConfig) {
 	hc := yamlConfig.Features.History
 	if hc.Backend == "" || strings.EqualFold(hc.Backend, "none") {
@@ -1219,6 +1230,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// Initialize circuit breaker
 	globalCircuitStore = initializeCircuitStore(yamlConfig)
+	if globalCircuitStore != nil {
+		if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok && rs.RedisClient() != nil {
+			globalCircuitStatsRecorder = circuitstats.NewRedisRecorder(rs.RedisClient(), logger)
+			logger.Info("⚡ Circuit activity: Redis-backed (shared across tasks)")
+		} else {
+			globalCircuitStatsRecorder = circuitstats.NewRecorder()
+		}
+	}
 
 	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
 
@@ -1239,6 +1258,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 		if circuitMetrics != nil {
 			opts = append(opts, circuit.WithMetrics(circuitMetrics))
+		}
+		if globalCircuitStatsRecorder != nil {
+			opts = append(opts, circuit.WithActivityRecorder(globalCircuitStatsRecorder))
 		}
 
 		// Pair each provider with its canonical name so the wiring loop
@@ -1418,6 +1440,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			CostSummary:      costSummaryFunc(),
 			UsageSummary:     usageSummaryFunc(),
 			RateLimitSummary: rateLimitSummaryFunc(),
+			CircuitActivity:  circuitActivitySummaryFunc(),
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}

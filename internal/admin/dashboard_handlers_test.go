@@ -11,6 +11,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/circuitstats"
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
@@ -27,14 +28,18 @@ func testDashboardHandler(t *testing.T) (*handler, *apikeys.Store) {
 	costRec := coststats.NewRecorder()
 	usageRec := usagestats.NewRecorder()
 	piiRec := pii.NewRecorder()
+	circuitRec := circuitstats.NewRecorder()
 	costRec.RecordRequest("openai", "iw:abc1234", "user-1", "gpt-4", 0.01, 0.005, 0.005, 100, 50)
 	usageRec.RecordRequest("openai", "gpt-4", "iw:abc1234", "user-1", 100, 50)
 	piiRec.RecordRedaction("openai", "iw:secret-key", nil, 0, time.Millisecond, pii.OutcomeOK)
+	circuitRec.RecordProbe("openai", "openai")
+	circuitRec.RecordProbeClosed("openai", "openai", 200)
 
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
 	h.deps.CostSummary = costRec.Snapshot
 	h.deps.UsageSummary = usageRec.Snapshot
 	h.deps.PIISummary = piiRec.Snapshot
+	h.deps.CircuitActivity = circuitRec.Snapshot
 	h.deps.RateLimiter = ratelimit.NewMemoryLimiter(h.deps.YAMLConfig)
 	h.deps.HealthFunc = func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -179,6 +184,30 @@ func TestHandleHealth_Unavailable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/admin/api/health", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestHandleCircuitActivity(t *testing.T) {
+	h, _ := testDashboardHandler(t)
+	rec := httptest.NewRecorder()
+	h.handleCircuitActivity(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/circuit-activity", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	body := decodeJSONBody(t, rec)
+	assert.Equal(t, true, body["available"])
+	assert.Equal(t, float64(1), body["probes_started"])
+	assert.Equal(t, float64(1), body["probes_succeeded"])
+	events, ok := body["recent_events"].([]interface{})
+	require.True(t, ok)
+	require.NotEmpty(t, events)
+}
+
+func TestHandleCircuitActivity_Unavailable(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	rec := httptest.NewRecorder()
+	h.handleCircuitActivity(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/circuit-activity", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decodeJSONBody(t, rec)
+	assert.Equal(t, false, body["available"])
 }
 
 func TestHandleRateLimits_WithSnapshotAndRedactedOverrides(t *testing.T) {

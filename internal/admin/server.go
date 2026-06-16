@@ -70,6 +70,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.HandleFunc("/keys/{key:.+}", h.handleDeleteKey).Methods(http.MethodDelete, http.MethodOptions)
 	api.HandleFunc("/config", h.handleConfig).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/health", h.handleHealth).Methods(http.MethodGet, http.MethodOptions)
+	api.HandleFunc("/circuit-activity", h.handleCircuitActivity).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/rate-limits", h.handleRateLimits).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/cost", h.handleCost).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/usage", h.handleUsage).Methods(http.MethodGet, http.MethodOptions)

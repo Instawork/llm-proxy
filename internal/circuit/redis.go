@@ -101,8 +101,8 @@ func NewRedisStore(cfg Config) (*RedisStore, error) {
 	// explicitly set a value — e.g. a password of "" means "don't
 	// override", not "force-clear", so operators can supply a URL with
 	// embedded credentials and leave RedisPassword unset.
-	if cfg.RedisPassword != "" {
-		opts.Password = cfg.RedisPassword
+	if overlay := cfg.RedisPassword; overlay != "" {
+		opts.Password = overlay
 	}
 	if cfg.RedisDBSet {
 		opts.DB = cfg.RedisDB
@@ -130,6 +130,15 @@ func NewRedisStore(cfg Config) (*RedisStore, error) {
 // designed to fail-open on subsequent errors.
 func (s *RedisStore) Ping(ctx context.Context) error {
 	return s.rdb.Ping(ctx).Err()
+}
+
+// RedisClient returns the shared go-redis client. Callers such as
+// circuitstats may reuse it for llm:cb:activity:* keys on the same DB.
+func (s *RedisStore) RedisClient() *redis.Client {
+	if s == nil {
+		return nil
+	}
+	return s.rdb
 }
 
 // Close releases the underlying Redis client's pooled connections and

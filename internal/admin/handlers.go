@@ -568,6 +568,14 @@ func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	h.deps.HealthFunc(w, r)
 }
 
+func (h *handler) handleCircuitActivity(w http.ResponseWriter, r *http.Request) {
+	if h.deps.CircuitActivity == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"available": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.deps.CircuitActivity())
+}
+
 func (h *handler) handleRateLimits(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.YAMLConfig
 	if cfg == nil {

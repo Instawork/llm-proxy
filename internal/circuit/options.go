@@ -90,3 +90,22 @@ func WithCallerExtractor(f CallerFromRequestFunc) Option {
 		t.callerFn = f
 	}
 }
+
+// ActivityRecorder is optional dashboard telemetry for circuit state transitions.
+// Implementations must be safe for concurrent use.
+type ActivityRecorder interface {
+	RecordCheck()
+	RecordFastFail(provider, key string)
+	RecordProbe(provider, key string)
+	RecordProbeClosed(provider, key string, statusCode int)
+	RecordProbeReopened(provider, key string, statusCode int, failureKind string)
+	RecordOpened(provider, key, reason string)
+}
+
+// WithActivityRecorder wires dashboard activity counters/events. Pass nil to
+// keep the default (no recording).
+func WithActivityRecorder(r ActivityRecorder) Option {
+	return func(t *Transport) {
+		t.activity = r
+	}
+}

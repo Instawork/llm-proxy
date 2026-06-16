@@ -21,4 +21,5 @@ type Deps struct {
 	PIISummary       func() map[string]interface{}
 	UsageSummary     func() map[string]interface{}
 	RateLimitSummary func() map[string]interface{}
+	CircuitActivity  func() map[string]interface{}
 }

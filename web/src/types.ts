@@ -120,6 +120,31 @@ export interface HealthResponse {
   };
 }
 
+export interface CircuitActivityEvent {
+  time: number;
+  provider: string;
+  key?: string;
+  kind: string;
+  new_state?: string;
+  status_code?: number;
+  failure_kind?: string;
+  reason?: string;
+}
+
+export interface CircuitActivityResponse {
+  available?: boolean;
+  backend?: string;
+  started_at?: number;
+  checks_total?: number;
+  blocked_open?: number;
+  probes_started?: number;
+  probes_succeeded?: number;
+  probes_failed?: number;
+  circuits_opened?: number;
+  by_provider?: Record<string, number>;
+  recent_events?: CircuitActivityEvent[];
+}
+
 export interface RateLimitConfig {
   RequestsPerMinute?: number;
   TokensPerMinute?: number;

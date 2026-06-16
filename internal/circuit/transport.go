@@ -58,6 +58,7 @@ type Transport struct {
 	metrics  MetricsSink
 	modelFn  ModelFromRequestFunc
 	callerFn CallerFromRequestFunc
+	activity ActivityRecorder
 }
 
 // NewTransport wraps inner with circuit-breaker behaviour for provider.
@@ -356,6 +357,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// ── Circuit state check ───────────────────────────────────────────────
 	state, key := t.effectiveStateForRequest(req)
+	if t.activity != nil {
+		t.activity.RecordCheck()
+	}
 
 	switch state {
 	case StateOpen:
@@ -363,6 +367,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.log.Warn("circuit: fast-fail (circuit open)",
 			append(fc.attrs(), "mode", ModeEnforce)...)
 		t.emit("fast_fail", fc)
+		if t.activity != nil {
+			t.activity.RecordFastFail(t.provider, key)
+		}
 		return t.degradedResponse(req), nil
 
 	case StateHalfOpen:
@@ -871,12 +878,18 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	// join the per-key state with provider rollup without starving
 	// half-open probes.
 	state, key := t.effectiveStateForRequest(req)
+	if t.activity != nil {
+		t.activity.RecordCheck()
+	}
 	switch state {
 	case StateOpen:
 		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
 		t.log.Warn("circuit: fast-fail per-model breaker open",
 			append(fc.attrs(), "mode", ModeEnforce, "stage", "post_cache_body")...)
 		t.emit("fast_fail", fc)
+		if t.activity != nil {
+			t.activity.RecordFastFail(t.provider, key)
+		}
 		return t.degradedResponse(req), nil
 	case StateHalfOpen:
 		return t.runProbe(req, key)
@@ -986,6 +999,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			if fErr := t.store.ForceOpen(ctx, t.provider, t.cfg.CooldownSeconds); fErr != nil {
 				t.log.Warn("circuit: ForceOpen (insufficient_quota) error",
 					"provider", t.provider, "error", fErr)
+			} else if t.activity != nil {
+				t.activity.RecordOpened(t.provider, t.provider, "insufficient_quota")
 			}
 			t.log.Warn("circuit: insufficient_quota — forcing provider open, passing upstream response through",
 				append(evt.attrs(),
@@ -1265,10 +1280,17 @@ func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, err
 		evt := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
 		t.log.Info("circuit: half-open probe already in flight, fast-failing", evt.attrs()...)
 		t.emit("fast_fail", evt)
+		if t.activity != nil {
+			t.activity.RecordFastFail(t.provider, key)
+		}
 		return t.degradedResponse(req), nil
 	}
 	if stopLease != nil {
 		defer stopLease()
+	}
+
+	if t.activity != nil {
+		t.activity.RecordProbe(t.provider, key)
 	}
 
 	resp, err := t.inner.RoundTrip(req)
@@ -1368,6 +1390,9 @@ func (t *Transport) recordProbeSuccess(ctx context.Context, req *http.Request, r
 		"status_code", probeStatus,
 		"new_state", StateClosed.String(),
 	)
+	if t.activity != nil {
+		t.activity.RecordProbeClosed(t.provider, key, probeStatus)
+	}
 	_ = t.store.RecordSuccess(ctx, key)
 	if t.cfg.PerProviderRollupThreshold > 0 {
 		if rec, ok := t.store.(RollupRecorder); ok {
@@ -1386,6 +1411,13 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 	t.log.Warn("circuit: probe failed, re-opening circuit",
 		append(evt.attrs(), "new_state", StateOpen.String())...)
 	t.emit("probe_failed", evt)
+	if t.activity != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.activity.RecordProbeReopened(t.provider, key, status, string(evt.Kind))
+	}
 	drainResponseBody(resp)
 	_ = t.store.RecordProbeFailed(ctx, key)
 	t.reArmRollup(ctx, key)
@@ -1409,6 +1441,9 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 	newState, openedNow, err := t.store.RecordTerminalFailure(ctx, key)
 	if err != nil {
 		t.log.Error("circuit: RecordTerminalFailure error", "key", key, "error", err)
+	}
+	if openedNow && t.activity != nil {
+		t.activity.RecordOpened(t.provider, key, "threshold")
 	}
 	t.maybeRecordRollup(ctx, key, openedNow)
 

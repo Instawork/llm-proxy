@@ -430,36 +430,41 @@ export default function KeysPage() {
                 />
               </label>
 
-              <label className="form-control w-full">
-                <span className="label-text">Daily cost limit (USD)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  className="input input-bordered w-full"
-                  placeholder="0 = unlimited"
-                  value={form.daily_cost_limit_dollars}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      daily_cost_limit_dollars: event.target.value,
-                    }))
-                  }
-                />
-                <span className="label-text-alt text-base-content/60">Leave at 0 for unlimited</span>
-              </label>
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                <label className="form-control w-full">
+                  <span className="label-text">Daily cost limit (USD)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    className="input input-bordered w-full"
+                    placeholder="0 = unlimited"
+                    value={form.daily_cost_limit_dollars}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        daily_cost_limit_dollars: event.target.value,
+                      }))
+                    }
+                  />
+                  <p className="mt-1.5 text-xs text-base-content/60">Leave at 0 for unlimited</p>
+                </label>
 
-              <label className="label cursor-pointer justify-start gap-3">
-                <input
-                  type="checkbox"
-                  className="toggle toggle-primary"
-                  checked={form.enabled}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, enabled: event.target.checked }))
-                  }
-                />
-                <span className="label-text">Enabled</span>
-              </label>
+                <div className="form-control w-full sm:w-auto">
+                  <span className="label-text">Key status</span>
+                  <label className="flex h-12 cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-primary"
+                      checked={form.enabled}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, enabled: event.target.checked }))
+                      }
+                    />
+                    <span className="text-sm font-medium">{form.enabled ? "Enabled" : "Disabled"}</span>
+                  </label>
+                </div>
+              </div>
 
               <label className="form-control w-full">
                 <span className="label-text">PII redaction</span>
@@ -478,9 +483,9 @@ export default function KeysPage() {
                   <option value="off">Off</option>
                 </select>
                 {piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
-                  <span className="label-text-alt text-warning">
+                  <p className="mt-1.5 text-xs text-warning">
                     Turning PII off requires a Bedrock key. Create a new Bedrock key instead.
-                  </span>
+                  </p>
                 ) : null}
               </label>
 

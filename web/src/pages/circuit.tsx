@@ -16,7 +16,8 @@ import PageHeader, {
   ProviderBadge,
   StatusBadge,
 } from "../components/ui/page-header";
-import { useHealth } from "../hooks/queries";
+import { useHealth, useCircuitActivity } from "../hooks/queries";
+import type { CircuitActivityEvent } from "../types";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   DAILY_HISTORY_SUBTITLE,
@@ -44,9 +45,34 @@ function rangeLabel(range: RangeKey): string {
   return range === "today" ? "today" : `last ${range === "7d" ? "7" : "30"} days`;
 }
 
+function eventLabel(kind: string): string {
+  switch (kind) {
+    case "probe":
+      return "Recovery probe";
+    case "probe_closed":
+      return "Closed (recovered)";
+    case "probe_reopened":
+      return "Re-opened";
+    case "fast_fail":
+      return "Blocked (open)";
+    case "opened":
+      return "Tripped open";
+    default:
+      return kind;
+  }
+}
+
+function formatEventTime(unix: number): string {
+  return new Date(unix * 1000).toLocaleString();
+}
+
 export default function CircuitPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useHealth();
+  const activityQuery = useCircuitActivity();
   const [range, setRange] = useState<RangeKey>("today");
+
+  const activity = activityQuery.data;
+  const recentEvents = activity?.recent_events ?? [];
 
   const providers = data?.circuit_breaker?.providers ?? {};
   const names = Object.keys(providers);
@@ -66,6 +92,9 @@ export default function CircuitPage() {
   const showProviderHistory = hasRedis && range !== "today" && providerSeries.providers.length > 0;
 
   const liveSource = circuitLiveSource(cb?.backend);
+  const activitySource = circuitLiveSource(activity?.backend ?? cb?.backend);
+  const activityHint =
+    activity?.backend === "redis" ? "Shared across tasks via Redis" : "Since process start";
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -108,6 +137,28 @@ export default function CircuitPage() {
         />
         <LiveStat title="Total failures" value={totalFailures} hint="Current window" source={liveSource} />
       </div>
+
+      {activity?.available ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <LiveStat title="State checks" value={activity.checks_total ?? 0} hint={activityHint} source={activitySource} />
+          <LiveStat title="Blocked (open)" value={activity.blocked_open ?? 0} source={activitySource} />
+          <LiveStat title="Recovery probes" value={activity.probes_started ?? 0} hint="After cooldown" source={activitySource} />
+          <LiveStat
+            title="Probes succeeded"
+            value={activity.probes_succeeded ?? 0}
+            hint="Circuit closed"
+            source={activitySource}
+            valueClassName="text-success"
+          />
+          <LiveStat
+            title="Probes failed"
+            value={activity.probes_failed ?? 0}
+            hint="Circuit re-opened"
+            source={activitySource}
+            valueClassName="text-error"
+          />
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard
@@ -153,6 +204,65 @@ export default function CircuitPage() {
             height={260}
           />
         </ChartCard>
+      ) : null}
+
+      {activity?.available ? (
+        <SectionPanel
+          title="Recovery activity"
+          subtitle="Half-open probes after cooldown windows end (shared when Redis-backed)"
+          source={activitySource}
+        >
+          <div className="overflow-x-auto">
+            <table className="table table-zebra table-sm">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Event</th>
+                  <th>Provider</th>
+                  <th>Key</th>
+                  <th>Result</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentEvents.map((e: CircuitActivityEvent, i) => (
+                  <tr key={`${e.time}-${e.kind}-${i}`}>
+                    <td className="whitespace-nowrap text-xs">{formatEventTime(e.time)}</td>
+                    <td>{eventLabel(e.kind)}</td>
+                    <td>
+                      <ProviderBadge provider={e.provider} />
+                    </td>
+                    <td className="font-mono text-xs">{e.key ?? "—"}</td>
+                    <td>
+                      {e.new_state ? (
+                        <StatusBadge
+                          active={e.new_state === "closed"}
+                          activeLabel="closed"
+                          inactiveLabel={e.new_state}
+                        />
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="text-xs text-base-content/70">
+                      {e.status_code ? `HTTP ${e.status_code}` : null}
+                      {e.failure_kind ? ` ${e.failure_kind}` : null}
+                      {e.reason ? e.reason : null}
+                    </td>
+                  </tr>
+                ))}
+                {recentEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="text-center text-base-content/50">
+                      No recovery probes yet — events appear when a cooldown ends and the breaker
+                      probes upstream, or when requests are blocked while open.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </SectionPanel>
       ) : null}
 
       <SectionPanel title="Providers" subtitle="Live trip state and failure counters" source={liveSource}>

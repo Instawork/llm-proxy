@@ -8,6 +8,7 @@ import type {
   CostResponse,
   CreateAPIKeyRequest,
   HealthResponse,
+  CircuitActivityResponse,
   PIIResponse,
   Provider,
   RateLimitsResponse,
@@ -24,6 +25,7 @@ export const queryKeys = {
   key: (key: string) => ["admin", "keys", "detail", key] as const,
   config: ["admin", "config"] as const,
   health: ["admin", "health"] as const,
+  circuitActivity: ["admin", "circuit-activity"] as const,
   rateLimits: ["admin", "rate-limits"] as const,
   cost: ["admin", "cost"] as const,
   usage: ["admin", "usage"] as const,
@@ -67,6 +69,16 @@ export function useHealth() {
     // history=1 opts into the Redis-backed circuit daily_history; bare
     // /health (infra liveness probe) stays Redis-free.
     queryFn: () => apiFetch<HealthResponse>("/admin/api/health?history=1"),
+    refetchInterval,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useCircuitActivity() {
+  const refetchInterval = usePollInterval();
+  return useQuery({
+    queryKey: queryKeys.circuitActivity,
+    queryFn: () => apiFetch<CircuitActivityResponse>("/admin/api/circuit-activity"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
