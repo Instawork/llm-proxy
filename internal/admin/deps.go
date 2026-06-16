@@ -6,6 +6,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 )
 
@@ -22,4 +23,5 @@ type Deps struct {
 	UsageSummary     func() map[string]interface{}
 	RateLimitSummary func() map[string]interface{}
 	CircuitActivity  func() map[string]interface{}
+	KeyProvisioner   *provision.Manager
 }

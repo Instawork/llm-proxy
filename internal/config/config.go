@@ -364,11 +364,39 @@ type APIKeyManagementConfig struct {
 	// pre-provision the table via Terraform and leave this false.
 	AutoCreateTable bool `yaml:"auto_create_table"`
 	// KeyPrefix is the prefix base (without separator, e.g. "iw") used for
-	// proxy API keys. New keys are generated as "<base>_<random>", and both
-	// the current "<base>_" and legacy "<base>:" separators are accepted on
-	// lookup. Blank falls back to apikeys.DefaultKeyPrefixBase. Overridable
-	// at runtime via the LLM_PROXY_API_KEY_PREFIX env var.
+	// proxy API keys. New keys are generated as "<base>-<random>", and
+	// "<base>-", "<base>_", and "<base>:" are accepted on lookup. Blank
+	// falls back to apikeys.DefaultKeyPrefixBase. Overridable at runtime
+	// via the LLM_PROXY_API_KEY_PREFIX env var.
 	KeyPrefix string `yaml:"key_prefix"`
+	// Provisioning configures automatic upstream key minting for the admin UI.
+	Provisioning KeyProvisioningConfig `yaml:"provisioning,omitempty"`
+}
+
+// KeyProvisioningConfig controls server-side upstream API key creation.
+type KeyProvisioningConfig struct {
+	Enabled   bool                        `yaml:"enabled"`
+	OpenAI    OpenAIProvisioningConfig    `yaml:"openai,omitempty"`
+	Gemini    GeminiProvisioningConfig    `yaml:"gemini,omitempty"`
+	Anthropic AnthropicProvisioningConfig `yaml:"anthropic,omitempty"`
+}
+
+// OpenAIProvisioningConfig mints keys via the OpenAI Admin API.
+type OpenAIProvisioningConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	ProjectID string `yaml:"project_id"`
+}
+
+// GeminiProvisioningConfig mints keys via the GCP API Keys API.
+type GeminiProvisioningConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	GCPProjectID string `yaml:"gcp_project_id"`
+}
+
+// AnthropicProvisioningConfig assigns keys from a Redis-backed pool.
+type AnthropicProvisioningConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	PoolRedisKey string `yaml:"pool_redis_key"`
 }
 
 // RateLimitingConfig represents rate limiting feature configuration

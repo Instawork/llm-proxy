@@ -10,6 +10,7 @@ import type {
   HealthResponse,
   CircuitActivityResponse,
   PIIResponse,
+  ProvisioningStatus,
   Provider,
   RateLimitsResponse,
   ShareCreateResponse,
@@ -30,6 +31,7 @@ export const queryKeys = {
   cost: ["admin", "cost"] as const,
   usage: ["admin", "usage"] as const,
   pii: ["admin", "pii"] as const,
+  provisioning: ["admin", "provisioning"] as const,
 };
 
 export function useMe() {
@@ -81,6 +83,13 @@ export function useCircuitActivity() {
     queryFn: () => apiFetch<CircuitActivityResponse>("/admin/api/circuit-activity"),
     refetchInterval,
     refetchIntervalInBackground: true,
+  });
+}
+
+export function useProvisioning() {
+  return useQuery({
+    queryKey: queryKeys.provisioning,
+    queryFn: () => apiFetch<ProvisioningStatus>("/admin/api/provisioning"),
   });
 }
 

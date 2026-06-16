@@ -65,6 +65,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.HandleFunc("/me", h.handleMe).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/keys", h.handleListKeys).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/keys", h.handleCreateKey).Methods(http.MethodPost, http.MethodOptions)
+	api.HandleFunc("/provisioning", h.handleProvisioning).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/keys/{key:.+}", h.handleGetKey).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/keys/{key:.+}", h.handleUpdateKey).Methods(http.MethodPatch, http.MethodOptions)
 	api.HandleFunc("/keys/{key:.+}", h.handleDeleteKey).Methods(http.MethodDelete, http.MethodOptions)
