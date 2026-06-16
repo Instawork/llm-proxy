@@ -99,6 +99,59 @@ func TestRedisStore_GetProviderStats_AggregatesPerModelKeys(t *testing.T) {
 	require.Equal(t, 3, agg.Failures)
 }
 
+// Regression: a circuit that is Open with an EMPTY failure window must still
+// be reported Open by GetProviderStats. This reproduces the production
+// dashboard-says-closed-while-Redis-says-open bug, where the per-model
+// breaker re-opened via a failed half-open probe (RecordProbeFailed sets the
+// state + half-open marker but records no failure timestamp), so scanning
+// only `failures:*` keys found nothing and defaulted to Closed.
+func TestRedisStore_GetProviderStats_OpenWithEmptyFailureWindow(t *testing.T) {
+	cfg := Config{
+		FailureThreshold: 1,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store, _ := newRedisStoreForBehaviorTest(t, cfg)
+	ctx := context.Background()
+
+	// Re-open the bare-provider key via a failed probe: this sets state=open
+	// and the half-open marker but adds NO entry to the failures zset.
+	require.NoError(t, store.RecordProbeFailed(ctx, "openai"))
+
+	// Sanity: the failures zset is empty, so the old failures-only scan would
+	// have seen nothing here.
+	cnt, err := store.rdb.ZCard(ctx, store.failuresKey("openai")).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), cnt)
+
+	agg, err := store.GetProviderStats(ctx, "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateOpen, agg.State, "open breaker with empty failure window must report Open")
+	require.Equal(t, 0, agg.Failures)
+	require.NotNil(t, agg.CooldownUntil, "Open state should surface a cooldown expiry")
+}
+
+// Regression: a per-model breaker that is Open with an empty failure window
+// must propagate Open to the provider-level aggregate even when a sibling
+// model key is Closed.
+func TestRedisStore_GetProviderStats_OpenPerModelKeyWithoutFailures(t *testing.T) {
+	cfg := Config{
+		FailureThreshold: 1,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store, _ := newRedisStoreForBehaviorTest(t, cfg)
+	ctx := context.Background()
+
+	// One model re-opened via a failed probe (no failure timestamps), another
+	// is healthy/closed.
+	require.NoError(t, store.RecordProbeFailed(ctx, "openai:gpt-5.5"))
+
+	agg, err := store.GetProviderStats(ctx, "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateOpen, agg.State, "worst-case state across model keys must be Open")
+}
+
 func TestRedisStore_StateTransitionsFromOpenToHalfOpenThenClosedAfterIdle(t *testing.T) {
 	cfg := Config{
 		FailureThreshold: 1,
