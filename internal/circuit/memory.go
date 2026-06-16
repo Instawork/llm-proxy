@@ -271,10 +271,17 @@ func (s *MemoryStore) ForceOpen(_ context.Context, key string, cooldownSeconds i
 	e := s.entry(key)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	now := s.now()
 	e.state = StateOpen
-	e.cooldownUntil = s.now().Add(time.Duration(cooldownSeconds) * time.Second)
+	e.cooldownUntil = now.Add(time.Duration(cooldownSeconds) * time.Second)
 	e.probeInFlight = false
 	e.probeStartAt = time.Time{}
+	// Record a failure in the sliding window so observability (GetStats
+	// Failures, the dashboard "Failures by provider" / trend charts, and
+	// daily-history rollups) reflects the forced-open event. Without this the
+	// breaker shows state=open with failures=0 and the graphs stay empty.
+	e.failures = append(e.failures, now)
+	s.pruneFailuresLocked(e, now)
 	return nil
 }
 

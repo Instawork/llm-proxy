@@ -38,6 +38,22 @@ func (noopMetrics) Incr(string, []string, float64) error { return nil }
 //     retry paths).
 type ModelFromRequestFunc func(*http.Request) string
 
+// CallerFromRequestFunc returns a low-cardinality, human-readable label
+// for the caller behind an HTTP request (e.g. the proxy API-key
+// description like "finch-prod"), or "" if it cannot be determined.
+//
+// It is used only to enrich failure log lines and metric tags so
+// operators can attribute degraded responses to a downstream caller —
+// never to influence routing or breaker behaviour. Like
+// ModelFromRequestFunc, implementations must be side-effect-free,
+// non-blocking, and safe for concurrent use; in practice the caller
+// label lives on the request context, so no body read is required.
+//
+// IMPORTANT: return a stable, bounded label (a key *name*, not the
+// secret key value and not a per-request id) — the value becomes a
+// Datadog tag and unbounded values blow the cardinality budget.
+type CallerFromRequestFunc func(*http.Request) string
+
 // Option mutates a Transport during construction.  See NewTransport for
 // the canonical usage.
 type Option func(*Transport)
@@ -61,5 +77,16 @@ func WithMetrics(m MetricsSink) Option {
 func WithModelExtractor(f ModelFromRequestFunc) Option {
 	return func(t *Transport) {
 		t.modelFn = f
+	}
+}
+
+// WithCallerExtractor installs a caller-label extractor so failure log
+// lines and metric tags carry a `caller` dimension (e.g. the proxy
+// API-key description). The transport calls it only on failure paths, so
+// successful traffic pays no extra cost. Pass nil (or omit the option) to
+// skip caller tagging — the tag then reports "unknown".
+func WithCallerExtractor(f CallerFromRequestFunc) Option {
+	return func(t *Transport) {
+		t.callerFn = f
 	}
 }

@@ -702,6 +702,24 @@ func circuitModelExtractor(
 	}
 }
 
+// circuitCallerExtractor returns a caller-label extractor for circuit
+// failure observability. It reads the resolved proxy API-key record off
+// the request context (set by the auth middleware) and returns its
+// Description — a stable, human-readable label like "finch-prod" — never
+// the secret key value. Empty when no key is on the context; the circuit
+// transport normalizes that to the "unknown" tag.
+func circuitCallerExtractor() circuit.CallerFromRequestFunc {
+	return func(req *http.Request) string {
+		if req == nil {
+			return ""
+		}
+		if rec, ok := apikeys.FromContext(req.Context()); ok && rec != nil {
+			return rec.Description
+		}
+		return ""
+	}
+}
+
 // initializeAPIKeyStore creates and configures the API key store from config
 func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
 	// Check if API key management is enabled
@@ -1205,6 +1223,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
+			circuit.WithCallerExtractor(circuitCallerExtractor()),
 		}
 		if circuitMetrics != nil {
 			opts = append(opts, circuit.WithMetrics(circuitMetrics))

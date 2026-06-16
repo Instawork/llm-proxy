@@ -366,10 +366,21 @@ func (s *RedisStore) ForceOpen(ctx context.Context, key string, cooldownSeconds 
 	}
 	cd := time.Duration(cooldownSeconds) * time.Second
 	hoTTL := time.Duration(cooldownSeconds*halfOpenMarkerTTLMultiplier) * time.Second
+	now := float64(time.Now().UnixNano()) / 1e9
+	cutoff := now - float64(s.cfg.WindowSeconds)
+	member := fmt.Sprintf("%.9f:%d", now, s.failureSeq.Add(1))
+	fttl := time.Duration(s.cfg.CooldownSeconds*halfOpenMarkerTTLMultiplier) * time.Second
 	pipe := s.rdb.Pipeline()
 	pipe.Set(ctx, s.stateKey(key), "open", cd)
 	pipe.Set(ctx, s.halfOpenKey(key), "1", hoTTL)
 	pipe.Del(ctx, s.probeKey(key))
+	// Record a failure in the sliding window so observability (GetStats
+	// Failures, the dashboard "Failures by provider" / trend charts, and
+	// daily-history rollups) reflects the forced-open event. Without this the
+	// breaker shows state=open with failures=0 and the graphs stay empty.
+	pipe.ZAdd(ctx, s.failuresKey(key), redis.Z{Score: now, Member: member})
+	pipe.ZRemRangeByScore(ctx, s.failuresKey(key), "-inf", fmt.Sprintf("%f", cutoff))
+	pipe.Expire(ctx, s.failuresKey(key), fttl)
 	if _, err := pipe.Exec(ctx); err != nil {
 		s.log.Warn(
 			"circuit.RedisStore: ForceOpen failed (provider will NOT fast-fail account-wide)",

@@ -238,10 +238,7 @@ export function DonutChart({
       maintainAspectRatio: false,
       cutout: "70%",
       plugins: {
-        legend: {
-          position: "bottom",
-          labels: { boxWidth: 12, usePointStyle: true, padding: 16, color: chartPalette.tick() },
-        },
+        legend: { display: false },
       },
     }),
     [theme],
@@ -253,16 +250,29 @@ export function DonutChart({
   }
 
   return (
-    <div className="relative" style={{ height }}>
-      <Doughnut key={theme} data={data} options={options} />
-      {centerValue ? (
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center pb-10">
-          <span className="text-2xl font-semibold">{centerValue}</span>
-          {centerLabel ? (
-            <span className="text-xs uppercase tracking-wide text-base-content/50">{centerLabel}</span>
-          ) : null}
-        </div>
-      ) : null}
+    <div className="flex flex-col">
+      <div className="relative" style={{ height }}>
+        <Doughnut key={theme} data={data} options={options} />
+        {centerValue ? (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-2xl font-semibold leading-tight">{centerValue}</span>
+            {centerLabel ? (
+              <span className="text-xs uppercase tracking-wide text-base-content/50">{centerLabel}</span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2">
+        {labels.map((label, i) => (
+          <li key={`${label}-${i}`} className="flex items-center gap-1.5 text-xs text-base-content/70">
+            <span
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: colors[i % colors.length] }}
+            />
+            <span className="truncate">{label}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
