@@ -20,6 +20,7 @@ import {
   useDeleteKey,
   useKeys,
   useMe,
+  useProvisioning,
   useUpdateKey,
 } from "../../hooks/queries";
 import type {
@@ -123,11 +124,13 @@ export default function KeysPage() {
   const [deleteTarget, setDeleteTarget] = useState<APIKey | null>(null);
   const [editingKey, setEditingKey] = useState<APIKey | null>(null);
   const [form, setForm] = useState<KeyFormState>(defaultForm);
+  const [manualKeyEntry, setManualKeyEntry] = useState(false);
   const [shareResult, setShareResult] = useState<ShareCreateResponse | null>(null);
   const [sharingKey, setSharingKey] = useState<string | null>(null);
 
   const filter = providerFilter || undefined;
   const { data: keys = [], isLoading, error } = useKeys(filter);
+  const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
   const updateKey = useUpdateKey();
   const deleteKey = useDeleteKey();
@@ -151,6 +154,16 @@ export default function KeysPage() {
     return ["bedrock"] as Provider[];
   }, [piiOffRequiresBedrock]);
 
+  const providerAutoProvision = Boolean(
+    provisioning?.enabled && provisioning.providers?.[form.provider]?.auto_provision,
+  );
+  const anthropicPoolAvailable = provisioning?.providers?.anthropic?.pool_available;
+  const showAnthropicPoolWarning =
+    form.provider === "anthropic" &&
+    providerAutoProvision &&
+    typeof anthropicPoolAvailable === "number" &&
+    anthropicPoolAvailable < 5;
+
   const onShare = async (record: APIKey) => {
     setSharingKey(record.key);
     try {
@@ -166,6 +179,7 @@ export default function KeysPage() {
   const openCreate = () => {
     setEditingKey(null);
     setForm(defaultForm);
+    setManualKeyEntry(false);
     setModalOpen(true);
   };
 
@@ -190,6 +204,7 @@ export default function KeysPage() {
     setModalOpen(false);
     setEditingKey(null);
     setForm(defaultForm);
+    setManualKeyEntry(false);
   };
 
   const onSubmit = async (event: FormEvent) => {
@@ -211,19 +226,24 @@ export default function KeysPage() {
         });
         push("Key updated", "success");
       } else {
-        if (!form.actual_key.trim()) {
+        const useAutoProvision = providerAutoProvision && !manualKeyEntry;
+        if (!useAutoProvision && !form.actual_key.trim()) {
           push("Provider API key is required", "error");
           return;
         }
         const body: CreateAPIKeyRequest = {
           provider: form.provider,
-          actual_key: form.actual_key,
           description: form.description,
           daily_cost_limit: dailyCostLimit,
           enabled: form.enabled,
           redact_pii: redactPii,
           ...rateLimitsFromForm(form),
         };
+        if (useAutoProvision) {
+          body.auto_provision = true;
+        } else {
+          body.actual_key = form.actual_key;
+        }
         await createKey.mutateAsync(body);
         push("Key created", "success");
       }
@@ -401,7 +421,45 @@ export default function KeysPage() {
                 ) : null}
               </label>
 
-              {!editingKey ? (
+              {!editingKey && providerAutoProvision && !manualKeyEntry ? (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-base-content/80">
+                  Upstream key will be created automatically for {form.provider}.
+                </div>
+              ) : null}
+
+              {showAnthropicPoolWarning ? (
+                <div className="alert alert-warning py-2 text-sm">
+                  Anthropic pool is low ({anthropicPoolAvailable} remaining). Contact ops to refill
+                  the pool.
+                </div>
+              ) : null}
+
+              {!editingKey && providerAutoProvision ? (
+                <details
+                  className="rounded-lg border border-base-300 px-3 py-2"
+                  open={manualKeyEntry}
+                  onToggle={(event) => setManualKeyEntry(event.currentTarget.open)}
+                >
+                  <summary className="cursor-pointer text-sm font-medium">
+                    Advanced: paste provider key
+                  </summary>
+                  <label className="form-control mt-3 w-full">
+                    <span className="label-text">Provider API key</span>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      className="input input-bordered w-full font-mono"
+                      placeholder="sk-..."
+                      value={form.actual_key}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, actual_key: event.target.value }))
+                      }
+                    />
+                  </label>
+                </details>
+              ) : null}
+
+              {!editingKey && !providerAutoProvision ? (
                 <label className="form-control w-full">
                   <span className="label-text">Provider API key</span>
                   <input

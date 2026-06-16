@@ -23,12 +23,13 @@ const (
 	KeyLength = 32
 
 	// DefaultKeyPrefixBase is the default prefix base (without separator).
-	// New keys are generated as "<base>_<hex>"; both the current "<base>_"
-	// and the legacy "<base>:" separator are accepted on lookup.
+	// New keys are generated as "<base>-<hex>"; legacy "<base>_",
+	// "<base>:", and "<base>-" forms are accepted on lookup.
 	DefaultKeyPrefixBase = "iw"
 
-	keyPrefixSepNew    = "_"
-	keyPrefixSepLegacy = ":"
+	keyPrefixSepNew              = "-"
+	keyPrefixSepLegacyUnderscore = "_"
+	keyPrefixSepLegacyColon      = ":"
 )
 
 var (
@@ -36,28 +37,28 @@ var (
 	// e.g. "iw". Set once at startup via SetKeyPrefixBase.
 	keyPrefixBase = DefaultKeyPrefixBase
 
-	// KeyPrefix is the prefix used to GENERATE new keys ("<base>_").
+	// KeyPrefix is the prefix used to GENERATE new keys ("<base>-").
 	// Exported for backwards compatibility with callers/tests that build
 	// keys as KeyPrefix+"...". Do NOT use it to decide whether a string is
-	// one of our keys — that must accept the legacy ":" separator too, so
-	// use HasKeyPrefix / TrimKeyPrefix instead.
+	// one of our keys — that must accept legacy separators too, so use
+	// HasKeyPrefix / TrimKeyPrefix instead.
 	KeyPrefix = keyPrefixBase + keyPrefixSepNew
 
 	// acceptedKeyPrefixes lists every prefix recognized as one of our proxy
 	// keys, current separator first. Kept in sync by SetKeyPrefixBase.
 	acceptedKeyPrefixes = []string{
 		keyPrefixBase + keyPrefixSepNew,
-		keyPrefixBase + keyPrefixSepLegacy,
+		keyPrefixBase + keyPrefixSepLegacyUnderscore,
+		keyPrefixBase + keyPrefixSepLegacyColon,
 	}
 )
 
 // SetKeyPrefixBase configures the proxy key prefix base (e.g. "iw"). New
-// keys are then generated as "<base>_<hex>", while lookups continue to
-// accept both the current "<base>_" form and the legacy "<base>:" form for
-// keys minted before the separator change. A blank base is ignored so a
-// missing config value falls back to the default. Call once at startup
-// before serving traffic — it is not safe to call concurrently with key
-// operations.
+// keys are then generated as "<base>-<hex>", while lookups continue to
+// accept "<base>-", "<base>_", and "<base>:" for keys minted under older
+// separators. A blank base is ignored so a missing config value falls back
+// to the default. Call once at startup before serving traffic — it is not
+// safe to call concurrently with key operations.
 func SetKeyPrefixBase(base string) {
 	base = strings.TrimSpace(base)
 	if base == "" {
@@ -67,15 +68,16 @@ func SetKeyPrefixBase(base string) {
 	KeyPrefix = base + keyPrefixSepNew
 	acceptedKeyPrefixes = []string{
 		base + keyPrefixSepNew,
-		base + keyPrefixSepLegacy,
+		base + keyPrefixSepLegacyUnderscore,
+		base + keyPrefixSepLegacyColon,
 	}
 }
 
 // KeyPrefixBase returns the configured prefix base (without separator).
 func KeyPrefixBase() string { return keyPrefixBase }
 
-// HasKeyPrefix reports whether k carries a recognized proxy-key prefix —
-// either the current "<base>_" or the legacy "<base>:" form.
+// HasKeyPrefix reports whether k carries a recognized proxy-key prefix
+// (current "<base>-" or legacy "<base>_" / "<base>:").
 func HasKeyPrefix(k string) bool {
 	_, ok := matchedKeyPrefix(k)
 	return ok
@@ -172,6 +174,13 @@ type APIKey struct {
 	RateLimitTPM int `dynamodbav:"rate_limit_tpm,omitempty"` // tokens / minute
 	RateLimitRPD int `dynamodbav:"rate_limit_rpd,omitempty"` // requests / day
 	RateLimitTPD int `dynamodbav:"rate_limit_tpd,omitempty"` // tokens / day
+	// Provisioned is true when actual_key was minted by the provisioner.
+	Provisioned bool `dynamodbav:"provisioned,omitempty"`
+	// UpstreamKeyID identifies the vendor credential for revoke (service
+	// account id, GCP key name, etc.).
+	UpstreamKeyID string `dynamodbav:"upstream_key_id,omitempty"`
+	// UpstreamKind classifies the upstream credential for revoke handlers.
+	UpstreamKind string `dynamodbav:"upstream_kind,omitempty"`
 }
 
 // KeyRateLimits carries optional per-key rate-limit overrides for CreateKey.
@@ -335,8 +344,15 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 	return nil
 }
 
+// KeyCreateMeta carries optional auto-provision metadata for CreateKey.
+type KeyCreateMeta struct {
+	Provisioned   bool
+	UpstreamKeyID string
+	UpstreamKind  string
+}
+
 // GenerateKey generates a new API key using the current generation prefix
-// ("<base>_", e.g. "iw_").
+// ("<base>-", e.g. "iw-").
 func GenerateKey() (string, error) {
 	bytes := make([]byte, KeyLength)
 	if _, err := rand.Read(bytes); err != nil {
@@ -347,6 +363,11 @@ func GenerateKey() (string, error) {
 
 // CreateKey creates a new API key record.
 func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string, redactPII *bool, rateLimits ...KeyRateLimits) (*APIKey, error) {
+	return s.CreateKeyWithMeta(ctx, provider, actualKey, description, dailyCostLimit, tags, redactPII, KeyCreateMeta{}, rateLimits...)
+}
+
+// CreateKeyWithMeta creates a new API key record with optional provision metadata.
+func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string, redactPII *bool, meta KeyCreateMeta, rateLimits ...KeyRateLimits) (*APIKey, error) {
 	// Generate new key
 	newKey, err := GenerateKey()
 	if err != nil {
@@ -374,6 +395,9 @@ func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description 
 		RateLimitTPM:   rl.TPM,
 		RateLimitRPD:   rl.RPD,
 		RateLimitTPD:   rl.TPD,
+		Provisioned:    meta.Provisioned,
+		UpstreamKeyID:  meta.UpstreamKeyID,
+		UpstreamKind:   meta.UpstreamKind,
 	}
 
 	// Marshal to DynamoDB attribute values

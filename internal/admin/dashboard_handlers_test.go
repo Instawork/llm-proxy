@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
-	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/circuitstats"
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"

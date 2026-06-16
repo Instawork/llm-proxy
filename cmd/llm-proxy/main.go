@@ -28,6 +28,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 	"github.com/Instawork/llm-proxy/internal/redact"
@@ -105,6 +106,7 @@ var globalCostStatsRecorder *coststats.Recorder
 var (
 	globalAPIKeyStore          providers.APIKeyStore
 	globalAPIKeyStoreInitError error
+	globalKeyProvisioner       *provision.Manager
 )
 
 // Global rate limiter instance
@@ -1202,6 +1204,17 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Initialize API key store if enabled
 	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
 
+	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
+	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
+	if provErr != nil {
+		logger.Error("Key provisioning disabled: setup failed", "error", provErr)
+	} else {
+		globalKeyProvisioner = keyProvisioner
+		if keyProvisioner.Enabled() {
+			logger.Info("Key provisioning: ENABLED")
+		}
+	}
+
 	// Initialize rate limiter if enabled
 	if yamlConfig.Features.RateLimiting.Enabled {
 		lim, err := ratelimit.Factory(yamlConfig)
@@ -1441,6 +1454,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			UsageSummary:     usageSummaryFunc(),
 			RateLimitSummary: rateLimitSummaryFunc(),
 			CircuitActivity:  circuitActivitySummaryFunc(),
+			KeyProvisioner:   globalKeyProvisioner,
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}

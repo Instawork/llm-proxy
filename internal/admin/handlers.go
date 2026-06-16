@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
 )
@@ -110,8 +112,8 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if req.Provider == "" || req.ActualKey == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider and actual_key are required"})
+	if req.Provider == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider is required"})
 		return
 	}
 	if err := apikeys.ValidatePIIOffBedrockPolicy(
@@ -124,14 +126,51 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := h.deps.APIKeyStore.CreateKey(
+	actualKey := strings.TrimSpace(req.ActualKey)
+	var meta apikeys.KeyCreateMeta
+
+	if req.AutoProvision {
+		if h.deps.KeyProvisioner == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "key provisioning is not configured"})
+			return
+		}
+		if _, ok := h.deps.KeyProvisioner.ForProvider(req.Provider); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "auto_provision is not available for provider " + req.Provider,
+			})
+			return
+		}
+		provName := "llm-proxy:" + provision.SanitizeName(req.Description)
+		res, err := h.deps.KeyProvisioner.Provision(r.Context(), req.Provider, provName)
+		if err != nil {
+			if errors.Is(err, provision.ErrEmptyPool) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+				return
+			}
+			h.deps.Logger.Error("admin: provision upstream key failed", "provider", req.Provider, "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to provision upstream key"})
+			return
+		}
+		actualKey = res.ActualKey
+		meta = apikeys.KeyCreateMeta{
+			Provisioned:   true,
+			UpstreamKeyID: res.UpstreamID,
+			UpstreamKind:  res.UpstreamKind,
+		}
+	} else if actualKey == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
+		return
+	}
+
+	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(
 		r.Context(),
 		req.Provider,
-		req.ActualKey,
+		actualKey,
 		req.Description,
 		req.DailyCostLimit,
 		req.Tags,
 		req.RedactPII,
+		meta,
 		apikeys.KeyRateLimits{
 			RPM: req.RateLimitRPM,
 			TPM: req.RateLimitTPM,
@@ -272,6 +311,32 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := mux.Vars(r)["key"]
+	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if record.Provisioned && h.deps.KeyProvisioner != nil {
+		if revokeErr := h.deps.KeyProvisioner.Revoke(
+			r.Context(),
+			record.Provider,
+			record.UpstreamKeyID,
+			record.UpstreamKind,
+		); revokeErr != nil {
+			h.deps.Logger.Warn("admin: upstream revoke failed",
+				"key", keyID,
+				"provider", record.Provider,
+				"upstream_id", record.UpstreamKeyID,
+				"error", revokeErr,
+			)
+		}
+	}
+
 	if err := h.deps.APIKeyStore.DeleteKey(r.Context(), keyID); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -282,6 +347,33 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) handleProvisioning(w http.ResponseWriter, r *http.Request) {
+	if h.deps.KeyProvisioner == nil {
+		writeJSON(w, http.StatusOK, ProvisioningResponse{Enabled: false})
+		return
+	}
+	raw := h.deps.KeyProvisioner.Status(r.Context())
+	resp := ProvisioningResponse{Enabled: false}
+	if enabled, ok := raw["enabled"].(bool); ok {
+		resp.Enabled = enabled
+	}
+	if providers, ok := raw["providers"].(map[string]interface{}); ok {
+		resp.Providers = make(map[string]ProvisioningProvider, len(providers))
+		for name, entry := range providers {
+			m, _ := entry.(map[string]interface{})
+			p := ProvisioningProvider{}
+			if v, ok := m["auto_provision"].(bool); ok {
+				p.AutoProvision = v
+			}
+			if v, ok := m["pool_available"].(int); ok {
+				p.PoolAvailable = v
+			}
+			resp.Providers[name] = p
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) handleConfig(w http.ResponseWriter, r *http.Request) {

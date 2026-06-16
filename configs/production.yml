@@ -31,8 +31,19 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys"
     region: "us-west-2"
-    # New keys are minted as "iw_<random>"; legacy "iw:" keys still validate.
+    # New keys are minted as "iw-<random>"; legacy "iw_" and "iw:" keys still validate.
     key_prefix: "iw"
+    provisioning:
+      enabled: true
+      openai:
+        enabled: true
+        project_id: "${LLM_PROXY_OPENAI_PROJECT_ID}"
+      gemini:
+        enabled: true
+        gcp_project_id: "${LLM_PROXY_GCP_PROJECT_ID}"
+      anthropic:
+        enabled: true
+        pool_redis_key: "llm:provision:anthropic:available"
   # Circuit breaker: enforce mode.  Retries transient failures (up to
   # max_transient_retries), fast-fails open circuits with a synthetic 503,
   # and counts retry contributions toward the failure window.

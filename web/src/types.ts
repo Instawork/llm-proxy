@@ -24,11 +24,23 @@ export interface APIKey {
   created_at: string;
   updated_at: string;
   expires_at?: string | null;
+  provisioned?: boolean;
+}
+
+export interface ProvisioningProviderStatus {
+  auto_provision: boolean;
+  pool_available?: number;
+}
+
+export interface ProvisioningStatus {
+  enabled: boolean;
+  providers?: Partial<Record<Provider, ProvisioningProviderStatus>>;
 }
 
 export interface CreateAPIKeyRequest {
   provider: Provider;
-  actual_key: string;
+  actual_key?: string;
+  auto_provision?: boolean;
   description?: string;
   daily_cost_limit?: number;
   enabled?: boolean;

@@ -36,12 +36,14 @@ type KeyResponse struct {
 	UpdatedAt      time.Time         `json:"updated_at"`
 	ExpiresAt      *time.Time        `json:"expires_at,omitempty"`
 	ActualKey      string            `json:"actual_key,omitempty"`
+	Provisioned    bool              `json:"provisioned,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
 type CreateKeyRequest struct {
 	Provider       string            `json:"provider"`
-	ActualKey      string            `json:"actual_key"`
+	ActualKey      string            `json:"actual_key,omitempty"`
+	AutoProvision  bool              `json:"auto_provision,omitempty"`
 	Description    string            `json:"description,omitempty"`
 	DailyCostLimit int64             `json:"daily_cost_limit"`
 	Tags           map[string]string `json:"tags,omitempty"`
@@ -110,6 +112,18 @@ type RateLimitsResponse struct {
 	Stats     map[string]interface{}    `json:"stats,omitempty"`
 }
 
+// ProvisioningResponse summarizes auto-provision availability for the admin UI.
+type ProvisioningResponse struct {
+	Enabled   bool                            `json:"enabled"`
+	Providers map[string]ProvisioningProvider `json:"providers,omitempty"`
+}
+
+// ProvisioningProvider describes per-provider auto-provision status.
+type ProvisioningProvider struct {
+	AutoProvision bool `json:"auto_provision"`
+	PoolAvailable int  `json:"pool_available,omitempty"`
+}
+
 func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	resp := KeyResponse{
 		Key:            k.PK,
@@ -130,5 +144,6 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	if includeActualKey {
 		resp.ActualKey = maskedActualKey
 	}
+	resp.Provisioned = k.Provisioned
 	return resp
 }

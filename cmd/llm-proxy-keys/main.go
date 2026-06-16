@@ -20,6 +20,11 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "pool" {
+		runPoolCommand(os.Args[2:])
+		return
+	}
+
 	// Command-line flags
 	var (
 		configDir     = flag.String("config-dir", "configs", "Path to configuration directory")
@@ -47,6 +52,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  Delete key:      -delete=iw:xxx\n")
 		fmt.Fprintf(os.Stderr, "  Disable key:     -disable=iw:xxx\n")
 		fmt.Fprintf(os.Stderr, "  Enable key:      -enable=iw:xxx\n\n")
+		fmt.Fprintf(os.Stderr, "Pool commands:\n")
+		fmt.Fprintf(os.Stderr, "  pool add:        pool add --provider anthropic --key sk-ant-api03-...\n")
+		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
