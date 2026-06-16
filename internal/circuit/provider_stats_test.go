@@ -27,6 +27,7 @@ type fakeProviderStatsStore struct {
 func (f *fakeProviderStatsStore) GetState(context.Context, string) (State, error) {
 	return StateClosed, nil
 }
+
 func (f *fakeProviderStatsStore) RecordTerminalFailure(context.Context, string) (State, bool, error) {
 	return StateClosed, false, nil
 }
@@ -34,12 +35,15 @@ func (f *fakeProviderStatsStore) RecordSuccess(context.Context, string) error { 
 func (f *fakeProviderStatsStore) RecordProbeFailed(context.Context, string) error {
 	return nil
 }
+
 func (f *fakeProviderStatsStore) ForceOpen(context.Context, string, int) error {
 	return nil
 }
+
 func (f *fakeProviderStatsStore) GetStats(context.Context, string) (*ProviderStats, error) {
 	return f.keyStats, nil
 }
+
 func (f *fakeProviderStatsStore) GetProviderStats(context.Context, string) (*ProviderStats, error) {
 	return f.providerStats, nil
 }

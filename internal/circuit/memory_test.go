@@ -201,9 +201,9 @@ func TestMemoryStore_GetProviderStats_AggregatesPerModelKeys(t *testing.T) {
 	s := NewMemoryStore(cfg)
 	ctx := context.Background()
 
-	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")          //nolint:errcheck
-	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")          //nolint:errcheck
-	s.RecordTerminalFailure(ctx, "gemini:gemini-1-flash-preview")    //nolint:errcheck
+	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")       //nolint:errcheck
+	s.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")       //nolint:errcheck
+	s.RecordTerminalFailure(ctx, "gemini:gemini-1-flash-preview") //nolint:errcheck
 
 	bare, err := s.GetStats(ctx, "gemini")
 	require.NoError(t, err)
