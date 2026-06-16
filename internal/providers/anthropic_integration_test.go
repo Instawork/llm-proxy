@@ -15,6 +15,44 @@ import (
 	"time"
 )
 
+// anthropicUpstreamSkipReason reports whether an Anthropic response indicates a
+// transient upstream failure that should not fail CI integration tests.
+func anthropicUpstreamSkipReason(status int, body []byte) (reason string, ok bool) {
+	if status == http.StatusOK {
+		return "", false
+	}
+	var envelope struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", false
+	}
+	if envelope.Type != "error" {
+		return "", false
+	}
+	switch {
+	case status == 529:
+		return "Anthropic upstream overloaded (529)", true
+	case status >= 500 && status <= 504 && envelope.Error.Type == "api_error":
+		return fmt.Sprintf("Anthropic upstream api_error (%d)", status), true
+	default:
+		return "", false
+	}
+}
+
+// skipOnAnthropicUpstreamError skips integration tests when Anthropic returns a
+// transient upstream failure (529 overloaded, 5xx api_error). Those indicate
+// provider-side capacity or availability issues, not a regression in this proxy.
+func skipOnAnthropicUpstreamError(t *testing.T, status int, body []byte) {
+	t.Helper()
+	if reason, ok := anthropicUpstreamSkipReason(status, body); ok {
+		t.Skipf("skipping: %s; not a proxy regression. Response: %s", reason, string(body))
+	}
+}
+
 // testModel represents a model configuration for testing
 type anthropicTestModel struct {
 	name       string
@@ -172,6 +210,7 @@ func TestAnthropicIntegration_AdvancedScenarios(t *testing.T) {
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
+				skipOnAnthropicUpstreamError(t, resp.StatusCode, body)
 				t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 			}
 
@@ -243,6 +282,7 @@ func testAnthropicNonStreaming(t *testing.T, server *httptest.Server, providerMa
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnAnthropicUpstreamError(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
@@ -322,6 +362,7 @@ func testAnthropicStreaming(t *testing.T, server *httptest.Server, providerManag
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		skipOnAnthropicUpstreamError(t, resp.StatusCode, body)
 		t.Fatalf("Expected status 200, got %d. Response: %s", resp.StatusCode, string(body))
 	}
 
