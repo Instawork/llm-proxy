@@ -23,7 +23,7 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatDailyCostLimit, formatUsd, maskKeyId } from "../lib/format";
+import { compact, formatCount, formatDailyCostLimit, formatUsd, maskKeyId } from "../lib/format";
 import type { CostKeySpend } from "../types";
 
 function rangeLabel(range: RangeKey): string {
@@ -176,7 +176,7 @@ export default function CostPage() {
         />
         <LiveStat
           title="Requests"
-          value={requestsToday.value.toLocaleString()}
+          value={formatCount(requestsToday.value)}
           hint="tracked today"
           source={requestsToday.source}
         />
@@ -264,9 +264,9 @@ export default function CostPage() {
                     <td className="text-right">{formatUsd(row.spend_usd)}</td>
                     <td className="text-right">{formatUsd(row.input_spend_usd ?? 0)}</td>
                     <td className="text-right">{formatUsd(row.output_spend_usd ?? 0)}</td>
-                    <td className="text-right">{row.requests.toLocaleString()}</td>
+                    <td className="text-right">{formatCount(row.requests)}</td>
                     <td className="text-right text-base-content/70">
-                      {row.input_tokens}/{row.output_tokens}
+                      {formatCount(row.input_tokens)}/{formatCount(row.output_tokens)}
                     </td>
                   </tr>
                 ))}

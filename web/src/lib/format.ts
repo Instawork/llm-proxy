@@ -10,6 +10,12 @@ export function compact(n: number | undefined | null): string {
   return compactFormatter.format(n);
 }
 
+/** Locale-formats an integer count, tolerating undefined/null/NaN from the API. */
+export function formatCount(n: number | undefined | null): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return "0";
+  return n.toLocaleString();
+}
+
 /** Formats a 0..1 ratio as a percentage string, e.g. 0.667 -> "66.7%". */
 export function percent(ratio: number | undefined | null, digits = 1): string {
   if (ratio === undefined || ratio === null || Number.isNaN(ratio)) return "—";

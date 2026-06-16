@@ -6,7 +6,7 @@ import KeyLink from "../components/ui/key-link";
 import { LiveStat, rateLimitUsageSource, SectionPanel } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useKeys, useRateLimits } from "../hooks/queries";
-import { scopeLabel } from "../lib/format";
+import { formatCount, scopeLabel } from "../lib/format";
 import type { RateLimitCounter } from "../types";
 
 function counterRows(counters: Record<string, RateLimitCounter> | undefined) {
@@ -137,8 +137,8 @@ export default function RateLimitsPage() {
                         row.label
                       )}
                     </td>
-                    <td>{row.requests}</td>
-                    <td>{row.tokens.toLocaleString()}</td>
+                    <td>{formatCount(row.requests)}</td>
+                    <td>{formatCount(row.tokens)}</td>
                   </tr>
                 ))}
                 {rows.length === 0 ? (

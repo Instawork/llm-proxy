@@ -19,7 +19,7 @@ import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
 import { useCost, useKey, usePII, useRateLimits } from "../../hooks/queries";
 import { DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
-import { formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
+import { formatCount, formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
 import {
   costRecentForKey,
@@ -307,8 +307,8 @@ export default function KeyDetailPage() {
           rows={rateUsage.map((row) => (
             <tr key={row.window}>
               <td className="capitalize">{row.window === "day" ? "Today" : "Last minute"}</td>
-              <td>{row.requests.toLocaleString()}</td>
-              <td>{row.tokens.toLocaleString()}</td>
+              <td>{formatCount(row.requests)}</td>
+              <td>{formatCount(row.tokens)}</td>
             </tr>
           ))}
         />

@@ -21,7 +21,7 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, scopeKind, scopeLabel } from "../lib/format";
+import { compact, formatCount, scopeKind, scopeLabel } from "../lib/format";
 import type { APIKey, DailyHistoryRow, UsageScopeCounter } from "../types";
 
 function rangeLabel(range: RangeKey): string {
@@ -281,8 +281,8 @@ function UsageTable({
                     r.label
                   )}
                 </td>
-                <td className="text-right">{r.requests.toLocaleString()}</td>
-                <td className="text-right">{r.tokens.toLocaleString()}</td>
+                <td className="text-right">{formatCount(r.requests)}</td>
+                <td className="text-right">{formatCount(r.tokens)}</td>
                 <td className="text-right text-base-content/60">
                   {totalTokens > 0 ? `${((r.tokens / totalTokens) * 100).toFixed(1)}%` : "—"}
                 </td>

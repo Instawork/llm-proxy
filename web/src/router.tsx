@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import AppShell from "./components/app-shell";
+import ErrorBoundary from "./components/ui/error-boundary";
 import { queryClient } from "./client";
 import CircuitPage from "./pages/circuit";
 import ConfigPage from "./pages/config";
@@ -17,7 +18,11 @@ import SharePage from "./pages/share";
 import UsagePage from "./pages/usage";
 
 function shell(page: ReactNode) {
-  return <AppShell>{page}</AppShell>;
+  return (
+    <AppShell>
+      <ErrorBoundary>{page}</ErrorBoundary>
+    </AppShell>
+  );
 }
 
 export default function Router() {
