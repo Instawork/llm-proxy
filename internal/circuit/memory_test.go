@@ -214,6 +214,27 @@ func TestMemoryStore_GetProviderStats_AggregatesPerModelKeys(t *testing.T) {
 	require.Equal(t, 3, agg.Failures)
 }
 
+// Parity with the RedisStore regression: an Open breaker with an empty
+// failure window (re-opened via a failed probe) must still report Open.
+func TestMemoryStore_GetProviderStats_OpenWithEmptyFailureWindow(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.WindowSeconds = 60
+	cfg.CooldownSeconds = 300
+	s := NewMemoryStore(cfg)
+	ctx := context.Background()
+
+	require.NoError(t, s.RecordProbeFailed(ctx, "openai"))
+
+	bare, err := s.GetStats(ctx, "openai")
+	require.NoError(t, err)
+	require.Equal(t, 0, bare.Failures)
+
+	agg, err := s.GetProviderStats(ctx, "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateOpen, agg.State)
+	require.Equal(t, 0, agg.Failures)
+}
+
 func TestMemoryStore_GetStatsPrunesExpiredFailures(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.WindowSeconds = 1

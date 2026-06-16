@@ -432,46 +432,66 @@ func (s *RedisStore) GetStats(ctx context.Context, key string) (*ProviderStats, 
 
 // GetProviderStats aggregates failures and worst-case state across every
 // per-model key for provider (see ProviderStatsFor).
+//
+// Keys are enumerated from the failures, state, AND half-open marker
+// keyspaces, then unioned.  Scanning failures alone is NOT enough: a circuit
+// that re-opened via a failed half-open probe (RecordProbeFailed sets the
+// state + half-open marker but adds no failure timestamp), or whose failure
+// window has simply pruned to empty while the cooldown is still in force, has
+// a live state/half-open key but zero entries in `failures:<key>`.
+// Enumerating only `failures:*` misses such a key entirely and reports the
+// provider Closed even though it is actively fast-failing — the exact
+// dashboard-says-closed-while-Redis-says-open discrepancy this guards against.
 func (s *RedisStore) GetProviderStats(ctx context.Context, provider string) (*ProviderStats, error) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	cutoff := fmt.Sprintf("%f", now-float64(s.cfg.WindowSeconds))
 	stats := &ProviderStats{State: StateClosed}
 
-	match := redisKeyFailures + provider + "*"
-	var cursor uint64
-	for {
-		keys, next, err := s.rdb.Scan(ctx, cursor, match, 128).Result()
-		if err != nil {
-			return nil, err
+	// Union of every circuit key for this provider across all three per-key
+	// keyspaces, de-duped so a key carrying both failures and a state marker
+	// is only processed once.
+	cbKeys := make(map[string]struct{})
+	for _, prefix := range []string{redisKeyFailures, redisKeyState, redisKeyHalfOpen} {
+		match := prefix + provider + "*"
+		var cursor uint64
+		for {
+			keys, next, err := s.rdb.Scan(ctx, cursor, match, 128).Result()
+			if err != nil {
+				return nil, err
+			}
+			for _, rk := range keys {
+				cbKey := strings.TrimPrefix(rk, prefix)
+				if !providerKeyMatches(cbKey, provider) {
+					continue
+				}
+				cbKeys[cbKey] = struct{}{}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
 		}
-		for _, fkey := range keys {
-			cbKey := strings.TrimPrefix(fkey, redisKeyFailures)
-			if !providerKeyMatches(cbKey, provider) {
-				continue
-			}
-			count, err := s.rdb.ZCount(ctx, fkey, cutoff, "+inf").Result()
-			if err != nil {
-				continue
-			}
-			stats.Failures += int(count)
+	}
 
-			state, err := s.GetState(ctx, cbKey)
-			if err != nil {
-				continue
-			}
-			stats.State = worseState(stats.State, state)
-			if state == StateOpen {
-				if dur, err := s.rdb.TTL(ctx, s.stateKey(cbKey)).Result(); err == nil && dur > 0 {
-					t := time.Now().Add(dur)
-					if stats.CooldownUntil == nil || t.Before(*stats.CooldownUntil) {
-						stats.CooldownUntil = &t
-					}
+	for cbKey := range cbKeys {
+		// Failure count is best-effort: a missing/expired failures zset just
+		// contributes 0, but must NOT skip the state evaluation below.
+		if count, err := s.rdb.ZCount(ctx, s.failuresKey(cbKey), cutoff, "+inf").Result(); err == nil {
+			stats.Failures += int(count)
+		}
+
+		state, err := s.GetState(ctx, cbKey)
+		if err != nil {
+			continue
+		}
+		stats.State = worseState(stats.State, state)
+		if state == StateOpen {
+			if dur, err := s.rdb.TTL(ctx, s.stateKey(cbKey)).Result(); err == nil && dur > 0 {
+				t := time.Now().Add(dur)
+				if stats.CooldownUntil == nil || t.Before(*stats.CooldownUntil) {
+					stats.CooldownUntil = &t
 				}
 			}
-		}
-		cursor = next
-		if cursor == 0 {
-			break
 		}
 	}
 	return stats, nil
