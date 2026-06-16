@@ -52,6 +52,10 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	publicAPI := adminRouter.PathPrefix("/api").Subrouter()
 	publicAPI.Use(h.corsMiddleware)
 	// Share read is public — the UUID in the URL is the capability token.
+	// A per-client token bucket caps abuse/DoS against this unauthenticated
+	// endpoint (guessing the UUID is already infeasible). Generous enough for
+	// legitimate use: a 10-request burst refilling at 1/sec per client IP.
+	publicAPI.Use(newShareRateLimiter(1, 10).middleware)
 	publicAPI.HandleFunc("/share/{id}", h.handleGetShare).Methods(http.MethodGet, http.MethodOptions)
 
 	api := adminRouter.PathPrefix("/api").Subrouter()

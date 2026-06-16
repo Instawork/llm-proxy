@@ -1391,6 +1391,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Health check endpoint
 	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
 
+	// robots.txt: keep the admin dashboard and (capability-URL) share pages
+	// out of search indexes. This is defense-in-depth for accidental URL
+	// leaks, not an access control — share UUIDs are still the real gate.
+	r.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, "User-agent: *\nDisallow: /admin/\n") //nolint:errcheck
+	}).Methods("GET")
+
 	if yamlConfig.Features.AdminDashboard.Enabled {
 		// Override the PII-off bypass allowlist from config (falls back to the
 		// built-in default when unset) so roster changes don't need a deploy.

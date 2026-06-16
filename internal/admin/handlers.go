@@ -507,6 +507,21 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit every successful resolution of a public share link. The link hands
+	// out a working credential, so we record who pulled it (client IP), which
+	// link, and the redacted key — never the raw secret.
+	h.deps.Logger.Info("admin: share link resolved",
+		"id", link.ID(),
+		"key", apikeys.RedactKey(record.PK),
+		"provider", record.Provider,
+		"client_ip", clientIP(r),
+		"created_by", link.CreatedBy,
+	)
+
+	// Belt-and-suspenders against the capability URL being indexed if it ever
+	// leaks into a crawlable surface.
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+
 	base := h.publicBaseURL(r)
 	resp := map[string]interface{}{
 		"id":          link.ID(),
