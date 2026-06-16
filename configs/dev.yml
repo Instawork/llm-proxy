@@ -28,6 +28,8 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-dev"
     region: "us-west-2"
+    # New keys are minted as "iw_<random>"; legacy "iw:" keys still validate.
+    key_prefix: "iw"
     # Dev only — auto-creates the DynamoDB table against whatever AWS
     # creds are active. Staging/production must leave this false and
     # pre-provision the table via Terraform.

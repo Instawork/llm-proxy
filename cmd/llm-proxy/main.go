@@ -152,8 +152,8 @@ var globalCircuitRedisFallback bool
 var circuitBreakerProviders = []string{"openai", "anthropic", "gemini"}
 
 // redisPingTimeout bounds the blocking startup PING to Redis.  Long enough
-// to succeed on a warm connection across regions, short enough that a dead
-// Redis never holds up proxy startup past its health-check window.
+// to succeed on a warm connection with some network latency, short enough
+// that a dead Redis never holds up proxy startup past its health-check window.
 const redisPingTimeout = 2 * time.Second
 
 func init() {
@@ -734,6 +734,18 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 		logger.Error("🔑 API Key Store: Missing required configuration (table_name or region)")
 		return nil
 	}
+
+	// Resolve the proxy key prefix base, env var taking precedence over YAML.
+	// A blank value leaves the apikeys default in place. New keys are minted
+	// as "<base>_<random>"; legacy "<base>:" keys still validate.
+	keyPrefixBase := os.Getenv("LLM_PROXY_API_KEY_PREFIX")
+	if keyPrefixBase == "" {
+		keyPrefixBase = apiKeyConfig.KeyPrefix
+	}
+	apikeys.SetKeyPrefixBase(keyPrefixBase)
+	logger.Info("🔑 API Key Store: key prefix configured",
+		"prefix_base", apikeys.KeyPrefixBase(),
+		"generation_prefix", apikeys.KeyPrefix)
 
 	logger.Info("🔑 API Key Store: Initializing API key store",
 		"table_name", apiKeyConfig.TableName,

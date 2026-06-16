@@ -31,6 +31,8 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys"
     region: "us-west-2"
+    # New keys are minted as "iw_<random>"; legacy "iw:" keys still validate.
+    key_prefix: "iw"
   # Circuit breaker: enforce mode.  Retries transient failures (up to
   # max_transient_retries), fast-fails open circuits with a synthetic 503,
   # and counts retry contributions toward the failure window.
@@ -94,7 +96,11 @@ features:
     allow_per_key_override: false
   admin_dashboard:
     enabled: true
-    allowed_domain: "instawork.com"
+    # Real sign-in domain is injected at deploy time via the
+    # LLM_PROXY_ADMIN_ALLOWED_DOMAIN env var (it takes precedence over this
+    # value in auth.go). Keep the neutral placeholder here so no private
+    # domain ships in the repo.
+    allowed_domain: "example.com"
     rollups:
       enabled: true
       redis:

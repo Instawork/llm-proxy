@@ -19,27 +19,107 @@ import (
 )
 
 const (
-	// KeyPrefix is the prefix for all internal API keys
-	KeyPrefix = "iw:"
 	// KeyLength is the length of the random part of the key
 	KeyLength = 32
+
+	// DefaultKeyPrefixBase is the default prefix base (without separator).
+	// New keys are generated as "<base>_<hex>"; both the current "<base>_"
+	// and the legacy "<base>:" separator are accepted on lookup.
+	DefaultKeyPrefixBase = "iw"
+
+	keyPrefixSepNew    = "_"
+	keyPrefixSepLegacy = ":"
 )
 
-// RedactKey returns a short, identifiable form of an iw: API key safe to
+var (
+	// keyPrefixBase is the configured prefix base (without separator),
+	// e.g. "iw". Set once at startup via SetKeyPrefixBase.
+	keyPrefixBase = DefaultKeyPrefixBase
+
+	// KeyPrefix is the prefix used to GENERATE new keys ("<base>_").
+	// Exported for backwards compatibility with callers/tests that build
+	// keys as KeyPrefix+"...". Do NOT use it to decide whether a string is
+	// one of our keys — that must accept the legacy ":" separator too, so
+	// use HasKeyPrefix / TrimKeyPrefix instead.
+	KeyPrefix = keyPrefixBase + keyPrefixSepNew
+
+	// acceptedKeyPrefixes lists every prefix recognized as one of our proxy
+	// keys, current separator first. Kept in sync by SetKeyPrefixBase.
+	acceptedKeyPrefixes = []string{
+		keyPrefixBase + keyPrefixSepNew,
+		keyPrefixBase + keyPrefixSepLegacy,
+	}
+)
+
+// SetKeyPrefixBase configures the proxy key prefix base (e.g. "iw"). New
+// keys are then generated as "<base>_<hex>", while lookups continue to
+// accept both the current "<base>_" form and the legacy "<base>:" form for
+// keys minted before the separator change. A blank base is ignored so a
+// missing config value falls back to the default. Call once at startup
+// before serving traffic — it is not safe to call concurrently with key
+// operations.
+func SetKeyPrefixBase(base string) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return
+	}
+	keyPrefixBase = base
+	KeyPrefix = base + keyPrefixSepNew
+	acceptedKeyPrefixes = []string{
+		base + keyPrefixSepNew,
+		base + keyPrefixSepLegacy,
+	}
+}
+
+// KeyPrefixBase returns the configured prefix base (without separator).
+func KeyPrefixBase() string { return keyPrefixBase }
+
+// HasKeyPrefix reports whether k carries a recognized proxy-key prefix —
+// either the current "<base>_" or the legacy "<base>:" form.
+func HasKeyPrefix(k string) bool {
+	_, ok := matchedKeyPrefix(k)
+	return ok
+}
+
+// matchedKeyPrefix returns the recognized prefix that k starts with, if any.
+func matchedKeyPrefix(k string) (string, bool) {
+	for _, p := range acceptedKeyPrefixes {
+		if strings.HasPrefix(k, p) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// TrimKeyPrefix strips a recognized proxy-key prefix from k and returns the
+// remainder. If k carries no recognized prefix it is returned unchanged.
+func TrimKeyPrefix(k string) string {
+	if p, ok := matchedKeyPrefix(k); ok {
+		return strings.TrimPrefix(k, p)
+	}
+	return k
+}
+
+// RedactKey returns a short, identifiable form of a proxy API key safe to
 // emit to logs and observability sinks. The full key is a bearer secret;
 // dumping it into stdout/Datadog/CloudWatch is equivalent to leaking
-// credentials. We keep the `iw:` prefix and the first/last 4 hex chars so
-// that a human still has enough signal to correlate the same key across
-// log lines without exposing the secret material in the middle.
+// credentials. We keep the recognized prefix (preserving whichever
+// separator the key actually uses) and the first/last 4 hex chars so that a
+// human still has enough signal to correlate the same key across log lines
+// without exposing the secret material in the middle.
 func RedactKey(k string) string {
 	if k == "" {
 		return ""
 	}
-	stripped := strings.TrimPrefix(k, KeyPrefix)
-	if len(stripped) <= 8 {
-		return KeyPrefix + "***"
+	prefix, ok := matchedKeyPrefix(k)
+	if !ok {
+		prefix = KeyPrefix
 	}
-	return KeyPrefix + stripped[:4] + "…" + stripped[len(stripped)-4:]
+	stripped := strings.TrimPrefix(k, prefix)
+	if len(stripped) <= 8 {
+		return prefix + "***"
+	}
+	return prefix + stripped[:4] + "…" + stripped[len(stripped)-4:]
 }
 
 // updateFieldNames returns the sorted set of field names being updated.
@@ -255,7 +335,8 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 	return nil
 }
 
-// GenerateKey generates a new API key with the iw: prefix
+// GenerateKey generates a new API key using the current generation prefix
+// ("<base>_", e.g. "iw_").
 func GenerateKey() (string, error) {
 	bytes := make([]byte, KeyLength)
 	if _, err := rand.Read(bytes); err != nil {
@@ -323,7 +404,7 @@ func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description 
 // GetKeyRecord retrieves an API key without enabled/expiry enforcement.
 // Used by admin tooling that must inspect or mutate disabled keys.
 func (s *Store) GetKeyRecord(ctx context.Context, key string) (*APIKey, error) {
-	if !strings.HasPrefix(key, KeyPrefix) {
+	if !HasKeyPrefix(key) {
 		return nil, fmt.Errorf("invalid key format: must start with %s", KeyPrefix)
 	}
 
@@ -502,15 +583,16 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 			queryInput.ExclusiveStartKey = result.LastEvaluatedKey
 		}
 	} else {
-		// Scan all keys. Filter to iw:-prefixed items so co-located
-		// share-link records (pk "share:<uuid>") never get unmarshaled
-		// into the key list. Paginate so large key sets are not truncated
-		// at DynamoDB's 1 MiB response limit.
+		// Scan all keys. Filter on the prefix base (e.g. "iw") so BOTH the
+		// current "iw_" keys and legacy "iw:" keys are returned, while
+		// co-located share-link records (pk "share:<uuid>") never get
+		// unmarshaled into the key list. Paginate so large key sets are
+		// not truncated at DynamoDB's 1 MiB response limit.
 		scanInput := &dynamodb.ScanInput{
 			TableName:        aws.String(s.tableName),
 			FilterExpression: aws.String("begins_with(pk, :pfx)"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":pfx": &types.AttributeValueMemberS{Value: KeyPrefix},
+				":pfx": &types.AttributeValueMemberS{Value: keyPrefixBase},
 			},
 		}
 		for {
@@ -536,9 +618,10 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 	return keys, nil
 }
 
-// LookupProxyKey returns the DynamoDB record for an iw: bearer token.
+// LookupProxyKey returns the DynamoDB record for a proxy bearer token
+// (current "<base>_" or legacy "<base>:" form).
 func (s *Store) LookupProxyKey(ctx context.Context, bearer string) (*APIKey, error) {
-	if !strings.HasPrefix(bearer, KeyPrefix) {
+	if !HasKeyPrefix(bearer) {
 		return nil, nil
 	}
 	return s.GetKey(ctx, bearer)
@@ -547,7 +630,7 @@ func (s *Store) LookupProxyKey(ctx context.Context, bearer string) (*APIKey, err
 // ValidateAndGetActualKey validates an API key and returns the actual provider key
 func (s *Store) ValidateAndGetActualKey(ctx context.Context, key string) (string, string, error) {
 	// If key doesn't have our prefix, return it as-is (passthrough)
-	if !strings.HasPrefix(key, KeyPrefix) {
+	if !HasKeyPrefix(key) {
 		return key, "", nil
 	}
 

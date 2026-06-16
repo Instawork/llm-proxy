@@ -37,7 +37,7 @@ func RedactScopeKey(scope string) string {
 }
 
 func redactScopeSecret(value string) string {
-	body := strings.TrimPrefix(value, apikeys.KeyPrefix)
+	body := apikeys.TrimKeyPrefix(value)
 	if len(body) <= scopeSuffixLen {
 		return "••••"
 	}

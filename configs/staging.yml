@@ -18,6 +18,8 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys-staging"
     region: "us-west-2"
+    # New keys are minted as "iw_<random>"; legacy "iw:" keys still validate.
+    key_prefix: "iw"
   # Circuit breaker: enforce mode (matching production).
   circuit_breaker:
     enabled: true
