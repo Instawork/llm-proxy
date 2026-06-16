@@ -313,3 +313,23 @@ func TestRegisterRoutes_ServesDashboardAPI(t *testing.T) {
 	r.ServeHTTP(costHTTPRec, costReq)
 	require.Equal(t, http.StatusOK, costHTTPRec.Code)
 }
+
+func TestRegisterRoutes_RedirectsBareAdminToSlash(t *testing.T) {
+	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "test-secret-at-least-32-bytes-long")
+
+	yamlCfg := config.GetDefaultYAMLConfig()
+	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
+
+	r := mux.NewRouter()
+	RegisterRoutes(r, Deps{
+		Logger:     testLogger(),
+		YAMLConfig: yamlCfg,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusMovedPermanently, rec.Code)
+	require.Equal(t, "/admin/", rec.Header().Get("Location"))
+}

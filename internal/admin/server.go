@@ -27,6 +27,15 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 
 	h := newHandler(deps, auth)
 
+	// Redirect the bare "/admin" (no trailing slash) to "/admin/". The SPA is
+	// mounted on the "/admin" prefix subrouter, whose effective matcher is
+	// "/admin/…", so bare "/admin" would otherwise fall through to mux's
+	// default 404. Registered on the parent router because the subrouter
+	// cannot match the slash-less form.
+	r.HandleFunc("/admin", func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+	}).Methods(http.MethodGet)
+
 	adminRouter := r.PathPrefix("/admin").Subrouter()
 
 	authRouter := adminRouter.PathPrefix("/auth").Subrouter()
