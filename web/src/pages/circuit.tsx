@@ -360,6 +360,64 @@ export default function CircuitPage() {
         </ChartCard>
       ) : null}
 
+      <SectionPanel
+        title="Providers"
+        subtitle={
+          range === "today"
+            ? "Live trip state and current-window failure counts"
+            : `Live trip state · peak daily failures · ${rangeLabel(range)}`
+        }
+        source={range === "today" ? circuitLiveSource(cb?.backend) : failureStatSource}
+      >
+        <div className="overflow-x-auto">
+          <table className="table table-zebra">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>State</th>
+                <th>{range === "today" ? "Failures" : "Peak failures"}</th>
+                <th>Rollup</th>
+                <th>Threshold</th>
+              </tr>
+            </thead>
+            <tbody>
+              {names.map((name) => {
+                const p = providers[name];
+                const state = p.state ?? p.error ?? "unknown";
+                const failures =
+                  range === "today" || !hasFailureRedis
+                    ? (p.failures ?? "—")
+                    : (providerFailurePeaks.get(name) ?? 0);
+                return (
+                  <tr key={name}>
+                    <td>
+                      <ProviderBadge provider={name} />
+                    </td>
+                    <td>
+                      <StatusBadge
+                        active={state === "closed"}
+                        activeLabel="closed"
+                        inactiveLabel={state}
+                      />
+                    </td>
+                    <td>{failures}</td>
+                    <td>{p.rollup?.open ? "open" : p.rollup?.enabled ? "closed" : "—"}</td>
+                    <td>{p.rollup?.threshold ?? "—"}</td>
+                  </tr>
+                );
+              })}
+              {names.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="text-center text-base-content/50">
+                    No provider data
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </SectionPanel>
+
       {activity?.available ? (
         <SectionPanel
           title="Recovery activity"
@@ -422,64 +480,6 @@ export default function CircuitPage() {
           </div>
         </SectionPanel>
       ) : null}
-
-      <SectionPanel
-        title="Providers"
-        subtitle={
-          range === "today"
-            ? "Live trip state and current-window failure counts"
-            : `Live trip state · peak daily failures · ${rangeLabel(range)}`
-        }
-        source={range === "today" ? circuitLiveSource(cb?.backend) : failureStatSource}
-      >
-        <div className="overflow-x-auto">
-          <table className="table table-zebra">
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>State</th>
-                <th>{range === "today" ? "Failures" : "Peak failures"}</th>
-                <th>Rollup</th>
-                <th>Threshold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {names.map((name) => {
-                const p = providers[name];
-                const state = p.state ?? p.error ?? "unknown";
-                const failures =
-                  range === "today" || !hasFailureRedis
-                    ? (p.failures ?? "—")
-                    : (providerFailurePeaks.get(name) ?? 0);
-                return (
-                  <tr key={name}>
-                    <td>
-                      <ProviderBadge provider={name} />
-                    </td>
-                    <td>
-                      <StatusBadge
-                        active={state === "closed"}
-                        activeLabel="closed"
-                        inactiveLabel={state}
-                      />
-                    </td>
-                    <td>{failures}</td>
-                    <td>{p.rollup?.open ? "open" : p.rollup?.enabled ? "closed" : "—"}</td>
-                    <td>{p.rollup?.threshold ?? "—"}</td>
-                  </tr>
-                );
-              })}
-              {names.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="text-center text-base-content/50">
-                    No provider data
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </SectionPanel>
     </div>
   );
 }

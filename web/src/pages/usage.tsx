@@ -101,11 +101,14 @@ export default function UsagePage() {
   const dailyTokens = useMemo(() => scalarSeries(history, "tokens_today", range), [history, range]);
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailyTokens.available);
 
-  // Memory breakdowns are scoped to today; Redis rollups drive multi-day ranges
-  // (and today after a restart, when memory has reset to empty).
+  // Prefer Redis whenever it's available — including "today" and the Active
+  // models / by-model / by-provider / by-key / by-user breakdowns. Memory
+  // counters only reflect this one process, so on a multi-pod fleet they
+  // undercount badly (the top cards already use fleet-wide today totals — using
+  // memory here makes the breakdowns look like dropped requests). Fall back to
+  // in-process memory only when Redis isn't wired up at all.
   const memByModel = useMemo(() => rowsForKind(counters, "model"), [counters]);
-  const memCountersEmpty = memByModel.length === 0;
-  const useRedisBreakdown = range !== "today" || (memCountersEmpty && hasRedis);
+  const useRedisBreakdown = hasRedis || range !== "today";
   const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
 
   const byModel = useMemo(

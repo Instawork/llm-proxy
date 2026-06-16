@@ -106,27 +106,20 @@ export default function CostPage() {
   const recent = stats?.recent ?? [];
   const withLimits = keyList.filter((k) => (k.daily_cost_limit ?? 0) > 0);
 
-  // Breakdowns: live memory for "today" (fall back to Redis after a restart),
-  // summed Redis rollups for multi-day ranges.
+  // Prefer fleet-wide Redis rollups whenever Redis is available — including
+  // "today" — since in-process memory only reflects this one pod and undercounts
+  // on a multi-pod fleet. Fall back to memory only when Redis isn't wired up.
+  const useRedisBreakdown = hasRedis || range !== "today";
   const memKeys = memKeyAgg(byKey);
-  const rangeByKey: CostKeyAgg[] =
-    range === "today"
-      ? memKeys.length
-        ? memKeys
-        : aggCostByKey(history, "today")
-      : aggCostByKey(history, range);
-  const breakdownSource: DataSource =
-    range === "today" ? (memKeys.length ? "memory" : "redis") : "redis";
+  const rangeByKey: CostKeyAgg[] = useRedisBreakdown ? aggCostByKey(history, range) : memKeys;
+  const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
   const withSpend = rangeByKey.filter((row) => row.spend_usd > 0);
   const rangeSpendTotal = withSpend.reduce((sum, row) => sum + row.spend_usd, 0);
 
   const memProviders = stats?.by_provider ?? [];
-  const rangeByProvider =
-    range === "today"
-      ? memProviders.length
-        ? memProviders.map((p) => ({ name: p.name, spend_usd: p.spend_usd, requests: p.requests }))
-        : aggCostByProvider(history, "today")
-      : aggCostByProvider(history, range);
+  const rangeByProvider = useRedisBreakdown
+    ? aggCostByProvider(history, range)
+    : memProviders.map((p) => ({ name: p.name, spend_usd: p.spend_usd, requests: p.requests }));
 
   const limitRows = keyList
     .map((key) => ({

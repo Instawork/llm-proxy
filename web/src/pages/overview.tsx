@@ -13,7 +13,7 @@ import PageHeader, {
 } from "../components/ui/page-header";
 import { useConfig, useHealth, useKeys, useUsage } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
-import { DAILY_HISTORY_SUBTITLE, dailyHistoryChart, pickToday } from "../lib/daily-history";
+import { aggScopeMap, DAILY_HISTORY_SUBTITLE, dailyHistoryChart, pickToday } from "../lib/daily-history";
 import { featureEnabled } from "../lib/features";
 import { compact, scopeKind, scopeLabel } from "../lib/format";
 
@@ -45,13 +45,34 @@ export default function OverviewPage() {
   const usageRedis = Boolean(usageStats?.daily_history_available);
   const usageCounters = usageStats?.counters ?? {};
   const globalUsage = usageCounters["global"];
-  const requestsTodayPick = pickToday(globalUsage?.requests, usageHistory, "requests_today", usageRedis);
-  const tokensTodayPick = pickToday(globalUsage?.tokens, usageHistory, "tokens_today", usageRedis);
-  const modelRows = Object.entries(usageCounters)
-    .filter(([scope]) => scopeKind(scope) === "model")
-    .map(([scope, c]) => ({ label: scopeLabel(scope), requests: c.requests ?? 0 }))
+  // Prefer the fleet-wide today totals the backend merges from Redis over this
+  // process's in-memory counters, so the card matches the Usage page (and isn't
+  // just whatever traffic this one pod has served since its last restart).
+  const requestsTodayPick = pickToday(
+    usageStats?.available ? (usageStats?.requests_today ?? globalUsage?.requests) : undefined,
+    usageHistory,
+    "requests_today",
+    usageRedis,
+  );
+  const tokensTodayPick = pickToday(
+    usageStats?.available ? (usageStats?.tokens_today ?? globalUsage?.tokens) : undefined,
+    usageHistory,
+    "tokens_today",
+    usageRedis,
+  );
+  const modelRows = (
+    usageRedis
+      ? aggScopeMap(usageHistory, "today", "by_model").map((s) => ({
+          label: scopeLabel(s.scope),
+          requests: s.requests,
+        }))
+      : Object.entries(usageCounters)
+          .filter(([scope]) => scopeKind(scope) === "model")
+          .map(([scope, c]) => ({ label: scopeLabel(scope), requests: c.requests ?? 0 }))
+  )
     .sort((a, b) => b.requests - a.requests)
     .slice(0, 6);
+  const modelSource = usageRedis ? "redis" : "memory";
 
   const isLoading = health.isLoading || config.isLoading || usage.isLoading;
   const error = health.error || config.error || usage.error;
@@ -159,7 +180,7 @@ export default function OverviewPage() {
         <ChartCard
           title="Requests by model"
           subtitle="Top models today"
-          source="memory"
+          source={modelSource}
           actions={
             <Link to="/usage" className="btn btn-ghost btn-xs">
               Usage

@@ -97,10 +97,11 @@ export default function PIIPage() {
   const recent = stats?.recent ?? [];
   const failures = (stats?.fail_open ?? 0) + (stats?.fail_closed ?? 0);
 
-  // Breakdowns: memory for live "today", Redis rollups for multi-day ranges
-  // (and today after a restart, when memory has reset).
+  // Prefer fleet-wide Redis rollups whenever Redis is available — including
+  // "today" — since in-process memory only reflects this one pod and undercounts
+  // on a multi-pod fleet. Fall back to memory only when Redis isn't wired up.
   const memEntity = toNameCount(stats?.by_entity ?? []);
-  const useRedisBreakdown = range !== "today" || (memEntity.length === 0 && hasRedis);
+  const useRedisBreakdown = hasRedis || range !== "today";
   const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
   const byEntity = useRedisBreakdown ? aggNameCount(history, range, "by_entity") : memEntity;
   const byProvider = useRedisBreakdown

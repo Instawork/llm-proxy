@@ -18,7 +18,7 @@ import {
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
 import { useCost, useKey, usePII, useRateLimits } from "../../hooks/queries";
-import { DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
+import { aggCostByKey, DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
 import { formatCount, formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
 import {
@@ -75,6 +75,18 @@ export default function KeyDetailPage() {
   const costHistory = costQuery.data?.stats?.daily_history;
   const hasCostRedis = Boolean(costQuery.data?.stats?.daily_history_available);
   const keySpend7d = costSeriesForKey(costHistory, masked, "7d");
+  // Prefer the fleet-wide Redis today rollup for this key over this pod's memory.
+  const keyTodayCost = hasCostRedis
+    ? aggCostByKey(costHistory, "today").find((r) => r.key_id === masked)
+    : undefined;
+  const spendTodayValue = keyTodayCost ? keyTodayCost.spend_usd : (costStats?.spend_usd ?? 0);
+  const requestsTodayValue = keyTodayCost ? keyTodayCost.requests : (costStats?.requests ?? 0);
+  const keyCostSource: DataSource = keyTodayCost ? "redislive" : "memory";
+  // PII detections come from the fleet-wide top_keys rollup (overlaid by
+  // MergeToday) when Redis is on; only falls back to the memory ring buffer for
+  // keys outside the rolled-up top-N.
+  const hasPiiRedis = Boolean(piiQuery.data?.stats?.daily_history_available);
+  const piiSource: DataSource = hasPiiRedis ? "redislive" : "memory";
 
   const liveUpdatedAt = Math.max(
     costQuery.dataUpdatedAt,
@@ -182,18 +194,18 @@ export default function KeyDetailPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <LiveStat title="Spend today" value={formatUsd(costStats?.spend_usd ?? 0)} hint="tracked cost" source="memory" />
+        <LiveStat title="Spend today" value={formatUsd(spendTodayValue)} hint="tracked cost" source={keyCostSource} />
         <LiveStat
           title="Requests"
-          value={(costStats?.requests ?? 0).toLocaleString()}
+          value={requestsTodayValue.toLocaleString()}
           hint="cost tracker"
-          source="memory"
+          source={keyCostSource}
         />
         <LiveStat
           title="PII detections"
           value={piiDetections.toLocaleString()}
           hint={`${piiRecent.length} recent events`}
-          source="memory"
+          source={piiSource}
         />
         <LiveStat
           title="Rate usage"
