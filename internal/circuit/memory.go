@@ -330,6 +330,35 @@ func (s *MemoryStore) GetStats(_ context.Context, key string) (*ProviderStats, e
 	return stats, nil
 }
 
+// GetProviderStats aggregates failures and worst-case state across every
+// per-model key for provider (see ProviderStatsFor).
+func (s *MemoryStore) GetProviderStats(_ context.Context, provider string) (*ProviderStats, error) {
+	now := s.now()
+	stats := &ProviderStats{State: StateClosed}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key, e := range s.entries {
+		if !providerKeyMatches(key, provider) {
+			continue
+		}
+		e.mu.Lock()
+		s.pruneFailuresLocked(e, now)
+		stats.Failures += len(e.failures)
+		state := s.stateUnlocked(e)
+		stats.State = worseState(stats.State, state)
+		if state == StateOpen && !e.cooldownUntil.IsZero() {
+			t := e.cooldownUntil
+			if stats.CooldownUntil == nil || t.Before(*stats.CooldownUntil) {
+				stats.CooldownUntil = &t
+			}
+		}
+		e.mu.Unlock()
+	}
+	return stats, nil
+}
+
 // pruneRollupLocked removes rollup events older than the window cutoff.
 // Caller must hold r.mu.
 //

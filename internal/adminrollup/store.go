@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	MetricCost      = "cost"
-	MetricPII       = "pii"
-	MetricUsage     = "usage"
-	MetricCircuit   = "circuit"
-	MetricRateLimit = "ratelimit"
+	MetricCost            = "cost"
+	MetricPII             = "pii"
+	MetricUsage           = "usage"
+	MetricCircuit         = "circuit"
+	MetricCircuitActivity = "circuit_activity"
+	MetricRateLimit       = "ratelimit"
 
 	keyPrefix = "llm:admin:"
 
@@ -174,6 +175,9 @@ func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps Top
 		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
 		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
 		return piiDataFromAggregates(totals, byEntity, byProv, byKey, caps), true
+	case MetricCircuitActivity:
+		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
+		return circuitActivityDataFromAggregates(totals, byProv), true
 	default:
 		return nil, false
 	}

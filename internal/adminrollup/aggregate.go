@@ -61,6 +61,9 @@ func applyDeltaRedis(ctx context.Context, rdb *redis.Client, metric, day string,
 	if err != nil {
 		return err
 	}
+	if len(dimsJSON) == 0 || string(dimsJSON) == "null" {
+		dimsJSON = []byte("{}")
+	}
 	sec := int(ttl.Seconds())
 	if sec <= 0 {
 		sec = int(todayTTL.Seconds())
@@ -313,4 +316,20 @@ func kvFromNameVals(vals []nameVal) []map[string]interface{} {
 		out[i] = map[string]interface{}{"name": v.Name, "count": int64(v.Val)}
 	}
 	return out
+}
+
+func circuitActivityDataFromAggregates(totals map[string]float64, byProvider map[string]float64) map[string]interface{} {
+	byProvOut := make(map[string]int64, len(byProvider))
+	for k, v := range byProvider {
+		byProvOut[k] = int64(v)
+	}
+	return map[string]interface{}{
+		"checks_total":     int64(totals["checks_total"]),
+		"blocked_open":     int64(totals["blocked_open"]),
+		"probes_started":   int64(totals["probes_started"]),
+		"probes_succeeded": int64(totals["probes_succeeded"]),
+		"probes_failed":    int64(totals["probes_failed"]),
+		"circuits_opened":  int64(totals["circuits_opened"]),
+		"by_provider":      byProvOut,
+	}
 }

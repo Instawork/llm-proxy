@@ -74,6 +74,31 @@ func TestRedisStore_RecordTerminalFailure_CountsSameScoreFailures(t *testing.T) 
 	}
 }
 
+func TestRedisStore_GetProviderStats_AggregatesPerModelKeys(t *testing.T) {
+	cfg := Config{
+		FailureThreshold: 5,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store, _ := newRedisStoreForBehaviorTest(t, cfg)
+	ctx := context.Background()
+
+	_, _, err := store.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")
+	require.NoError(t, err)
+	_, _, err = store.RecordTerminalFailure(ctx, "gemini:gemini-2.5-flash")
+	require.NoError(t, err)
+	_, _, err = store.RecordTerminalFailure(ctx, "gemini:gemini-1-flash-preview")
+	require.NoError(t, err)
+
+	bare, err := store.GetStats(ctx, "gemini")
+	require.NoError(t, err)
+	require.Equal(t, 0, bare.Failures)
+
+	agg, err := store.GetProviderStats(ctx, "gemini")
+	require.NoError(t, err)
+	require.Equal(t, 3, agg.Failures)
+}
+
 func TestRedisStore_StateTransitionsFromOpenToHalfOpenThenClosedAfterIdle(t *testing.T) {
 	cfg := Config{
 		FailureThreshold: 1,

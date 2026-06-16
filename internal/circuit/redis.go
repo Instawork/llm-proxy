@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -426,6 +427,53 @@ func (s *RedisStore) GetStats(ctx context.Context, key string) (*ProviderStats, 
 		}
 	}
 
+	return stats, nil
+}
+
+// GetProviderStats aggregates failures and worst-case state across every
+// per-model key for provider (see ProviderStatsFor).
+func (s *RedisStore) GetProviderStats(ctx context.Context, provider string) (*ProviderStats, error) {
+	now := float64(time.Now().UnixNano()) / 1e9
+	cutoff := fmt.Sprintf("%f", now-float64(s.cfg.WindowSeconds))
+	stats := &ProviderStats{State: StateClosed}
+
+	match := redisKeyFailures + provider + "*"
+	var cursor uint64
+	for {
+		keys, next, err := s.rdb.Scan(ctx, cursor, match, 128).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, fkey := range keys {
+			cbKey := strings.TrimPrefix(fkey, redisKeyFailures)
+			if !providerKeyMatches(cbKey, provider) {
+				continue
+			}
+			count, err := s.rdb.ZCount(ctx, fkey, cutoff, "+inf").Result()
+			if err != nil {
+				continue
+			}
+			stats.Failures += int(count)
+
+			state, err := s.GetState(ctx, cbKey)
+			if err != nil {
+				continue
+			}
+			stats.State = worseState(stats.State, state)
+			if state == StateOpen {
+				if dur, err := s.rdb.TTL(ctx, s.stateKey(cbKey)).Result(); err == nil && dur > 0 {
+					t := time.Now().Add(dur)
+					if stats.CooldownUntil == nil || t.Before(*stats.CooldownUntil) {
+						stats.CooldownUntil = &t
+					}
+				}
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
 	return stats, nil
 }
 
