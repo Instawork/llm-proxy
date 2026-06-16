@@ -47,6 +47,7 @@ logs/
 
 # Local scratch dir (debug dumps, CI log captures, etc.)
 .local/
+circleci-build-logs-*.txt
 
 # Local open-source audit configuration
 .cursor/open-source-audit/blocked-terms.txt
