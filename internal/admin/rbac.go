@@ -81,6 +81,13 @@ func (h *handler) editorMaxDailyCostCents() int64 {
 }
 
 func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {
+	// A negative limit is invalid input for ALL roles: the enforcement
+	// middleware treats <= 0 as "unlimited", so persisting a negative value
+	// would silently disable the cap (the opposite of an operator's likely
+	// intent). Reject it at the API boundary so it can never be stored.
+	if cents < 0 {
+		return fmt.Errorf("daily_cost_limit cannot be negative (got %d); use 0 for unlimited", cents)
+	}
 	role, err := h.auth.userRole(r)
 	if err != nil {
 		return fmt.Errorf("unable to resolve user role: %w", err)

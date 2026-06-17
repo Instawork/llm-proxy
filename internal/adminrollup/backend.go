@@ -29,7 +29,15 @@ type backend interface {
 	mget(ctx context.Context, keys []string) ([]*string, error)
 	applyDelta(ctx context.Context, metric, day string, d Delta, ttl time.Duration) error
 	hgetall(ctx context.Context, key string) (map[string]float64, error)
+	// hget returns a single numeric hash field. A missing key/field yields
+	// (0, nil) — absence is not an error for read-through callers.
+	hget(ctx context.Context, key, field string) (float64, error)
 	trySetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error)
+	// reserveUnderLimit atomically reserves estimate against (recorded spend +
+	// outstanding reservations) vs limitCents. Returns true when reserved.
+	reserveUnderLimit(ctx context.Context, spendHashKey, spendField, reservedHashKey, reservedField string, estimate float64, limitCents int64, ttl time.Duration) (bool, error)
+	// addReserved adjusts a reservation field by delta (floored at 0).
+	addReserved(ctx context.Context, reservedHashKey, reservedField string, delta float64, ttl time.Duration) error
 	close() error
 	kind() string
 }
@@ -88,6 +96,17 @@ func (b *redisBackend) hgetall(ctx context.Context, key string) (map[string]floa
 		return nil, err
 	}
 	return hgetallFloat(m), nil
+}
+
+func (b *redisBackend) hget(ctx context.Context, key, field string) (float64, error) {
+	v, err := b.rdb.HGet(ctx, key, field).Float64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
 }
 
 func (b *redisBackend) trySetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
@@ -180,6 +199,15 @@ func (b *memoryBackend) hgetall(_ context.Context, key string) (map[string]float
 		out[k] = v
 	}
 	return out, nil
+}
+
+func (b *memoryBackend) hget(_ context.Context, key, field string) (float64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if h := b.hash[key]; h != nil {
+		return h[field], nil
+	}
+	return 0, nil
 }
 
 func (b *memoryBackend) trySetNX(_ context.Context, key, value string, ttl time.Duration) (bool, error) {

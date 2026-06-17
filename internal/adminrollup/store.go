@@ -147,6 +147,17 @@ func (s *Store) TryElectArchiver(ctx context.Context, metric, day, holder string
 	return err == nil && ok
 }
 
+// KeySpendUSD reads the fleet-wide spend (USD) recorded for a single masked
+// key in the given metric/day's by_key hash. Used by hard cluster-wide cost
+// limit enforcement, which needs the exact per-key value rather than the
+// top-N-capped dashboard view. Returns 0 (no error) when the key has no spend.
+func (s *Store) KeySpendUSD(ctx context.Context, metric, day, keyID string) (float64, error) {
+	if s == nil || s.be == nil || keyID == "" {
+		return 0, nil
+	}
+	return s.be.hget(ctx, dimKey(metric, day, "by_key"), dimMemberField(keyID, "spend_usd"))
+}
+
 func (s *Store) loadHash(ctx context.Context, key string) (map[string]float64, error) {
 	if s == nil {
 		return nil, nil

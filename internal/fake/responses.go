@@ -6,14 +6,17 @@ import (
 	"time"
 )
 
-func successBody(provider, model string, inputTokens, outputTokens int) []byte {
+func successBody(provider, model string, inputTokens, outputTokens, cachedTokens int, assistantContent string) []byte {
+	if assistantContent == "" {
+		assistantContent = "fake response"
+	}
 	switch provider {
 	case "anthropic":
-		return anthropicSuccess(model, inputTokens, outputTokens)
+		return anthropicSuccess(model, inputTokens, outputTokens, assistantContent)
 	case "gemini":
-		return geminiSuccess(model, inputTokens, outputTokens)
+		return geminiSuccess(model, inputTokens, outputTokens, cachedTokens, assistantContent)
 	default:
-		return openAISuccess(model, inputTokens, outputTokens)
+		return openAISuccess(model, inputTokens, outputTokens, cachedTokens, assistantContent)
 	}
 }
 
@@ -28,7 +31,18 @@ func failureBody(provider string, status int) []byte {
 	}
 }
 
-func openAISuccess(model string, inTok, outTok int) []byte {
+func openAISuccess(model string, inTok, outTok, cachedTok int, content string) []byte {
+	usage := map[string]any{
+		"prompt_tokens":     inTok,
+		"completion_tokens": outTok,
+		"total_tokens":      inTok + outTok,
+	}
+	if cachedTok > 0 {
+		// OpenAI reports cached tokens as a SUBSET of prompt_tokens (inclusive):
+		// prompt_tokens is unchanged; cached_tokens just describes how many of
+		// them were a cache hit. A correct proxy must not add this to input.
+		usage["prompt_tokens_details"] = map[string]int{"cached_tokens": cachedTok}
+	}
 	body := map[string]any{
 		"id":      "chatcmpl-fake",
 		"object":  "chat.completion",
@@ -39,16 +53,12 @@ func openAISuccess(model string, inTok, outTok int) []byte {
 				"index": 0,
 				"message": map[string]string{
 					"role":    "assistant",
-					"content": "fake response",
+					"content": content,
 				},
 				"finish_reason": "stop",
 			},
 		},
-		"usage": map[string]int{
-			"prompt_tokens":     inTok,
-			"completion_tokens": outTok,
-			"total_tokens":      inTok + outTok,
-		},
+		"usage": usage,
 	}
 	b, _ := json.Marshal(body)
 	return b
@@ -78,14 +88,14 @@ func openAIError(status int) []byte {
 	return b
 }
 
-func anthropicSuccess(model string, inTok, outTok int) []byte {
+func anthropicSuccess(model string, inTok, outTok int, content string) []byte {
 	body := map[string]any{
-		"id":   "msg_fake",
-		"type": "message",
-		"role": "assistant",
+		"id":    "msg_fake",
+		"type":  "message",
+		"role":  "assistant",
 		"model": model,
 		"content": []map[string]string{
-			{"type": "text", "text": "fake response"},
+			{"type": "text", "text": content},
 		},
 		"stop_reason": "end_turn",
 		"usage": map[string]int{
@@ -116,23 +126,28 @@ func anthropicError(status int) []byte {
 	return b
 }
 
-func geminiSuccess(model string, inTok, outTok int) []byte {
+func geminiSuccess(model string, inTok, outTok, cachedTok int, content string) []byte {
+	usage := map[string]int{
+		"promptTokenCount":     inTok,
+		"candidatesTokenCount": outTok,
+		"totalTokenCount":      inTok + outTok,
+	}
+	if cachedTok > 0 {
+		// Gemini's cachedContentTokenCount is a subset of promptTokenCount.
+		usage["cachedContentTokenCount"] = cachedTok
+	}
 	body := map[string]any{
 		"candidates": []map[string]any{
 			{
 				"content": map[string]any{
-					"parts": []map[string]string{{"text": "fake response"}},
+					"parts": []map[string]string{{"text": content}},
 					"role":  "model",
 				},
 				"finishReason": "STOP",
 			},
 		},
-		"usageMetadata": map[string]int{
-			"promptTokenCount":     inTok,
-			"candidatesTokenCount": outTok,
-			"totalTokenCount":      inTok + outTok,
-		},
-		"modelVersion": model,
+		"usageMetadata": usage,
+		"modelVersion":  model,
 	}
 	b, _ := json.Marshal(body)
 	return b

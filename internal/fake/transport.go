@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,16 +13,18 @@ import (
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
+var wirePlaceholderRE = regexp.MustCompile(`<[A-Z][A-Z0-9_]*_\d+>`)
+
 const defaultOutputTokens = 16
 
 // Config carries fake-upstream settings from YAML plus runtime gate state.
 type Config struct {
-	Enabled         bool
+	Enabled          bool
 	ChaosFailureRate float64
-	ChaosSeed       int64
-	LatencyMS       int
-	JitterMS        int
-	Estimation      providers.YAMLConfigEstimationAdapter
+	ChaosSeed        int64
+	LatencyMS        int
+	JitterMS         int
+	Estimation       providers.YAMLConfigEstimationAdapter
 }
 
 // Transport synthesizes provider responses without calling the inner RoundTripper.
@@ -72,10 +75,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	default:
 		inTok, model := t.estimateTokens(req)
 		outTok := parseOutputTokens(req, defaultOutputTokens)
+		cachedTok := parseCachedTokens(req, inTok)
 		if model == "" {
 			model = defaultModel(t.provider)
 		}
-		body := successBody(t.provider, model, inTok, outTok)
+		content := "fake response"
+		if parseBoolHeader(req, HeaderEchoPlaceholders) {
+			content = echoWirePlaceholders(req)
+		}
+		body := successBody(t.provider, model, inTok, outTok, cachedTok, content)
 		return t.jsonResponse(req, http.StatusOK, body), nil
 	}
 }
@@ -182,6 +190,24 @@ func parseOutputTokens(req *http.Request, fallback int) int {
 	return v
 }
 
+// parseCachedTokens reads the requested cached-token count, clamped to
+// [0, promptTokens] since cached tokens are always a subset of input under the
+// inclusive (OpenAI/Gemini) convention this fake models.
+func parseCachedTokens(req *http.Request, promptTokens int) int {
+	hdr := req.Header.Get(HeaderCachedTokens)
+	if hdr == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(hdr)
+	if err != nil || v < 0 {
+		return 0
+	}
+	if v > promptTokens {
+		return promptTokens
+	}
+	return v
+}
+
 func parseModelFromBody(body []byte) string {
 	var m struct {
 		Model string `json:"model"`
@@ -201,4 +227,28 @@ func defaultModel(provider string) string {
 	default:
 		return "gpt-4o-mini"
 	}
+}
+
+func parseBoolHeader(req *http.Request, name string) bool {
+	hdr := strings.TrimSpace(strings.ToLower(req.Header.Get(name)))
+	return hdr == "1" || hdr == "true" || hdr == "yes"
+}
+
+// echoWirePlaceholders returns wire-tier placeholders from the (scrubbed)
+// request body so fuzz can test MASK restore / SEAL opacity through the real
+// proxy without a live LLM echoing placeholders back.
+func echoWirePlaceholders(req *http.Request) string {
+	if req.Body == nil {
+		return "fake response"
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return "fake response"
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	matches := wirePlaceholderRE.FindAllString(string(body), -1)
+	if len(matches) == 0 {
+		return "fake response"
+	}
+	return strings.Join(matches, " ")
 }

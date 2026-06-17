@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
+import { roleAtLeast } from "../lib/rbac";
 import type {
   AdminUser,
   AdminUserRecord,
@@ -46,25 +47,33 @@ export function useMe() {
 }
 
 export function useKeys(provider?: Provider) {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
   return useQuery({
     queryKey: queryKeys.keys(provider),
     queryFn: () => apiFetch<APIKey[]>(`/admin/api/keys${query}`),
+    enabled: roleAtLeast(role, "editor"),
   });
 }
 
 export function useKey(key: string | undefined) {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   return useQuery({
     queryKey: queryKeys.key(key ?? ""),
     queryFn: () => apiFetch<APIKey>(`/admin/api/keys/${encodeURIComponent(key!)}`),
-    enabled: Boolean(key),
+    enabled: Boolean(key) && roleAtLeast(role, "editor"),
   });
 }
 
 export function useConfig() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: () => apiFetch<ConfigSummary>("/admin/api/config"),
+    enabled: roleAtLeast(role, "editor"),
   });
 }
 
@@ -91,9 +100,12 @@ export function useCircuitActivity() {
 }
 
 export function useProvisioning() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   return useQuery({
     queryKey: queryKeys.provisioning,
     queryFn: () => apiFetch<ProvisioningStatus>("/admin/api/provisioning"),
+    enabled: roleAtLeast(role, "editor"),
   });
 }
 
@@ -207,9 +219,12 @@ export function useDeleteShare() {
 }
 
 export function useUsers() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   return useQuery({
     queryKey: queryKeys.users,
     queryFn: () => apiFetch<AdminUserRecord[]>("/admin/api/users"),
+    enabled: roleAtLeast(role, "admin"),
   });
 }
 

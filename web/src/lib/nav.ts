@@ -1,0 +1,51 @@
+import type { AdminRole } from "../types";
+
+import { roleAtLeast } from "./rbac";
+
+export type NavItem = {
+  to: string;
+  label: string;
+  minRole: AdminRole;
+};
+
+export const MONITORING_NAV: NavItem[] = [
+  { to: "/", label: "Overview", minRole: "editor" },
+  { to: "/usage", label: "Usage", minRole: "viewer" },
+  { to: "/circuit", label: "Circuit Breaker", minRole: "viewer" },
+  { to: "/rate-limits", label: "Rate Limits", minRole: "viewer" },
+  { to: "/cost", label: "Cost Tracking", minRole: "viewer" },
+  { to: "/pii", label: "PII Redaction", minRole: "viewer" },
+];
+
+export const MANAGE_NAV: NavItem[] = [
+  { to: "/keys", label: "API Keys", minRole: "editor" },
+  { to: "/config", label: "Configuration", minRole: "admin" },
+  { to: "/users", label: "Users", minRole: "admin" },
+];
+
+export function navItemsForRole(role: AdminRole) {
+  const visible = (items: NavItem[]) => items.filter((item) => roleAtLeast(role, item.minRole));
+  return {
+    monitoring: visible(MONITORING_NAV),
+    manage: visible(MANAGE_NAV),
+  };
+}
+
+export function defaultPathForRole(role: AdminRole): string {
+  const { monitoring } = navItemsForRole(role);
+  return monitoring[0]?.to ?? "/usage";
+}
+
+export function minRoleForPath(pathname: string): AdminRole | null {
+  const path = pathname === "/" ? "/" : pathname.replace(/\/$/, "");
+  for (const item of [...MONITORING_NAV, ...MANAGE_NAV]) {
+    if (item.to === "/") {
+      if (path === "/") return item.minRole;
+      continue;
+    }
+    if (path === item.to || path.startsWith(`${item.to}/`)) {
+      return item.minRole;
+    }
+  }
+  return null;
+}

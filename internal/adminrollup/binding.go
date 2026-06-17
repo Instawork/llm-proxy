@@ -129,6 +129,70 @@ func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{
 	s.MergeHistory(ctx, metric, snap)
 }
 
+// RollupBound reports whether a rollup store is attached (i.e. fleet-wide
+// reads via Redis are available rather than only the in-process view).
+func (b *RecorderBinding) RollupBound() bool {
+	s, _ := b.deps()
+	return s != nil
+}
+
+// FleetKeySpendUSD returns the fleet-wide spend (USD) recorded across all
+// instances for keyID on the given metric/day, read straight from the shared
+// rollup store. The read is bounded by mergeHistoryTimeout (and the caller's
+// ctx) so a slow store never stalls a request-path caller.
+//
+// Return contract (three distinct states callers MUST treat differently):
+//   - (0,   false, nil): unbound — no rollup store. Fleet enforcement was
+//     never expected; falling back to the in-process view is correct.
+//   - (v,   true,  nil): bound and read succeeded; v is the fleet total.
+//   - (0,   true,  err): bound but the Redis read FAILED. The caller cannot
+//     see other instances' spend right now; this is a degraded state, not a
+//     "spend is zero" state. Callers that enforce hard cluster-wide limits
+//     should treat this as untrusted (e.g. fail closed) rather than silently
+//     dropping to per-instance enforcement.
+func (b *RecorderBinding) FleetKeySpendUSD(ctx context.Context, metric, day, keyID string) (float64, bool, error) {
+	s, _ := b.deps()
+	if s == nil {
+		return 0, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	v, err := s.KeySpendUSD(ctx, metric, day, keyID)
+	if err != nil {
+		return 0, true, err
+	}
+	return v, true, nil
+}
+
+// ReserveFleetKeySpend atomically reserves estimateUSD for keyID against its
+// daily cap across the fleet. The bool reports whether a rollup store is bound
+// (when false, the caller has no fleet reservation and should fall back to its
+// read-only enforcement path). allowed is meaningful only when bound: true =>
+// reserved and may proceed, false => cap reached, block. The read+write is
+// bounded by mergeHistoryTimeout (and ctx).
+func (b *RecorderBinding) ReserveFleetKeySpend(ctx context.Context, metric, day, keyID string, estimateUSD float64, limitCents int64) (allowed, bound bool, err error) {
+	s, _ := b.deps()
+	if s == nil {
+		return false, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	allowed, err = s.ReserveKeySpend(ctx, metric, day, keyID, estimateUSD, limitCents)
+	return allowed, true, err
+}
+
+// AdjustFleetKeyReservation adjusts keyID's outstanding reservation by deltaUSD
+// (negative to release). No-op when unbound. Bounded by mergeHistoryTimeout.
+func (b *RecorderBinding) AdjustFleetKeyReservation(ctx context.Context, metric, day, keyID string, deltaUSD float64) error {
+	s, _ := b.deps()
+	if s == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	return s.AddKeyReservation(ctx, metric, day, keyID, deltaUSD)
+}
+
 // FlushRollup forces pending Redis writes (for shutdown; no-op if unbound).
 func (b *RecorderBinding) FlushRollup() {
 	if _, p := b.deps(); p != nil {

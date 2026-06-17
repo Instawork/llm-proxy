@@ -5,6 +5,7 @@ import LLMProxyLogo from "./llm-proxy-logo";
 import UserAvatar from "./user-avatar";
 import { DataSourceKey } from "./ui/data-source";
 import { useLogout, useMe } from "../hooks/queries";
+import { navItemsForRole } from "../lib/nav";
 import { toggleTheme, useTheme } from "../lib/theme";
 
 function ThemeToggle() {
@@ -174,23 +175,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const role = me?.role ?? "viewer";
 
-  const monitoringItems = [
-    { to: "/", label: "Overview", icon: <DashboardIcon /> },
-    { to: "/usage", label: "Usage", icon: <UsageIcon /> },
-    { to: "/circuit", label: "Circuit Breaker", icon: <CircuitIcon /> },
-    { to: "/rate-limits", label: "Rate Limits", icon: <GaugeIcon /> },
-    { to: "/cost", label: "Cost Tracking", icon: <CostIcon /> },
-    { to: "/pii", label: "PII Redaction", icon: <ShieldIcon /> },
-  ];
+  const navIcons: Record<string, React.ReactElement> = {
+    "/": <DashboardIcon />,
+    "/usage": <UsageIcon />,
+    "/circuit": <CircuitIcon />,
+    "/rate-limits": <GaugeIcon />,
+    "/cost": <CostIcon />,
+    "/pii": <ShieldIcon />,
+    "/keys": <KeyIcon />,
+    "/config": <ConfigIcon />,
+    "/users": <UsersIcon />,
+  };
 
-  const manageItems: { to: string; label: string; icon: React.ReactElement }[] = [];
-  if (role === "editor" || role === "admin") {
-    manageItems.push({ to: "/keys", label: "API Keys", icon: <KeyIcon /> });
-  }
-  if (role === "admin") {
-    manageItems.push({ to: "/config", label: "Configuration", icon: <ConfigIcon /> });
-    manageItems.push({ to: "/users", label: "Users", icon: <UsersIcon /> });
-  }
+  const { monitoring, manage } = navItemsForRole(role);
+  const monitoringItems = monitoring.map((item) => ({
+    ...item,
+    icon: navIcons[item.to],
+  }));
+  const manageItems = manage.map((item) => ({
+    ...item,
+    icon: navIcons[item.to],
+  }));
 
   const navSections = [{ heading: "Monitoring", items: monitoringItems }];
   if (manageItems.length > 0) {

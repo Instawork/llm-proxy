@@ -1,9 +1,92 @@
 package coststats
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/alicebob/miniredis/v2"
 )
+
+func TestRecorderKeySpendUSD(t *testing.T) {
+	r := NewRecorder()
+	if got := r.KeySpendUSD(context.Background(), "missing"); got != 0 {
+		t.Fatalf("missing key spend = %v", got)
+	}
+	r.RecordRequest("openai", "iw:abc", "", "m", 0.25, 0, 0, 1, 1)
+	if got := r.KeySpendUSD(context.Background(), "iw:abc"); got != 0.25 {
+		t.Fatalf("key spend = %v want 0.25", got)
+	}
+}
+
+// A cost-limited key's blocked requests are never tracked, so maybeRollDay may
+// not fire after midnight UTC. KeySpendUSD must treat a stale-day bucket as zero
+// so the key isn't blocked forever into the new day.
+func TestRecorderKeySpendUSD_StaleDayReturnsZero(t *testing.T) {
+	r := NewRecorder()
+	r.RecordRequest("openai", "iw:abc", "", "m", 5.00, 0, 0, 1, 1)
+	if got := r.KeySpendUSD(context.Background(), "iw:abc"); got != 5.00 {
+		t.Fatalf("same-day key spend = %v want 5.00", got)
+	}
+
+	// Simulate the recorder's bucket being stuck on a previous UTC day.
+	r.mu.Lock()
+	r.dayKey = "2000-01-01"
+	r.mu.Unlock()
+
+	if got := r.KeySpendUSD(context.Background(), "iw:abc"); got != 0 {
+		t.Fatalf("stale-day key spend = %v want 0", got)
+	}
+}
+
+// When bound to a shared rollup store, KeySpendUSD must return the fleet-wide
+// spend so cost limits are enforced cluster-wide. We simulate another instance
+// by writing a by_key delta straight to the store, then assert this recorder
+// (which has zero local spend for that key) still sees it.
+func TestRecorderKeySpendUSD_FleetWideFromStore(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	defer mr.Close()
+	store, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis:   &config.RedisConfig{Address: mr.Addr(), DB: 6, DBSet: true},
+	})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	r := NewRecorder()
+	r.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCost))
+
+	day := time.Now().UTC().Format("2006-01-02")
+	// Another instance recorded $4.00 for this key directly in Redis.
+	err = store.ApplyDelta(context.Background(), adminrollup.MetricCost, day, adminrollup.Delta{
+		Totals: map[string]float64{"spend_usd": 4.00},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {adminrollup.DimMemberField("iw:fleet", "spend_usd"): 4.00},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyDelta: %v", err)
+	}
+
+	// This recorder has no local spend for the key, but must see the fleet total.
+	if got := r.KeySpendUSD(context.Background(), "iw:fleet"); got != 4.00 {
+		t.Fatalf("fleet-wide key spend = %v want 4.00", got)
+	}
+
+	// max(fleet, local): a larger local (not yet flushed to Redis) wins so this
+	// instance never under-counts its own just-recorded spend.
+	r.RecordRequest("openai", "iw:fleet", "", "m", 9.00, 0, 0, 1, 1)
+	if got := r.KeySpendUSD(context.Background(), "iw:fleet"); got != 9.00 {
+		t.Fatalf("max(fleet,local) = %v want 9.00", got)
+	}
+}
 
 func TestRecorderAggregatesByKeyAndProvider(t *testing.T) {
 	r := NewRecorder()

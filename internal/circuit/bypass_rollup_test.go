@@ -246,7 +246,7 @@ func TestPerModelKeying_OneModelOpenDoesNotAffectAnother(t *testing.T) {
 	store := NewMemoryStore(cfg)
 
 	inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		// flash-lite is broken; pro is fine.
+		// flash-lite is broken; flash-standard is fine.
 		if strings.Contains(string(modelFromBody(req)), "flash-lite") {
 			return makeResp(503), nil
 		}
@@ -271,16 +271,16 @@ func TestPerModelKeying_OneModelOpenDoesNotAffectAnother(t *testing.T) {
 		t.Fatalf("openai:flash-lite breaker should be Open, got %s", state)
 	}
 
-	// pro still works — its key is independent.
-	resp, err = tr.RoundTrip(requestForModel("pro"))
+	// flash-standard still works — its key is independent.
+	resp, err = tr.RoundTrip(requestForModel("flash-standard"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if resp.StatusCode != 200 {
-		t.Fatalf("openai:pro must still pass through; got %d", resp.StatusCode)
+		t.Fatalf("openai:flash-standard must still pass through; got %d", resp.StatusCode)
 	}
-	if state, _ := store.GetState(context.Background(), "openai:pro"); state != StateClosed {
-		t.Fatalf("openai:pro breaker should be Closed, got %s", state)
+	if state, _ := store.GetState(context.Background(), "openai:flash-standard"); state != StateClosed {
+		t.Fatalf("openai:flash-standard breaker should be Closed, got %s", state)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestPerModelKeying_OpenBreakerFastFailsWithoutUpstreamCall(t *testing.T) {
 // When the model extractor cannot identify a model (returns "") the
 // transport must fall back to per-provider keying so we never silently
 // lose breaker coverage on unattributable traffic.
-func TestPerModelKeying_FallbackToProviderWhenModelUnknown(t *testing.T) {
+func TestPerModelKeying_UnextractableModelIsolatedFromBareProvider(t *testing.T) {
 	cfg := bypassConfig()
 	cfg.FailureThreshold = 1
 	store := NewMemoryStore(cfg)
@@ -381,8 +381,16 @@ func TestPerModelKeying_FallbackToProviderWhenModelUnknown(t *testing.T) {
 	if _, err := tr.RoundTrip(req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if state, _ := store.GetState(context.Background(), "openai"); state != StateOpen {
-		t.Fatalf("provider-keyed breaker should Open as fallback when model is unknown, got %s", state)
+	// Failures from unextractable-model requests must open ONLY the dedicated
+	// sentinel breaker, never the bare-provider key. Opening the bare provider
+	// would fast-fail every healthy per-model request (a cheap DoS), since the
+	// bare-provider state is joined into all per-model effective states and is
+	// also the forced-open (insufficient_quota) overlay key.
+	if state, _ := store.GetState(context.Background(), "openai:_unknown"); state != StateOpen {
+		t.Fatalf("unextractable-model breaker should Open on its sentinel key, got %s", state)
+	}
+	if state, _ := store.GetState(context.Background(), "openai"); state != StateClosed {
+		t.Fatalf("bare-provider breaker must remain Closed; unextractable failures must not contaminate it, got %s", state)
 	}
 }
 

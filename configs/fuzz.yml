@@ -59,7 +59,11 @@ features:
       retention_days: 7
       history_days: 7
   pii_redact:
-    enabled: false
+    enabled: true
+    analyzer_url: "http://presidio:3000"
+    fail_mode: "open"
+    allow_per_key_override: true
+    wire_placeholders: true
   redact_api:
     enabled: false
   rate_limiting:

@@ -376,6 +376,11 @@ type CostTrackingConfig struct {
 	QueueSize     int               `yaml:"queue_size,omitempty"`     // Size of the async tracking queue (default: 1000)
 	FlushInterval int               `yaml:"flush_interval,omitempty"` // Interval in seconds to flush pending records (default: 15)
 	Transports    []TransportConfig `yaml:"transports,omitempty"`     // Multiple transport configs
+	// FailClosedOnReadError makes daily cost-limit enforcement reject
+	// cost-limited requests (503) when the fleet-wide spend read is degraded
+	// (Redis rollup bound but unreachable), instead of silently falling back
+	// to per-instance enforcement. Default false (fail-open for availability).
+	FailClosedOnReadError bool `yaml:"fail_closed_on_read_error,omitempty"`
 }
 
 // TransportConfig represents cost tracking transport configuration

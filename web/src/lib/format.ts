@@ -42,11 +42,23 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   return `$${amount.toFixed(2)}`;
 }
 
-/** Masked iw: key prefix matching middleware.MaskKeyID for joining spend stats. */
+/** Masked iw: key identity matching middleware.MaskKeyID for joining spend stats.
+ * A bare 12-char prefix collides across keys sharing that prefix, so we append
+ * an FNV-1a/32 hash of the whole key (mirrors the Go backend byte-for-byte;
+ * keys are ASCII so char/byte encodings agree). */
 export function maskKeyId(key: string): string {
   if (!key) return "";
   if (key.length <= 12) return key;
-  return `${key.slice(0, 12)}…`;
+  return `${key.slice(0, 12)}…${fnv1a32Hex(key)}`;
+}
+
+function fnv1a32Hex(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
 }
 
 const SCOPE_SUFFIX_LEN = 4;

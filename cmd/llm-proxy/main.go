@@ -1418,7 +1418,30 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
 	}
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
-		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder))
+		costLimitOpts := middleware.CostLimitOptions{
+			FailClosedOnReadError: yamlConfig.Features.CostTracking.FailClosedOnReadError,
+		}
+		// When the cost tracker is available, enable synchronous cluster-wide
+		// reservations: estimate a call's cost up front, reserve it atomically
+		// against the cap, and reconcile to the actual cost after the response.
+		// This stops concurrent / multi-instance requests from overshooting a
+		// daily cap in the check-before / charge-after window.
+		if globalCostTracker != nil {
+			costLimitOpts.Estimate = func(provider, model string, inputTokens, outputTokens int) float64 {
+				_, _, total, err := globalCostTracker.CalculateCost(provider, model, inputTokens, outputTokens)
+				if err != nil {
+					return 0
+				}
+				return total
+			}
+			costLimitOpts.Estimation = providers.YAMLConfigEstimationAdapter{
+				MaxSampleBytes:        yamlConfig.Features.RateLimiting.Estimation.MaxSampleBytes,
+				BytesPerToken:         yamlConfig.Features.RateLimiting.Estimation.BytesPerToken,
+				CharsPerToken:         yamlConfig.Features.RateLimiting.Estimation.CharsPerToken,
+				ProviderCharsPerToken: yamlConfig.Features.RateLimiting.Estimation.ProviderCharsPerToken,
+			}
+		}
+		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder, costLimitOpts))
 	}
 
 	piiCfg := yamlConfig.Features.PIIRedact

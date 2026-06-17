@@ -3,6 +3,8 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
@@ -59,8 +61,19 @@ const (
 	piiOutcomeOversize   = "oversize"
 )
 
-// MaskKeyID truncates a proxy key to a short, non-reversible prefix so
-// per-key stats can be attributed without surfacing the full secret.
+// MaskKeyID truncates a proxy key to a short, non-reversible identity so
+// per-key stats (and cost-limit enforcement) can be attributed without
+// surfacing the full secret.
+//
+// A bare 12-char prefix is NOT a safe identity: proxy keys are "iw:" + a long
+// hex digest, so any two keys that share the first 12 characters would collapse
+// into one spend bucket — silently breaking per-key cost-limit isolation (one
+// key's spend would count against the other's cap). We append an FNV-1a hash of
+// the WHOLE key so distinct keys cannot collide on the truncated prefix alone.
+// FNV-1a is sufficient here (collisions are the only concern, keys are
+// server-generated and not attacker-chosen) and is trivial to mirror byte-for-
+// byte in the web UI (see web/src/lib/format.ts maskKeyId), which recomputes
+// this value to join spend stats. Keys are ASCII so byte/char encodings agree.
 func MaskKeyID(key string) string {
 	if key == "" {
 		return ""
@@ -68,7 +81,14 @@ func MaskKeyID(key string) string {
 	if len(key) <= 12 {
 		return key
 	}
-	return key[:12] + "…"
+	return key[:12] + "…" + keyIDHashSuffix(key)
+}
+
+// keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key.
+func keyIDHashSuffix(key string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // PIIRedactConfig controls the middleware behaviour. See

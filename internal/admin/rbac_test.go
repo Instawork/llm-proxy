@@ -53,6 +53,16 @@ func TestValidateEditorCostLimitSkipsAdmin(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateCostLimitRejectsNegativeForAllRoles(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	// Admin (the most privileged role) must still be rejected for a negative
+	// limit, since a negative value would otherwise read as "unlimited".
+	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", nil)
+	err := h.validateEditorCostLimit(req, -1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative")
+}
+
 func TestValidateEditorCostLimitRejectsOverCap(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	_, err := h.deps.UserStore.CreateUser(context.Background(), "editor@example.com", adminusers.RoleEditor)

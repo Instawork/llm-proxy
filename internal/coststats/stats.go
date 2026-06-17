@@ -3,6 +3,8 @@
 package coststats
 
 import (
+	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -344,14 +346,94 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 // KeySpendUSD returns recorded spend for a masked iw: key in the current UTC day.
-func (r *Recorder) KeySpendUSD(keyID string) float64 {
+//
+// When a shared rollup store is bound (Redis), this returns the fleet-wide
+// spend aggregated across every proxy instance, combined with this instance's
+// in-process view as max(fleet, local). That combination is deliberately
+// conservative for hard cluster-wide cost-limit enforcement:
+//   - fleet captures spend recorded by OTHER instances (the in-process map
+//     alone would let the effective cap scale with instance count);
+//   - local never under-counts this instance's own just-recorded spend during
+//     the brief window before its delta is flushed to Redis;
+//   - max never exceeds the true fleet total (local is always a subset of the
+//     fleet once flushed), so it cannot over-charge.
+//
+// If the recorder's bucket is for a prior UTC day, the local contribution is
+// treated as 0 rather than stale spend. That matters because a cost-limited
+// key's blocked (402) requests are never cost-tracked, so RecordRequest — the
+// only caller of maybeRollDay — may not fire after midnight. Without this guard
+// a key that hit its cap at 23:59 would stay blocked forever into the new day.
+func (r *Recorder) KeySpendUSD(ctx context.Context, keyID string) float64 {
+	spend, _ := r.KeySpendUSDDetailed(ctx, keyID)
+	return spend
+}
+
+// ReserveKeySpend atomically reserves an estimated cost for keyID against its
+// daily cap across the fleet. Returns (allowed, reservationActive):
+//   - reservationActive=false: no rollup store is bound, so no fleet
+//     reservation was made. Callers should fall back to read-only enforcement
+//     (KeySpendUSD) for this request; allowed is meaningless.
+//   - reservationActive=true, allowed=true: reserved; request may proceed and
+//     the caller MUST later release/reconcile via AdjustKeyReservation.
+//   - reservationActive=true, allowed=false: the combined recorded + reserved
+//     spend has reached the cap; the request should be blocked (nothing was
+//     reserved, so no release is owed).
+//
+// On a backing-store error the reservation is treated as inactive (the caller
+// degrades to read-only enforcement) so a Redis blip never hard-fails traffic.
+func (r *Recorder) ReserveKeySpend(ctx context.Context, keyID string, estimateUSD float64, limitCents int64) (allowed, reservationActive bool) {
+	if r == nil || keyID == "" || limitCents <= 0 {
+		return true, false
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	allowed, bound, err := r.ReserveFleetKeySpend(ctx, adminrollup.MetricCost, today, keyID, estimateUSD, limitCents)
+	if !bound || err != nil {
+		return true, false
+	}
+	return allowed, true
+}
+
+// AdjustKeyReservation changes keyID's outstanding fleet reservation by
+// deltaUSD (negative to release). No-op when no rollup store is bound.
+func (r *Recorder) AdjustKeyReservation(ctx context.Context, keyID string, deltaUSD float64) {
+	if r == nil || keyID == "" || deltaUSD == 0 {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if err := r.AdjustFleetKeyReservation(ctx, adminrollup.MetricCost, today, keyID, deltaUSD); err != nil {
+		log.Printf("coststats: adjust reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
+	}
+}
+
+// KeySpendUSDDetailed is KeySpendUSD plus a degraded flag. degraded is true
+// only when a fleet rollup store IS bound but its read failed: the returned
+// spend is then this instance's local-only view, which cannot see spend
+// recorded by sibling instances. Callers enforcing hard cluster-wide caps can
+// use this to fail closed instead of silently weakening to per-instance
+// enforcement (the failure mode that lets a fleet overshoot its cap when
+// Redis is unreachable). When unbound (local-only by design) degraded is
+// false: there are no siblings to miss.
+func (r *Recorder) KeySpendUSDDetailed(ctx context.Context, keyID string) (spendUSD float64, degraded bool) {
 	if r == nil || keyID == "" {
-		return 0
+		return 0, false
 	}
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if ks := r.byKey[keyID]; ks != nil {
-		return ks.SpendUSD
+	var local float64
+	if r.dayKey == today {
+		if ks := r.byKey[keyID]; ks != nil {
+			local = ks.SpendUSD
+		}
 	}
-	return 0
+	r.mu.RUnlock()
+
+	fleet, bound, err := r.FleetKeySpendUSD(ctx, adminrollup.MetricCost, today, keyID)
+	if bound && err != nil {
+		return local, true
+	}
+	if bound && fleet > local {
+		return fleet, false
+	}
+	return local, false
 }

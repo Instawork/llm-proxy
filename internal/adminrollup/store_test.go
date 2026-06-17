@@ -31,6 +31,69 @@ func testStore(t *testing.T) *Store {
 	return store
 }
 
+func TestStoreKeySpendUSD(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	day := "2026-06-17"
+
+	if v, err := store.KeySpendUSD(ctx, MetricCost, day, "iw:abc"); err != nil || v != 0 {
+		t.Fatalf("missing key spend = %v err=%v", v, err)
+	}
+
+	// Two instances independently fold deltas for the same key; HINCRBYFLOAT
+	// accumulates them into a single fleet-wide value.
+	d := Delta{
+		Totals: map[string]float64{"spend_usd": 1.25},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {dimMemberField("iw:abc", "spend_usd"): 1.25},
+		},
+	}
+	require.NoError(t, store.ApplyDelta(ctx, MetricCost, day, d))
+	require.NoError(t, store.ApplyDelta(ctx, MetricCost, day, d))
+
+	v, err := store.KeySpendUSD(ctx, MetricCost, day, "iw:abc")
+	require.NoError(t, err)
+	if v != 2.50 {
+		t.Fatalf("fleet key spend = %v want 2.50", v)
+	}
+}
+
+func TestReserveKeySpend(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	day := "2026-06-17"
+	const key = "iw:reserve"
+	const limitCents = 100 // $1.00 cap
+
+	// Record $0.40 of actual spend.
+	require.NoError(t, store.ApplyDelta(ctx, MetricCost, day, Delta{
+		Totals:     map[string]float64{"spend_usd": 0.40},
+		Dimensions: map[string]map[string]float64{"by_key": {dimMemberField(key, "spend_usd"): 0.40}},
+	}))
+
+	// Recorded $0.40 is under the $1.00 cap, so the boundary request is
+	// allowed and reserves its estimate ($0.65 → combined $1.05).
+	allowed, err := store.ReserveKeySpend(ctx, MetricCost, day, key, 0.65, limitCents)
+	require.NoError(t, err)
+	require.True(t, allowed, "boundary request under cap should be allowed and reserved")
+
+	// Combined recorded+reserved is now $1.05 ≥ $1.00, so the NEXT request is
+	// blocked: the in-flight reservation prevents concurrent overshoot.
+	allowed, err = store.ReserveKeySpend(ctx, MetricCost, day, key, 0.10, limitCents)
+	require.NoError(t, err)
+	require.False(t, allowed, "request after cap reached (incl. reservations) must be blocked")
+
+	reserved, err := store.ReservedKeySpendUSD(ctx, MetricCost, day, key)
+	require.NoError(t, err)
+	require.InDelta(t, 0.65, reserved, 1e-9, "only the allowed reservation should be held")
+
+	// Release the reservation; it must floor at 0 even if over-released.
+	require.NoError(t, store.AddKeyReservation(ctx, MetricCost, day, key, -10.0))
+	reserved, err = store.ReservedKeySpendUSD(ctx, MetricCost, day, key)
+	require.NoError(t, err)
+	require.Equal(t, 0.0, reserved, "over-release must floor at 0, never go negative")
+}
+
 func TestSaveTodayAndArchiveDaily(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

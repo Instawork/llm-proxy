@@ -180,8 +180,24 @@ func (t *Transport) keyFor(req *http.Request) string {
 		return t.provider
 	}
 	model := t.modelFn(req)
+	if model == "" {
+		// Body IS buffered but no model could be extracted (malformed or
+		// non-chat payload). Do NOT fold these into the bare-provider key:
+		// that key doubles as the provider-wide forced-open overlay
+		// (insufficient_quota) and is joined into every per-model request's
+		// effective state. Letting organic unextractable-request failures
+		// open it would fast-fail ALL healthy per-model traffic — a cheap
+		// DoS. Isolate them in a dedicated sentinel breaker instead.
+		return composeKey(t.provider, unknownModelKey)
+	}
 	return composeKey(t.provider, model)
 }
+
+// unknownModelKey is the model component used for requests whose body is
+// buffered but yields no extractable model. Keeps such requests in their own
+// per-provider breaker, isolated from both real per-model keys and the
+// bare-provider forced-open overlay.
+const unknownModelKey = "_unknown"
 
 // composeKey is the canonical (provider, model) → store key formatter.
 // Centralised so log lines, metric tags, and Store calls cannot drift.
