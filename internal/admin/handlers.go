@@ -162,6 +162,11 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.validateEditorCostLimit(r, req.DailyCostLimit); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(
 		r.Context(),
 		req.Provider,
@@ -234,6 +239,10 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		updates["description"] = *req.Description
 	}
 	if req.DailyCostLimit != nil {
+		if err := h.validateEditorCostLimit(r, *req.DailyCostLimit); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		updates["daily_cost_limit"] = *req.DailyCostLimit
 	}
 	if req.Tags != nil {
@@ -611,6 +620,12 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		"client_ip", clientIP(r),
 		"created_by", link.CreatedBy,
 	)
+
+	if user, err := h.auth.currentUser(r); err == nil && h.deps.UserStore != nil {
+		if recErr := h.deps.UserStore.RecordShareAwareness(r.Context(), user.Email, id); recErr != nil {
+			h.deps.Logger.Warn("admin: record share awareness failed", "error", recErr, "email", user.Email, "share_id", id)
+		}
+	}
 
 	// Belt-and-suspenders against the capability URL being indexed if it ever
 	// leaks into a crawlable surface.

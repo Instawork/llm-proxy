@@ -3,9 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../client";
 import type {
   AdminUser,
+  AdminUserRecord,
   APIKey,
   ConfigSummary,
   CostResponse,
+  CreateAdminUserRequest,
   CreateAPIKeyRequest,
   HealthResponse,
   CircuitActivityResponse,
@@ -15,6 +17,7 @@ import type {
   RateLimitsResponse,
   ShareCreateResponse,
   ShareInfo,
+  UpdateAdminUserRoleRequest,
   UpdateAPIKeyRequest,
   UsageResponse,
 } from "../types";
@@ -32,6 +35,7 @@ export const queryKeys = {
   usage: ["admin", "usage"] as const,
   pii: ["admin", "pii"] as const,
   provisioning: ["admin", "provisioning"] as const,
+  users: ["admin", "users"] as const,
 };
 
 export function useMe() {
@@ -199,5 +203,48 @@ export function useDeleteShare() {
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<void>(`/admin/api/share/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  });
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: queryKeys.users,
+    queryFn: () => apiFetch<AdminUserRecord[]>("/admin/api/users"),
+  });
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAdminUserRequest) =>
+      apiFetch<AdminUserRecord>("/admin/api/users", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useUpdateUserRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ email, role }: { email: string; role: UpdateAdminUserRoleRequest["role"] }) =>
+      apiFetch<AdminUserRecord>(`/admin/api/users/${encodeURIComponent(email)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.users });
+      qc.invalidateQueries({ queryKey: queryKeys.me });
+    },
+  });
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (email: string) =>
+      apiFetch<void>(`/admin/api/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
   });
 }

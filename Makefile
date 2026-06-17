@@ -16,6 +16,9 @@ MAIN_PATH=./cmd/llm-proxy
 KEYS_BINARY_NAME=llm-proxy-keys
 KEYS_BINARY_PATH=./bin/$(KEYS_BINARY_NAME)
 KEYS_MAIN_PATH=./cmd/llm-proxy-keys
+USERS_BINARY_NAME=llm-proxy-users
+USERS_BINARY_PATH=./bin/$(USERS_BINARY_NAME)
+USERS_MAIN_PATH=./cmd/llm-proxy-users
 GO_VERSION=$(shell go version | cut -d' ' -f3)
 GIT_COMMIT=$(shell git rev-parse --short HEAD || echo "unknown")
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -145,9 +148,16 @@ build-keys:
 	@go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o $(KEYS_BINARY_PATH) $(KEYS_MAIN_PATH)
 	@echo "$(GREEN)✓ Build completed: $(KEYS_BINARY_PATH)$(NC)"
 
+.PHONY: build-users
+build-users:
+	@echo "$(BLUE)Building $(USERS_BINARY_NAME)...$(NC)"
+	@mkdir -p bin
+	@go build -o $(USERS_BINARY_PATH) $(USERS_MAIN_PATH)
+	@echo "$(GREEN)✓ Build completed: $(USERS_BINARY_PATH)$(NC)"
+
 # Build all binaries
 .PHONY: build-all
-build-all: build build-keys
+build-all: build build-keys build-users
 	@echo "$(GREEN)✓ All binaries built successfully$(NC)"
 
 # Clean build artifacts

@@ -36,7 +36,7 @@ func TestHandleDevLogin_SetsSession(t *testing.T) {
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		DevCORSOrigin:  "http://localhost:5173",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newAuthenticator: %v", err)
 	}

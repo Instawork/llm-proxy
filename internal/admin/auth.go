@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -45,10 +46,12 @@ type authenticator struct {
 	redirectURLEnv    string
 	devBypass         bool
 	devFrontendOrigin string
+	userStore         *adminusers.Store
+	editorLimits      config.EditorLimitsConfig
 	logger            *slog.Logger
 }
 
-func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig) (*authenticator, error) {
+func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig, userStore *adminusers.Store) (*authenticator, error) {
 	// Resolve the allowed sign-in domain with the env var taking precedence over
 	// the YAML value, then fall back to example.com. Doing it here (not just in
 	// loadAuthConfig) ensures auth.allowedDomain — the value isAllowedUser checks —
@@ -86,6 +89,8 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig)
 		allowedDomain:     allowedDomain,
 		devBypass:         adminCfg.DevBypassLogin,
 		devFrontendOrigin: adminCfg.DevCORSOrigin,
+		userStore:         userStore,
+		editorLimits:      adminCfg.EditorLimits,
 		logger:            logger,
 	}
 
@@ -206,6 +211,15 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	session.Values[sessionUserEmail] = email
 	session.Values[sessionUserName] = "Dev User"
 	session.Values[sessionUserPicture] = devUserPicture("Dev User")
+
+	if a.userStore != nil {
+		if _, _, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User")); err != nil {
+			a.logger.Error("admin auth: dev ensure user failed", "error", err, "email", email)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	if err := session.Save(r, w); err != nil {
 		a.logger.Error("admin auth: dev login session save failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -318,6 +332,14 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.userStore != nil {
+		if _, _, err := a.userStore.EnsureUser(r.Context(), claims.Email, claims.Name, claims.Picture); err != nil {
+			a.logger.Error("admin auth: ensure user failed", "error", err, "email", claims.Email)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	session.Values[sessionUserEmail] = claims.Email
 	session.Values[sessionUserName] = claims.Name
 	session.Values[sessionUserPicture] = claims.Picture
@@ -354,12 +376,35 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 	}
 	name, _ := session.Values[sessionUserName].(string)
 	picture, _ := session.Values[sessionUserPicture].(string)
-	return &UserResponse{
+
+	role := string(adminusers.RoleViewer)
+	if a.userStore != nil {
+		u, err := a.userStore.GetUser(r.Context(), email)
+		if err != nil {
+			return nil, fmt.Errorf("user lookup failed: %w", err)
+		}
+		role = string(u.Role)
+		if u.Name != "" {
+			name = u.Name
+		}
+		if u.Picture != "" {
+			picture = u.Picture
+		}
+	}
+
+	resp := &UserResponse{
 		Email:                           email,
 		Name:                            name,
 		Picture:                         picture,
+		Role:                            role,
 		CanBypassPIIOffNonBedrockPolicy: apikeys.CanBypassPIIOffNonBedrockPolicy(email),
-	}, nil
+	}
+	if role == string(adminusers.RoleEditor) && a.editorLimits.MaxDailyCostLimitCents > 0 {
+		resp.EditorLimits = &EditorLimitsResponse{
+			MaxDailyCostLimitCents: a.editorLimits.MaxDailyCostLimitCents,
+		}
+	}
+	return resp, nil
 }
 
 func devUserPicture(name string) string {

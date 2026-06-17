@@ -13,10 +13,39 @@ const maskedActualKey = "***HIDDEN***"
 
 // UserResponse is the authenticated admin user.
 type UserResponse struct {
-	Email                           string `json:"email"`
-	Name                            string `json:"name,omitempty"`
-	Picture                         string `json:"picture,omitempty"`
-	CanBypassPIIOffNonBedrockPolicy bool   `json:"can_bypass_pii_off_non_bedrock_policy"`
+	Email                           string                `json:"email"`
+	Name                            string                `json:"name,omitempty"`
+	Picture                         string                `json:"picture,omitempty"`
+	Role                            string                `json:"role"`
+	CanBypassPIIOffNonBedrockPolicy bool                  `json:"can_bypass_pii_off_non_bedrock_policy"`
+	EditorLimits                    *EditorLimitsResponse `json:"editor_limits,omitempty"`
+}
+
+// EditorLimitsResponse exposes editor caps to the UI.
+type EditorLimitsResponse struct {
+	MaxDailyCostLimitCents int64 `json:"max_daily_cost_limit_cents"`
+}
+
+// AdminUserRecord is a user in the admin roster.
+type AdminUserRecord struct {
+	Email       string    `json:"email"`
+	Name        string    `json:"name,omitempty"`
+	Picture     string    `json:"picture,omitempty"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	LastLoginAt time.Time `json:"last_login_at,omitempty"`
+}
+
+// CreateUserRequest pre-provisions a user.
+type CreateUserRequest struct {
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
+// UpdateUserRoleRequest changes a user's role.
+type UpdateUserRoleRequest struct {
+	Role string `json:"role"`
 }
 
 // KeyResponse is a safe JSON view of an API key record.

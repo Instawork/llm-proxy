@@ -117,6 +117,9 @@ export default function KeysPage() {
   const { data: config } = useConfig();
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
   const canBypassPiiBedrockPolicy = Boolean(me?.can_bypass_pii_off_non_bedrock_policy);
+  const canDeleteKeys = me?.role === "admin";
+  const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
+  const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
   const [providerFilter, setProviderFilter] = useState<Provider | "">("");
   const [modalOpen, setModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<APIKey | null>(null);
@@ -208,6 +211,10 @@ export default function KeysPage() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const dailyCostLimit = Math.round(Number(form.daily_cost_limit_dollars || "0") * 100);
+    if (editorMaxCents > 0 && dailyCostLimit > editorMaxCents) {
+      push(`Daily cost limit cannot exceed $${editorMaxDollars}`, "error");
+      return;
+    }
     const redactPii = piiFromFormValue(form.redact_pii);
 
     try {
@@ -314,6 +321,7 @@ export default function KeysPage() {
             onShare={onShare}
             onEdit={openEdit}
             onDelete={setDeleteTarget}
+            canDelete={canDeleteKeys}
             sharingKey={sharingKey}
             maskKey={maskKey}
             formatRateLimits={formatRateLimits}
@@ -433,7 +441,10 @@ export default function KeysPage() {
                       }))
                     }
                   />
-                  <p className="mt-1.5 text-xs text-base-content/60">Leave at 0 for unlimited</p>
+                  <p className="mt-1.5 text-xs text-base-content/60">
+                    Leave at 0 for unlimited
+                    {editorMaxDollars != null ? ` · Editor max $${editorMaxDollars}/day` : null}
+                  </p>
                 </label>
 
                 <div className="form-control w-full sm:w-auto">

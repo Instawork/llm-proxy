@@ -4,9 +4,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/gorilla/mux"
 )
+
+func roleHandler(auth *authenticator, min adminusers.Role, fn http.HandlerFunc) http.Handler {
+	return auth.requireRole(min)(http.HandlerFunc(fn))
+}
 
 // RegisterRoutes mounts admin auth and JSON API routes on r.
 func RegisterRoutes(r *mux.Router, deps Deps) {
@@ -19,7 +24,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	if deps.YAMLConfig != nil {
 		adminCfg = deps.YAMLConfig.Features.AdminDashboard
 	}
-	auth, err := newAuthenticator(logger, adminCfg)
+	auth, err := newAuthenticator(logger, adminCfg, deps.UserStore)
 	if err != nil {
 		logger.Error("admin dashboard disabled: auth setup failed", "error", err)
 		return
@@ -63,21 +68,28 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Use(auth.requireSession)
 
 	api.HandleFunc("/me", h.handleMe).Methods(http.MethodGet, http.MethodOptions)
-	api.HandleFunc("/keys", h.handleListKeys).Methods(http.MethodGet, http.MethodOptions)
-	api.HandleFunc("/keys", h.handleCreateKey).Methods(http.MethodPost, http.MethodOptions)
-	api.HandleFunc("/provisioning", h.handleProvisioning).Methods(http.MethodGet, http.MethodOptions)
-	api.HandleFunc("/keys/{key:.+}", h.handleGetKey).Methods(http.MethodGet, http.MethodOptions)
-	api.HandleFunc("/keys/{key:.+}", h.handleUpdateKey).Methods(http.MethodPatch, http.MethodOptions)
-	api.HandleFunc("/keys/{key:.+}", h.handleDeleteKey).Methods(http.MethodDelete, http.MethodOptions)
-	api.HandleFunc("/config", h.handleConfig).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/health", h.handleHealth).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/circuit-activity", h.handleCircuitActivity).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/rate-limits", h.handleRateLimits).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/cost", h.handleCost).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/usage", h.handleUsage).Methods(http.MethodGet, http.MethodOptions)
 	api.HandleFunc("/pii", h.handlePII).Methods(http.MethodGet, http.MethodOptions)
-	api.HandleFunc("/share", h.handleCreateShare).Methods(http.MethodPost, http.MethodOptions)
-	api.HandleFunc("/share/{id}", h.handleDeleteShare).Methods(http.MethodDelete, http.MethodOptions)
+
+	api.Handle("/config", roleHandler(auth, adminusers.RoleEditor, h.handleConfig)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys", roleHandler(auth, adminusers.RoleEditor, h.handleListKeys)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys", roleHandler(auth, adminusers.RoleEditor, h.handleCreateKey)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/provisioning", roleHandler(auth, adminusers.RoleEditor, h.handleProvisioning)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleEditor, h.handleGetKey)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleEditor, h.handleUpdateKey)).Methods(http.MethodPatch, http.MethodOptions)
+	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleDeleteKey)).Methods(http.MethodDelete, http.MethodOptions)
+	api.Handle("/share", roleHandler(auth, adminusers.RoleEditor, h.handleCreateShare)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/share/{id}", roleHandler(auth, adminusers.RoleEditor, h.handleDeleteShare)).Methods(http.MethodDelete, http.MethodOptions)
+
+	api.Handle("/users", roleHandler(auth, adminusers.RoleAdmin, h.handleListUsers)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/users", roleHandler(auth, adminusers.RoleAdmin, h.handleCreateUser)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleGetUser)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleUpdateUserRole)).Methods(http.MethodPatch, http.MethodOptions)
+	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleDeleteUser)).Methods(http.MethodDelete, http.MethodOptions)
 
 	mountSPA(adminRouter)
 

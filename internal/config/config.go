@@ -157,6 +157,30 @@ type AdminDashboardConfig struct {
 	// default list applies (see apikeys.SetPIIOffNonBedrockBypassAdmins).
 	// Prefer setting this in YAML so roster changes don't require a deploy.
 	PIIOffBypassAdmins []string `yaml:"pii_off_bypass_admins"`
+	// Users configures the DynamoDB-backed admin user roster and RBAC.
+	Users AdminUsersConfig `yaml:"users"`
+	// EditorLimits caps what editors may set when creating/updating keys.
+	EditorLimits EditorLimitsConfig `yaml:"editor_limits"`
+}
+
+// AdminUsersConfig configures the admin user DynamoDB store.
+type AdminUsersConfig struct {
+	DynamoDB AdminUsersDynamoDBConfig `yaml:"dynamodb"`
+}
+
+// AdminUsersDynamoDBConfig is DynamoDB settings for admin users.
+type AdminUsersDynamoDBConfig struct {
+	Region          string `yaml:"region"`
+	TableName       string `yaml:"table_name"`
+	EndpointURL     string `yaml:"endpoint_url"`
+	AutoCreateTable bool   `yaml:"auto_create_table"`
+}
+
+// EditorLimitsConfig caps editor key-management permissions.
+type EditorLimitsConfig struct {
+	// MaxDailyCostLimitCents is the maximum daily_cost_limit (cents) editors
+	// may set on keys. Zero means no cap.
+	MaxDailyCostLimitCents int64 `yaml:"max_daily_cost_limit_cents"`
 }
 
 // AdminRollupsConfig configures daily rollups for the admin UI.
@@ -916,6 +940,10 @@ func (c *YAMLConfig) Validate() error {
 		if err := c.validatePIIRedactConfig(); err != nil {
 			return fmt.Errorf("invalid pii_redact configuration: %w", err)
 		}
+	}
+
+	if c.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents < 0 {
+		return fmt.Errorf("invalid admin_dashboard configuration: editor_limits.max_daily_cost_limit_cents cannot be negative")
 	}
 
 	return nil

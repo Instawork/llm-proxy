@@ -41,6 +41,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     throw new APIClientError(401, "Unauthorized");
   }
 
+  if (response.status === 403) {
+    throw new APIClientError(403, await parseError(response));
+  }
+
   if (!response.ok) {
     throw new APIClientError(response.status, await parseError(response));
   }

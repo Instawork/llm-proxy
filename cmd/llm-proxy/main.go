@@ -18,6 +18,7 @@ import (
 	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/circuitstats"
@@ -106,6 +107,8 @@ var globalCostStatsRecorder *coststats.Recorder
 var (
 	globalAPIKeyStore          providers.APIKeyStore
 	globalAPIKeyStoreInitError error
+	globalAdminUserStore       *adminusers.Store
+	globalAdminUserStoreError  error
 	globalKeyProvisioner       *provision.Manager
 )
 
@@ -783,6 +786,41 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	return store
 }
 
+func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
+	if yamlConfig == nil || !yamlConfig.Features.AdminDashboard.Enabled {
+		logger.Info("👤 Admin User Store: admin dashboard disabled")
+		return nil
+	}
+
+	userCfg := yamlConfig.Features.AdminDashboard.Users.DynamoDB
+	if userCfg.TableName == "" || userCfg.Region == "" {
+		logger.Error("👤 Admin User Store: missing table_name or region")
+		globalAdminUserStoreError = fmt.Errorf("admin users dynamodb table_name and region are required")
+		return nil
+	}
+
+	endpointURL := userCfg.EndpointURL
+	if endpointURL == "" {
+		endpointURL = os.Getenv("AWS_ENDPOINT_URL")
+	}
+
+	store, err := adminusers.NewStore(adminusers.StoreConfig{
+		TableName:       userCfg.TableName,
+		Region:          userCfg.Region,
+		EndpointURL:     endpointURL,
+		Logger:          logger,
+		AutoCreateTable: userCfg.AutoCreateTable,
+	})
+	if err != nil {
+		globalAdminUserStoreError = err
+		logger.Error("👤 Admin User Store: failed to initialize", "error", err)
+		return nil
+	}
+
+	logger.Info("👤 Admin User Store: successfully initialized", "table", userCfg.TableName)
+	return store
+}
+
 // piiSummaryFunc returns a snapshot closure for the admin /pii endpoint, or
 // newPerKeyOverrideProvider returns a cached PerKeyOverrideFunc that resolves
 // an iw: key's rate-limit overrides from its DynamoDB record. Results (hits
@@ -1206,6 +1244,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// Initialize API key store if enabled
 	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
+	globalAdminUserStore = initializeAdminUserStore(yamlConfig)
 
 	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
 	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
@@ -1450,6 +1489,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			YAMLConfig:       yamlConfig,
 			APIKeyStore:      keyStore,
 			APIKeyStoreError: globalAPIKeyStoreInitError,
+			UserStore:        globalAdminUserStore,
+			UserStoreError:   globalAdminUserStoreError,
 			RateLimiter:      globalRateLimiter,
 			HealthFunc:       healthHandler,
 			PIISummary:       piiSummaryFunc(),

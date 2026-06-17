@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
@@ -140,7 +141,7 @@ func (td *testOIDCServer) mintIDToken(claims idTokenClaims) string {
 	return raw
 }
 
-func newTestOAuthAuthenticator(t *testing.T, oidcSrv *testOIDCServer, allowedDomain string) *authenticator {
+func newTestOAuthAuthenticator(t *testing.T, oidcSrv *testOIDCServer, allowedDomain string, userStore ...*adminusers.Store) *authenticator {
 	t.Helper()
 	provider, err := oidc.NewProvider(context.Background(), oidcSrv.issuer)
 	require.NoError(t, err)
@@ -148,7 +149,7 @@ func newTestOAuthAuthenticator(t *testing.T, oidcSrv *testOIDCServer, allowedDom
 	sessionStore := sessions.NewCookieStore([]byte("test-secret-at-least-32-bytes-long"))
 	sessionStore.Options = &sessions.Options{Path: "/", MaxAge: 3600, HttpOnly: true}
 
-	return &authenticator{
+	auth := &authenticator{
 		oauthConfig: &oauth2.Config{
 			ClientID:     testOAuthClientID,
 			ClientSecret: "test-secret",
@@ -165,6 +166,10 @@ func newTestOAuthAuthenticator(t *testing.T, oidcSrv *testOIDCServer, allowedDom
 		devFrontendOrigin: "http://localhost:5173",
 		logger:            testLogger(),
 	}
+	if len(userStore) > 0 {
+		auth.userStore = userStore[0]
+	}
+	return auth
 }
 
 func saveOAuthStateSession(t *testing.T, auth *authenticator, w http.ResponseWriter, r *http.Request, state string) {
@@ -201,7 +206,7 @@ func TestNewAuthenticator_AllowedDomainHonorsEnvOverride(t *testing.T) {
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		AllowedDomain:  "example.com",
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "instawork.com", auth.allowedDomain)
 	assert.True(t, auth.isAllowedUser("alice@instawork.com", "instawork.com"))
@@ -297,6 +302,30 @@ func TestHandleCallback_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "alice@example.com", user.Email)
 	assert.Equal(t, "Alice Example", user.Name)
+}
+
+func TestHandleCallback_EnsureUser(t *testing.T) {
+	oidcSrv := newTestOIDCServer(t)
+	userStore := testAdminUserStore(t)
+	auth := newTestOAuthAuthenticator(t, oidcSrv, "example.com", userStore)
+	state := "test-oauth-state-ensure-user"
+
+	loginRec := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodGet, "/admin/auth/login", nil)
+	saveOAuthStateSession(t, auth, loginRec, loginReq, state)
+
+	cbRec := httptest.NewRecorder()
+	cbReq := httptest.NewRequest(http.MethodGet, "/admin/auth/callback?state="+state+"&code=auth-code-xyz", nil)
+	for _, c := range sessionCookies(t, loginRec) {
+		cbReq.AddCookie(c)
+	}
+	auth.handleCallback(cbRec, cbReq)
+	require.Equal(t, http.StatusFound, cbRec.Code)
+
+	got, err := userStore.GetUser(context.Background(), "alice@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, adminusers.RoleViewer, got.Role)
+	assert.Equal(t, "Alice Example", got.Name)
 }
 
 func TestHandleCallback_InvalidState(t *testing.T) {
@@ -449,7 +478,7 @@ func TestNewAuthenticator_DevBypassWithoutGoogleOAuth(t *testing.T) {
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		AllowedDomain:  "example.com",
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, auth.oauthConfig)
 	assert.True(t, auth.devBypass)
@@ -466,7 +495,7 @@ func TestNewAuthenticator_RequiresSessionSecretInProd(t *testing.T) {
 	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "")
 	_, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: false,
-	})
+	}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM_PROXY_ADMIN_SESSION_SECRET")
 }
