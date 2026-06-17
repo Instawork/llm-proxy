@@ -28,8 +28,8 @@ type ProxyKeyLookup interface {
 
 // Config controls POST /redact runtime behaviour.
 type Config struct {
-	MaxBodyBytes           int
-	AllowUnauthenticated   bool
+	MaxBodyBytes         int
+	AllowUnauthenticated bool
 }
 
 // Handler serves POST /redact.
