@@ -1,4 +1,4 @@
-module github.com/Instawork/llm-proxy-live
+module github.com/Instawork/llm-proxy/integration
 
 go 1.24.5
 

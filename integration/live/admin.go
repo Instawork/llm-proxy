@@ -20,32 +20,46 @@ func NewAdminClient(base string, timeout time.Duration) (*AdminClient, error) {
 }
 
 type KeyRecord struct {
-	Key          string `json:"key"`
-	Provider     string `json:"provider"`
-	Description  string `json:"description"`
-	Enabled      bool   `json:"enabled"`
-	RedactPII    *bool  `json:"redact_pii"`
-	RateLimitRPM int    `json:"rate_limit_rpm"`
+	Key              string `json:"key"`
+	Provider         string `json:"provider"`
+	Description      string `json:"description"`
+	Enabled          bool   `json:"enabled"`
+	RedactPII        *bool  `json:"redact_pii"`
+	RateLimitRPM     int    `json:"rate_limit_rpm"`
+	DailyCostLimit   int64  `json:"daily_cost_limit"`
 }
 
 type createKeyRequest struct {
-	Provider     string            `json:"provider"`
-	ActualKey    string            `json:"actual_key"`
-	Description  string            `json:"description,omitempty"`
-	RedactPII    *bool             `json:"redact_pii,omitempty"`
-	RateLimitRPM int               `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM int               `json:"rate_limit_tpm,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`
+	Provider       string            `json:"provider"`
+	ActualKey        string            `json:"actual_key"`
+	Description      string            `json:"description,omitempty"`
+	DailyCostLimit   int64             `json:"daily_cost_limit,omitempty"`
+	RedactPII        *bool             `json:"redact_pii,omitempty"`
+	RateLimitRPM     int               `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
+}
+
+type updateKeyRequest struct {
+	DailyCostLimit *int64 `json:"daily_cost_limit,omitempty"`
+	RateLimitRPM   *int   `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM   *int   `json:"rate_limit_tpm,omitempty"`
 }
 
 // FuzzCreateKeyRequest builds a key create payload for fuzz runs (dummy upstream key).
 func FuzzCreateKeyRequest(description string, rpm, tpm int) createKeyRequest {
+	return FuzzCreateKeyRequestWithCost(description, rpm, tpm, 0)
+}
+
+// FuzzCreateKeyRequestWithCost builds a key with optional daily_cost_limit cents (0 = unlimited).
+func FuzzCreateKeyRequestWithCost(description string, rpm, tpm int, dailyCostLimitCents int64) createKeyRequest {
 	return createKeyRequest{
-		Provider:     "openai",
-		ActualKey:    "fake-upstream-not-used",
-		Description:  description,
-		RateLimitRPM: rpm,
-		RateLimitTPM: tpm,
+		Provider:       "openai",
+		ActualKey:        "fake-upstream-not-used",
+		Description:      description,
+		RateLimitRPM:     rpm,
+		RateLimitTPM:     tpm,
+		DailyCostLimit:   dailyCostLimitCents,
 	}
 }
 
@@ -151,7 +165,29 @@ func (a *AdminClient) CreateKey(ctx context.Context, req createKeyRequest) (*Key
 		return nil, fmt.Errorf("POST /admin/api/keys status %d: %s", resp.StatusCode, truncate(string(data), 300))
 	}
 	var out KeyRecord
-	return &out, jsonDecode(data, &out)
+	if err := jsonDecode(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (a *AdminClient) UpdateKey(ctx context.Context, keyID string, req updateKeyRequest) (*KeyRecord, error) {
+	if err := a.DevLogin(ctx); err != nil {
+		return nil, err
+	}
+	path := "/admin/api/keys/" + encodeKeyPath(keyID)
+	resp, data, err := a.Do(ctx, http.MethodPatch, path, req, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("PATCH %s status %d: %s", path, resp.StatusCode, truncate(string(data), 300))
+	}
+	var out KeyRecord
+	if err := jsonDecode(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (a *AdminClient) DeleteKey(ctx context.Context, keyID string) error {

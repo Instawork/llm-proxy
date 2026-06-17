@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Instawork/llm-proxy-live/fuzz"
+	"github.com/Instawork/llm-proxy/integration/fuzz"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 	timeoutSec := flag.Int("timeout", 60, "HTTP timeout seconds")
 	seed := flag.Int64("seed", 0, "chaos seed (logged for repro)")
 	chaosRate := flag.Float64("chaos-rate", 0, "per-request X-LLM-Proxy-Fake-Chaos-Rate override")
-	costFile := flag.String("cost-file", "./logs/cost-tracking.jsonl", "cost tracking jsonl path")
+	costFile := flag.String("cost-file", "../logs/cost-tracking.jsonl", "cost tracking jsonl path (relative to integration/ when run via make fuzz)")
 	resetCost := flag.Bool("reset-cost-file", false, "truncate cost file before run")
 	reportJSON := flag.String("report-json", "", "write machine-readable report JSON")
 	flag.Parse()

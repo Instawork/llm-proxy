@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
 
 type StatusHistogram map[string]int
@@ -16,6 +17,7 @@ type ScenarioResult struct {
 }
 
 type Report struct {
+	mu                sync.Mutex
 	Seed              int64             `json:"seed"`
 	Scenarios         []ScenarioResult  `json:"scenarios"`
 	StatusHistogram   StatusHistogram   `json:"status_histogram"`
@@ -27,15 +29,31 @@ type Report struct {
 }
 
 func (r *Report) RecordStatus(code int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	key := fmt.Sprintf("%d", code)
 	if code == 0 {
 		key = "error"
+	}
+	if r.StatusHistogram == nil {
+		r.StatusHistogram = StatusHistogram{}
 	}
 	r.StatusHistogram[key]++
 }
 
 func (r *Report) RecordError(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.StatusHistogram == nil {
+		r.StatusHistogram = StatusHistogram{}
+	}
 	r.StatusHistogram[kind]++
+}
+
+func (r *Report) RecordDegraded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.DegradedResponses++
 }
 
 func (r *Report) AddScenario(res ScenarioResult) {

@@ -229,28 +229,20 @@ for i = 0, pairsCount - 1 do
     if rem < 0 then rem = 0 end
     return {0, 'minute', 'requests', limMinReq, rem, i, ttlMin}
   end
-  if limMinTok > 0 then
-    if not (minTok == 0) then
-      if (minTok + est > limMinTok) then
-        local rem = limMinTok - (minTok + est)
-        if rem < 0 then rem = 0 end
-        return {0, 'minute', 'tokens', limMinTok, rem, i, ttlMin}
-      end
-    end
+  if limMinTok > 0 and (minTok + est > limMinTok) then
+    local rem = limMinTok - (minTok + est)
+    if rem < 0 then rem = 0 end
+    return {0, 'minute', 'tokens', limMinTok, rem, i, ttlMin}
   end
   if limDayReq > 0 and (dayReq + 1 > limDayReq) then
     local rem = limDayReq - (dayReq + 1)
     if rem < 0 then rem = 0 end
     return {0, 'day', 'requests', limDayReq, rem, i, ttlDay}
   end
-  if limDayTok > 0 then
-    if not (dayTok == 0) then
-      if (dayTok + est > limDayTok) then
-        local rem = limDayTok - (dayTok + est)
-        if rem < 0 then rem = 0 end
-        return {0, 'day', 'tokens', limDayTok, rem, i, ttlDay}
-      end
-    end
+  if limDayTok > 0 and (dayTok + est > limDayTok) then
+    local rem = limDayTok - (dayTok + est)
+    if rem < 0 then rem = 0 end
+    return {0, 'day', 'tokens', limDayTok, rem, i, ttlDay}
   end
 end
 for i = 0, pairsCount - 1 do

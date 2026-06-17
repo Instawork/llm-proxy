@@ -1417,6 +1417,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
 	}
+	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
+		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder))
+	}
 
 	piiCfg := yamlConfig.Features.PIIRedact
 	redactAPICfg := yamlConfig.Features.RedactAPI

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Instawork/llm-proxy-live/live"
+	"github.com/Instawork/llm-proxy/integration/live"
 )
 
 type Runner struct {
@@ -35,6 +35,7 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	if r.cfg.ResetCostFile {
 		_ = ResetCostFile(r.cfg.CostFile)
 	}
+	r.ensureCircuitReady(ctx)
 	scenarios := ParseScenarioList(r.cfg.Scenario)
 	for _, name := range scenarios {
 		start := time.Now()
@@ -50,6 +51,24 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 		}
 	}
 	return r.report, nil
+}
+
+func (r *Runner) ensureCircuitReady(ctx context.Context) {
+	kh := newKeyHelper(r.admin)
+	key, err := kh.create(ctx, "fuzz-preflight", 10_000, 10_000_000)
+	if err != nil {
+		return
+	}
+	defer kh.cleanup(ctx)
+	zero := 0.0
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero, FakeOutcome: "success"})
+		if res.Status == http.StatusOK {
+			return
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func (r *Runner) runScenario(ctx context.Context, name string) (bool, string) {
@@ -196,21 +215,21 @@ func (r *Runner) rateLimitCancel5xx(ctx context.Context) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	one := 1.0
 	failures := 0
 	for i := 0; i < 5; i++ {
-		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &one})
+		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, FakeOutcome: "500"})
 		if res.Status >= 500 {
 			failures++
 		}
 	}
 	if failures == 0 {
-		return false, "expected 5xx from chaos-rate 1"
+		return false, "expected 5xx from fake outcome 500"
 	}
+	time.Sleep(11 * time.Second)
 	zero := 0.0
 	ok := 0
 	for i := 0; i < 5; i++ {
-		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero})
+		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero, FakeOutcome: "success"})
 		if res.Status == http.StatusOK {
 			ok++
 		}
@@ -293,7 +312,7 @@ func (r *Runner) costFuzzyModel(ctx context.Context) (bool, string) {
 	before, _ := CountLines(r.cfg.CostFile)
 	zero := 0.0
 	res := r.proxy.OpenAIChat(ctx, ChatOpts{
-		APIKey: key, Model: "gpt-4o-mini-2024-07-18", ChaosRate: &zero, OutputTok: 8,
+		APIKey: key, Model: "gpt4o-mini", ChaosRate: &zero, OutputTok: 8,
 	})
 	if res.Status != http.StatusOK {
 		return false, fmt.Sprintf("status %d", res.Status)
@@ -344,9 +363,12 @@ func (r *Runner) costNoCharge429(ctx context.Context) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	before, _ := CountLines(r.cfg.CostFile)
 	zero := 0.0
-	_ = r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero})
+	first := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero})
+	if first.Status != http.StatusOK {
+		return false, fmt.Sprintf("first request want 200 got %d", first.Status)
+	}
+	before, _ := CountLines(r.cfg.CostFile)
 	res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero})
 	if res.Status != http.StatusTooManyRequests {
 		return false, fmt.Sprintf("expected 429 got %d", res.Status)

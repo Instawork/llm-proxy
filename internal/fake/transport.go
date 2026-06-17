@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
@@ -53,7 +54,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	outcome := t.chaos.Pick(parseChaosRate(req))
+	outcome := parseOutcome(req)
+	if outcome < 0 {
+		outcome = t.chaos.Pick(parseChaosRate(req))
+	}
 	switch outcome {
 	case OutcomeConnError:
 		return nil, errFakeConn
@@ -143,6 +147,27 @@ func parseChaosRate(req *http.Request) float64 {
 		return -1
 	}
 	return v
+}
+
+func parseOutcome(req *http.Request) Outcome {
+	hdr := strings.TrimSpace(strings.ToLower(req.Header.Get(HeaderOutcome)))
+	switch hdr {
+	case "", "success", "ok", "200":
+		if hdr == "" {
+			return Outcome(-1)
+		}
+		return OutcomeSuccess
+	case "500":
+		return Outcome500
+	case "503":
+		return Outcome503
+	case "429":
+		return Outcome429
+	case "conn", "conn-error", "connection":
+		return OutcomeConnError
+	default:
+		return Outcome(-1)
+	}
 }
 
 func parseOutputTokens(req *http.Request, fallback int) int {

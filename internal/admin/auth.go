@@ -213,10 +213,18 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	session.Values[sessionUserPicture] = devUserPicture("Dev User")
 
 	if a.userStore != nil {
-		if _, _, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User")); err != nil {
+		user, created, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User"))
+		if err != nil {
 			a.logger.Error("admin auth: dev ensure user failed", "error", err, "email", email)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		if user.Role == adminusers.RoleViewer && (created || isDefaultDevBypassEmail(email)) {
+			if err := a.userStore.SetRole(r.Context(), email, adminusers.RoleEditor); err != nil {
+				a.logger.Error("admin auth: dev promote to editor failed", "error", err, "email", email)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 
@@ -405,6 +413,10 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 		}
 	}
 	return resp, nil
+}
+
+func isDefaultDevBypassEmail(email string) bool {
+	return strings.EqualFold(strings.TrimSpace(email), "dev@example.com")
 }
 
 func devUserPicture(name string) string {

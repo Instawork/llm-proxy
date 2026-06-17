@@ -342,3 +342,16 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	r.MergeHistory(adminrollup.MetricCost, snap)
 	return snap
 }
+
+// KeySpendUSD returns recorded spend for a masked iw: key in the current UTC day.
+func (r *Recorder) KeySpendUSD(keyID string) float64 {
+	if r == nil || keyID == "" {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if ks := r.byKey[keyID]; ks != nil {
+		return ks.SpendUSD
+	}
+	return 0
+}

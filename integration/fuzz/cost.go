@@ -80,9 +80,8 @@ func RoundUpCost(v float64) float64 {
 func ExpectedOpenAICost(inputTokens, outputTokens int) float64 {
 	const inputPerM = 0.15
 	const outputPerM = 0.60
-	in := RoundUpCost(float64(inputTokens) / 1_000_000 * inputPerM)
-	out := RoundUpCost(float64(outputTokens) / 1_000_000 * outputPerM)
-	return RoundUpCost(in + out)
+	raw := float64(inputTokens)/1_000_000*inputPerM + float64(outputTokens)/1_000_000*outputPerM
+	return RoundUpCost(raw)
 }
 
 func SumCost(recs []CostRecord) float64 {

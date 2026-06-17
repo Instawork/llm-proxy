@@ -313,5 +313,5 @@ func TestHandleDevLoginEnsuresUser(t *testing.T) {
 
 	user, err := h.deps.UserStore.GetUser(context.Background(), "fresh@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, adminusers.RoleViewer, user.Role)
+	assert.Equal(t, adminusers.RoleEditor, user.Role)
 }

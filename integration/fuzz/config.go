@@ -34,11 +34,11 @@ func AllScenarios() []string {
 		"cost-no-charge-degraded",
 		"cost-concurrent-async",
 		"cost-admin-stats",
+		"latency-timeout",
+		"circuit-transient-retry",
 		"circuit-random-trip",
 		"circuit-recovery",
 		"circuit-mixed",
-		"circuit-transient-retry",
-		"latency-timeout",
 	}
 }
 

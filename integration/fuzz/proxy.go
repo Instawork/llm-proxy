@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Instawork/llm-proxy-live/live"
+	"github.com/Instawork/llm-proxy/integration/live"
 )
 
 type Proxy struct {
@@ -36,6 +36,7 @@ type ChatOpts struct {
 	Model       string
 	Content     string
 	ChaosRate   *float64
+	FakeOutcome string
 	OutputTok   int
 	LatencyMS   int
 	TestMode    string
@@ -87,6 +88,9 @@ func (p *Proxy) applyFakeHeaders(req *http.Request, opts ChatOpts) {
 	if opts.LatencyMS > 0 {
 		req.Header.Set("X-LLM-Proxy-Fake-Latency-Ms", strconv.Itoa(opts.LatencyMS))
 	}
+	if opts.FakeOutcome != "" {
+		req.Header.Set("X-LLM-Proxy-Fake-Outcome", opts.FakeOutcome)
+	}
 	if opts.TestMode != "" {
 		req.Header.Set("X-LLM-Proxy-Test-Mode", opts.TestMode)
 	}
@@ -109,7 +113,7 @@ func (p *Proxy) do(req *http.Request) ChatResult {
 	if p.report != nil {
 		p.report.RecordStatus(resp.StatusCode)
 		if strings.Contains(string(data), degradedSignal) {
-			p.report.DegradedResponses++
+			p.report.RecordDegraded()
 		}
 	}
 	return ChatResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: string(data)}
@@ -154,6 +158,15 @@ func newKeyHelper(admin *live.AdminClient) *keyHelper {
 
 func (k *keyHelper) create(ctx context.Context, desc string, rpm, tpm int) (string, error) {
 	rec, err := k.admin.CreateKey(ctx, live.FuzzCreateKeyRequest(desc, rpm, tpm))
+	if err != nil {
+		return "", err
+	}
+	k.keys = append(k.keys, rec.Key)
+	return rec.Key, nil
+}
+
+func (k *keyHelper) createWithCost(ctx context.Context, desc string, rpm, tpm int, dailyCostLimitCents int64) (string, error) {
+	rec, err := k.admin.CreateKey(ctx, live.FuzzCreateKeyRequestWithCost(desc, rpm, tpm, dailyCostLimitCents))
 	if err != nil {
 		return "", err
 	}

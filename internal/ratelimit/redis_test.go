@@ -214,6 +214,31 @@ func TestRedisLimiter_DynamicPerKeyOverride(t *testing.T) {
 	assert.False(t, res.Allowed)
 }
 
+func TestRedisLimiter_PerKeyTPMBlocksFirstRequestWhenEstimateExceedsLimit(t *testing.T) {
+	mr := miniredis.RunT(t)
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits = config.LimitsConfig{RequestsPerMinute: 1000, TokensPerMinute: 0}
+	cfg.Features.RateLimiting.Backend = "redis"
+	cfg.Features.RateLimiting.Redis = &config.RedisConfig{Address: mr.Addr()}
+
+	lim, err := NewRedisLimiter(cfg)
+	require.NoError(t, err)
+	ov, ok := lim.(PerKeyOverridable)
+	require.True(t, ok)
+	ov.SetPerKeyOverride(func(keyID string) (config.LimitsConfig, bool) {
+		if keyID == "iw:tpm-cap" {
+			return config.LimitsConfig{TokensPerMinute: 50}, true
+		}
+		return config.LimitsConfig{}, false
+	})
+
+	scope := ScopeKeys{APIKey: "iw:tpm-cap"}
+	now := time.Now()
+	res, err := lim.CheckAndReserve(context.Background(), "1", scope, 4800, now)
+	require.NoError(t, err)
+	assert.False(t, res.Allowed, "first request should be blocked when est tokens exceed per-key TPM")
+}
+
 func TestRedisLimiter_SnapshotReportsLiveCounters(t *testing.T) {
 	cfg := baseCfg()
 	lim, _ := newRedisLimiterForTest(t, cfg)

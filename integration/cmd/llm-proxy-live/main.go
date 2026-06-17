@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Instawork/llm-proxy-live/live"
+	"github.com/Instawork/llm-proxy/integration/live"
 )
 
 func main() {
