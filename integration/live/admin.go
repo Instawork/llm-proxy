@@ -38,6 +38,17 @@ type createKeyRequest struct {
 	Tags         map[string]string `json:"tags,omitempty"`
 }
 
+// FuzzCreateKeyRequest builds a key create payload for fuzz runs (dummy upstream key).
+func FuzzCreateKeyRequest(description string, rpm, tpm int) createKeyRequest {
+	return createKeyRequest{
+		Provider:     "openai",
+		ActualKey:    "fake-upstream-not-used",
+		Description:  description,
+		RateLimitRPM: rpm,
+		RateLimitTPM: tpm,
+	}
+}
+
 func (a *AdminClient) Me(ctx context.Context) (map[string]any, error) {
 	if err := a.DevLogin(ctx); err != nil {
 		return nil, err
@@ -78,6 +89,21 @@ func (a *AdminClient) RateLimits(ctx context.Context) (map[string]any, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET /admin/api/rate-limits status %d", resp.StatusCode)
+	}
+	var out map[string]any
+	return out, jsonDecode(data, &out)
+}
+
+func (a *AdminClient) CircuitActivity(ctx context.Context) (map[string]any, error) {
+	if err := a.DevLogin(ctx); err != nil {
+		return nil, err
+	}
+	resp, data, err := a.Do(ctx, http.MethodGet, "/admin/api/circuit-activity", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /admin/api/circuit-activity status %d", resp.StatusCode)
 	}
 	var out map[string]any
 	return out, jsonDecode(data, &out)
@@ -268,3 +294,9 @@ func piiLatestRecentEntityTotal(stats map[string]any) float64 {
 func elapsed(start time.Time) string {
 	return time.Since(start).Round(time.Millisecond).String()
 }
+
+// CostStatsAvailable is exported for fuzz/integration helpers.
+func CostStatsAvailable(stats map[string]any) bool { return costStatsAvailable(stats) }
+
+// CostStatsSpendToday is exported for fuzz/integration helpers.
+func CostStatsSpendToday(stats map[string]any) float64 { return costStatsSpendToday(stats) }

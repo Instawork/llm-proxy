@@ -25,6 +25,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/coststats"
+	"github.com/Instawork/llm-proxy/internal/fake"
 	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/pii"
@@ -455,6 +456,52 @@ func isTestModeAllowed(yc *config.YAMLConfig) bool {
 	return yc.Features.CircuitBreaker.Enabled &&
 		yc.Features.CircuitBreaker.TestModeEnabled &&
 		os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1"
+}
+
+// isFakeModeAllowed gates global fake-upstream responses. Both YAML opt-in
+// and LLM_PROXY_ALLOW_FAKE_MODE=1 are required.
+func isFakeModeAllowed(yc *config.YAMLConfig) bool {
+	return yc.Features.FakeUpstream.Enabled &&
+		os.Getenv("LLM_PROXY_ALLOW_FAKE_MODE") == "1"
+}
+
+func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
+	fu := yc.Features.FakeUpstream
+	est := providers.YAMLConfigEstimationAdapter{
+		MaxSampleBytes:        yc.Features.RateLimiting.Estimation.MaxSampleBytes,
+		BytesPerToken:         yc.Features.RateLimiting.Estimation.BytesPerToken,
+		CharsPerToken:         yc.Features.RateLimiting.Estimation.CharsPerToken,
+		ProviderCharsPerToken: yc.Features.RateLimiting.Estimation.ProviderCharsPerToken,
+	}
+	if est.MaxSampleBytes == 0 {
+		est.MaxSampleBytes = 200000
+	}
+	if est.BytesPerToken == 0 {
+		est.BytesPerToken = 4
+	}
+	if est.CharsPerToken == 0 {
+		est.CharsPerToken = 4
+	}
+	return fake.Config{
+		Enabled:          allowed,
+		ChaosFailureRate: fu.ChaosFailureRate,
+		ChaosSeed:        fu.ChaosSeed,
+		LatencyMS:        fu.LatencyMS,
+		JitterMS:         fu.JitterMS,
+		Estimation:       est,
+	}
+}
+
+func wrapProviderWithFake(
+	p interface {
+		WrapTransport(func(http.RoundTripper) http.RoundTripper)
+	},
+	providerName string,
+	cfg fake.Config,
+) {
+	p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
+		return fake.NewTransport(inner, providerName, cfg)
+	})
 }
 
 // circuitConfigFromYAML converts the YAML circuit breaker config into the
@@ -1297,6 +1344,39 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
 
+	fakeAllowed := isFakeModeAllowed(yamlConfig)
+	fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
+	if fakeAllowed {
+		logger.Warn("🎭 Fake upstream: ENABLED — synthetic LLM responses, no real provider calls",
+			"chaos_failure_rate", yamlConfig.Features.FakeUpstream.ChaosFailureRate,
+		)
+	} else if yamlConfig.Features.FakeUpstream.Enabled {
+		logger.Warn(
+			"🎭 Fake upstream: requested in YAML but LLM_PROXY_ALLOW_FAKE_MODE is not set; fake transport NOT installed",
+		)
+	}
+
+	type namedProvider struct {
+		name string
+		p    interface {
+			WrapTransport(func(http.RoundTripper) http.RoundTripper)
+		}
+	}
+	namedProviders := []namedProvider{
+		{"openai", openAIProvider},
+		{"anthropic", anthropicProvider},
+		{"gemini", geminiProvider},
+	}
+	if bedrockProvider != nil {
+		namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
+	}
+
+	if fakeAllowed {
+		for _, np := range namedProviders {
+			wrapProviderWithFake(np.p, np.name, fakeCfg)
+		}
+	}
+
 	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
 		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, isTestModeAllowed(yamlConfig))
@@ -1319,22 +1399,6 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			opts = append(opts, circuit.WithActivityRecorder(globalCircuitStatsRecorder))
 		}
 
-		// Pair each provider with its canonical name so the wiring loop
-		// iterates the same set of names that /health queries.
-		type namedProvider struct {
-			name string
-			p    interface {
-				WrapTransport(func(http.RoundTripper) http.RoundTripper)
-			}
-		}
-		namedProviders := []namedProvider{
-			{"openai", openAIProvider},
-			{"anthropic", anthropicProvider},
-			{"gemini", geminiProvider},
-		}
-		if bedrockProvider != nil {
-			namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
-		}
 		for _, np := range namedProviders {
 			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, opts...)
 		}
