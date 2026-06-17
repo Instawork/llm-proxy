@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -88,7 +89,8 @@ func runCommand(command string, args []string) {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	switch command {
 	case "set-role":
@@ -125,12 +127,16 @@ func handleSetRole(ctx context.Context, store *adminusers.Store, email, roleStr 
 
 	_, getErr := store.GetUser(ctx, email)
 	if getErr != nil {
-		if _, err := store.CreateUser(ctx, email, role); err != nil {
-			logger.Error("failed to create user", "error", err)
-			os.Exit(1)
+		if errors.Is(getErr, adminusers.ErrUserNotFound) {
+			if _, err := store.CreateUser(ctx, email, role); err != nil {
+				logger.Error("failed to create user", "error", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Created %s with role %s\n", strings.ToLower(email), role)
+			return
 		}
-		fmt.Printf("✅ Created %s with role %s\n", strings.ToLower(email), role)
-		return
+		logger.Error("failed to get user", "error", getErr)
+		os.Exit(1)
 	}
 
 	if err := store.SetRole(ctx, email, role); err != nil {

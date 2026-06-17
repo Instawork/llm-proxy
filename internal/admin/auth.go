@@ -379,14 +379,16 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 
 	role := string(adminusers.RoleViewer)
 	if a.userStore != nil {
-		if u, err := a.userStore.GetUser(r.Context(), email); err == nil {
-			role = string(u.Role)
-			if u.Name != "" {
-				name = u.Name
-			}
-			if u.Picture != "" {
-				picture = u.Picture
-			}
+		u, err := a.userStore.GetUser(r.Context(), email)
+		if err != nil {
+			return nil, fmt.Errorf("user lookup failed: %w", err)
+		}
+		role = string(u.Role)
+		if u.Name != "" {
+			name = u.Name
+		}
+		if u.Picture != "" {
+			picture = u.Picture
 		}
 	}
 

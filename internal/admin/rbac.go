@@ -83,7 +83,7 @@ func (h *handler) editorMaxDailyCostCents() int64 {
 func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {
 	role, err := h.auth.userRole(r)
 	if err != nil {
-		return nil
+		return fmt.Errorf("unable to resolve user role: %w", err)
 	}
 	if role != adminusers.RoleEditor {
 		return nil

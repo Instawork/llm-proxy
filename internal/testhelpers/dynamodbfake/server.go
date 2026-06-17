@@ -86,7 +86,11 @@ func (f *Server) InjectItem(table, pk string, item map[string]any) {
 	if f.tables[table] == nil {
 		f.tables[table] = make(map[string]any)
 	}
-	f.tables[table][pk] = item
+	storageKey := storageKeyFromAttrs(item)
+	if storageKey == "" {
+		storageKey = pk
+	}
+	f.tables[table][storageKey] = item
 }
 
 func (f *Server) handle(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -140,7 +141,7 @@ func (h *handler) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.guardLastAdminDemotion(r, email, role); err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		writeLastAdminGuardError(w, h, err, "update user")
 		return
 	}
 
@@ -183,7 +184,7 @@ func (h *handler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.guardLastAdminRemoval(r, email); err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		writeLastAdminGuardError(w, h, err, "delete user")
 		return
 	}
 
@@ -209,7 +210,10 @@ func (h *handler) guardLastAdminDemotion(r *http.Request, email string, newRole 
 func (h *handler) guardLastAdminRemoval(r *http.Request, email string) error {
 	target, err := h.deps.UserStore.GetUser(r.Context(), email)
 	if err != nil {
-		return nil
+		if errors.Is(err, adminusers.ErrUserNotFound) {
+			return nil
+		}
+		return err
 	}
 	if target.Role != adminusers.RoleAdmin {
 		return nil
@@ -230,4 +234,13 @@ type lastAdminError struct{}
 
 func (e *lastAdminError) Error() string {
 	return "cannot remove the last admin"
+}
+
+func writeLastAdminGuardError(w http.ResponseWriter, h *handler, err error, action string) {
+	if errors.Is(err, errLastAdmin) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	h.deps.Logger.Error("admin: guard last admin failed", "action", action, "error", err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to " + action})
 }

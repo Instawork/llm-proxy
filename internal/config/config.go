@@ -942,6 +942,10 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
+	if c.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents < 0 {
+		return fmt.Errorf("invalid admin_dashboard configuration: editor_limits.max_daily_cost_limit_cents cannot be negative")
+	}
+
 	return nil
 }
 

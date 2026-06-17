@@ -23,6 +23,9 @@ const (
 	userPKP   = "USER#"
 )
 
+// ErrUserNotFound is returned when a user profile row does not exist.
+var ErrUserNotFound = errors.New("user not found")
+
 // User is an admin dashboard user record.
 type User struct {
 	Email       string    `json:"email"`
@@ -70,6 +73,10 @@ type StoreConfig struct {
 
 // NewStore creates a new admin users store.
 func NewStore(cfg StoreConfig) (*Store, error) {
+	if strings.TrimSpace(cfg.TableName) == "" {
+		return nil, fmt.Errorf("table name is required")
+	}
+
 	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -134,6 +141,9 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 		s.logger.Debug("admin users table already exists", "table", s.tableName)
 		return nil
 	}
+	if !isResourceNotFound(err) {
+		return fmt.Errorf("describe table failed: %w", err)
+	}
 
 	s.logger.Info("Creating DynamoDB table for admin users", "table", s.tableName)
 
@@ -157,6 +167,11 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 	return waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(s.tableName),
 	}, 2*time.Minute)
+}
+
+func isResourceNotFound(err error) bool {
+	var notFound *types.ResourceNotFoundException
+	return errors.As(err, &notFound)
 }
 
 func normalizeEmail(email string) (string, error) {
@@ -183,7 +198,7 @@ func (s *Store) getProfileItem(ctx context.Context, email string) (*userItem, er
 		return nil, err
 	}
 	if out.Item == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, ErrUserNotFound
 	}
 	var item userItem
 	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
@@ -238,6 +253,9 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 		}
 		return itemToUser(&item), false, nil
 	}
+	if !errors.Is(getErr, ErrUserNotFound) {
+		return User{}, false, getErr
+	}
 
 	item := userItem{
 		PK:          userPK(email),
@@ -261,7 +279,25 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 	}); err != nil {
 		var cond *types.ConditionalCheckFailedException
 		if errors.As(err, &cond) {
-			return s.EnsureUser(ctx, email, name, picture)
+			existing, getErr := s.getProfileItem(ctx, email)
+			if getErr != nil {
+				return User{}, false, getErr
+			}
+			item.Role = existing.Role
+			item.CreatedAt = existing.CreatedAt
+			item.UpdatedAt = now
+			item.LastLoginAt = now
+			av, err := attributevalue.MarshalMap(item)
+			if err != nil {
+				return User{}, false, err
+			}
+			if _, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
+				TableName: aws.String(s.tableName),
+				Item:      av,
+			}); err != nil {
+				return User{}, false, err
+			}
+			return itemToUser(&item), false, nil
 		}
 		return User{}, false, err
 	}
@@ -287,7 +323,8 @@ func (s *Store) CreateUser(ctx context.Context, email string, role Role) (User, 
 	if err != nil {
 		return User{}, err
 	}
-	if _, err := ParseRole(string(role)); err != nil {
+	parsedRole, err := ParseRole(string(role))
+	if err != nil {
 		return User{}, err
 	}
 
@@ -296,7 +333,7 @@ func (s *Store) CreateUser(ctx context.Context, email string, role Role) (User, 
 		PK:        userPK(email),
 		SK:        profileSK,
 		Email:     email,
-		Role:      string(role),
+		Role:      string(parsedRole),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -325,7 +362,8 @@ func (s *Store) SetRole(ctx context.Context, email string, role Role) error {
 	if err != nil {
 		return err
 	}
-	if _, err := ParseRole(string(role)); err != nil {
+	parsedRole, err := ParseRole(string(role))
+	if err != nil {
 		return err
 	}
 
@@ -341,7 +379,7 @@ func (s *Store) SetRole(ctx context.Context, email string, role Role) error {
 			"#role": "role",
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":role":       &types.AttributeValueMemberS{Value: string(role)},
+			":role":       &types.AttributeValueMemberS{Value: string(parsedRole)},
 			":updated_at": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
 		},
 		ConditionExpression: aws.String("attribute_exists(pk)"),
