@@ -87,6 +87,16 @@ func (r *Runner) runScenario(ctx context.Context, name string) (bool, string) {
 		return r.costJSONLCount(ctx)
 	case "cost-token-math":
 		return r.costTokenMath(ctx)
+	case "cost-cache-token-no-inflation":
+		return r.costCacheTokenNoInflation(ctx)
+	case "ratelimit-key-rpd":
+		return r.rateLimitKeyRPD(ctx)
+	case "pii-presidio-redaction":
+		return r.piiPresidioRedaction(ctx)
+	case "pii-wire-restore-email":
+		return r.piiWireRestoreEmail(ctx)
+	case "pii-wire-seal-ssn":
+		return r.piiWireSealSSN(ctx)
 	case "cost-fuzzy-model":
 		return r.costFuzzyModel(ctx)
 	case "cost-unknown-model":
@@ -99,12 +109,42 @@ func (r *Runner) runScenario(ctx context.Context, name string) (bool, string) {
 		return r.costConcurrentAsync(ctx)
 	case "cost-admin-stats":
 		return r.costAdminStats(ctx)
+	case "cost-limit-zero-unlimited":
+		return r.costLimitZeroUnlimited(ctx)
+	case "cost-limit-blocks-second":
+		return r.costLimitBlocksSecondRequest(ctx)
+	case "cost-limit-allows-under":
+		return r.costLimitAllowsUnderCap(ctx)
+	case "cost-limit-no-charge-blocked":
+		return r.costLimitNoChargeWhenBlocked(ctx)
+	case "cost-limit-isolated-keys":
+		return r.costLimitIsolatedKeys(ctx)
+	case "cost-limit-admin-by-key":
+		return r.costLimitAdminByKeyStats(ctx)
+	case "cost-limit-update-raises":
+		return r.costLimitUpdateRaisesCap(ctx)
+	case "cost-limit-update-removes":
+		return r.costLimitUpdateRemovesCap(ctx)
+	case "cost-limit-concurrent":
+		return r.costLimitConcurrentBoundary(ctx)
+	case "cost-limit-atomicity-stress":
+		return r.costLimitAtomicityStress(ctx)
+	case "ratelimit-atomicity-stress":
+		return r.rateLimitAtomicityStress(ctx)
+	case "cost-limit-create-persists":
+		return r.costLimitCreatePersistsLimit(ctx)
 	case "circuit-random-trip":
 		return r.circuitRandomTrip(ctx)
 	case "circuit-recovery":
 		return r.circuitRecovery(ctx)
 	case "circuit-mixed":
 		return r.circuitMixed(ctx)
+	case "circuit-per-model-isolation":
+		return r.circuitPerModelIsolation(ctx)
+	case "circuit-half-open-recover":
+		return r.circuitHalfOpenRecovers(ctx)
+	case "circuit-half-open-reopen":
+		return r.circuitHalfOpenReopens(ctx)
 	case "circuit-transient-retry":
 		return r.circuitTransientRetry(ctx)
 	case "latency-timeout":
@@ -146,6 +186,58 @@ func (r *Runner) rateLimitKeyRPM(ctx context.Context) (bool, string) {
 		return false, "expected some 429 responses"
 	}
 	return true, fmt.Sprintf("ok=%d denied=%d", ok, denied)
+}
+
+// rateLimitAtomicityStress slams a single RPM-limited key with far more
+// parallel requests than the limit, proving the fixed-window counter's
+// increment-and-check is atomic. The limiter uses a per-minute fixed window, so
+// the exact invariant is: admitted requests must never exceed limit×(minute
+// windows the burst touched). A non-atomic increment would let a thundering
+// herd all observe count<limit simultaneously and overshoot that bound. TPM is
+// set arbitrarily high so RPM is the only binding constraint, and a fresh key
+// starts the window at zero.
+func (r *Runner) rateLimitAtomicityStress(ctx context.Context) (bool, string) {
+	kh := newKeyHelper(r.admin)
+	defer kh.cleanup(ctx)
+	const limit = 25
+	key, err := kh.create(ctx, "fuzz-rl-atomic", limit, 500_000_000)
+	if err != nil {
+		return false, err.Error()
+	}
+	zero := 0.0
+	const fired = 600
+	const workers = 96
+	start := time.Now()
+	results := r.proxy.Burst(ctx, fired, workers, func(c context.Context) ChatResult {
+		return r.proxy.OpenAIChat(c, ChatOpts{APIKey: key, ChaosRate: &zero})
+	})
+	end := time.Now()
+	// Distinct per-minute windows the burst spanned (≥1). Admission may reset
+	// at each boundary, so the cap is limit×windows.
+	windows := int(end.Truncate(time.Minute).Sub(start.Truncate(time.Minute))/time.Minute) + 1
+	maxAdmit := limit * windows
+
+	ok, denied, other := 0, 0, 0
+	for _, res := range results {
+		switch res.Status {
+		case http.StatusOK:
+			ok++
+		case http.StatusTooManyRequests:
+			denied++
+		default:
+			other++
+		}
+	}
+	if other != 0 {
+		return false, fmt.Sprintf("unexpected non-200/429 responses other=%d (ok=%d denied=%d fired=%d)", other, ok, denied, fired)
+	}
+	if ok < limit {
+		return false, fmt.Sprintf("expected to fill at least one window's limit ok=%d limit=%d", ok, limit)
+	}
+	if ok > maxAdmit {
+		return false, fmt.Sprintf("NON-ATOMIC RPM: admitted ok=%d > limit*windows=%d (limit=%d windows=%d denied=%d fired=%d) — counter not atomic", ok, maxAdmit, limit, windows, denied, fired)
+	}
+	return true, fmt.Sprintf("atomic RPM under load: fired=%d ok=%d denied=%d limit=%d windows=%d (cap=%d) workers=%d", fired, ok, denied, limit, windows, maxAdmit, workers)
 }
 
 func (r *Runner) rateLimitKeyTPM(ctx context.Context) (bool, string) {

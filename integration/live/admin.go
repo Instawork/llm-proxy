@@ -20,31 +20,38 @@ func NewAdminClient(base string, timeout time.Duration) (*AdminClient, error) {
 }
 
 type KeyRecord struct {
-	Key              string `json:"key"`
-	Provider         string `json:"provider"`
-	Description      string `json:"description"`
-	Enabled          bool   `json:"enabled"`
-	RedactPII        *bool  `json:"redact_pii"`
-	RateLimitRPM     int    `json:"rate_limit_rpm"`
-	DailyCostLimit   int64  `json:"daily_cost_limit"`
+	Key            string `json:"key"`
+	Provider       string `json:"provider"`
+	Description    string `json:"description"`
+	Enabled        bool   `json:"enabled"`
+	RedactPII      *bool  `json:"redact_pii"`
+	RateLimitRPM   int    `json:"rate_limit_rpm"`
+	DailyCostLimit int64  `json:"daily_cost_limit"`
 }
 
 type createKeyRequest struct {
 	Provider       string            `json:"provider"`
-	ActualKey        string            `json:"actual_key"`
-	Description      string            `json:"description,omitempty"`
-	DailyCostLimit   int64             `json:"daily_cost_limit,omitempty"`
-	RedactPII        *bool             `json:"redact_pii,omitempty"`
-	RateLimitRPM     int               `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
-	Tags             map[string]string `json:"tags,omitempty"`
+	ActualKey      string            `json:"actual_key"`
+	Description    string            `json:"description,omitempty"`
+	DailyCostLimit int64             `json:"daily_cost_limit,omitempty"`
+	RedactPII      *bool             `json:"redact_pii,omitempty"`
+	RateLimitRPM   int               `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM   int               `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD   int               `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD   int               `json:"rate_limit_tpd,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
 }
 
 type updateKeyRequest struct {
 	DailyCostLimit *int64 `json:"daily_cost_limit,omitempty"`
 	RateLimitRPM   *int   `json:"rate_limit_rpm,omitempty"`
 	RateLimitTPM   *int   `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD   *int   `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD   *int   `json:"rate_limit_tpd,omitempty"`
 }
+
+// UpdateKeyRequest is the PATCH body for /admin/api/keys/{key}.
+type UpdateKeyRequest = updateKeyRequest
 
 // FuzzCreateKeyRequest builds a key create payload for fuzz runs (dummy upstream key).
 func FuzzCreateKeyRequest(description string, rpm, tpm int) createKeyRequest {
@@ -55,12 +62,28 @@ func FuzzCreateKeyRequest(description string, rpm, tpm int) createKeyRequest {
 func FuzzCreateKeyRequestWithCost(description string, rpm, tpm int, dailyCostLimitCents int64) createKeyRequest {
 	return createKeyRequest{
 		Provider:       "openai",
-		ActualKey:        "fake-upstream-not-used",
-		Description:      description,
-		RateLimitRPM:     rpm,
-		RateLimitTPM:     tpm,
-		DailyCostLimit:   dailyCostLimitCents,
+		ActualKey:      "fake-upstream-not-used",
+		Description:    description,
+		RateLimitRPM:   rpm,
+		RateLimitTPM:   tpm,
+		DailyCostLimit: dailyCostLimitCents,
 	}
+}
+
+// FuzzCreateKeyRequestWithDaily builds a key with per-day request/token caps
+// (rpd/tpd; 0 = unlimited) alongside the per-minute caps.
+func FuzzCreateKeyRequestWithDaily(description string, rpm, tpm, rpd, tpd int) createKeyRequest {
+	req := FuzzCreateKeyRequest(description, rpm, tpm)
+	req.RateLimitRPD = rpd
+	req.RateLimitTPD = tpd
+	return req
+}
+
+// FuzzCreateKeyRequestWithPII builds a key with per-key PII redaction override.
+func FuzzCreateKeyRequestWithPII(description string, rpm, tpm int, redactPII bool) createKeyRequest {
+	req := FuzzCreateKeyRequest(description, rpm, tpm)
+	req.RedactPII = &redactPII
+	return req
 }
 
 func (a *AdminClient) Me(ctx context.Context) (map[string]any, error) {
@@ -163,6 +186,25 @@ func (a *AdminClient) CreateKey(ctx context.Context, req createKeyRequest) (*Key
 	}
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("POST /admin/api/keys status %d: %s", resp.StatusCode, truncate(string(data), 300))
+	}
+	var out KeyRecord
+	if err := jsonDecode(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (a *AdminClient) GetKey(ctx context.Context, keyID string) (*KeyRecord, error) {
+	if err := a.DevLogin(ctx); err != nil {
+		return nil, err
+	}
+	path := "/admin/api/keys/" + encodeKeyPath(keyID)
+	resp, data, err := a.Do(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s status %d: %s", path, resp.StatusCode, truncate(string(data), 300))
 	}
 	var out KeyRecord
 	if err := jsonDecode(data, &out); err != nil {
@@ -296,7 +338,7 @@ func piiLatestRecentEntry(stats map[string]any) map[string]any {
 	if !ok || len(recent) == 0 {
 		return nil
 	}
-	entry, ok := recent[len(recent)-1].(map[string]any)
+	entry, ok := recent[0].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -325,6 +367,17 @@ func piiLatestRecentEntityTotal(stats map[string]any) float64 {
 	default:
 		return 0
 	}
+}
+
+// Exported helpers for fuzz/integration callers reading /admin/api/pii stats.
+
+func PIIStatsScanned(stats map[string]any) float64       { return piiStatsScanned(stats) }
+func PIIStatsWithPII(stats map[string]any) float64       { return piiStatsWithPII(stats) }
+func PIIStatsAvailable(stats map[string]any) bool        { return piiStatsAvailable(stats) }
+func PIIStatsRecentCount(stats map[string]any) int       { return piiStatsRecentCount(stats) }
+func PIILatestRecentOutcome(stats map[string]any) string { return piiLatestRecentOutcome(stats) }
+func PIILatestRecentEntityTotal(stats map[string]any) float64 {
+	return piiLatestRecentEntityTotal(stats)
 }
 
 func elapsed(start time.Time) string {

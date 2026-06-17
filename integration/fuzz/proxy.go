@@ -32,15 +32,17 @@ func NewProxy(base string, timeout time.Duration, report *Report) *Proxy {
 }
 
 type ChatOpts struct {
-	APIKey      string
-	Model       string
-	Content     string
-	ChaosRate   *float64
-	FakeOutcome string
-	OutputTok   int
-	LatencyMS   int
-	TestMode    string
-	MaxTokens   int
+	APIKey               string
+	Model                string
+	Content              string
+	ChaosRate            *float64
+	FakeOutcome          string
+	OutputTok            int
+	CachedTokens         int
+	FakeEchoPlaceholders bool
+	LatencyMS            int
+	TestMode             string
+	MaxTokens            int
 }
 
 type ChatResult struct {
@@ -84,6 +86,12 @@ func (p *Proxy) applyFakeHeaders(req *http.Request, opts ChatOpts) {
 	}
 	if opts.OutputTok > 0 {
 		req.Header.Set("X-LLM-Proxy-Fake-Output-Tokens", strconv.Itoa(opts.OutputTok))
+	}
+	if opts.CachedTokens > 0 {
+		req.Header.Set("X-LLM-Proxy-Fake-Cached-Tokens", strconv.Itoa(opts.CachedTokens))
+	}
+	if opts.FakeEchoPlaceholders {
+		req.Header.Set("X-LLM-Proxy-Fake-Echo-Placeholders", "1")
 	}
 	if opts.LatencyMS > 0 {
 		req.Header.Set("X-LLM-Proxy-Fake-Latency-Ms", strconv.Itoa(opts.LatencyMS))
@@ -167,6 +175,24 @@ func (k *keyHelper) create(ctx context.Context, desc string, rpm, tpm int) (stri
 
 func (k *keyHelper) createWithCost(ctx context.Context, desc string, rpm, tpm int, dailyCostLimitCents int64) (string, error) {
 	rec, err := k.admin.CreateKey(ctx, live.FuzzCreateKeyRequestWithCost(desc, rpm, tpm, dailyCostLimitCents))
+	if err != nil {
+		return "", err
+	}
+	k.keys = append(k.keys, rec.Key)
+	return rec.Key, nil
+}
+
+func (k *keyHelper) createWithPII(ctx context.Context, desc string, rpm, tpm int, redactPII bool) (string, error) {
+	rec, err := k.admin.CreateKey(ctx, live.FuzzCreateKeyRequestWithPII(desc, rpm, tpm, redactPII))
+	if err != nil {
+		return "", err
+	}
+	k.keys = append(k.keys, rec.Key)
+	return rec.Key, nil
+}
+
+func (k *keyHelper) createWithDaily(ctx context.Context, desc string, rpm, tpm, rpd, tpd int) (string, error) {
+	rec, err := k.admin.CreateKey(ctx, live.FuzzCreateKeyRequestWithDaily(desc, rpm, tpm, rpd, tpd))
 	if err != nil {
 		return "", err
 	}

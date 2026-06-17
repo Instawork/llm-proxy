@@ -24,6 +24,7 @@ func AllScenarios() []string {
 		"ratelimit-key-rpm",
 		"ratelimit-key-tpm",
 		"ratelimit-race",
+		"ratelimit-atomicity-stress",
 		"ratelimit-reconcile",
 		"ratelimit-cancel-5xx",
 		"cost-jsonl-count",
@@ -34,16 +35,77 @@ func AllScenarios() []string {
 		"cost-no-charge-degraded",
 		"cost-concurrent-async",
 		"cost-admin-stats",
+		"cost-limit-zero-unlimited",
+		"cost-limit-blocks-second",
+		"cost-limit-allows-under",
+		"cost-limit-no-charge-blocked",
+		"cost-limit-isolated-keys",
+		"cost-limit-admin-by-key",
+		"cost-limit-update-raises",
+		"cost-limit-update-removes",
+		"cost-limit-concurrent",
+		"cost-limit-atomicity-stress",
+		"cost-limit-create-persists",
 		"latency-timeout",
 		"circuit-transient-retry",
 		"circuit-random-trip",
 		"circuit-recovery",
 		"circuit-mixed",
+		"circuit-per-model-isolation",
+		"circuit-half-open-recover",
+		"circuit-half-open-reopen",
+		"cost-cache-token-no-inflation",
+		"ratelimit-key-rpd",
+		"pii-presidio-redaction",
+		"pii-wire-restore-email",
+		"pii-wire-seal-ssn",
+	}
+}
+
+// ProxyIssuesScenarios covers failure modes commonly reported against LLM
+// proxies in the wild: prompt-cache token double-counting, per-day rate
+// limits with client-backoff header hygiene, and Presidio wire redaction
+// through the real proxy API (fake upstream only).
+func ProxyIssuesScenarios() []string {
+	return []string{
+		"cost-cache-token-no-inflation",
+		"ratelimit-key-rpd",
+		"pii-presidio-redaction",
+		"pii-wire-restore-email",
+		"pii-wire-seal-ssn",
+	}
+}
+
+func CircuitScenarios() []string {
+	return []string{
+		"circuit-transient-retry",
+		"circuit-random-trip",
+		"circuit-recovery",
+		"circuit-mixed",
+		"circuit-per-model-isolation",
+		"circuit-half-open-recover",
+		"circuit-half-open-reopen",
+	}
+}
+
+func CostLimitScenarios() []string {
+	return []string{
+		"cost-limit-zero-unlimited",
+		"cost-limit-blocks-second",
+		"cost-limit-allows-under",
+		"cost-limit-no-charge-blocked",
+		"cost-limit-isolated-keys",
+		"cost-limit-admin-by-key",
+		"cost-limit-update-raises",
+		"cost-limit-update-removes",
+		"cost-limit-concurrent",
+		"cost-limit-atomicity-stress",
+		"cost-limit-create-persists",
 	}
 }
 
 func DefaultSmokeScenarios() []string {
-	return []string{"ratelimit-key-rpm", "cost-jsonl-count", "circuit-random-trip"}
+	return []string{"ratelimit-key-rpm", "cost-jsonl-count", "cost-limit-blocks-second", "circuit-random-trip"}
 }
 
 func ChaosScenarios() []string {
@@ -57,6 +119,15 @@ func MatrixScenarios() []string {
 func ParseScenarioList(raw string) []string {
 	if raw == "" || raw == "all" {
 		return AllScenarios()
+	}
+	if raw == "cost-limit" {
+		return CostLimitScenarios()
+	}
+	if raw == "circuit" {
+		return CircuitScenarios()
+	}
+	if raw == "proxy-issues" {
+		return ProxyIssuesScenarios()
 	}
 	if raw == "smoke" {
 		return DefaultSmokeScenarios()

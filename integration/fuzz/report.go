@@ -18,14 +18,14 @@ type ScenarioResult struct {
 
 type Report struct {
 	mu                sync.Mutex
-	Seed              int64             `json:"seed"`
-	Scenarios         []ScenarioResult  `json:"scenarios"`
-	StatusHistogram   StatusHistogram   `json:"status_histogram"`
-	CostLinesDelta    int               `json:"cost_lines_delta"`
-	CostLinesExpected int               `json:"cost_lines_expected"`
-	CostTotalObserved float64           `json:"cost_total_observed"`
-	CostTotalExpected float64           `json:"cost_total_expected"`
-	DegradedResponses int               `json:"degraded_responses"`
+	Seed              int64            `json:"seed"`
+	Scenarios         []ScenarioResult `json:"scenarios"`
+	StatusHistogram   StatusHistogram  `json:"status_histogram"`
+	CostLinesDelta    int              `json:"cost_lines_delta"`
+	CostLinesExpected int              `json:"cost_lines_expected"`
+	CostTotalObserved float64          `json:"cost_total_observed"`
+	CostTotalExpected float64          `json:"cost_total_expected"`
+	DegradedResponses int              `json:"degraded_responses"`
 }
 
 func (r *Report) RecordStatus(code int) {

@@ -12,7 +12,7 @@ import (
 
 func main() {
 	base := flag.String("base", envOr("PROXY_BASE_URL", "http://localhost:9002"), "proxy base URL")
-	scenario := flag.String("scenario", "smoke", "scenario name, comma list, smoke, all, chaos, or matrix")
+	scenario := flag.String("scenario", "smoke", "scenario name, comma list, smoke, all, chaos, matrix, cost-limit, circuit, or proxy-issues")
 	workers := flag.Int("workers", 8, "concurrent workers")
 	requests := flag.Int("requests", 4, "requests per worker for burst scenarios")
 	timeoutSec := flag.Int("timeout", 60, "HTTP timeout seconds")
