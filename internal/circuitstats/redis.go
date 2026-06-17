@@ -51,6 +51,7 @@ func NewRedisRecorder(client *redis.Client, log *slog.Logger) *Recorder {
 		startedAt:  time.Now().UTC(),
 		dayKey:     time.Now().UTC().Format("2006-01-02"),
 		byProvider: make(map[string]int64),
+		byKey:      make(map[string]int64),
 		rdb:        client,
 		log:        log,
 	}

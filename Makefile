@@ -531,6 +531,7 @@ docker-compose-dev:
 	@ENVIRONMENT=dev LLM_PROXY_PORT=9002 docker compose up -d
 	@echo "$(GREEN)✓ Development services started$(NC)"
 	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:9002$(NC)"
+	@echo "$(YELLOW)🖥  Admin dashboard (Vite) at: http://localhost:5173/admin/$(NC)"
 	@echo "$(YELLOW)📂 Source files are mounted for live development$(NC)"
 
 .PHONY: docker-compose-prod

@@ -318,10 +318,14 @@ func kvFromNameVals(vals []nameVal) []map[string]interface{} {
 	return out
 }
 
-func circuitActivityDataFromAggregates(totals map[string]float64, byProvider map[string]float64) map[string]interface{} {
+func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64) map[string]interface{} {
 	byProvOut := make(map[string]int64, len(byProvider))
 	for k, v := range byProvider {
 		byProvOut[k] = int64(v)
+	}
+	byKeyOut := make(map[string]int64, len(byKey))
+	for k, v := range byKey {
+		byKeyOut[k] = int64(v)
 	}
 	return map[string]interface{}{
 		"checks_total":     int64(totals["checks_total"]),
@@ -331,5 +335,6 @@ func circuitActivityDataFromAggregates(totals map[string]float64, byProvider map
 		"probes_failed":    int64(totals["probes_failed"]),
 		"circuits_opened":  int64(totals["circuits_opened"]),
 		"by_provider":      byProvOut,
+		"by_key":           byKeyOut,
 	}
 }

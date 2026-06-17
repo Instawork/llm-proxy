@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -273,8 +274,49 @@ def format_text(findings: list[Finding]) -> str:
     return "\n".join(lines)
 
 
-def hook_payload(findings: list[Finding]) -> str:
+def _sentinel_path(root: Path) -> Path:
+    """Path to the per-repo hook sentinel file."""
+    return Path("/tmp") / f"oss-audit-queued-{hashlib.md5(str(root).encode()).hexdigest()[:8]}"
+
+
+def _findings_hash(findings: list[Finding]) -> str:
+    key = "|".join(f"{f.path}:{f.line}:{f.rule}:{f.match}" for f in findings)
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def already_queued(root: Path, findings: list[Finding]) -> bool:
+    """Return True if an identical finding set was already queued this session."""
+    sentinel = _sentinel_path(root)
+    if not sentinel.exists():
+        return False
+    try:
+        return sentinel.read_text().strip() == _findings_hash(findings)
+    except OSError:
+        return False
+
+
+def mark_queued(root: Path, findings: list[Finding]) -> None:
+    """Record the current findings hash so subsequent hook runs skip re-queuing."""
+    try:
+        _sentinel_path(root).write_text(_findings_hash(findings))
+    except OSError:
+        pass
+
+
+def clear_queued(root: Path) -> None:
+    """Remove the sentinel so the next non-empty findings set is re-queued."""
+    try:
+        _sentinel_path(root).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def hook_payload(findings: list[Finding], root: Path) -> str:
     if not findings:
+        clear_queued(root)
+        return json.dumps({})
+
+    if already_queued(root, findings):
         return json.dumps({})
 
     shown = findings[:HOOK_FINDING_LIMIT]
@@ -283,6 +325,7 @@ def hook_payload(findings: list[Finding]) -> str:
     if extra > 0:
         body += f"\n- ... {extra} more finding(s). Run the audit script manually for the full list."
 
+    mark_queued(root, findings)
     return json.dumps(
         {
             "followup_message": (
@@ -328,7 +371,7 @@ def main() -> int:
     if args.hook:
         # Drain hook stdin so Cursor can pipe event JSON without affecting the scan.
         sys.stdin.read()
-        print(hook_payload(findings))
+        print(hook_payload(findings, root))
         return 0
 
     if args.json:

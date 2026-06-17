@@ -35,13 +35,20 @@ func TestRecorder_FastFailAndOpened(t *testing.T) {
 	r := NewRecorder()
 	r.RecordCheck()
 	r.RecordCheck()
-	r.RecordFastFail("gemini", "gemini")
+	r.RecordFastFail("gemini", "gemini:gemini-2.5-flash-lite")
+	r.RecordFastFail("gemini", "gemini:gemini-2.5-flash-lite")
+	r.RecordFastFail("openai", "openai")
 	r.RecordOpened("openai", "openai", "insufficient_quota")
 
 	snap := r.Snapshot()
 	assert.Equal(t, int64(2), snap["checks_total"])
-	assert.Equal(t, int64(1), snap["blocked_open"])
+	assert.Equal(t, int64(3), snap["blocked_open"])
 	assert.Equal(t, int64(1), snap["circuits_opened"])
+
+	byKey, ok := snap["by_key"].(map[string]int64)
+	require.True(t, ok)
+	assert.Equal(t, int64(2), byKey["gemini:gemini-2.5-flash-lite"])
+	assert.Equal(t, int64(1), byKey["openai"])
 }
 
 func TestRecorder_SnapshotNil(t *testing.T) {

@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 
+import { KeyCostEventsTable, KeyPiiEventsTable, KeyRateUsageTable } from "../../components/keys/key-detail-tables";
 import { CopyButton } from "../../components/ui/copy-button";
 import { MaskedKey } from "../../components/ui/masked-key";
 import PageHeader, {
@@ -19,7 +20,7 @@ import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
 import { useCost, useKey, usePII, useRateLimits } from "../../hooks/queries";
 import { aggCostByKey, DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
-import { formatCount, formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
+import { formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
 import {
   costRecentForKey,
@@ -29,17 +30,6 @@ import {
   rateLimitOverrideForKey,
   rateLimitUsageForKey,
 } from "../../lib/key-stats";
-import type { PIIRecentEvent } from "../../types";
-
-function piiOutcomeBadge(outcome: PIIRecentEvent["outcome"]) {
-  const map: Record<PIIRecentEvent["outcome"], string> = {
-    ok: "badge-success",
-    fail_open: "badge-warning",
-    fail_closed: "badge-error",
-    oversize: "badge-ghost",
-  };
-  return <span className={`badge badge-sm ${map[outcome]}`}>{outcome}</span>;
-}
 
 function piiLabel(value: boolean | null | undefined): string {
   if (value === true) return "On";
@@ -240,27 +230,7 @@ export default function KeyDetailPage() {
             <Meta label="Input tokens" value={(costStats?.input_tokens ?? 0).toLocaleString()} />
             <Meta label="Output tokens" value={(costStats?.output_tokens ?? 0).toLocaleString()} />
           </div>
-          <EventsTable
-            empty="No cost events for this key yet"
-            headers={["Time", "Provider", "Model", "Total", "Input", "Output", "Tokens"]}
-            rows={costRecent.map((ev, i) => (
-              <tr key={`${ev.time}-${ev.model}-${i}`}>
-                <td className="whitespace-nowrap text-base-content/70">
-                  {new Date(ev.time * 1000).toLocaleTimeString()}
-                </td>
-                <td>
-                  <ProviderBadge provider={ev.provider} />
-                </td>
-                <td className="text-xs text-base-content/60">{ev.model ?? "—"}</td>
-                <td>{formatUsd(ev.spend_usd)}</td>
-                <td>{formatUsd(ev.input_spend_usd ?? 0)}</td>
-                <td>{formatUsd(ev.output_spend_usd ?? 0)}</td>
-                <td className="text-base-content/70">
-                  {ev.input_tokens}/{ev.output_tokens}
-                </td>
-              </tr>
-            ))}
-          />
+          <KeyCostEventsTable rows={costRecent} />
         </Section>
 
         <Section title="PII redaction" subtitle="Recent events are memory-only (last 50)" source="memory">
@@ -270,35 +240,7 @@ export default function KeyDetailPage() {
             <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
             <Meta label="Per-key override" value={keyRecord ? piiLabel(keyRecord.redact_pii) : "—"} />
           </div>
-          <EventsTable
-            empty="No PII events for this key yet"
-            headers={["Time", "Provider", "Entities", "Outcome", "Latency"]}
-            rows={piiRecent.map((ev, i) => (
-              <tr key={`${ev.time}-${i}`}>
-                <td className="whitespace-nowrap text-base-content/70">
-                  {new Date(ev.time * 1000).toLocaleTimeString()}
-                </td>
-                <td>
-                  <ProviderBadge provider={ev.provider} />
-                </td>
-                <td>
-                  {ev.entity_total > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {Object.entries(ev.entity_counts).map(([name, n]) => (
-                        <span key={name} className="badge badge-sm badge-outline">
-                          {name.replaceAll("_", " ")} ×{n}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="text-base-content/40">clean</span>
-                  )}
-                </td>
-                <td>{piiOutcomeBadge(ev.outcome)}</td>
-                <td className="text-base-content/70">{ev.duration_ms.toFixed(1)} ms</td>
-              </tr>
-            ))}
-          />
+          <KeyPiiEventsTable rows={piiRecent} />
         </Section>
       </div>
 
@@ -313,17 +255,7 @@ export default function KeyDetailPage() {
           <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord?.rate_limit_rpd)} />
           <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord?.rate_limit_tpd)} />
         </div>
-        <EventsTable
-          empty="No rate-limit usage recorded for this key"
-          headers={["Window", "Requests", "Tokens"]}
-          rows={rateUsage.map((row) => (
-            <tr key={row.window}>
-              <td className="capitalize">{row.window === "day" ? "Today" : "Last minute"}</td>
-              <td>{formatCount(row.requests)}</td>
-              <td>{formatCount(row.tokens)}</td>
-            </tr>
-          ))}
-        />
+        <KeyRateUsageTable rows={rateUsage} />
       </Section>
     </div>
   );
@@ -359,41 +291,6 @@ function Section({
         {subtitle ? <p className="mt-1 text-sm text-base-content/60">{subtitle}</p> : null}
       </div>
       {children}
-    </div>
-  );
-}
-
-function EventsTable({
-  headers,
-  rows,
-  empty,
-}: {
-  headers: string[];
-  rows: React.ReactNode[];
-  empty: string;
-}) {
-  return (
-    <div className="overflow-x-auto border-t border-base-300/70">
-      <table className="table table-zebra">
-        <thead>
-          <tr>
-            {headers.map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length > 0 ? (
-            rows
-          ) : (
-            <tr>
-              <td colSpan={headers.length} className="text-center text-base-content/50">
-                {empty}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
     </div>
   );
 }

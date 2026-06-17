@@ -1,18 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import KeyLink from "../../components/ui/key-link";
+import KeysTable from "../../components/keys/keys-table";
 import PageHeader, {
   EmptyState,
   ErrorAlert,
   LoadingBlock,
-  ProviderBadge,
-  StatusBadge,
 } from "../../components/ui/page-header";
 import { CopyButton } from "../../components/ui/copy-button";
 import { maskKey } from "../../components/ui/masked-key";
 import { useToast } from "../../components/ui/toast";
 import { formatShareExpiry } from "../../lib/share-expiry";
-import { dailyCostLimitFormDollars, formatDailyCostLimit } from "../../lib/format";
+import { dailyCostLimitFormDollars } from "../../lib/format";
 import {
   useConfig,
   useCreateKey,
@@ -311,85 +309,15 @@ export default function KeysPage() {
             }
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="table table-zebra">
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Cost limit</th>
-                  <th>Rate limits</th>
-                  <th>PII redact</th>
-                  <th>Description</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleKeys.map((record) => (
-                  <tr key={record.key}>
-                    <td>
-                      <KeyLink keyValue={record.key} keys={visibleKeys} label={maskKey(record.key)} />
-                    </td>
-                    <td>
-                      <ProviderBadge provider={record.provider} />
-                    </td>
-                    <td>
-                      <StatusBadge active={record.enabled} activeLabel="Enabled" inactiveLabel="Disabled" />
-                    </td>
-                    <td>{formatDailyCostLimit(record.daily_cost_limit)}</td>
-                    <td className="max-w-[10rem] truncate text-xs text-base-content/70" title={formatRateLimits(record)}>
-                      {formatRateLimits(record)}
-                    </td>
-                    <td>
-                      <span className="badge badge-ghost badge-sm">{piiLabel(record.redact_pii)}</span>
-                    </td>
-                    <td className="max-w-xs truncate text-base-content/70">
-                      {record.description ? (
-                        <KeyLink
-                          keyValue={record.key}
-                          keys={visibleKeys}
-                          label={record.description}
-                        />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          disabled={sharingKey === record.key}
-                          onClick={() => onShare(record)}
-                        >
-                          {sharingKey === record.key ? (
-                            <span className="loading loading-spinner loading-xs" />
-                          ) : (
-                            "Share"
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
-                          onClick={() => openEdit(record)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs text-error"
-                          onClick={() => setDeleteTarget(record)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <KeysTable
+            keys={visibleKeys}
+            onShare={onShare}
+            onEdit={openEdit}
+            onDelete={setDeleteTarget}
+            sharingKey={sharingKey}
+            maskKey={maskKey}
+            formatRateLimits={formatRateLimits}
+          />
         )}
       </div>
 
@@ -429,8 +357,8 @@ export default function KeysPage() {
 
               {showAnthropicPoolWarning ? (
                 <div className="alert alert-warning py-2 text-sm">
-                  Anthropic pool is low ({anthropicPoolAvailable} remaining). Contact ops to refill
-                  the pool.
+                  Anthropic pool is low ({anthropicPoolAvailable} remaining). Add more keys to the
+                  Anthropic pool in your deployment configuration.
                 </div>
               ) : null}
 

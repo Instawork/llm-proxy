@@ -1,13 +1,12 @@
 import { useMemo, useState } from "react";
 
+import UsageTable from "../components/usage/usage-table";
 import { BarChart, ChartCard, DonutChart, TrendChart } from "../components/charts";
 import { chartPalette } from "../components/charts/chart-setup";
-import KeyLink from "../components/ui/key-link";
 import {
   type DataSource,
   LiveStat,
   RangeToggle,
-  SectionPanel,
   trendChartSource,
 } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
@@ -21,8 +20,8 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatCount, scopeKind, scopeLabel } from "../lib/format";
-import type { APIKey, DailyHistoryRow, UsageScopeCounter } from "../types";
+import { compact, scopeKind, scopeLabel } from "../lib/format";
+import type { DailyHistoryRow, UsageScopeCounter } from "../types";
 
 function rangeLabel(range: RangeKey): string {
   return range === "today" ? "today" : `last ${range === "7d" ? "7" : "30"} days`;
@@ -36,17 +35,10 @@ const DONUT_COLORS = [
   chartPalette.error,
 ];
 
-interface Row {
-  scope: string;
-  label: string;
-  requests: number;
-  tokens: number;
-}
-
 function rowsForKind(
   counters: Record<string, UsageScopeCounter> | undefined,
   kind: string,
-): Row[] {
+) {
   return Object.entries(counters ?? {})
     .filter(([scope]) => scopeKind(scope) === kind)
     .map(([scope, c]) => ({
@@ -62,7 +54,7 @@ function redisRows(
   history: DailyHistoryRow[] | undefined,
   range: RangeKey,
   field: string,
-): Row[] {
+) {
   return aggScopeMap(history, range, field).map((s) => ({
     scope: s.scope,
     label: scopeLabel(s.scope),
@@ -101,12 +93,6 @@ export default function UsagePage() {
   const dailyTokens = useMemo(() => scalarSeries(history, "tokens_today", range), [history, range]);
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailyTokens.available);
 
-  // Prefer Redis whenever it's available — including "today" and the Active
-  // models / by-model / by-provider / by-key / by-user breakdowns. Memory
-  // counters only reflect this one process, so on a multi-pod fleet they
-  // undercount badly (the top cards already use fleet-wide today totals — using
-  // memory here makes the breakdowns look like dropped requests). Fall back to
-  // in-process memory only when Redis isn't wired up at all.
   const memByModel = useMemo(() => rowsForKind(counters, "model"), [counters]);
   const useRedisBreakdown = hasRedis || range !== "today";
   const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
@@ -241,66 +227,5 @@ export default function UsagePage() {
       <UsageTable title="By key" rows={byKey} keys={keys.data} linkKeys source={breakdownSource} range={range} />
       <UsageTable title="By user" rows={byUser} source={breakdownSource} range={range} />
     </div>
-  );
-}
-
-function UsageTable({
-  title,
-  rows,
-  keys,
-  linkKeys = false,
-  source,
-  range,
-}: {
-  title: string;
-  rows: Row[];
-  keys?: APIKey[];
-  linkKeys?: boolean;
-  source: DataSource;
-  range: RangeKey;
-}) {
-  const totalTokens = rows.reduce((s, r) => s + r.tokens, 0);
-  const subtitle =
-    source === "redis" ? `Summed Redis rollups · ${rangeLabel(range)}` : `Live memory · ${rangeLabel(range)}`;
-  return (
-    <SectionPanel title={title} subtitle={subtitle} source={source}>
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
-          <thead>
-            <tr>
-              <th>{title.replace("By ", "")}</th>
-              <th className="text-right">Requests</th>
-              <th className="text-right">Tokens</th>
-              <th className="text-right">Share</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.scope}>
-                <td className="font-medium">
-                  {linkKeys ? (
-                    <KeyLink keys={keys} scope={r.scope} label={r.label} />
-                  ) : (
-                    r.label
-                  )}
-                </td>
-                <td className="text-right">{formatCount(r.requests)}</td>
-                <td className="text-right">{formatCount(r.tokens)}</td>
-                <td className="text-right text-base-content/60">
-                  {totalTokens > 0 ? `${((r.tokens / totalTokens) * 100).toFixed(1)}%` : "—"}
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="text-center text-base-content/50">
-                  No usage recorded today
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </SectionPanel>
   );
 }

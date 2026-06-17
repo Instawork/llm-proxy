@@ -18,6 +18,11 @@ func TestMergeTodayCircuitActivity(t *testing.T) {
 			"checks_total": 5,
 			"blocked_open": 2,
 		},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {
+				"gemini:gemini-2.5-flash-lite": 2,
+			},
+		},
 	})
 	require.NoError(t, err)
 
@@ -29,4 +34,7 @@ func TestMergeTodayCircuitActivity(t *testing.T) {
 
 	assert.Equal(t, int64(5), snap["checks_total"])
 	assert.Equal(t, int64(2), snap["blocked_open"])
+	byKey, ok := snap["by_key"].(map[string]int64)
+	require.True(t, ok)
+	assert.Equal(t, int64(2), byKey["gemini:gemini-2.5-flash-lite"])
 }

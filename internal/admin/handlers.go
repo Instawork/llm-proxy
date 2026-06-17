@@ -328,7 +328,8 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 			record.UpstreamKeyID,
 			record.UpstreamKind,
 		); revokeErr != nil {
-			h.deps.Logger.Warn("admin: upstream revoke failed",
+			h.deps.Logger.Warn(
+				"admin: upstream revoke failed",
 				"key", keyID,
 				"provider", record.Provider,
 				"upstream_id", record.UpstreamKeyID,
@@ -602,7 +603,8 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 	// Audit every successful resolution of a public share link. The link hands
 	// out a working credential, so we record who pulled it (client IP), which
 	// link, and the redacted key — never the raw secret.
-	h.deps.Logger.Info("admin: share link resolved",
+	h.deps.Logger.Info(
+		"admin: share link resolved",
 		"id", link.ID(),
 		"key", apikeys.RedactKey(record.PK),
 		"provider", record.Provider,

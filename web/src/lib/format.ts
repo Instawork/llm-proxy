@@ -88,6 +88,23 @@ export function scopeKind(scope: string): string {
   return idx >= 0 ? scope.slice(0, idx) : scope;
 }
 
+/** Splits a circuit breaker store key into provider scope vs per-model scope. */
+export function parseBreakerKey(
+  key: string | undefined,
+  provider: string,
+): { model: string | null; scope: "model" | "provider" } {
+  const raw = (key ?? provider).trim();
+  const idx = raw.indexOf(":");
+  if (idx < 0) {
+    return { model: null, scope: "provider" };
+  }
+  const model = raw.slice(idx + 1);
+  if (!model) {
+    return { model: null, scope: "provider" };
+  }
+  return { model, scope: "model" };
+}
+
 /** Short relative time: "just now", "12s ago", "3m ago". */
 export function relativeTime(from: number, now: number = Date.now()): string {
   const secs = Math.max(0, Math.round((now - from) / 1000));

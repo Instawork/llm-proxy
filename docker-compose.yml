@@ -9,13 +9,13 @@ services:
     volumes:
       # Always mount source files for live development
       - .:/app
-      - /app/bin  # Exclude bin directory to avoid conflicts
-      - /app/tmp  # air build output (linux binary) — keep out of host mount
-      - ./logs:/app/logs  # Ensure logs directory is writable
+      - /app/bin # Exclude bin directory to avoid conflicts
+      - /app/tmp # air build output (linux binary) — keep out of host mount
+      - ./logs:/app/logs # Ensure logs directory is writable
     working_dir: /app
     # air watches Go sources + YAML and rebuilds/restarts on change.
     # See .air.toml. Falls back to `go run` only if air is unavailable.
-    command: ["air", "-c", ".air.toml"]
+    command: [ "air", "-c", ".air.toml" ]
     depends_on:
       - dynamodb
       - redis
@@ -43,7 +43,7 @@ services:
       - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -61,7 +61,7 @@ services:
       - llm-proxy-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -77,7 +77,7 @@ services:
     # every CreateTable hangs until the client deadline. Run as root so the
     # SQLite-backed shared DB file can be created in the persisted volume.
     user: root
-    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    command: [ "-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data" ]
     volumes:
       - llm-proxy-dynamodb-data:/data
     ports:
@@ -129,7 +129,7 @@ services:
       # without this mount.
       - ./recognizers.yaml:/app/presidio_analyzer/conf/default_recognizers.yaml:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -158,8 +158,8 @@ services:
       - DD_LOGS_ENABLED=true
       - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
     ports:
-      - "8125:8125/udp"  # DogStatsD
-      - "8126:8126"      # APM
+      - "8125:8125/udp" # DogStatsD
+      - "8126:8126" # APM
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
@@ -170,18 +170,16 @@ services:
       - llm-proxy-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "agent", "health"]
+      test: [ "CMD", "agent", "health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # Vite dev server for the admin dashboard (optional local UI)
+  # Vite dev server for the admin dashboard (hot reload for web/ edits)
   web:
     image: node:22-alpine
     container_name: llm-proxy-admin-web
-    profiles:
-      - admin-ui
     working_dir: /app/web
     volumes:
       - ./web:/app/web
@@ -191,7 +189,7 @@ services:
       - VITE_API_PROXY_TARGET=http://llm-proxy:9002
     depends_on:
       - llm-proxy
-    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    command: [ "sh", "-c", "npm install && npm run dev -- --host 0.0.0.0" ]
     networks:
       - llm-proxy-network
 

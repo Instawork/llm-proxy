@@ -326,6 +326,22 @@ export function aggCircuitActivity(
   return out;
 }
 
+/** Sum blocked-open fast-fails per breaker key across UTC days in range. */
+export function aggCircuitBlockedByKey(
+  rows: DailyHistoryRow[] | undefined,
+  range: RangeKey,
+): NameCount[] {
+  const acc = new Map<string, number>();
+  for (const row of sliceRange(rows, range)) {
+    for (const [key, raw] of Object.entries(asRecord(row.by_key))) {
+      acc.set(key, (acc.get(key) ?? 0) + asNum(raw));
+    }
+  }
+  return [...acc.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
 // --- Circuit providers (map name -> {failures}) -----------------------------
 
 export function aggCircuitProviders(

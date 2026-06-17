@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import { BarChart, ChartCard, DonutChart, TrendChart } from "../components/charts";
 import { chartPalette } from "../components/charts/chart-setup";
-import KeyLink from "../components/ui/key-link";
+import { TopKeysTable, RecentDetectionsTable } from "../components/tables/misc-tables";
 import {
   type DataSource,
   LiveStat,
@@ -10,7 +10,7 @@ import {
   SectionPanel,
   trendChartSource,
 } from "../components/ui/data-source";
-import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
+import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useKeys, usePII } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
@@ -22,7 +22,7 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import type { PIINameCount, PIIRecentEvent } from "../types";
+import type { PIINameCount } from "../types";
 
 function rangeLabel(range: RangeKey): string {
   return range === "today" ? "today" : `last ${range === "7d" ? "7" : "30"} days`;
@@ -35,16 +35,6 @@ const ENTITY_COLORS = [
   chartPalette.success,
   chartPalette.error,
 ];
-
-function outcomeBadge(outcome: PIIRecentEvent["outcome"]) {
-  const map: Record<PIIRecentEvent["outcome"], string> = {
-    ok: "badge-success",
-    fail_open: "badge-warning",
-    fail_closed: "badge-error",
-    oversize: "badge-ghost",
-  };
-  return <span className={`badge badge-sm ${map[outcome]}`}>{outcome}</span>;
-}
 
 function toNameCount(rows: PIINameCount[]): NameCount[] {
   return rows.map((r) => ({ name: r.name, count: r.count }));
@@ -242,26 +232,7 @@ export default function PIIPage() {
           }
           source={breakdownSource}
         >
-          <div className="overflow-x-auto">
-            <table className="table table-zebra">
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  <th className="text-right">Detections</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topKeys.map((row) => (
-                  <tr key={row.name}>
-                    <td>
-                      <KeyLink keys={keys.data} maskedId={row.name} showMasked />
-                    </td>
-                    <td className="text-right">{row.count.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TopKeysTable rows={topKeys} keys={keys.data ?? []} />
         </SectionPanel>
       ) : null}
 
@@ -270,61 +241,7 @@ export default function PIIPage() {
         subtitle={`Last ${recent.length} redaction events — not written to Redis`}
         source="memory"
       >
-        <div className="overflow-x-auto">
-          <table className="table table-zebra">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Provider</th>
-                <th>Key</th>
-                <th>Entities</th>
-                <th>Outcome</th>
-                <th>Latency</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent.map((ev, i) => (
-                <tr key={`${ev.time}-${i}`}>
-                  <td className="whitespace-nowrap text-base-content/70">
-                    {new Date(ev.time * 1000).toLocaleTimeString()}
-                  </td>
-                  <td>
-                    <ProviderBadge provider={ev.provider} />
-                  </td>
-                  <td>
-                    {ev.key_id ? (
-                      <KeyLink keys={keys.data} maskedId={ev.key_id} className="font-mono text-xs" />
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>
-                    {ev.entity_total > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {Object.entries(ev.entity_counts).map(([name, n]) => (
-                          <span key={name} className="badge badge-sm badge-outline">
-                            {name.replaceAll("_", " ")} ×{n}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-base-content/40">clean</span>
-                    )}
-                  </td>
-                  <td>{outcomeBadge(ev.outcome)}</td>
-                  <td className="text-base-content/70">{ev.duration_ms.toFixed(1)} ms</td>
-                </tr>
-              ))}
-              {recent.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="text-center text-base-content/50">
-                    No detections recorded yet
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <RecentDetectionsTable rows={recent} keys={keys.data ?? []} />
       </SectionPanel>
     </div>
   );

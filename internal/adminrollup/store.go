@@ -177,7 +177,8 @@ func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps Top
 		return piiDataFromAggregates(totals, byEntity, byProv, byKey, caps), true
 	case MetricCircuitActivity:
 		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
-		return circuitActivityDataFromAggregates(totals, byProv), true
+		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
+		return circuitActivityDataFromAggregates(totals, byProv, byKey), true
 	default:
 		return nil, false
 	}

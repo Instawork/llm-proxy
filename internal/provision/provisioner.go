@@ -71,7 +71,8 @@ func (m *Manager) Provision(ctx context.Context, provider, name string) (Result,
 		return Result{}, err
 	}
 	if m.logger != nil {
-		m.logger.Info("provision: upstream key minted",
+		m.logger.Info(
+			"provision: upstream key minted",
 			"provider", provider,
 			"name", name,
 			"upstream_kind", res.UpstreamKind,

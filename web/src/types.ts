@@ -155,6 +155,7 @@ export interface CircuitActivityResponse {
   probes_failed?: number;
   circuits_opened?: number;
   by_provider?: Record<string, number>;
+  by_key?: Record<string, number>;
   recent_events?: CircuitActivityEvent[];
   daily_history?: DailyHistoryRow[];
   daily_history_available?: boolean;

@@ -1,21 +1,86 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 
 import { BarChart, ChartCard } from "../components/charts";
 import { chartPalette } from "../components/charts/chart-setup";
 import KeyLink from "../components/ui/key-link";
+import DataTable from "../components/ui/data-table";
 import { LiveStat, rateLimitUsageSource, SectionPanel } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useKeys, useRateLimits } from "../hooks/queries";
+import { scopeUsageDisplayRows } from "../lib/group-rows";
+import { useCollapsedRows } from "../hooks/use-collapsed-rows";
 import { formatCount, scopeLabel } from "../lib/format";
 import type { RateLimitCounter } from "../types";
 
-function counterRows(counters: Record<string, RateLimitCounter> | undefined) {
+interface ScopeRow {
+  scope: string;
+  label: string;
+  requests: number;
+  tokens: number;
+}
+
+function counterRows(counters: Record<string, RateLimitCounter> | undefined): ScopeRow[] {
   return Object.entries(counters ?? {}).map(([scope, c]) => ({
     scope,
     label: scopeLabel(scope),
     requests: c.requests ?? 0,
     tokens: c.tokens ?? 0,
   }));
+}
+
+function RateLimitUsageTable({ rows, keys }: { rows: ScopeRow[]; keys: ReturnType<typeof useKeys>["data"] }) {
+  const { displayData, onSearchActiveChange, footer } = useCollapsedRows(
+    rows,
+    scopeUsageDisplayRows,
+    "scopes",
+  );
+
+  const columns = useMemo<ColumnDef<(typeof displayData)[number], unknown>[]>(
+    () => [
+      {
+        id: "scope",
+        accessorKey: "label",
+        header: "Scope",
+        cell: ({ row }) => {
+          const data = row.original;
+          if (data.isOthers) {
+            return <span className="italic text-base-content/60">{data.label}</span>;
+          }
+          return data.scope.startsWith("key:") ? (
+            <KeyLink keys={keys} scope={data.scope} label={data.label} />
+          ) : (
+            <span className="font-medium">{data.label}</span>
+          );
+        },
+      },
+      {
+        id: "requests",
+        accessorKey: "requests",
+        header: "Requests",
+        cell: ({ getValue }) => formatCount(getValue<number>()),
+      },
+      {
+        id: "tokens",
+        accessorKey: "tokens",
+        header: "Tokens",
+        cell: ({ getValue }) => formatCount(getValue<number>()),
+      },
+    ],
+    [keys],
+  );
+
+  return (
+    <DataTable
+      data={displayData}
+      columns={columns}
+      searchPlaceholder="Filter scopes…"
+      emptyMessage="No usage recorded in this window"
+      getRowId={(row) => (row.isOthers ? "__others__" : row.scope)}
+      onSearchActiveChange={onSearchActiveChange}
+      footer={footer}
+    />
+  );
 }
 
 export default function RateLimitsPage() {
@@ -118,39 +183,7 @@ export default function RateLimitsPage() {
         </SectionPanel>
 
         <SectionPanel title={`Live usage (${window})`} source={usageSource}>
-          <div className="overflow-x-auto">
-            <table className="table table-zebra">
-              <thead>
-                <tr>
-                  <th>Scope</th>
-                  <th>Requests</th>
-                  <th>Tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.scope}>
-                    <td className="font-medium">
-                      {row.scope.startsWith("key:") ? (
-                        <KeyLink keys={keys.data} scope={row.scope} label={row.label} />
-                      ) : (
-                        row.label
-                      )}
-                    </td>
-                    <td>{formatCount(row.requests)}</td>
-                    <td>{formatCount(row.tokens)}</td>
-                  </tr>
-                ))}
-                {rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="text-center text-base-content/50">
-                      No usage recorded in this window
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+          <RateLimitUsageTable rows={rows} keys={keys.data} />
         </SectionPanel>
       </div>
     </div>

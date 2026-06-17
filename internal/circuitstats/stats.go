@@ -45,6 +45,7 @@ type activityFlushed struct {
 	probesFailed    int64
 	circuitsOpened  int64
 	byProvider      map[string]int64
+	byKey           map[string]int64
 }
 
 // Recorder accumulates rolling circuit activity. Each instance keeps local
@@ -63,6 +64,7 @@ type Recorder struct {
 	circuitsOpened  int64
 
 	byProvider map[string]int64
+	byKey      map[string]int64
 
 	recent  []activityEvent
 	flushed activityFlushed
@@ -80,6 +82,7 @@ func NewRecorder() *Recorder {
 		startedAt:  now,
 		dayKey:     now.Format("2006-01-02"),
 		byProvider: make(map[string]int64),
+		byKey:      make(map[string]int64),
 	}
 }
 
@@ -102,6 +105,7 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.probesFailed = 0
 	r.circuitsOpened = 0
 	r.byProvider = make(map[string]int64)
+	r.byKey = make(map[string]int64)
 	r.recent = nil
 }
 
@@ -115,6 +119,12 @@ func (r *Recorder) appendEvent(e activityEvent) {
 func (r *Recorder) bumpProvider(provider string) {
 	if provider != "" {
 		r.byProvider[provider]++
+	}
+}
+
+func (r *Recorder) bumpBlockedKey(key string) {
+	if key != "" {
+		r.byKey[key]++
 	}
 }
 
@@ -135,6 +145,12 @@ func (r *Recorder) activityDeltaLocked() adminrollup.Delta {
 		}
 		d.Dimensions["by_provider"] = provDelta
 	}
+	if keyDelta := int64MapDelta(r.byKey, r.flushed.byKey); len(keyDelta) > 0 {
+		if d.Dimensions == nil {
+			d.Dimensions = make(map[string]map[string]float64)
+		}
+		d.Dimensions["by_key"] = keyDelta
+	}
 	return d
 }
 
@@ -153,6 +169,9 @@ func (r *Recorder) advanceFlushedLocked() {
 	if r.flushed.byProvider == nil {
 		r.flushed.byProvider = make(map[string]int64)
 	}
+	if r.flushed.byKey == nil {
+		r.flushed.byKey = make(map[string]int64)
+	}
 	r.flushed.checksTotal = r.checksTotal
 	r.flushed.blockedOpen = r.blockedOpen
 	r.flushed.probesStarted = r.probesStarted
@@ -161,6 +180,9 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.circuitsOpened = r.circuitsOpened
 	for k, v := range r.byProvider {
 		r.flushed.byProvider[k] = v
+	}
+	for k, v := range r.byKey {
+		r.flushed.byKey[k] = v
 	}
 }
 
@@ -203,6 +225,7 @@ func (r *Recorder) RecordFastFail(provider, key string) {
 	}
 	r.recordActivity("blocked_open", provider, e, func() {
 		r.blockedOpen++
+		r.bumpBlockedKey(key)
 	})
 }
 
@@ -304,6 +327,10 @@ func (r *Recorder) snapshotMemoryLocked() map[string]interface{} {
 	for k, v := range r.byProvider {
 		byProvider[k] = v
 	}
+	byKey := make(map[string]int64, len(r.byKey))
+	for k, v := range r.byKey {
+		byKey[k] = v
+	}
 	backend := "memory"
 	if r.redisEnabled() {
 		backend = "redis"
@@ -320,6 +347,7 @@ func (r *Recorder) snapshotMemoryLocked() map[string]interface{} {
 		"probes_failed":    r.probesFailed,
 		"circuits_opened":  r.circuitsOpened,
 		"by_provider":      byProvider,
+		"by_key":           byKey,
 		"recent_events":    recent,
 	}
 }

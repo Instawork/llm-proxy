@@ -4,16 +4,17 @@ Vite + React admin UI for the LLM Proxy. The production build is embedded into t
 
 ## Local development (Option A — Vite + Go API)
 
-1. From the repo root, start the proxy and Vite dev server:
+1. From the repo root, start the dev stack (includes the Vite dev server):
 
 ```bash
-docker compose --profile admin-ui up llm-proxy web
+make docker-compose-up
+# or: docker compose up -d
 ```
 
 Docker Compose starts an in-memory **DynamoDB Local** sidecar for API key CRUD (`dynamodb` service on port 8000). Override with real AWS by unsetting `AWS_ENDPOINT_URL` and mounting `~/.aws` credentials.
 
 2. `configs/dev.yml` enables the admin dashboard and **dev bypass login** (no Google OAuth required locally).
-3. Open http://localhost:5173/admin/ and click **Dev login (local session)**.
+3. Open <http://localhost:5173/admin/> and click **Dev login (local session)**.
 
 API calls go to `http://localhost:9002` with cookies. CORS is configured via `features.admin_dashboard.dev_cors_origin`.
 

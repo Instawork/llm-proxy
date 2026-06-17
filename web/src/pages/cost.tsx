@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 
-import KeyLink from "../components/ui/key-link";
+import SpendByKeyTable from "../components/cost/spend-by-key-table";
+import SpendByProviderTable from "../components/cost/spend-by-provider-table";
+import { LimitSpendTable, RecentCostTable, TransportsTable } from "../components/cost/extra-tables";
+import { BarChart, ChartCard, DonutChart, GroupedBarChart, TrendChart } from "../components/charts";
+import { chartPalette } from "../components/charts/chart-setup";
 import {
   type DataSource,
   LiveStat,
@@ -8,9 +12,7 @@ import {
   SectionPanel,
   trendChartSource,
 } from "../components/ui/data-source";
-import { BarChart, ChartCard, DonutChart, GroupedBarChart, TrendChart } from "../components/charts";
-import { chartPalette } from "../components/charts/chart-setup";
-import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
+import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useCost, useKeys } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
@@ -23,7 +25,8 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatCount, formatDailyCostLimit, formatUsd, maskKeyId } from "../lib/format";
+import { compact, formatCount, formatUsd, maskKeyId } from "../lib/format";
+import { donutSlices } from "../lib/group-rows";
 import type { CostKeySpend } from "../types";
 
 function rangeLabel(range: RangeKey): string {
@@ -41,12 +44,6 @@ function memKeyAgg(byKey: CostKeySpend[]): CostKeyAgg[] {
     output_tokens: row.output_tokens,
   }));
 }
-
-const TRANSPORT_COLORS: Record<string, () => string> = {
-  file: chartPalette.info,
-  dynamodb: chartPalette.primary,
-  datadog: chartPalette.warning,
-};
 
 const SPEND_COLORS = [
   chartPalette.primary,
@@ -115,17 +112,28 @@ export default function CostPage() {
   const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
   const withSpend = rangeByKey.filter((row) => row.spend_usd > 0);
   const rangeSpendTotal = withSpend.reduce((sum, row) => sum + row.spend_usd, 0);
+  const donutData = donutSlices(
+    withSpend.map((row) => row.key_id || "unknown"),
+    withSpend.map((row) => row.spend_usd),
+    withSpend.map((_, i) => SPEND_COLORS[i % SPEND_COLORS.length]()),
+    8,
+    chartPalette.tick(),
+  );
 
   const memProviders = stats?.by_provider ?? [];
   const rangeByProvider = useRedisBreakdown
     ? aggCostByProvider(history, range)
     : memProviders.map((p) => ({ name: p.name, spend_usd: p.spend_usd, requests: p.requests }));
+  const withProviderSpend = rangeByProvider.filter((row) => row.spend_usd > 0);
 
   const limitRows = keyList
     .map((key) => ({
+      id: key.key,
+      label: key.description || maskKeyId(key.key),
       key,
       spendUsd: spendByMaskedKey(byKey, key.key),
       limitUsd: (key.daily_cost_limit ?? 0) / 100,
+      requests: byKey.find((entry) => entry.key_id === maskKeyId(key.key))?.requests ?? 0,
     }))
     .filter((row) => row.limitUsd > 0 || row.spendUsd > 0)
     .sort((a, b) => b.spendUsd - a.spendUsd || b.limitUsd - a.limitUsd);
@@ -213,60 +221,40 @@ export default function CostPage() {
           source={breakdownSource}
         >
           <DonutChart
-            labels={withSpend.map((row) => row.key_id || "unknown")}
-            values={withSpend.map((row) => row.spend_usd)}
-            colors={withSpend.map((_, i) => SPEND_COLORS[i % SPEND_COLORS.length]())}
+            labels={donutData.labels}
+            values={donutData.values}
+            colors={donutData.colors}
             centerValue={formatUsd(rangeSpendTotal)}
             centerLabel={rangeLabel(range)}
           />
         </ChartCard>
       </div>
 
-      {withSpend.length > 0 ? (
-        <SectionPanel
-          title="Spend by key"
-          subtitle={
-            range === "today"
-              ? `Rollup for ${stats?.day ?? "today"}`
-              : `Summed Redis rollups · ${rangeLabel(range)}`
-          }
-          source={breakdownSource}
-        >
-          <div className="overflow-x-auto">
-            <table className="table table-zebra">
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  <th className="text-right">Total</th>
-                  <th className="text-right">Input</th>
-                  <th className="text-right">Output</th>
-                  <th className="text-right">Requests</th>
-                  <th className="text-right">Tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                {withSpend.map((row) => (
-                  <tr key={row.key_id || String(row.requests)}>
-                    <td>
-                      {row.key_id ? (
-                        <KeyLink keys={keyList} maskedId={row.key_id} className="font-mono text-xs" />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="text-right">{formatUsd(row.spend_usd)}</td>
-                    <td className="text-right">{formatUsd(row.input_spend_usd ?? 0)}</td>
-                    <td className="text-right">{formatUsd(row.output_spend_usd ?? 0)}</td>
-                    <td className="text-right">{formatCount(row.requests)}</td>
-                    <td className="text-right text-base-content/70">
-                      {formatCount(row.input_tokens)}/{formatCount(row.output_tokens)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </SectionPanel>
+      {withSpend.length > 0 || withProviderSpend.length > 0 ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {withSpend.length > 0 ? (
+            <SectionPanel
+              title="Spend by key"
+              subtitle={
+                range === "today"
+                  ? `Rollup for ${stats?.day ?? "today"}`
+                  : `Summed Redis rollups · ${rangeLabel(range)}`
+              }
+              source={breakdownSource}
+            >
+              <SpendByKeyTable rows={withSpend} keys={keyList} />
+            </SectionPanel>
+          ) : null}
+          {withProviderSpend.length > 0 ? (
+            <SectionPanel
+              title="Spend by provider"
+              subtitle={`Tracked spend · ${rangeLabel(range)}`}
+              source={breakdownSource}
+            >
+              <SpendByProviderTable rows={withProviderSpend} />
+            </SectionPanel>
+          ) : null}
+        </div>
       ) : null}
 
       <ChartCard
@@ -293,76 +281,21 @@ export default function CostPage() {
         />
       </ChartCard>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard
-          title="Spend by provider"
-          subtitle={`Tracked spend · ${rangeLabel(range)}`}
-          source={breakdownSource}
-        >
-          <BarChart
-            labels={rangeByProvider.map((row) => row.name)}
-            values={rangeByProvider.map((row) => row.spend_usd)}
-            label="USD"
-            colors={rangeByProvider.map(() => chartPalette.warning())}
-            horizontal
-          />
-        </ChartCard>
-
-        <SectionPanel title="Async pipeline" source="config">
-          <div className="grid gap-4 p-5 sm:grid-cols-2">
-            <Field label="Workers" value={data.workers} />
-            <Field label="Queue size" value={data.queue_size} />
-            <Field label="Flush interval" value={data.flush_interval ? `${data.flush_interval}s` : undefined} />
-            <Field label="Transports" value={data.transport_count ?? transports.length} />
-          </div>
-        </SectionPanel>
-      </div>
+      <SectionPanel title="Async pipeline" source="config">
+        <div className="grid gap-4 p-5 sm:grid-cols-2">
+          <Field label="Workers" value={data.workers} />
+          <Field label="Queue size" value={data.queue_size} />
+          <Field label="Flush interval" value={data.flush_interval ? `${data.flush_interval}s` : undefined} />
+          <Field label="Transports" value={data.transport_count ?? transports.length} />
+        </div>
+      </SectionPanel>
 
       <SectionPanel
         title="Per-key spend vs limit"
         subtitle="Spend is today's rollup; daily limits are stored on the key (DynamoDB)"
         source={breakdownSource}
       >
-        <div className="overflow-x-auto">
-          <table className="table table-zebra">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Spend today</th>
-                <th>Daily limit</th>
-                <th>Requests</th>
-              </tr>
-            </thead>
-            <tbody>
-              {limitRows.map((row) => {
-                const masked = maskKeyId(row.key.key);
-                const keyStats = byKey.find((entry) => entry.key_id === masked);
-                return (
-                  <tr key={row.key.key}>
-                    <td>
-                      <KeyLink
-                        keys={keyList}
-                        keyValue={row.key.key}
-                        label={row.key.description || masked}
-                        showMasked={Boolean(row.key.description)}
-                      />
-                    </td>
-                    <td>{formatUsd(row.spendUsd)}</td>
-                    <td>{formatDailyCostLimit(row.key.daily_cost_limit)}</td>
-                    <td>{keyStats?.requests ?? 0}</td>
-                  </tr>
-                );
-              })}
-              {limitRows.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="text-center text-base-content/50">
-                    No spend or limits recorded yet
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <LimitSpendTable rows={limitRows} keys={keyList} />
       </SectionPanel>
 
       {recent.length > 0 ? (
@@ -371,90 +304,12 @@ export default function CostPage() {
           subtitle="Last 50 events — not written to Redis"
           source="memory"
         >
-          <div className="overflow-x-auto">
-            <table className="table table-zebra">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Key</th>
-                  <th>Provider</th>
-                  <th>Model</th>
-                  <th>Total</th>
-                  <th>Input</th>
-                  <th>Output</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((ev, i) => (
-                  <tr key={`${ev.time}-${ev.model}-${i}`}>
-                    <td className="whitespace-nowrap text-base-content/70">
-                      {new Date(ev.time * 1000).toLocaleTimeString()}
-                    </td>
-                    <td>
-                      {ev.key_id ? (
-                        <KeyLink keys={keyList} maskedId={ev.key_id} className="font-mono text-xs" />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      <ProviderBadge provider={ev.provider} />
-                    </td>
-                    <td className="text-xs text-base-content/60">{ev.model ?? "—"}</td>
-                    <td>{formatUsd(ev.spend_usd)}</td>
-                    <td>{formatUsd(ev.input_spend_usd ?? 0)}</td>
-                    <td>{formatUsd(ev.output_spend_usd ?? 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <RecentCostTable rows={recent} keys={keyList} />
         </SectionPanel>
       ) : null}
 
       <SectionPanel title="Configured transports" subtitle="Cost audit pipeline (file / DynamoDB / Datadog)" source="config">
-        <div className="overflow-x-auto">
-          <table className="table table-zebra">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Destination</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transports.map((t, i) => (
-                <tr key={`${t.type}-${i}`}>
-                  <td>
-                    <span
-                      className="badge badge-sm"
-                      style={{
-                        backgroundColor: (TRANSPORT_COLORS[t.type] ?? chartPalette.primary)(),
-                        color: "white",
-                        border: 0,
-                      }}
-                    >
-                      {t.type}
-                    </span>
-                  </td>
-                  <td className="text-base-content/70">
-                    {t.path ??
-                      t.table_name ??
-                      (t.host ? `${t.host}:${t.port ?? ""}` : undefined) ??
-                      t.namespace ??
-                      "—"}
-                  </td>
-                </tr>
-              ))}
-              {transports.length === 0 ? (
-                <tr>
-                  <td colSpan={2} className="text-center text-base-content/50">
-                    No transports configured
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <TransportsTable transports={transports} />
       </SectionPanel>
     </div>
   );

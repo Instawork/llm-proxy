@@ -10,18 +10,18 @@ import {
   trendChartSource,
   type DataSource,
 } from "../components/ui/data-source";
+import { BlockedByKeyTable, CircuitActivityTable, CircuitProvidersTable } from "../components/tables/misc-tables";
 import PageHeader, {
   ErrorAlert,
   LiveIndicator,
   LoadingBlock,
-  ProviderBadge,
-  StatusBadge,
 } from "../components/ui/page-header";
 import { useHealth, useCircuitActivity } from "../hooks/queries";
-import type { CircuitActivityEvent, DailyHistoryRow } from "../types";
+import type { DailyHistoryRow } from "../types";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   aggCircuitActivity,
+  aggCircuitBlockedByKey,
   aggCircuitProviders,
   DAILY_HISTORY_SUBTITLE,
   maxScalarField,
@@ -32,6 +32,7 @@ import {
   circuitProviderSeries,
   scalarSeries,
 } from "../lib/daily-history";
+import { parseBreakerKey, scopeKind } from "../lib/format";
 
 const PROVIDER_SERIES_COLORS = [
   chartPalette.error,
@@ -207,6 +208,50 @@ export default function CircuitPage() {
     return allRecentEvents.filter((e) => e.time >= cutoff);
   }, [allRecentEvents, range]);
 
+  // Break the "Blocked (open)" volume down by breaker key (provider:model)
+  // rather than rolling it up under the bare provider. A per-model breaker
+  // (e.g. gemini:gemini-2.5-flash-lite) tripping should not read as "all of
+  // Gemini is down" — this surfaces exactly which model keys are blocked.
+  const blockedByKey = useMemo(() => {
+    const fromAggregates =
+      range === "today"
+        ? activity?.by_key
+        : hasActivityRedis
+          ? Object.fromEntries(
+            aggCircuitBlockedByKey(activityHistory, range).map((r) => [r.name, r.count]),
+          )
+          : activity?.by_key;
+
+    if (fromAggregates && Object.keys(fromAggregates).length > 0) {
+      return Object.entries(fromAggregates)
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+    }
+
+    // Fallback for deployments that predate by_key aggregation.
+    const counts = new Map<string, number>();
+    for (const e of recentEvents) {
+      if (e.kind !== "fast_fail") continue;
+      const key = e.key ?? e.provider;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [range, activity?.by_key, hasActivityRedis, activityHistory, recentEvents]);
+
+  const openModelKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const name of names) {
+      for (const key of providers[name]?.rollup?.open_keys ?? []) {
+        keys.add(key);
+      }
+    }
+    return [...keys].sort();
+  }, [names, providers]);
+
   const refetchAll = () => {
     refetch();
     activityQuery.refetch();
@@ -369,54 +414,41 @@ export default function CircuitPage() {
         }
         source={range === "today" ? circuitLiveSource(cb?.backend) : failureStatSource}
       >
-        <div className="overflow-x-auto">
-          <table className="table table-zebra">
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>State</th>
-                <th>{range === "today" ? "Failures" : "Peak failures"}</th>
-                <th>Rollup</th>
-                <th>Threshold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {names.map((name) => {
-                const p = providers[name];
-                const state = p.state ?? p.error ?? "unknown";
-                const failures =
-                  range === "today" || !hasFailureRedis
-                    ? (p.failures ?? "—")
-                    : (providerFailurePeaks.get(name) ?? 0);
-                return (
-                  <tr key={name}>
-                    <td>
-                      <ProviderBadge provider={name} />
-                    </td>
-                    <td>
-                      <StatusBadge
-                        active={state === "closed"}
-                        activeLabel="closed"
-                        inactiveLabel={state}
-                      />
-                    </td>
-                    <td>{failures}</td>
-                    <td>{p.rollup?.open ? "open" : p.rollup?.enabled ? "closed" : "—"}</td>
-                    <td>{p.rollup?.threshold ?? "—"}</td>
-                  </tr>
-                );
-              })}
-              {names.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="text-center text-base-content/50">
-                    No provider data
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <CircuitProvidersTable
+          names={names}
+          providers={providers}
+          range={range}
+          hasFailureRedis={hasFailureRedis}
+          providerFailurePeaks={providerFailurePeaks}
+        />
       </SectionPanel>
+
+      {activity?.available ? (
+        <SectionPanel
+          title="Blocked by model"
+          subtitle={`Fleet-wide blocked (open) totals per breaker key (provider:model) · ${rangeLabel(range)}`}
+          source={activitySource}
+        >
+          <BlockedByKeyTable rows={blockedByKey} />
+          {openModelKeys.length > 0 ? (
+            <div className="border-t border-base-300 px-5 py-4">
+              <p className="mb-2 text-xs font-medium text-base-content/70">
+                Models in rollup window (currently degraded)
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {openModelKeys.map((key) => {
+                  const { model, scope } = parseBreakerKey(key, scopeKind(key));
+                  return (
+                    <span key={key} className="badge badge-outline font-mono text-xs">
+                      {scope === "model" ? model : key}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </SectionPanel>
+      ) : null}
 
       {activity?.available ? (
         <SectionPanel
@@ -428,56 +460,12 @@ export default function CircuitPage() {
           }
           source={activitySource}
         >
-          <div className="overflow-x-auto">
-            <table className="table table-zebra table-sm">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Event</th>
-                  <th>Provider</th>
-                  <th>Key</th>
-                  <th>Result</th>
-                  <th>Detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentEvents.map((e: CircuitActivityEvent, i) => (
-                  <tr key={`${e.time}-${e.kind}-${i}`}>
-                    <td className="whitespace-nowrap text-xs">{formatEventTime(e.time)}</td>
-                    <td>{eventLabel(e.kind)}</td>
-                    <td>
-                      <ProviderBadge provider={e.provider} />
-                    </td>
-                    <td className="font-mono text-xs">{e.key ?? "—"}</td>
-                    <td>
-                      {e.new_state ? (
-                        <StatusBadge
-                          active={e.new_state === "closed"}
-                          activeLabel="closed"
-                          inactiveLabel={e.new_state}
-                        />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="text-xs text-base-content/70">
-                      {e.status_code ? `HTTP ${e.status_code}` : null}
-                      {e.failure_kind ? ` ${e.failure_kind}` : null}
-                      {e.reason ? e.reason : null}
-                    </td>
-                  </tr>
-                ))}
-                {recentEvents.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center text-base-content/50">
-                      No recovery probes in this window — events appear when a cooldown ends and the
-                      breaker probes upstream, or when requests are blocked while open.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+          <CircuitActivityTable
+            events={recentEvents}
+            formatEventTime={formatEventTime}
+            eventLabel={eventLabel}
+            parseBreakerKey={parseBreakerKey}
+          />
         </SectionPanel>
       ) : null}
     </div>
