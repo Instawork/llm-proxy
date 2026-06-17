@@ -63,7 +63,11 @@ func (r *Runner) piiPresidioRedaction(ctx context.Context) (bool, string) {
 		return false, msg
 	}
 	statsBefore, _ := piiCfg["stats"].(map[string]any)
-	recentBefore := live.PIIStatsRecentCount(statsBefore)
+	// Use the monotonic, uncapped counters as the growth signal. The `recent`
+	// list is a bounded ring buffer (≤50), so it saturates after enough PII
+	// traffic and can no longer "grow" — requests_scanned/with_pii do not.
+	scannedBefore := live.PIIStatsScanned(statsBefore)
+	withPIIBefore := live.PIIStatsWithPII(statsBefore)
 
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
@@ -86,7 +90,7 @@ func (r *Runner) piiPresidioRedaction(ctx context.Context) (bool, string) {
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
-	var recentAfter int
+	var scannedAfter, withPIIAfter float64
 	var outcome string
 	var entityTotal float64
 	for time.Now().Before(deadline) {
@@ -95,18 +99,19 @@ func (r *Runner) piiPresidioRedaction(ctx context.Context) (bool, string) {
 			return false, err.Error()
 		}
 		statsAfter, _ := piiAfter["stats"].(map[string]any)
-		recentAfter = live.PIIStatsRecentCount(statsAfter)
+		scannedAfter = live.PIIStatsScanned(statsAfter)
+		withPIIAfter = live.PIIStatsWithPII(statsAfter)
 		outcome = live.PIILatestRecentOutcome(statsAfter)
 		entityTotal = live.PIILatestRecentEntityTotal(statsAfter)
-		if recentAfter > recentBefore && outcome == "ok" && entityTotal > 0 {
-			return true, fmt.Sprintf("recent %d→%d outcome=%s entities=%.0f", recentBefore, recentAfter, outcome, entityTotal)
+		if scannedAfter > scannedBefore && withPIIAfter > withPIIBefore && outcome == "ok" && entityTotal > 0 {
+			return true, fmt.Sprintf("scanned %.0f→%.0f with_pii %.0f→%.0f outcome=%s entities=%.0f", scannedBefore, scannedAfter, withPIIBefore, withPIIAfter, outcome, entityTotal)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	if outcome == "fail_open" {
 		return false, "Presidio analyze failed (fail_open) — run `make test-pii-up` and restart fuzz proxy"
 	}
-	return false, fmt.Sprintf("recent events did not grow with PII detection (before=%d after=%d outcome=%s entities=%.0f)", recentBefore, recentAfter, outcome, entityTotal)
+	return false, fmt.Sprintf("PII counters did not grow with detection (scanned %.0f→%.0f with_pii %.0f→%.0f outcome=%s entities=%.0f)", scannedBefore, scannedAfter, withPIIBefore, withPIIAfter, outcome, entityTotal)
 }
 
 // piiWireRestoreEmail exercises MASK-tier wire restore: Presidio scrubs the
