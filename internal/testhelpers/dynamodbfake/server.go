@@ -127,17 +127,17 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "PutItem":
 		tableName, _ := input["TableName"].(string)
 		item, _ := input["Item"].(map[string]any)
-		pk := ExtractDDBString(item, "pk")
+		storageKey := storageKeyFromAttrs(item)
 		if f.tables[tableName] == nil {
 			f.tables[tableName] = make(map[string]any)
 		}
-		f.tables[tableName][pk] = item
+		f.tables[tableName][storageKey] = item
 		_, _ = w.Write([]byte(`{}`))
 	case "GetItem":
 		tableName, _ := input["TableName"].(string)
 		key, _ := input["Key"].(map[string]any)
-		pk := ExtractDDBString(key, "pk")
-		item := f.tables[tableName][pk]
+		storageKey := storageKeyFromAttrs(key)
+		item := f.tables[tableName][storageKey]
 		if item == nil {
 			_, _ = w.Write([]byte(`{}`))
 			return
@@ -146,33 +146,58 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "DeleteItem":
 		tableName, _ := input["TableName"].(string)
 		key, _ := input["Key"].(map[string]any)
-		pk := ExtractDDBString(key, "pk")
+		storageKey := storageKeyFromAttrs(key)
 		conditionExpr, _ := input["ConditionExpression"].(string)
-		if strings.Contains(conditionExpr, "attribute_exists") && f.tables[tableName][pk] == nil {
+		if strings.Contains(conditionExpr, "attribute_exists") && f.tables[tableName][storageKey] == nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
 			return
 		}
 		if f.tables[tableName] != nil {
-			delete(f.tables[tableName], pk)
+			delete(f.tables[tableName], storageKey)
 		}
 		_, _ = w.Write([]byte(`{}`))
 	case "UpdateItem":
-		// Stub UpdateItem: we do not parse DynamoDB UpdateExpressions
-		// here. Tests that need to assert mutated field values should
-		// either drive the store through PutItem (CreateKey) or use the
-		// expressive fake methods (InjectItem). Returning 200 keeps the
-		// happy path green for callers that only assert no error.
+		tableName, _ := input["TableName"].(string)
+		key, _ := input["Key"].(map[string]any)
+		storageKey := storageKeyFromAttrs(key)
+		conditionExpr, _ := input["ConditionExpression"].(string)
+		item, exists := f.tables[tableName][storageKey]
+		if strings.Contains(conditionExpr, "attribute_exists") && !exists {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
+			return
+		}
+		if exists {
+			itemMap, _ := item.(map[string]any)
+			if vals, ok := input["ExpressionAttributeValues"].(map[string]any); ok {
+				if role := extractAttrValueString(vals, ":role"); role != "" {
+					itemMap["role"] = map[string]any{"S": role}
+				}
+				if updated := extractAttrValueString(vals, ":updated_at"); updated != "" {
+					itemMap["updated_at"] = map[string]any{"S": updated}
+				}
+			}
+			f.tables[tableName][storageKey] = itemMap
+		}
 		_, _ = w.Write([]byte(`{}`))
 	case "Query", "Scan":
 		tableName, _ := input["TableName"].(string)
 		filterExpr, _ := input["FilterExpression"].(string)
 		attrValues, _ := input["ExpressionAttributeValues"].(map[string]any)
 		var items []any
-		for pk, it := range f.tables[tableName] {
+		for _, it := range f.tables[tableName] {
+			item, _ := it.(map[string]any)
+			if filterExpr != "" && strings.Contains(filterExpr, "sk =") {
+				wantSK := extractAttrValueString(attrValues, ":profile")
+				if wantSK != "" && ExtractDDBString(item, "sk") != wantSK {
+					continue
+				}
+			}
 			if filterExpr != "" && strings.Contains(filterExpr, "begins_with") {
+				pkVal := ExtractDDBString(item, "pk")
 				pfx := extractAttrValueString(attrValues, ":pfx")
-				if pfx != "" && !strings.HasPrefix(pk, pfx) {
+				if pfx != "" && !strings.HasPrefix(pkVal, pfx) {
 					continue
 				}
 			}
@@ -202,6 +227,15 @@ func ExtractDDBString(m map[string]any, k string) string {
 		}
 	}
 	return ""
+}
+
+func storageKeyFromAttrs(m map[string]any) string {
+	pk := ExtractDDBString(m, "pk")
+	sk := ExtractDDBString(m, "sk")
+	if sk != "" {
+		return pk + "\x00" + sk
+	}
+	return pk
 }
 
 func extractAttrValueString(attrs map[string]any, key string) string {

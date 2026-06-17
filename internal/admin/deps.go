@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/provision"
@@ -16,6 +17,8 @@ type Deps struct {
 	YAMLConfig       *config.YAMLConfig
 	APIKeyStore      *apikeys.Store
 	APIKeyStoreError error
+	UserStore        *adminusers.Store
+	UserStoreError   error
 	RateLimiter      ratelimit.RateLimiter
 	HealthFunc       http.HandlerFunc
 	CostSummary      func() map[string]interface{}

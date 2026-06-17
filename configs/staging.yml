@@ -22,6 +22,10 @@ features:
     key_prefix: "iw"
     provisioning:
       enabled: false
+  admin_dashboard:
+    users:
+      dynamodb:
+        table_name: "llm-proxy-admin-users-staging"
   # Circuit breaker: enforce mode (matching production).
   circuit_breaker:
     enabled: true

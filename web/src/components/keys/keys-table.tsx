@@ -18,6 +18,7 @@ interface KeysTableProps {
   onShare: (record: APIKey) => void;
   onEdit: (record: APIKey) => void;
   onDelete: (record: APIKey) => void;
+  canDelete?: boolean;
   sharingKey?: string | null;
   maskKey: (key: string) => string;
   formatRateLimits: (record: APIKey) => string;
@@ -28,6 +29,7 @@ export default function KeysTable({
   onShare,
   onEdit,
   onDelete,
+  canDelete = true,
   sharingKey,
   maskKey,
   formatRateLimits,
@@ -113,18 +115,20 @@ export default function KeysTable({
             <button type="button" className="btn btn-ghost btn-xs" onClick={() => onEdit(row.original)}>
               Edit
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs text-error"
-              onClick={() => onDelete(row.original)}
-            >
-              Delete
-            </button>
+            {canDelete ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs text-error"
+                onClick={() => onDelete(row.original)}
+              >
+                Delete
+              </button>
+            ) : null}
           </div>
         ),
       },
     ],
-    [keys, maskKey, formatRateLimits, onShare, onEdit, onDelete, sharingKey],
+    [keys, maskKey, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey],
   );
 
   return (

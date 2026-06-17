@@ -74,6 +74,13 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
+    users:
+      dynamodb:
+        region: "us-west-2"
+        table_name: "llm-proxy-admin-users"
+        auto_create_table: false
+    editor_limits:
+      max_daily_cost_limit_cents: 10000
   # ---------------------------------------------------------------------------
   # Row history (gzipped JSONL archive — independent of Redis rollups)
   # ---------------------------------------------------------------------------

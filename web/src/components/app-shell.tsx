@@ -105,6 +105,16 @@ function ConfigIcon() {
   );
 }
 
+function UsersIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
 function SidebarUserFooter({
   user,
   displayName,
@@ -123,6 +133,9 @@ function SidebarUserFooter({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-base-content">{displayName}</p>
           {user?.email ? <p className="truncate text-xs text-base-content/60">{user.email}</p> : null}
+          {user?.role ? (
+            <p className="mt-0.5 truncate text-[0.65rem] uppercase tracking-wide text-base-content/45">{user.role}</p>
+          ) : null}
         </div>
       </div>
       <div className="mt-2">
@@ -159,26 +172,30 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const isActive = (to: string) => (to === "/" ? location.pathname === "/" : location.pathname.startsWith(to));
 
-  const navSections = [
-    {
-      heading: "Monitoring",
-      items: [
-        { to: "/", label: "Overview", icon: <DashboardIcon /> },
-        { to: "/usage", label: "Usage", icon: <UsageIcon /> },
-        { to: "/circuit", label: "Circuit Breaker", icon: <CircuitIcon /> },
-        { to: "/rate-limits", label: "Rate Limits", icon: <GaugeIcon /> },
-        { to: "/cost", label: "Cost Tracking", icon: <CostIcon /> },
-        { to: "/pii", label: "PII Redaction", icon: <ShieldIcon /> },
-      ],
-    },
-    {
-      heading: "Manage",
-      items: [
-        { to: "/keys", label: "API Keys", icon: <KeyIcon /> },
-        { to: "/config", label: "Configuration", icon: <ConfigIcon /> },
-      ],
-    },
+  const role = me?.role ?? "viewer";
+
+  const monitoringItems = [
+    { to: "/", label: "Overview", icon: <DashboardIcon /> },
+    { to: "/usage", label: "Usage", icon: <UsageIcon /> },
+    { to: "/circuit", label: "Circuit Breaker", icon: <CircuitIcon /> },
+    { to: "/rate-limits", label: "Rate Limits", icon: <GaugeIcon /> },
+    { to: "/cost", label: "Cost Tracking", icon: <CostIcon /> },
+    { to: "/pii", label: "PII Redaction", icon: <ShieldIcon /> },
   ];
+
+  const manageItems: { to: string; label: string; icon: React.ReactElement }[] = [];
+  if (role === "editor" || role === "admin") {
+    manageItems.push({ to: "/keys", label: "API Keys", icon: <KeyIcon /> });
+  }
+  if (role === "admin") {
+    manageItems.push({ to: "/config", label: "Configuration", icon: <ConfigIcon /> });
+    manageItems.push({ to: "/users", label: "Users", icon: <UsersIcon /> });
+  }
+
+  const navSections = [{ heading: "Monitoring", items: monitoringItems }];
+  if (manageItems.length > 0) {
+    navSections.push({ heading: "Manage", items: manageItems });
+  }
 
   const displayName = me?.name || me?.email?.split("@")[0] || "User";
 

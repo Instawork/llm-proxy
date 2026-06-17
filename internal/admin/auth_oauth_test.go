@@ -201,7 +201,7 @@ func TestNewAuthenticator_AllowedDomainHonorsEnvOverride(t *testing.T) {
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		AllowedDomain:  "example.com",
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "instawork.com", auth.allowedDomain)
 	assert.True(t, auth.isAllowedUser("alice@instawork.com", "instawork.com"))
@@ -449,7 +449,7 @@ func TestNewAuthenticator_DevBypassWithoutGoogleOAuth(t *testing.T) {
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		AllowedDomain:  "example.com",
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, auth.oauthConfig)
 	assert.True(t, auth.devBypass)
@@ -466,7 +466,7 @@ func TestNewAuthenticator_RequiresSessionSecretInProd(t *testing.T) {
 	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "")
 	_, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: false,
-	})
+	}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "LLM_PROXY_ADMIN_SESSION_SECRET")
 }

@@ -2,11 +2,38 @@ export type Provider = "openai" | "anthropic" | "gemini" | "bedrock";
 
 export type PiiRedactSetting = boolean | null;
 
+export type AdminRole = "admin" | "editor" | "viewer";
+
+export interface EditorLimits {
+  max_daily_cost_limit_cents: number;
+}
+
 export interface AdminUser {
   email: string;
   name?: string;
   picture?: string;
+  role?: AdminRole;
   can_bypass_pii_off_non_bedrock_policy?: boolean;
+  editor_limits?: EditorLimits;
+}
+
+export interface AdminUserRecord {
+  email: string;
+  name?: string;
+  picture?: string;
+  role: AdminRole;
+  created_at: string;
+  updated_at: string;
+  last_login_at?: string;
+}
+
+export interface CreateAdminUserRequest {
+  email: string;
+  role: AdminRole;
+}
+
+export interface UpdateAdminUserRoleRequest {
+  role: AdminRole;
 }
 
 export interface APIKey {

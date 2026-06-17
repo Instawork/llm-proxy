@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/testhelpers/dynamodbfake"
@@ -17,26 +18,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testAdminUserStore(t *testing.T) *adminusers.Store {
+	t.Helper()
+	store, err := adminusers.NewStore(adminusers.StoreConfig{
+		TableName:       "test-admin-users",
+		Region:          "us-west-2",
+		AutoCreateTable: true,
+	})
+	require.NoError(t, err)
+	return store
+}
+
 func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 	t.Helper()
 	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "test-secret-at-least-32-bytes-long")
+	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "admin@example.com")
 
 	fake := dynamodbfake.New(t)
 	dynamodbfake.UseFakeDynamo(t, fake.URL())
 	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2"})
 	require.NoError(t, err)
 
+	userStore := testAdminUserStore(t)
+	_, err = userStore.CreateUser(context.Background(), "admin@example.com", adminusers.RoleAdmin)
+	require.NoError(t, err)
+
 	yamlCfg := config.GetDefaultYAMLConfig()
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
 	yamlCfg.Features.AdminDashboard.DevCORSOrigin = "http://localhost:5173"
+	yamlCfg.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents = 5000
 
-	auth, err := newAuthenticator(slog.Default(), yamlCfg.Features.AdminDashboard)
+	auth, err := newAuthenticator(slog.Default(), yamlCfg.Features.AdminDashboard, userStore)
 	require.NoError(t, err)
 
 	h := newHandler(Deps{
 		Logger:      slog.Default(),
 		YAMLConfig:  yamlCfg,
 		APIKeyStore: store,
+		UserStore:   userStore,
 	}, auth)
 	return h, store
 }

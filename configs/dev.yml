@@ -50,6 +50,10 @@ features:
   admin_dashboard:
     enabled: true
     dev_bypass_login: true
+    users:
+      dynamodb:
+        table_name: "llm-proxy-admin-users-dev"
+        auto_create_table: true
     rollups:
       enabled: true
       redis:
