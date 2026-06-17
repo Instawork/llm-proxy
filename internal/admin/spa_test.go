@@ -43,6 +43,7 @@ func TestMountSPA_ServesIndexForClientRoutes(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, body, "<!doctype html>")
 	assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "no-cache, no-store, must-revalidate", rec.Header().Get("Cache-Control"))
 }
 
 func TestMountSPA_MissingAssetReturns404(t *testing.T) {

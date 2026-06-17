@@ -51,6 +51,9 @@ func mountSPA(adminRouter *mux.Router) {
 			serveSPAIndex(w, dist)
 			return
 		}
+		if strings.HasPrefix(rel, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		fileServer.ServeHTTP(w, r)
 	}))
 }
@@ -68,5 +71,8 @@ func serveSPAIndex(w http.ResponseWriter, dist fs.FS) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Always revalidate the HTML shell so deploys don't leave browsers pointing at
+	// stale hashed bundle names (Vite renames assets every build).
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Write(data) //nolint:errcheck
 }
