@@ -328,6 +328,36 @@ When `test_mode_enabled: true`, the proxy honours an `X-LLM-Proxy-Test-Mode` req
 
 This is intended strictly for integration tests — leave `test_mode_enabled` off in production.
 
+#### Fake upstream mode (local fuzzing)
+
+For local rate-limit / cost / circuit-breaker fuzzing without calling real LLM providers, use the `fuzz` environment overlay:
+
+```bash
+ENVIRONMENT=fuzz \
+  LLM_PROXY_ALLOW_FAKE_MODE=1 \
+  LLM_PROXY_ALLOW_TEST_MODE=1 \
+  docker compose up -d
+```
+
+Both gates are required:
+
+- `features.fake_upstream.enabled: true` in [`configs/fuzz.yml`](configs/fuzz.yml)
+- `LLM_PROXY_ALLOW_FAKE_MODE=1` in the process environment
+
+When active, the proxy returns synthetic provider-shaped JSON (with realistic `usage` metadata) from an inner fake transport. Optional chaos failures (`chaos_failure_rate` or per-request `X-LLM-Proxy-Fake-Chaos-Rate`) exercise the circuit breaker. **Never enable fake upstream in production.**
+
+Run fuzz scenarios against a running fuzz-mode proxy:
+
+```bash
+make fuzz              # smoke: ratelimit + cost + circuit trip
+make fuzz-all          # every scenario
+make fuzz-chaos        # circuit / mixed / latency
+make fuzz-test         # go test -race ./internal/fake/...
+go run ./integration/cmd/llm-proxy-fuzz -scenario cost-jsonl-count -seed 42
+```
+
+Use `ENVIRONMENT=fuzz-mem` for the in-memory rate-limit / circuit backend matrix (no Redis).
+
 #### Bypassing the breaker
 
 Some callers cannot tolerate a fast-fail with a synthetic 503 — they have no fallback wired up and would rather try the real upstream and accept whatever it returns (including a real 5xx). For those callers the proxy honours an opt-in bypass header:

@@ -1,0 +1,97 @@
+# Fuzz / fake-upstream overlay (ENVIRONMENT=fuzz).
+# Requires LLM_PROXY_ALLOW_FAKE_MODE=1 and LLM_PROXY_ALLOW_TEST_MODE=1 in process env.
+
+enabled: true
+
+features:
+  fake_upstream:
+    enabled: true
+    chaos_failure_rate: 0.15
+    chaos_seed: 0
+    latency_ms: 0
+    jitter_ms: 0
+  cost_tracking:
+    enabled: true
+    async: true
+    workers: 3
+    queue_size: 50
+    flush_interval: 2
+    transports:
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking.jsonl"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys-fuzz"
+    region: "us-west-2"
+    key_prefix: "iw"
+    auto_create_table: true
+    provisioning:
+      enabled: false
+  circuit_breaker:
+    enabled: true
+    mode: enforce
+    backend: "redis"
+    redis:
+      address: "redis:6379"
+      db: 5
+    failure_threshold: 3
+    window_seconds: 60
+    cooldown_seconds: 10
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    global_rate_limit_escalation_window: 60
+    retry_contribution_mode: "log"
+    test_mode_enabled: true
+  admin_dashboard:
+    enabled: true
+    dev_bypass_login: true
+    users:
+      dynamodb:
+        table_name: "llm-proxy-admin-users-fuzz"
+        region: "us-west-2"
+        auto_create_table: true
+    rollups:
+      enabled: true
+      redis:
+        address: "redis:6379"
+        db: 6
+      retention_days: 7
+      history_days: 7
+  pii_redact:
+    enabled: false
+  redact_api:
+    enabled: false
+  rate_limiting:
+    enabled: true
+    backend: "redis"
+    estimation:
+      max_sample_bytes: 200000
+      bytes_per_token: 4
+      chars_per_token: 4
+      provider_chars_per_token:
+        openai: 5
+        anthropic: 3
+    limits:
+      requests_per_minute: 0
+      tokens_per_minute: 0
+      requests_per_day: 0
+      tokens_per_day: 0
+    redis:
+      address: "redis:6379"
+      password: ""
+      db: 4
+  history:
+    backend: local
+    role: global
+    streams: [cost, usage, ratelimit]
+    max_records: 100
+    max_bytes: 1048576
+    max_age_seconds: 60
+    gzip: true
+    local:
+      dir: logs/history
+
+providers:
+  bedrock:
+    enabled: false

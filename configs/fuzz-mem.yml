@@ -1,0 +1,62 @@
+# Fuzz overlay with in-memory rate limit + circuit stores (ENVIRONMENT=fuzz-mem).
+# Same fake-upstream profile as fuzz.yml but no Redis dependency for backend matrix runs.
+
+enabled: true
+
+features:
+  fake_upstream:
+    enabled: true
+    chaos_failure_rate: 0.15
+    chaos_seed: 0
+  circuit_breaker:
+    enabled: true
+    mode: enforce
+    backend: memory
+    failure_threshold: 3
+    window_seconds: 60
+    cooldown_seconds: 10
+    max_transient_retries: 2
+    max_rate_limit_retries: 2
+    test_mode_enabled: true
+  rate_limiting:
+    enabled: true
+    backend: memory
+    limits:
+      requests_per_minute: 0
+      tokens_per_minute: 0
+      requests_per_day: 0
+      tokens_per_day: 0
+  cost_tracking:
+    enabled: true
+    async: true
+    workers: 3
+    queue_size: 50
+    flush_interval: 2
+    transports:
+      - type: "file"
+        file:
+          path: "./logs/cost-tracking.jsonl"
+  api_key_management:
+    enabled: true
+    table_name: "llm-proxy-api-keys-fuzz-mem"
+    region: "us-west-2"
+    key_prefix: "iw"
+    auto_create_table: true
+  admin_dashboard:
+    enabled: true
+    dev_bypass_login: true
+    users:
+      dynamodb:
+        table_name: "llm-proxy-admin-users-fuzz-mem"
+        region: "us-west-2"
+        auto_create_table: true
+    rollups:
+      enabled: false
+  pii_redact:
+    enabled: false
+  redact_api:
+    enabled: false
+
+providers:
+  bedrock:
+    enabled: false

@@ -91,6 +91,11 @@ help:
 	@echo "  test-live      - Run standalone HTTP integration CLI (needs running proxy)"
 	@echo "  test-live-pii  - Bring up Presidio + run live admin/pii/presidio suites"
 	@echo "  test-live-snippets - Verify share-box snippets (see integration/snippets/README.md)"
+	@echo "  fuzz-test      - Run fake-mode unit tests with -race"
+	@echo "  fuzz           - Smoke fuzz scenarios (needs fuzz-mode proxy)"
+	@echo "  fuzz-all       - All fuzz scenarios"
+	@echo "  fuzz-chaos     - Circuit/chaos fuzz scenarios"
+	@echo "  fuzz-matrix    - Rate-limit/circuit scenarios on Redis + memory backends"
 	@echo "  install-snippet-deps - Install node/python/go deps for snippet smoke tests"
 	@echo "  install-live-deps - install-snippet-deps (alias)"
 	@echo "  build-live     - Build the llm-proxy-live integration binary"
@@ -330,6 +335,46 @@ test-live-pii: test-pii-up build-live
 	@echo "$(BLUE)Running live PII integration checks (Presidio + admin/pii suites)...$(NC)"
 	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-live -suite presidio,pii,admin $(LIVE_ARGS)
 	@echo "$(GREEN)✓ Live PII integration checks completed$(NC)"
+
+FUZZ_BINARY=$(LIVE_INTEGRATION_DIR)/bin/llm-proxy-fuzz
+FUZZ_ARGS?=-workers 4 -requests 25 -seed 42
+
+.PHONY: build-fuzz
+build-fuzz:
+	@echo "$(BLUE)Building llm-proxy-fuzz CLI...$(NC)"
+	@mkdir -p $(LIVE_INTEGRATION_DIR)/bin
+	@cd $(LIVE_INTEGRATION_DIR) && go build -o bin/llm-proxy-fuzz ./cmd/llm-proxy-fuzz
+	@echo "$(GREEN)✓ Build completed: $(FUZZ_BINARY)$(NC)"
+
+.PHONY: fuzz-test
+fuzz-test:
+	@echo "$(BLUE)Running fake-mode unit tests with -race...$(NC)"
+	@go test -race ./internal/fake/... ./cmd/llm-proxy/... -count=1
+	@echo "$(GREEN)✓ fuzz-test completed$(NC)"
+
+.PHONY: fuzz
+fuzz: build-fuzz
+	@echo "$(BLUE)Running fuzz smoke scenarios...$(NC)"
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario smoke $(FUZZ_ARGS)
+	@echo "$(GREEN)✓ fuzz smoke completed$(NC)"
+
+.PHONY: fuzz-all
+fuzz-all: build-fuzz
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario all $(FUZZ_ARGS)
+
+.PHONY: fuzz-chaos
+fuzz-chaos: build-fuzz
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario chaos -seed 42 $(FUZZ_ARGS)
+
+.PHONY: fuzz-matrix
+fuzz-matrix: build-fuzz
+	@echo "$(BLUE)Fuzz matrix: Redis backend (ENVIRONMENT=fuzz)...$(NC)"
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario matrix $(FUZZ_ARGS)
+	@echo "$(BLUE)Fuzz matrix: memory backend — restart proxy with ENVIRONMENT=fuzz-mem first$(NC)"
+
+.PHONY: fuzz-race
+fuzz-race: build-fuzz
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario "ratelimit-race,cost-concurrent-async,circuit-mixed" -workers 16 -requests 8 -seed 42
 
 .PHONY: test-live-snippets
 test-live-snippets: build-live install-snippet-deps

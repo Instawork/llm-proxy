@@ -52,6 +52,7 @@ type FeaturesConfig struct {
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
 	RedactAPI        RedactAPIConfig        `yaml:"redact_api"`
+	FakeUpstream     FakeUpstreamConfig     `yaml:"fake_upstream"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 	History          HistoryConfig          `yaml:"history"`
 }
@@ -153,6 +154,16 @@ type RedactAPIConfig struct {
 	// DevAllowUnauthenticated skips iw-* auth on POST /redact. Allowed only when
 	// ENVIRONMENT=dev and features.admin_dashboard.dev_bypass_login is true.
 	DevAllowUnauthenticated bool `yaml:"dev_allow_unauthenticated,omitempty"`
+}
+
+// FakeUpstreamConfig gates synthetic LLM responses for local fuzzing.
+// Requires LLM_PROXY_ALLOW_FAKE_MODE=1 in addition to enabled: true.
+type FakeUpstreamConfig struct {
+	Enabled          bool    `yaml:"enabled"`
+	ChaosFailureRate float64 `yaml:"chaos_failure_rate"`
+	ChaosSeed        int64   `yaml:"chaos_seed"`
+	LatencyMS        int     `yaml:"latency_ms"`
+	JitterMS         int     `yaml:"jitter_ms"`
 }
 
 // AdminDashboardConfig gates the /admin UI and JSON API.
