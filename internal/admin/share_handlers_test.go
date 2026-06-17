@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
@@ -18,8 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func ensureTestDynamoFake(t *testing.T) {
+	t.Helper()
+	if os.Getenv("AWS_ACCESS_KEY_ID") == "test" && os.Getenv("AWS_ENDPOINT_URL") != "" {
+		return
+	}
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+}
+
 func testAdminUserStore(t *testing.T) *adminusers.Store {
 	t.Helper()
+	ensureTestDynamoFake(t)
 	store, err := adminusers.NewStore(adminusers.StoreConfig{
 		TableName:       "test-admin-users",
 		Region:          "us-west-2",
@@ -34,8 +45,7 @@ func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "test-secret-at-least-32-bytes-long")
 	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "admin@example.com")
 
-	fake := dynamodbfake.New(t)
-	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	ensureTestDynamoFake(t)
 	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2"})
 	require.NoError(t, err)
 
