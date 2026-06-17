@@ -340,6 +340,123 @@ func (r *Runner) costLimitAtomicityStress(ctx context.Context) (bool, string) {
 		fired, ok, blocked, other, maxAllowed, perReq, spent, capUSD)
 }
 
+// costRollupAggregation proves the Redis cost rollup (the by_key INCRBYFLOAT
+// aggregation read by /admin/api/cost spend_today_usd) stays consistent with
+// the authoritative per-record JSONL ledger under a concurrent write burst. A
+// non-atomic float aggregation would drop updates and drift below the recorded
+// sum. Scenarios run serially, so the global spend delta isolates this burst.
+func (r *Runner) costRollupAggregation(ctx context.Context) (bool, string) {
+	costBefore, err := r.admin.CostConfig(ctx)
+	if err != nil {
+		return false, "admin /cost: " + err.Error()
+	}
+	statsBefore, _ := costBefore["stats"].(map[string]any)
+	if !live.CostStatsAvailable(statsBefore) {
+		return false, "cost rollup stats unavailable (spend_today) — cannot verify aggregation"
+	}
+	spendBefore := live.CostStatsSpendToday(statsBefore)
+
+	kh := newKeyHelper(r.admin)
+	defer kh.cleanup(ctx)
+	key, err := kh.createWithCost(ctx, "fuzz-rollup-agg", 100_000, 500_000_000, fuzzCostLimitHigh)
+	if err != nil {
+		return false, err.Error()
+	}
+	zero := 0.0
+	const fired = 200
+	const workers = 64
+	jsonlBefore, _ := CountLines(r.cfg.CostFile)
+	results := r.proxy.Burst(ctx, fired, workers, func(c context.Context) ChatResult {
+		return r.proxy.OpenAIChat(c, ChatOpts{APIKey: key, ChaosRate: &zero, OutputTok: 50_000})
+	})
+	ok := 0
+	for _, res := range results {
+		if res.Status == http.StatusOK {
+			ok++
+		}
+	}
+	if ok < 1 {
+		return false, "no successful requests in rollup burst"
+	}
+	recs, err := waitCostFlush(ctx, r.cfg.CostFile, jsonlBefore, ok)
+	if err != nil {
+		return false, "jsonl ledger did not flush all records: " + err.Error()
+	}
+	jsonlSum := SumCost(recs)
+
+	// The rollup may lag the ledger; poll until the global spend delta matches
+	// the recorded sum within a rounding tolerance (1% + per-record rounding).
+	tol := jsonlSum*0.01 + float64(ok)*0.0001
+	deadline := time.Now().Add(10 * time.Second)
+	var delta float64
+	for time.Now().Before(deadline) {
+		costAfter, err := r.admin.CostConfig(ctx)
+		if err != nil {
+			return false, err.Error()
+		}
+		statsAfter, _ := costAfter["stats"].(map[string]any)
+		delta = live.CostStatsSpendToday(statsAfter) - spendBefore
+		if math.Abs(delta-jsonlSum) <= tol {
+			return true, fmt.Sprintf("rollup matches ledger: records=%d jsonlSum=%.6f rollupDelta=%.6f (tol=%.6f)", ok, jsonlSum, delta, tol)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false, fmt.Sprintf("ROLLUP DRIFT: rollupDelta=%.6f vs jsonlSum=%.6f (records=%d tol=%.6f) — by_key aggregation lost updates", delta, jsonlSum, ok, tol)
+}
+
+// costFailedReleaseStress proves that failed (5xx) requests release their
+// up-front cost reservation under concurrency. A burst of forced-500 requests
+// (each reserves an estimate, then reconciles to zero on failure) must NOT
+// permanently consume the per-KEY cap: a subsequent normal request still
+// succeeds. A reservation leak on the failure path would exhaust the cap.
+//
+// The failure storm runs on a dedicated model so its circuit breaker (keyed by
+// provider:model) opening does not interfere with verification: the follow-up
+// check uses a DIFFERENT model on the same key (fresh circuit), isolating the
+// per-key cost cap from per-model circuit state.
+func (r *Runner) costFailedReleaseStress(ctx context.Context) (bool, string) {
+	kh := newKeyHelper(r.admin)
+	defer kh.cleanup(ctx)
+	// Small cap; the leaked estimates from 300 failures would dwarf it.
+	const capCents int64 = 5 // $0.05
+	key, err := kh.createWithCost(ctx, "fuzz-cost-failed-release", 100_000, 500_000_000, capCents)
+	if err != nil {
+		return false, err.Error()
+	}
+	const failModel = "cost-fail-storm"
+	const checkModel = "cost-fail-check"
+	zero := 0.0
+	const fired = 300
+	const workers = 64
+	results := r.proxy.Burst(ctx, fired, workers, func(c context.Context) ChatResult {
+		return r.proxy.OpenAIChat(c, ChatOpts{APIKey: key, Model: failModel, ChaosRate: &zero, FakeOutcome: "500", OutputTok: 1024})
+	})
+	failed := 0
+	for _, res := range results {
+		if res.Status >= 500 || isDegraded(res) {
+			failed++
+		}
+	}
+	if failed < 1 {
+		return false, fmt.Sprintf("expected forced-500 failures, saw none (fired=%d)", fired)
+	}
+	// After the failure storm, reservations must be released. Poll a normal
+	// request (on a fresh model with a closed circuit) until it succeeds; if
+	// the cap was leaked it stays cost-blocked (402).
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, Model: checkModel, ChaosRate: &zero, FakeOutcome: "success", OutputTok: 8})
+		if res.Status == http.StatusOK {
+			return true, fmt.Sprintf("reservations released after %d concurrent failures; per-key cap still admits", failed)
+		}
+		if !isCostLimitBlocked(res) {
+			return false, fmt.Sprintf("post-failure request unexpected status %d body=%s", res.Status, truncate(res.Body, 120))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false, fmt.Sprintf("RESERVATION LEAK: cap still blocked after %d concurrent failures released no budget", failed)
+}
+
 func (r *Runner) costLimitCreatePersistsLimit(ctx context.Context) (bool, string) {
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)

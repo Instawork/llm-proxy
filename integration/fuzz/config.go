@@ -59,6 +59,29 @@ func AllScenarios() []string {
 		"pii-presidio-redaction",
 		"pii-wire-restore-email",
 		"pii-wire-seal-ssn",
+		"ratelimit-tpm-atomicity-stress",
+		"ratelimit-daily-atomicity-stress",
+		"circuit-half-open-probe-stress",
+		"cost-rollup-aggregation",
+		"cost-failed-release-stress",
+		"pii-concurrent-no-bleed",
+	}
+}
+
+// StressScenarios are the high-concurrency atomicity/race stress tests that
+// hammer the Redis-backed reservation, counter, probe-slot, and rollup paths
+// plus PII cross-request isolation. The PII case requires the Presidio sidecar
+// (make test-pii-up) and pii_redact enabled in configs/fuzz.yml.
+func StressScenarios() []string {
+	return []string{
+		"cost-limit-atomicity-stress",
+		"ratelimit-atomicity-stress",
+		"ratelimit-tpm-atomicity-stress",
+		"ratelimit-daily-atomicity-stress",
+		"circuit-half-open-probe-stress",
+		"cost-rollup-aggregation",
+		"cost-failed-release-stress",
+		"pii-concurrent-no-bleed",
 	}
 }
 
@@ -128,6 +151,9 @@ func ParseScenarioList(raw string) []string {
 	}
 	if raw == "proxy-issues" {
 		return ProxyIssuesScenarios()
+	}
+	if raw == "stress" {
+		return StressScenarios()
 	}
 	if raw == "smoke" {
 		return DefaultSmokeScenarios()

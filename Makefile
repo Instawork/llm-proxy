@@ -372,9 +372,29 @@ fuzz-matrix: build-fuzz
 	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario matrix $(FUZZ_ARGS)
 	@echo "$(BLUE)Fuzz matrix: memory backend — restart proxy with ENVIRONMENT=fuzz-mem first$(NC)"
 
+.PHONY: fuzz-cost-limit
+fuzz-cost-limit: build-fuzz
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario cost-limit $(FUZZ_ARGS)
+
+.PHONY: fuzz-circuit
+fuzz-circuit: build-fuzz
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario circuit $(FUZZ_ARGS)
+
+.PHONY: fuzz-proxy-issues
+fuzz-proxy-issues: build-fuzz test-pii-up
+	@echo "$(YELLOW)Ensure fuzz proxy was restarted after configs/fuzz.yml pii_redact change$(NC)"
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario proxy-issues $(FUZZ_ARGS)
+
 .PHONY: fuzz-race
 fuzz-race: build-fuzz
 	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario "ratelimit-race,cost-concurrent-async,circuit-mixed" -workers 16 -requests 8 -seed 42
+
+.PHONY: fuzz-stress
+fuzz-stress: build-fuzz test-pii-up
+	@echo "$(BLUE)Running high-concurrency atomicity/race stress scenarios...$(NC)"
+	@echo "$(YELLOW)Ensure fuzz proxy was restarted after configs/fuzz.yml pii_redact change (pii-concurrent-no-bleed needs Presidio)$(NC)"
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario stress $(FUZZ_ARGS)
+	@echo "$(GREEN)✓ fuzz stress completed$(NC)"
 
 .PHONY: test-live-snippets
 test-live-snippets: build-live install-snippet-deps

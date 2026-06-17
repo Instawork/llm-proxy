@@ -115,6 +115,62 @@ func (r *Runner) circuitHalfOpenRecovers(ctx context.Context) (bool, string) {
 	return true, "open -> half-open probe success -> closed"
 }
 
+// circuitHalfOpenProbeStress proves the half-open probe slot is single-flight:
+// when a recovering (half-open) circuit is slammed with many concurrent
+// would-succeed requests, EXACTLY ONE may probe the upstream while the rest are
+// fast-failed. The proxy gates the probe behind an atomic Redis SetNX +
+// luaTryStartProbe; a non-atomic gate would let multiple probes hit a fragile
+// upstream simultaneously. The winning probe is held in-flight via latency so
+// the losers observe the slot taken (still half-open) and degrade.
+func (r *Runner) circuitHalfOpenProbeStress(ctx context.Context) (bool, string) {
+	kh := newKeyHelper(r.admin)
+	defer kh.cleanup(ctx)
+	key, err := kh.create(ctx, "fuzz-cb-halfopen-probe-stress", 100_000, 500_000_000)
+	if err != nil {
+		return false, err.Error()
+	}
+	const model = "cb-half-probe-stress"
+
+	if !r.tripModel(ctx, key, model) {
+		return false, "model never returned degraded while tripping"
+	}
+	if open := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, Model: model, FakeOutcome: "success"}); !isDegraded(open) {
+		return false, fmt.Sprintf("pre-cooldown want degraded got %d", open.Status)
+	}
+
+	time.Sleep(circuitCooldownWait) // Open -> Half-Open eligible
+
+	// Thundering herd at the half-open moment. The winning probe sleeps in the
+	// fake upstream (latency) so the slot stays held while losers check it.
+	const fired = 50
+	results := r.proxy.Burst(ctx, fired, fired, func(c context.Context) ChatResult {
+		return r.proxy.OpenAIChat(c, ChatOpts{APIKey: key, Model: model, FakeOutcome: "success", LatencyMS: 800})
+	})
+	ok, degraded, other := 0, 0, 0
+	for _, res := range results {
+		switch {
+		case res.Status == http.StatusOK:
+			ok++
+		case isDegraded(res):
+			degraded++
+		default:
+			other++
+		}
+	}
+	if other != 0 {
+		return false, fmt.Sprintf("unexpected non-200/degraded other=%d (ok=%d degraded=%d fired=%d)", other, ok, degraded, fired)
+	}
+	if ok != 1 {
+		return false, fmt.Sprintf("NON-SINGLE-FLIGHT half-open: admitted ok=%d want exactly 1 probe (degraded=%d fired=%d)", ok, degraded, fired)
+	}
+	// The successful probe must have closed the breaker: traffic resumes.
+	after := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, Model: model, FakeOutcome: "success"})
+	if after.Status != http.StatusOK {
+		return false, fmt.Sprintf("post-probe want 200 (closed) got %d body=%s", after.Status, truncate(after.Body, 120))
+	}
+	return true, fmt.Sprintf("single-flight half-open under load: fired=%d ok=1 degraded=%d then closed", fired, degraded)
+}
+
 // circuitHalfOpenReopens proves a FAILED half-open probe re-opens the breaker
 // for another cooldown instead of closing it.
 func (r *Runner) circuitHalfOpenReopens(ctx context.Context) (bool, string) {

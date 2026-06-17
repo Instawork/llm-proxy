@@ -131,6 +131,18 @@ func (r *Runner) runScenario(ctx context.Context, name string) (bool, string) {
 		return r.costLimitAtomicityStress(ctx)
 	case "ratelimit-atomicity-stress":
 		return r.rateLimitAtomicityStress(ctx)
+	case "ratelimit-tpm-atomicity-stress":
+		return r.rateLimitTPMAtomicityStress(ctx)
+	case "ratelimit-daily-atomicity-stress":
+		return r.rateLimitDailyAtomicityStress(ctx)
+	case "circuit-half-open-probe-stress":
+		return r.circuitHalfOpenProbeStress(ctx)
+	case "cost-rollup-aggregation":
+		return r.costRollupAggregation(ctx)
+	case "cost-failed-release-stress":
+		return r.costFailedReleaseStress(ctx)
+	case "pii-concurrent-no-bleed":
+		return r.piiConcurrentNoBleed(ctx)
 	case "cost-limit-create-persists":
 		return r.costLimitCreatePersistsLimit(ctx)
 	case "circuit-random-trip":

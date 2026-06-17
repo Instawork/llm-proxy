@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/integration/live"
@@ -149,6 +150,74 @@ func (r *Runner) piiWireRestoreEmail(ctx context.Context) (bool, string) {
 		return false, fmt.Sprintf("MASK placeholder leaked to client: %q", truncate(content, 120))
 	}
 	return true, fmt.Sprintf("MASK email restored (%s)", truncate(content, 60))
+}
+
+// piiConcurrentNoBleed fires many concurrent requests, each carrying a UNIQUE
+// email, through the scrub→echo→restore pipeline and asserts every response
+// restores exactly ITS OWN email — never another concurrent request's. This
+// catches cross-request state bleed in the placeholder restore map (e.g. a
+// shared/global mapping) that a sequential test cannot surface. Because each
+// request must see its own value, an A↔B swap is detected (set-equality would
+// not catch it), so we pair sent↔restored per request rather than using Burst.
+func (r *Runner) piiConcurrentNoBleed(ctx context.Context) (bool, string) {
+	if _, ok, msg := r.requirePIIReady(ctx); !ok {
+		return false, msg
+	}
+	kh := newKeyHelper(r.admin)
+	defer kh.cleanup(ctx)
+	key, err := kh.createWithPII(ctx, "fuzz-pii-nobleed", 100_000, 500_000_000, true)
+	if err != nil {
+		return false, err.Error()
+	}
+	zero := 0.0
+	const fired = 60
+	const workers = 32
+	runID := time.Now().UnixNano()
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, workers)
+	var mu sync.Mutex
+	var mismatches []string
+
+	for i := 0; i < fired; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			email := fmt.Sprintf("fuzz-bleed-%d-%d@example.com", runID, i)
+			prompt := fmt.Sprintf("My email is %s. Reply with ONLY that email address and nothing else.", email)
+			res := r.proxy.OpenAIChat(ctx, ChatOpts{
+				APIKey:               key,
+				ChaosRate:            &zero,
+				Content:              prompt,
+				OutputTok:            32,
+				FakeEchoPlaceholders: true,
+			})
+			content, _ := openAIAssistantContent(res.Body)
+			content = normalizeEcho(content)
+			fail := ""
+			switch {
+			case res.Status != http.StatusOK:
+				fail = fmt.Sprintf("status=%d", res.Status)
+			case strings.Contains(content, "<EMAIL_ADDRESS"):
+				fail = fmt.Sprintf("placeholder leaked: %q", truncate(content, 60))
+			case !strings.Contains(content, email):
+				fail = fmt.Sprintf("restored wrong/missing email: sent=%s got=%q", email, truncate(content, 60))
+			}
+			if fail != "" {
+				mu.Lock()
+				mismatches = append(mismatches, fmt.Sprintf("req#%d %s", i, fail))
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(mismatches) > 0 {
+		return false, fmt.Sprintf("PII CROSS-REQUEST BLEED (%d/%d failed): %s", len(mismatches), fired, mismatches[0])
+	}
+	return true, fmt.Sprintf("no bleed: %d concurrent unique-email requests each restored exactly its own (workers=%d)", fired, workers)
 }
 
 // piiWireSealSSN exercises SEAL-tier opacity: even when the fake upstream
