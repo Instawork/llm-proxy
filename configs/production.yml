@@ -112,6 +112,10 @@ features:
     # value in auth.go). Keep the neutral placeholder here so no private
     # domain ships in the repo.
     allowed_domain: "example.com"
+    users:
+      dynamodb:
+        table_name: "llm-proxy-admin-users"
+        region: "us-west-2"
     rollups:
       enabled: true
       redis:

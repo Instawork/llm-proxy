@@ -26,6 +26,7 @@ features:
     users:
       dynamodb:
         table_name: "llm-proxy-admin-users-staging"
+        region: "us-west-2"
   # Circuit breaker: enforce mode (matching production).
   circuit_breaker:
     enabled: true
