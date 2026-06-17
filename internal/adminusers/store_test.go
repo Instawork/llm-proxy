@@ -96,3 +96,64 @@ func TestDeleteUser(t *testing.T) {
 	_, err = store.GetUser(ctx, "gone@example.com")
 	require.Error(t, err)
 }
+
+func TestCreateUserDuplicate(t *testing.T) {
+	store := testUserStore(t)
+	ctx := context.Background()
+
+	_, err := store.CreateUser(ctx, "dup@example.com", RoleViewer)
+	require.NoError(t, err)
+
+	_, err = store.CreateUser(ctx, "dup@example.com", RoleEditor)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func TestSetRoleNotFound(t *testing.T) {
+	store := testUserStore(t)
+	err := store.SetRole(context.Background(), "missing@example.com", RoleAdmin)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestDeleteUserNotFound(t *testing.T) {
+	store := testUserStore(t)
+	err := store.DeleteUser(context.Background(), "missing@example.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestNormalizeEmailInvalid(t *testing.T) {
+	store := testUserStore(t)
+	_, _, err := store.EnsureUser(context.Background(), "not-an-email", "", "")
+	require.Error(t, err)
+}
+
+func TestGetUserNotFound(t *testing.T) {
+	store := testUserStore(t)
+	_, err := store.GetUser(context.Background(), "nobody@example.com")
+	require.Error(t, err)
+}
+
+func TestRecordShareAwarenessInvalidInput(t *testing.T) {
+	store := testUserStore(t)
+	err := store.RecordShareAwareness(context.Background(), "", "share-id")
+	require.Error(t, err)
+	err = store.RecordShareAwareness(context.Background(), "user@example.com", "")
+	require.Error(t, err)
+}
+
+func TestEnsureUserCreateRaceRetries(t *testing.T) {
+	store := testUserStore(t)
+	ctx := context.Background()
+
+	user, created, err := store.EnsureUser(ctx, "race@example.com", "Race", "")
+	require.NoError(t, err)
+	require.True(t, created)
+	assert.Equal(t, RoleViewer, user.Role)
+
+	user, created, err = store.EnsureUser(ctx, "race@example.com", "Race Again", "")
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, "Race Again", user.Name)
+}

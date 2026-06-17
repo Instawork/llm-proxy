@@ -131,6 +131,12 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 		if f.tables[tableName] == nil {
 			f.tables[tableName] = make(map[string]any)
 		}
+		conditionExpr, _ := input["ConditionExpression"].(string)
+		if strings.Contains(conditionExpr, "attribute_not_exists") && f.tables[tableName][storageKey] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
+			return
+		}
 		f.tables[tableName][storageKey] = item
 		_, _ = w.Write([]byte(`{}`))
 	case "GetItem":

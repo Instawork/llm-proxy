@@ -44,6 +44,7 @@ func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 	require.NoError(t, err)
 
 	yamlCfg := config.GetDefaultYAMLConfig()
+	yamlCfg.Features.AdminDashboard.AllowedDomain = "example.com"
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
 	yamlCfg.Features.AdminDashboard.DevCORSOrigin = "http://localhost:5173"
 	yamlCfg.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents = 5000
