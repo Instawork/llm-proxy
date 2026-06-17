@@ -66,6 +66,7 @@ func parseSuites(raw string) map[string]bool {
 			"health": true, "admin": true,
 			"openai": true, "anthropic": true, "gemini": true,
 			"ratelimit": true, "cost": true, "pii": true, "presidio": true,
+			"redact": true,
 			"snippets": true,
 		}
 	}

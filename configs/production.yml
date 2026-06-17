@@ -109,6 +109,10 @@ features:
     analyzer_url: "http://localhost:3000"
     fail_mode: "open"
     allow_per_key_override: false
+  redact_api:
+    enabled: true
+    fail_mode: closed
+    requests_per_minute: 120
   admin_dashboard:
     enabled: true
     # Real sign-in domain is injected at deploy time via the

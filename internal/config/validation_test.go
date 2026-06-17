@@ -196,3 +196,33 @@ func TestValidate_PIIRedactGatedByEnabled(t *testing.T) {
 	c.Features.PIIRedact.Enabled = true
 	require.Error(t, c.Validate())
 }
+
+func TestValidate_RedactAPI(t *testing.T) {
+	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
+	c.Features.APIKeyManagement.Enabled = true
+	c.Features.APIKeyManagement.TableName = "keys"
+	c.Features.APIKeyManagement.Region = "us-west-2"
+	c.Features.RedactAPI.Enabled = true
+	c.Features.RedactAPI.FailMode = "closed"
+	require.NoError(t, c.Validate())
+
+	c.Features.RedactAPI.FailMode = "open"
+	require.Error(t, c.Validate())
+
+	c.Features.RedactAPI.FailMode = "closed"
+	c.Features.RedactAPI.RequestsPerMinute = -1
+	require.Error(t, c.Validate())
+
+	c.Features.RedactAPI.RequestsPerMinute = 0
+	c.Features.APIKeyManagement.Enabled = false
+	require.Error(t, c.Validate())
+
+	c.Features.RedactAPI.DevAllowUnauthenticated = true
+	c.Features.AdminDashboard.DevBypassLogin = true
+	c.Features.APIKeyManagement.Enabled = false
+	require.NoError(t, c.Validate())
+
+	c.Features.AdminDashboard.DevBypassLogin = false
+	require.Error(t, c.Validate())
+}

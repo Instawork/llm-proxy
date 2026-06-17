@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -168,4 +169,20 @@ func hasTokenHeaders(pr *ProxyResponse) bool {
 		return false
 	}
 	return pr.InputTok != "" || pr.OutputTok != ""
+}
+
+// Redact posts plain text to POST /redact?mode=text. apiKey may be empty when the
+// proxy runs with redact_api.dev_allow_unauthenticated in dev.
+func (p *ProxyClient) Redact(ctx context.Context, apiKey, text string) (int, string, error) {
+	headers := map[string]string{
+		"Content-Type": "text/plain; charset=utf-8",
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	}
+	resp, data, err := p.http.DoRaw(ctx, http.MethodPost, "/redact?mode=text", []byte(text), headers)
+	if err != nil {
+		return 0, "", err
+	}
+	return resp.StatusCode, string(data), nil
 }

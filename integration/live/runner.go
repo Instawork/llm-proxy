@@ -77,6 +77,10 @@ func (r *Runner) Run(ctx context.Context) []Result {
 		r.logf("suite pii: redaction through proxy")
 		out = append(out, r.emitAll(r.runPII(ctx))...)
 	}
+	if r.cfg.Suite("redact") {
+		r.logf("suite redact: POST /redact")
+		out = append(out, r.emitAll(r.runRedactAPI(ctx))...)
+	}
 	if r.cfg.Suite("snippets") {
 		r.logf("suite snippets: share-box tabs under %s", r.cfg.SnippetsDir)
 		out = append(out, r.runSnippets(ctx)...)

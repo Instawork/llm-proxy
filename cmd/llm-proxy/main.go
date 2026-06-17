@@ -33,6 +33,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 	"github.com/Instawork/llm-proxy/internal/redact"
+	"github.com/Instawork/llm-proxy/internal/redactapi"
 	"github.com/Instawork/llm-proxy/internal/usagestats"
 	"github.com/gorilla/mux"
 )
@@ -1354,7 +1355,10 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	piiCfg := yamlConfig.Features.PIIRedact
-	if piiCfg.Enabled || piiCfg.AllowPerKeyOverride {
+	redactAPICfg := yamlConfig.Features.RedactAPI
+	needsRedactor := piiCfg.Enabled || piiCfg.AllowPerKeyOverride || redactAPICfg.Enabled
+	var redactor *redact.Redactor
+	if needsRedactor {
 		analyzerURL := piiCfg.AnalyzerURL
 		if envURL := os.Getenv("PRESIDIO_ANALYZER_URL"); envURL != "" {
 			analyzerURL = envURL
@@ -1367,41 +1371,46 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			EntityTypes:    piiCfg.EntityTypes,
 			Language:       piiCfg.Language,
 		}
-		redactor, err := redact.New(redactCfg)
+		var err error
+		redactor, err = redact.New(redactCfg)
 		if err != nil {
-			logger.Error("Failed to construct PII redactor; pii_redact feature disabled",
+			logger.Error("Failed to construct PII redactor; redaction features disabled",
 				"error", err)
+			redactor = nil
 		} else {
-			failClosed := piiCfg.FailMode == "closed"
-			globalPIIRecorder = pii.NewRecorder()
-			wirePlaceholders := true
-			if piiCfg.WirePlaceholders != nil {
-				wirePlaceholders = *piiCfg.WirePlaceholders
-			}
-			defaultAllowStreaming := true
-			if piiCfg.DefaultAllowStreaming != nil {
-				defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
-			}
-			r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
-				GlobalEnabled:         piiCfg.Enabled,
-				FailClosed:            failClosed,
-				MaxBodyBytes:          piiCfg.MaxBodyBytes,
-				Logger:                logger,
-				Recorder:              globalPIIRecorder,
-				WirePlaceholders:      wirePlaceholders,
-				DefaultAllowStreaming: defaultAllowStreaming,
-			}))
 			redact.SetGlobal(redactor)
-			logger.Info(
-				"🛡️  PII redaction middleware installed",
-				"global_enabled", piiCfg.Enabled,
-				"allow_per_key_override", piiCfg.AllowPerKeyOverride,
-				"wire_placeholders", wirePlaceholders,
-				"default_allow_streaming", defaultAllowStreaming,
-				"analyzer_url", analyzerURL,
-				"fail_mode", piiCfg.FailMode,
-			)
 		}
+	}
+
+	if redactor != nil && (piiCfg.Enabled || piiCfg.AllowPerKeyOverride) {
+		failClosed := piiCfg.FailMode == "closed"
+		globalPIIRecorder = pii.NewRecorder()
+		wirePlaceholders := true
+		if piiCfg.WirePlaceholders != nil {
+			wirePlaceholders = *piiCfg.WirePlaceholders
+		}
+		defaultAllowStreaming := true
+		if piiCfg.DefaultAllowStreaming != nil {
+			defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
+		}
+		r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
+			GlobalEnabled:         piiCfg.Enabled,
+			FailClosed:            failClosed,
+			MaxBodyBytes:          piiCfg.MaxBodyBytes,
+			Logger:                logger,
+			Recorder:              globalPIIRecorder,
+			WirePlaceholders:      wirePlaceholders,
+			DefaultAllowStreaming: defaultAllowStreaming,
+		}))
+		logger.Info(
+			"🛡️  PII redaction middleware installed",
+			"global_enabled", piiCfg.Enabled,
+			"allow_per_key_override", piiCfg.AllowPerKeyOverride,
+			"wire_placeholders", wirePlaceholders,
+			"default_allow_streaming", defaultAllowStreaming,
+			"analyzer_url", piiCfg.AnalyzerURL,
+			"fail_mode", piiCfg.FailMode,
+		)
 	}
 
 	initAdminRollups(yamlConfig)
@@ -1437,6 +1446,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if globalRateLimiter != nil {
 		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter, globalRateLimitStatsRecorder))
 	}
+	if redactAPICfg.Enabled {
+		r.Use(middleware.RedactRateLimitMiddleware(redactAPICfg.RequestsPerMinute))
+	}
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
 
 	// Create callbacks for cost tracking
@@ -1467,6 +1479,32 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// Health check endpoint
 	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
+
+	if redactAPICfg.Enabled && redactor != nil {
+		var keyLookup redactapi.ProxyKeyLookup
+		allowUnauth := redactAPICfg.DevAllowUnauthenticated
+		if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
+			keyLookup = store
+		} else if !allowUnauth {
+			logger.Error("redact_api enabled but API key store unavailable — POST /redact not registered")
+		}
+		if keyLookup != nil || allowUnauth {
+			maxBody := redactAPICfg.MaxBodyBytes
+			if maxBody <= 0 && piiCfg.MaxBodyBytes > 0 {
+				maxBody = piiCfg.MaxBodyBytes
+			}
+			r.Handle("/redact", redactapi.NewHandler(redactor, keyLookup, redactapi.Config{
+				MaxBodyBytes:         maxBody,
+				AllowUnauthenticated: allowUnauth,
+			}, logger)).Methods(http.MethodPost, http.MethodOptions)
+			logger.Info("🔒 POST /redact API enabled",
+				"fail_mode", redactAPICfg.FailMode,
+				"requests_per_minute", redactAPICfg.RequestsPerMinute,
+				"dev_allow_unauthenticated", allowUnauth)
+		}
+	} else if redactAPICfg.Enabled {
+		logger.Error("redact_api enabled but redactor unavailable — POST /redact not registered")
+	}
 
 	// robots.txt: keep the admin dashboard and (capability-URL) share pages
 	// out of search indexes. This is defense-in-depth for accidental URL

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Example Cursor beforeSubmitPrompt hook — redact PII via llm-proxy POST /redact.
+#
+# Setup (one-time):
+#   export LLM_PROXY_API_KEY=iw-…   # never commit this value
+#   export LLM_PROXY_URL=https://llm.instawork.com
+#
+# Install:
+#   cp .cursor/hooks/redact-prompt.sh.example ~/.cursor/hooks/redact-prompt.sh
+#   chmod +x ~/.cursor/hooks/redact-prompt.sh
+#
+# ~/.cursor/hooks.json:
+# {
+#   "version": 1,
+#   "hooks": {
+#     "beforeSubmitPrompt": [
+#       {
+#         "command": "./hooks/redact-prompt.sh",
+#         "failClosed": true
+#       }
+#     ]
+#   }
+# }
+
+set -euo pipefail
+
+input=$(cat)
+prompt=$(echo "$input" | jq -r '.prompt // empty')
+
+if [[ -z "$prompt" ]]; then
+  echo '{"continue": true}'
+  exit 0
+fi
+
+if [[ -z "${LLM_PROXY_API_KEY:-}" ]]; then
+  echo '{"continue": false, "user_message": "LLM_PROXY_API_KEY is not set; cannot redact prompt."}' >&2
+  exit 2
+fi
+
+base="${LLM_PROXY_URL:-https://llm.instawork.com}"
+redacted=$(curl -sf --max-time 10 -X POST "${base}/redact?mode=text" \
+  -H "Authorization: Bearer ${LLM_PROXY_API_KEY}" \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data-binary "$prompt") || {
+  echo '{"continue": false, "user_message": "PII redaction service unavailable."}' >&2
+  exit 2
+}
+
+# Reject JSON error bodies that slipped through as HTTP 200.
+if echo "$redacted" | jq -e '.error' >/dev/null 2>&1; then
+  echo '{"continue": false, "user_message": "PII redaction failed."}' >&2
+  exit 2
+fi
+
+# If the prompt looks like it contains common PII shapes, require redaction markers.
+if echo "$prompt" | grep -qE '[0-9]{3}-[0-9]{2}-[0-9]{4}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'; then
+  if ! echo "$redacted" | grep -q '\[REDACTED:'; then
+    echo '{"continue": false, "user_message": "PII redaction did not apply expected markers."}' >&2
+    exit 2
+  fi
+fi
+
+jq -n --arg prompt "$redacted" '{continue: true, prompt: $prompt}'

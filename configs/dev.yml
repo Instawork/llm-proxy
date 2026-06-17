@@ -69,6 +69,12 @@ features:
     analyzer_url: "http://presidio:3000"
     fail_mode: "open"
     allow_per_key_override: true
+  redact_api:
+    enabled: true
+    fail_mode: closed
+    requests_per_minute: 120
+    # Local curl/hook testing without minting an iw-* key first.
+    dev_allow_unauthenticated: true
   rate_limiting:
     enabled: true
     backend: "redis"

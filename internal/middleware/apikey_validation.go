@@ -20,7 +20,7 @@ type proxyKeyLookup interface {
 func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, globalPIIEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/admin/") {
+			if r.URL.Path == "/health" || r.URL.Path == "/redact" || strings.HasPrefix(r.URL.Path, "/admin/") {
 				next.ServeHTTP(w, r)
 				return
 			}

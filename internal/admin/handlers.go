@@ -432,6 +432,7 @@ func (h *handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"rate_limiting":      cfg.Features.RateLimiting.Enabled,
 			"circuit_breaker":    cfg.Features.CircuitBreaker.Enabled,
 			"pii_redact":         cfg.Features.PIIRedact.Enabled,
+			"redact_api":         cfg.Features.RedactAPI.Enabled,
 			"admin_dashboard":    cfg.Features.AdminDashboard.Enabled,
 		},
 		Providers:      providers,

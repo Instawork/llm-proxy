@@ -116,3 +116,23 @@ func TestAPIKeyValidationMiddleware_StashesProxyKeyInContext(t *testing.T) {
 		t.Fatalf("expected proxy key in context, got %+v", captured)
 	}
 }
+
+func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	store := &mockAPIKeyStore{}
+	mw := APIKeyValidationMiddleware(pm, store, false)
+
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/redact", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected /redact to bypass provider key validation, got %d", rec.Code)
+	}
+}

@@ -51,6 +51,7 @@ type FeaturesConfig struct {
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
+	RedactAPI        RedactAPIConfig        `yaml:"redact_api"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 	History          HistoryConfig          `yaml:"history"`
 }
@@ -129,6 +130,29 @@ type PIIRedactConfig struct {
 	// DefaultAllowStreaming controls whether wire-mode requests may keep
 	// stream:true. Per-key allow_streaming overrides this. Default: true.
 	DefaultAllowStreaming *bool `yaml:"default_allow_streaming,omitempty"`
+}
+
+// RedactAPIConfig gates the standalone POST /redact endpoint for generic
+// text redaction (e.g. Cursor hooks). Uses the same Presidio sidecar as
+// pii_redact; analyzer_url is read from features.pii_redact.analyzer_url.
+type RedactAPIConfig struct {
+	// Enabled registers POST /redact when true and a redactor can be built.
+	Enabled bool `yaml:"enabled"`
+
+	// FailMode must be "closed" (or empty, which defaults to closed at
+	// startup). Open/fail-through is not supported — hooks must not receive
+	// unredacted text when Presidio is unavailable.
+	FailMode string `yaml:"fail_mode"`
+
+	// RequestsPerMinute caps POST /redact per iw-* API key. 0 means unlimited.
+	RequestsPerMinute int `yaml:"requests_per_minute,omitempty"`
+
+	// MaxBodyBytes caps request body size. 0 inherits 1048576 (1 MiB).
+	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+
+	// DevAllowUnauthenticated skips iw-* auth on POST /redact. Allowed only when
+	// ENVIRONMENT=dev and features.admin_dashboard.dev_bypass_login is true.
+	DevAllowUnauthenticated bool `yaml:"dev_allow_unauthenticated,omitempty"`
 }
 
 // AdminDashboardConfig gates the /admin UI and JSON API.
@@ -939,9 +963,15 @@ func (c *YAMLConfig) Validate() error {
 	// Validate PII redaction config if enabled so a typo in fail_mode or
 	// a missing analyzer_url is surfaced via --validate-config rather than
 	// at first request.
-	if c.Features.PIIRedact.Enabled || c.Features.PIIRedact.AllowPerKeyOverride {
+	if c.Features.PIIRedact.Enabled || c.Features.PIIRedact.AllowPerKeyOverride || c.Features.RedactAPI.Enabled {
 		if err := c.validatePIIRedactConfig(); err != nil {
 			return fmt.Errorf("invalid pii_redact configuration: %w", err)
+		}
+	}
+
+	if c.Features.RedactAPI.Enabled {
+		if err := c.validateRedactAPIConfig(); err != nil {
+			return fmt.Errorf("invalid redact_api configuration: %w", err)
 		}
 	}
 
@@ -958,7 +988,7 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	r := c.Features.PIIRedact
 
 	if r.AnalyzerURL == "" {
-		return fmt.Errorf("analyzer_url is required when pii_redact is enabled or allow_per_key_override is true")
+		return fmt.Errorf("analyzer_url is required when pii_redact, allow_per_key_override, or redact_api is enabled")
 	}
 
 	switch r.FailMode {
@@ -976,6 +1006,38 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	}
 	if r.MaxBodyBytes < 0 {
 		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
+	return nil
+}
+
+func (c *YAMLConfig) validateRedactAPIConfig() error {
+	r := c.Features.RedactAPI
+
+	switch r.FailMode {
+	case "", "closed":
+	default:
+		return fmt.Errorf("fail_mode must be closed or empty (got %q); open is not supported for redact_api", r.FailMode)
+	}
+	if r.RequestsPerMinute < 0 {
+		return fmt.Errorf("requests_per_minute cannot be negative")
+	}
+	if r.MaxBodyBytes < 0 {
+		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
+	if r.DevAllowUnauthenticated {
+		env := os.Getenv("ENVIRONMENT")
+		if env == "" {
+			env = "dev"
+		}
+		if env != "dev" {
+			return fmt.Errorf("dev_allow_unauthenticated is only allowed when ENVIRONMENT=dev (got %q)", env)
+		}
+		if !c.Features.AdminDashboard.DevBypassLogin {
+			return fmt.Errorf("dev_allow_unauthenticated requires features.admin_dashboard.dev_bypass_login")
+		}
+	}
+	if !c.Features.APIKeyManagement.Enabled && !r.DevAllowUnauthenticated {
+		return fmt.Errorf("api_key_management must be enabled when redact_api is enabled")
 	}
 	return nil
 }
