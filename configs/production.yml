@@ -43,7 +43,11 @@ features:
         gcp_project_id: "${LLM_PROXY_GCP_PROJECT_ID}"
       anthropic:
         enabled: true
-        pool_redis_key: "llm:provision:anthropic:available"
+        default_tier: metered
+        tiers:
+          metered: "${LLM_PROXY_ANTHROPIC_KEY_METERED}"
+          elevated: "${LLM_PROXY_ANTHROPIC_KEY_ELEVATED}"
+          unrestricted: "${LLM_PROXY_ANTHROPIC_KEY_UNRESTRICTED}"
   # Circuit breaker: enforce mode.  Retries transient failures (up to
   # max_transient_retries), fast-fails open circuits with a synthetic 503,
   # and counts retry contributions toward the failure window.

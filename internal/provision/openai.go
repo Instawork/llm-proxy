@@ -34,18 +34,18 @@ func NewOpenAI(adminKey, projectID, baseURL string) *OpenAI {
 	}
 }
 
-func (o *OpenAI) Provision(ctx context.Context, name string) (Result, error) {
+func (o *OpenAI) Provision(ctx context.Context, prov ProvisionRequest) (Result, error) {
 	path := fmt.Sprintf("/organization/projects/%s/service_accounts", o.projectID)
-	body, _ := json.Marshal(map[string]string{"name": SanitizeName(name)})
+	body, _ := json.Marshal(map[string]string{"name": SanitizeName(prov.Name)})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+path, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return Result{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+o.adminKey)
-	req.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+o.adminKey)
+	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := o.client.Do(req)
+	resp, err := o.client.Do(httpReq)
 	if err != nil {
 		return Result{}, err
 	}

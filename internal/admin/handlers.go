@@ -141,10 +141,21 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		provName := "llm-proxy:" + provision.SanitizeName(req.Description)
-		res, err := h.deps.KeyProvisioner.Provision(r.Context(), req.Provider, provName)
+		tier := ""
+		if req.Tags != nil {
+			tier = strings.TrimSpace(req.Tags["tier"])
+		}
+		res, err := h.deps.KeyProvisioner.Provision(r.Context(), req.Provider, provision.ProvisionRequest{
+			Name: provName,
+			Tier: tier,
+		})
 		if err != nil {
 			if errors.Is(err, provision.ErrEmptyPool) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+				return
+			}
+			if errors.Is(err, provision.ErrInvalidTier) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
 			h.deps.Logger.Error("admin: provision upstream key failed", "provider", req.Provider, "error", err)
@@ -156,6 +167,12 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 			Provisioned:   true,
 			UpstreamKeyID: res.UpstreamID,
 			UpstreamKind:  res.UpstreamKind,
+		}
+		if req.Tags == nil {
+			req.Tags = map[string]string{}
+		}
+		if req.Provider == "anthropic" && res.UpstreamKind == provision.UpstreamKindAnthropicTiered && res.UpstreamID != "" {
+			req.Tags["tier"] = res.UpstreamID
 		}
 	} else if actualKey == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
@@ -379,6 +396,12 @@ func (h *handler) handleProvisioning(w http.ResponseWriter, r *http.Request) {
 			}
 			if v, ok := m["pool_available"].(int); ok {
 				p.PoolAvailable = v
+			}
+			if v, ok := m["default_tier"].(string); ok {
+				p.DefaultTier = v
+			}
+			if tiers, ok := m["tiers"].([]string); ok {
+				p.Tiers = tiers
 			}
 			resp.Providers[name] = p
 		}

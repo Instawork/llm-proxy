@@ -12,7 +12,18 @@ const (
 	UpstreamKindOpenAIServiceAccount = "openai_service_account"
 	UpstreamKindGCPAPIKey            = "gcp_api_key"
 	UpstreamKindAnthropicPooled      = "anthropic_pooled"
+	UpstreamKindAnthropicTiered      = "anthropic_tiered"
+
+	TierMetered      = "metered"
+	TierElevated     = "elevated"
+	TierUnrestricted = "unrestricted"
 )
+
+// ProvisionRequest carries per-provider options for upstream key assignment.
+type ProvisionRequest struct {
+	Name string
+	Tier string
+}
 
 // Result is a freshly minted upstream credential.
 type Result struct {
@@ -24,7 +35,7 @@ type Result struct {
 
 // Provisioner mints or assigns an upstream API key for one provider.
 type Provisioner interface {
-	Provision(ctx context.Context, name string) (Result, error)
+	Provision(ctx context.Context, req ProvisionRequest) (Result, error)
 	Revoke(ctx context.Context, upstreamID, upstreamKind string) error
 	PoolStatus(ctx context.Context) (available int, ok bool)
 }
@@ -61,12 +72,12 @@ func (m *Manager) ForProvider(provider string) (Provisioner, bool) {
 }
 
 // Provision mints an upstream key for the given provider.
-func (m *Manager) Provision(ctx context.Context, provider, name string) (Result, error) {
+func (m *Manager) Provision(ctx context.Context, provider string, req ProvisionRequest) (Result, error) {
 	p, ok := m.ForProvider(provider)
 	if !ok {
 		return Result{}, fmt.Errorf("provisioning not configured for provider %q", provider)
 	}
-	res, err := p.Provision(ctx, name)
+	res, err := p.Provision(ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -74,7 +85,8 @@ func (m *Manager) Provision(ctx context.Context, provider, name string) (Result,
 		m.logger.Info(
 			"provision: upstream key minted",
 			"provider", provider,
-			"name", name,
+			"name", req.Name,
+			"tier", req.Tier,
 			"upstream_kind", res.UpstreamKind,
 			"upstream_id", res.UpstreamID,
 		)
@@ -105,13 +117,28 @@ func (m *Manager) Status(ctx context.Context) map[string]interface{} {
 		if n, ok := p.PoolStatus(ctx); ok {
 			entry["pool_available"] = n
 		}
+		if tiers, ok := p.(interface {
+			TierStatus() (defaultTier string, tiers []string)
+		}); ok {
+			defaultTier, tierNames := tiers.TierStatus()
+			if len(tierNames) > 0 {
+				entry["default_tier"] = defaultTier
+				entry["tiers"] = tierNames
+			}
+		}
 		providers[name] = entry
 	}
 	out["providers"] = providers
 	return out
 }
 
-var errEmptyPool = errors.New("anthropic key pool is empty")
+var (
+	errEmptyPool   = errors.New("anthropic key pool is empty")
+	errInvalidTier = errors.New("invalid anthropic provisioning tier")
+)
 
 // ErrEmptyPool is returned when the Anthropic Redis pool has no keys left.
 var ErrEmptyPool = errEmptyPool
+
+// ErrInvalidTier is returned when an unknown Anthropic tier is requested.
+var ErrInvalidTier = errInvalidTier

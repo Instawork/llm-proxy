@@ -40,9 +40,9 @@ func NewGemini(projectID string, credsJSON []byte, baseURL string) (*Gemini, err
 	}, nil
 }
 
-func (g *Gemini) Provision(ctx context.Context, name string) (Result, error) {
+func (g *Gemini) Provision(ctx context.Context, req ProvisionRequest) (Result, error) {
 	createBody := map[string]interface{}{
-		"displayName": SanitizeName(name),
+		"displayName": SanitizeName(req.Name),
 		"restrictions": map[string]interface{}{
 			"apiTargets": []map[string]string{
 				{"service": "generativelanguage.googleapis.com"},

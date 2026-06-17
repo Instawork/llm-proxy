@@ -57,7 +57,11 @@ export interface APIKey {
 export interface ProvisioningProviderStatus {
   auto_provision: boolean;
   pool_available?: number;
+  default_tier?: string;
+  tiers?: string[];
 }
+
+export type AnthropicTier = "metered" | "elevated" | "unrestricted";
 
 export interface ProvisioningStatus {
   enabled: boolean;

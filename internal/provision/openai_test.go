@@ -35,7 +35,7 @@ func TestOpenAI_ProvisionAndRevoke(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := NewOpenAI("admin-key", "proj_test", srv.URL)
-	res, err := p.Provision(context.Background(), "finch-hiring")
+	res, err := p.Provision(context.Background(), ProvisionRequest{Name: "finch-hiring"})
 	require.NoError(t, err)
 	assert.Equal(t, "sk-test-secret", res.ActualKey)
 	assert.Equal(t, "sa_123", res.UpstreamID)
@@ -49,5 +49,5 @@ func TestOpenAI_ProvisionAndRevoke(t *testing.T) {
 func TestSanitizeName(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "llm-proxy-key", SanitizeName(""))
-	assert.Equal(t, "Finch-Hiring-Assistant", SanitizeName("Finch Hiring Assistant"))
+	assert.Equal(t, "Customer-Support-Bot", SanitizeName("Customer Support Bot"))
 }

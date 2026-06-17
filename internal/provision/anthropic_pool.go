@@ -34,8 +34,8 @@ func NewAnthropicPool(rdb *redis.Client, listKey, adminKey string) *AnthropicPoo
 	}
 }
 
-func (p *AnthropicPool) Provision(ctx context.Context, name string) (Result, error) {
-	_ = name
+func (p *AnthropicPool) Provision(ctx context.Context, req ProvisionRequest) (Result, error) {
+	_ = req.Name
 	key, err := p.rdb.LPop(ctx, p.listKey).Result()
 	if err == redis.Nil || key == "" {
 		return Result{}, fmt.Errorf("%w — refill via llm-proxy-keys pool add", errEmptyPool)
@@ -87,7 +87,7 @@ func (p *AnthropicPool) PoolStatus(ctx context.Context) (int, bool) {
 	return int(n), true
 }
 
-// PoolAdd pushes a key onto the Anthropic pool (ops / CLI).
+// PoolAdd pushes a key onto the Anthropic pool (administration / CLI).
 func PoolAdd(ctx context.Context, rdb *redis.Client, listKey, key string) error {
 	key = strings.TrimSpace(key)
 	if key == "" {

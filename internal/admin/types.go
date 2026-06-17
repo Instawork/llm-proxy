@@ -149,8 +149,10 @@ type ProvisioningResponse struct {
 
 // ProvisioningProvider describes per-provider auto-provision status.
 type ProvisioningProvider struct {
-	AutoProvision bool `json:"auto_provision"`
-	PoolAvailable int  `json:"pool_available,omitempty"`
+	AutoProvision bool     `json:"auto_provision"`
+	PoolAvailable int      `json:"pool_available,omitempty"`
+	DefaultTier   string   `json:"default_tier,omitempty"`
+	Tiers         []string `json:"tiers,omitempty"`
 }
 
 func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {

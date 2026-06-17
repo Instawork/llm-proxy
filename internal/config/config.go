@@ -417,10 +417,13 @@ type GeminiProvisioningConfig struct {
 	GCPProjectID string `yaml:"gcp_project_id"`
 }
 
-// AnthropicProvisioningConfig assigns keys from a Redis-backed pool.
+// AnthropicProvisioningConfig assigns shared Anthropic keys by trust tier.
 type AnthropicProvisioningConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	PoolRedisKey string `yaml:"pool_redis_key"`
+	Enabled     bool              `yaml:"enabled"`
+	DefaultTier string            `yaml:"default_tier,omitempty"`
+	Tiers       map[string]string `yaml:"tiers,omitempty"`
+	// PoolRedisKey enables the legacy Redis pool provisioner when tiers are unset.
+	PoolRedisKey string `yaml:"pool_redis_key,omitempty"`
 }
 
 // RateLimitingConfig represents rate limiting feature configuration

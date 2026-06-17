@@ -21,7 +21,7 @@ func TestAnthropicPool_ProvisionEmpty(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	p := NewAnthropicPool(rdb, "llm:provision:anthropic:available", "")
 
-	_, err = p.Provision(context.Background(), "test")
+	_, err = p.Provision(context.Background(), ProvisionRequest{Name: "test"})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrEmptyPool))
 }
@@ -39,7 +39,7 @@ func TestAnthropicPool_ProvisionAndStatus(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	p := NewAnthropicPool(rdb, listKey, "")
 
-	res, err := p.Provision(context.Background(), "test")
+	res, err := p.Provision(context.Background(), ProvisionRequest{Name: "test"})
 	require.NoError(t, err)
 	assert.Equal(t, "sk-ant-api03-test", res.ActualKey)
 	assert.Equal(t, UpstreamKindAnthropicPooled, res.UpstreamKind)

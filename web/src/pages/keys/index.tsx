@@ -44,6 +44,7 @@ type KeyFormState = {
   rate_limit_tpm: string;
   rate_limit_rpd: string;
   rate_limit_tpd: string;
+  anthropic_tier: string;
 };
 
 const defaultForm: KeyFormState = {
@@ -57,6 +58,7 @@ const defaultForm: KeyFormState = {
   rate_limit_tpm: "",
   rate_limit_rpd: "",
   rate_limit_tpd: "",
+  anthropic_tier: "metered",
 };
 
 function piiToFormValue(value?: PiiRedactSetting): PiiFormValue {
@@ -143,6 +145,23 @@ export default function KeysPage() {
     canBypassPiiBedrockPolicy,
   );
 
+  const anthropicProvisioning = provisioning?.providers?.anthropic;
+  const anthropicTierOptions = anthropicProvisioning?.tiers ?? [];
+  const anthropicDefaultTier = anthropicProvisioning?.default_tier ?? "metered";
+
+  useEffect(() => {
+    if (!modalOpen || editingKey || form.provider !== "anthropic" || anthropicTierOptions.length === 0) {
+      return;
+    }
+    if (anthropicTierOptions.includes(form.anthropic_tier)) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      anthropic_tier: anthropicDefaultTier,
+    }));
+  }, [modalOpen, editingKey, form.provider, form.anthropic_tier, anthropicTierOptions, anthropicDefaultTier]);
+
   useEffect(() => {
     if (!modalOpen || editingKey || !piiOffRequiresBedrock || form.provider === "bedrock") {
       return;
@@ -158,12 +177,8 @@ export default function KeysPage() {
   const providerAutoProvision = Boolean(
     provisioning?.enabled && provisioning.providers?.[form.provider]?.auto_provision,
   );
-  const anthropicPoolAvailable = provisioning?.providers?.anthropic?.pool_available;
-  const showAnthropicPoolWarning =
-    form.provider === "anthropic" &&
-    providerAutoProvision &&
-    typeof anthropicPoolAvailable === "number" &&
-    anthropicPoolAvailable < 5;
+  const showAnthropicTierSelect =
+    form.provider === "anthropic" && providerAutoProvision && !manualKeyEntry && anthropicTierOptions.length > 0;
 
   const onShare = async (record: APIKey) => {
     setSharingKey(record.key);
@@ -197,6 +212,7 @@ export default function KeysPage() {
       rate_limit_tpm: record.rate_limit_tpm ? String(record.rate_limit_tpm) : "",
       rate_limit_rpd: record.rate_limit_rpd ? String(record.rate_limit_rpd) : "",
       rate_limit_tpd: record.rate_limit_tpd ? String(record.rate_limit_tpd) : "",
+      anthropic_tier: record.tags?.tier ?? anthropicDefaultTier,
     });
     setModalOpen(true);
   };
@@ -246,6 +262,9 @@ export default function KeysPage() {
         };
         if (useAutoProvision) {
           body.auto_provision = true;
+          if (form.provider === "anthropic" && form.anthropic_tier) {
+            body.tags = { tier: form.anthropic_tier };
+          }
         } else {
           body.actual_key = form.actual_key;
         }
@@ -363,11 +382,26 @@ export default function KeysPage() {
                 </div>
               ) : null}
 
-              {showAnthropicPoolWarning ? (
-                <div className="alert alert-warning py-2 text-sm">
-                  Anthropic pool is low ({anthropicPoolAvailable} remaining). Add more keys to the
-                  Anthropic pool in your deployment configuration.
-                </div>
+              {showAnthropicTierSelect ? (
+                <label className="form-control w-full">
+                  <span className="label-text">Anthropic tier</span>
+                  <select
+                    className="select select-bordered w-full"
+                    value={form.anthropic_tier}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, anthropic_tier: event.target.value }))
+                    }
+                  >
+                    {anthropicTierOptions.map((tier) => (
+                      <option key={tier} value={tier}>
+                        {tier}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="label-text-alt text-base-content/60">
+                    metered = tight limits; elevated = trusted workloads; unrestricted = administrators only.
+                  </span>
+                </label>
               ) : null}
 
               {!editingKey && providerAutoProvision ? (
