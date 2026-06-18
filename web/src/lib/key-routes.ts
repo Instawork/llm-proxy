@@ -1,5 +1,5 @@
 import { maskKeyId } from "./format";
-import { isProxyKey, trimProxyKeyPrefix } from "./proxy-key";
+import { isProxyKey, matchedProxyKeyPrefix, trimProxyKeyPrefix } from "./proxy-key";
 import type { APIKey } from "../types";
 
 const REDACTED_SCOPE_SUFFIX = /^••••(.+)$/;
@@ -48,7 +48,7 @@ export function findKeyByMaskedId(maskedId: string, keys: APIKey[]): APIKey | un
 export function keyFromRateLimitScope(scope: string, keys?: APIKey[]): string | undefined {
   if (!scope.startsWith("key:")) return undefined;
   const rest = scope.slice(4);
-  if (isProxyKey(rest)) return rest;
+  if (matchedProxyKeyPrefix(rest)) return rest;
   const redacted = rest.match(REDACTED_SCOPE_SUFFIX);
   if (redacted) {
     return keys ? findKeyByScopeSuffix(redacted[1], keys)?.key : undefined;

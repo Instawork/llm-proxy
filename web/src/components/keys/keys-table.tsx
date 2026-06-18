@@ -74,7 +74,7 @@ export default function KeysTable({
         cell: ({ row }) =>
           viewerMode
             ? formatMonthlyCostLimit(row.original.monthly_cost_limit)
-            : formatDailyCostLimit(row.getValue<number>()),
+            : formatDailyCostLimit(row.original.daily_cost_limit),
       },
     ];
 

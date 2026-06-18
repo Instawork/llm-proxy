@@ -522,6 +522,7 @@ export default function KeysPage() {
               ) : null}
 
               {!isViewer ? (
+              <>
               <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
                 <label className="form-control w-full">
                   <span className="label-text">Daily cost limit (USD)</span>
@@ -644,6 +645,7 @@ export default function KeysPage() {
                   </label>
                 </div>
               </div>
+              </>
               ) : null}
 
               <div className="modal-action">
