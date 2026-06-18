@@ -124,6 +124,11 @@ func parseDimMemberField(key string) (member, field string, ok bool) {
 	return "", "", false
 }
 
+// ParseDimMemberField splits a dimension hash field into member and metric field.
+func ParseDimMemberField(key string) (member, field string, ok bool) {
+	return parseDimMemberField(key)
+}
+
 func buildDimRows(h map[string]float64, fields []string) map[string]map[string]float64 {
 	out := make(map[string]map[string]float64)
 	for k, v := range h {

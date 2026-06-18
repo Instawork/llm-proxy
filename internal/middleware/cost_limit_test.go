@@ -59,6 +59,36 @@ func TestCostLimitMiddleware_BlocksAtCap(t *testing.T) {
 	}
 }
 
+func TestCostLimitMonthlyExceeded(t *testing.T) {
+	reader := monthlySpendReader{monthlyUSD: 11.0}
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	key := &apikeys.APIKey{PK: "iw:abc123456789", DailyCostLimit: 0, MonthlyCostLimit: 1000}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	CostLimitMiddleware(pm, reader)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("next should not be called")
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get(costLimitReasonHeader); got != costLimitMonthlyExceeded {
+		t.Fatalf("reason header = %q want %q", got, costLimitMonthlyExceeded)
+	}
+}
+
+type monthlySpendReader struct {
+	dailyUSD   float64
+	monthlyUSD float64
+}
+
+func (m monthlySpendReader) KeySpendUSD(context.Context, string) float64   { return m.dailyUSD }
+func (m monthlySpendReader) KeyMonthlySpendUSD(context.Context, string) float64 { return m.monthlyUSD }
+
 // Two distinct keys that share the first 12 characters must NOT share a spend
 // bucket. Before MaskKeyID hashed the whole key, both collapsed to the same
 // 12-char prefix, so one key's spend counted against the other's cap (breaking

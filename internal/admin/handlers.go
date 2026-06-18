@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
@@ -71,8 +72,27 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
 	provider := r.URL.Query().Get("provider")
-	keys, err := h.deps.APIKeyStore.ListKeys(r.Context(), provider)
+	var keys []*apikeys.APIKey
+	if role == adminusers.RoleViewer {
+		keys, err = h.deps.APIKeyStore.ListKeysByOwner(r.Context(), user.Email, provider)
+	} else {
+		keys, err = h.deps.APIKeyStore.ListKeys(r.Context(), provider)
+		if err == nil {
+			keys = filterKeysForUser(role, user.Email, keys)
+		}
+	}
 	if err != nil {
 		h.deps.Logger.Error("admin: list keys failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list keys"})
@@ -116,6 +136,85 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider is required"})
 		return
 	}
+
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	if role == adminusers.RoleViewer {
+		if err := h.validateViewerPersonalCreate(r, &req, user.Email); err != nil {
+			if errors.Is(err, apikeys.ErrOwnerKeyExists) {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		actualKey := strings.TrimSpace(req.ActualKey)
+		var meta apikeys.KeyCreateMeta
+		if req.AutoProvision {
+			if h.deps.KeyProvisioner == nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "key provisioning is not configured"})
+				return
+			}
+			if _, ok := h.deps.KeyProvisioner.ForProvider(req.Provider); !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "auto_provision is not available for provider " + req.Provider,
+				})
+				return
+			}
+			provName := "llm-proxy:" + provision.SanitizeName(req.Description)
+			res, provErr := h.deps.KeyProvisioner.Provision(r.Context(), req.Provider, provision.ProvisionRequest{
+				Name: provName,
+			})
+			if provErr != nil {
+				if errors.Is(provErr, provision.ErrEmptyPool) {
+					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": provErr.Error()})
+					return
+				}
+				h.deps.Logger.Error("admin: provision personal key failed", "provider", req.Provider, "error", provErr)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to provision upstream key"})
+				return
+			}
+			actualKey = res.ActualKey
+			meta = apikeys.KeyCreateMeta{
+				Provisioned:   true,
+				UpstreamKeyID: res.UpstreamID,
+				UpstreamKind:  res.UpstreamKind,
+			}
+		} else if actualKey == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
+			return
+		}
+		key, err := h.deps.APIKeyStore.CreatePersonalKey(
+			r.Context(),
+			user.Email,
+			req.Provider,
+			actualKey,
+			req.Description,
+			viewerPersonalMonthlyLimitCents(h),
+			meta,
+		)
+		if err != nil {
+			if errors.Is(err, apikeys.ErrOwnerKeyExists) {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			h.deps.Logger.Error("admin: create personal key failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create key"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, keyToResponse(key, false))
+		return
+	}
+
 	if err := apikeys.ValidatePIIOffBedrockPolicy(
 		h.globalPIIEnabled(),
 		req.Provider,
@@ -226,6 +325,17 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil || !canAccessKey(role, user.Email, record) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, keyToResponse(record, true))
 }
 
@@ -246,6 +356,43 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
+	}
+
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	existing, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !canAccessKey(role, user.Email, existing) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	if role == adminusers.RoleViewer {
+		if req.Enabled != nil || req.DailyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
+			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "viewers may only update description"})
+			return
+		}
+		if req.Description == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to update"})
+			return
+		}
 	}
 
 	updates := map[string]interface{}{}
@@ -291,20 +438,10 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.RedactPII.Defined {
-		existing, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-				return
-			}
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		mergedRedact := req.RedactPII.Value
 		if err := apikeys.ValidatePIIOffBedrockPolicy(
 			h.globalPIIEnabled(),
 			existing.Provider,
-			mergedRedact,
+			req.RedactPII.Value,
 			h.adminBypassPIIBedrockPolicy(r),
 		); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -344,6 +481,25 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if role == adminusers.RoleEditor {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "editors cannot delete keys"})
+		return
+	}
+	if !canAccessKey(role, user.Email, record) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
 
@@ -577,10 +733,32 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	createdBy := ""
-	if user, err := h.auth.currentUser(r); err == nil {
-		createdBy = user.Email
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
 	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), req.Key)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !canAccessKey(role, user.Email, record) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	createdBy := user.Email
 
 	link, err := h.deps.APIKeyStore.CreateShareLink(r.Context(), req.Key, createdBy)
 	if err != nil {
@@ -631,6 +809,15 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the shared key no longer exists"})
 		return
+	}
+
+	if user, err := h.auth.currentUser(r); err == nil {
+		if role, roleErr := adminusers.ParseRole(user.Role); roleErr == nil && role == adminusers.RoleViewer {
+			if !strings.EqualFold(record.OwnerEmail, user.Email) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+				return
+			}
+		}
 	}
 
 	// Audit every successful resolution of a public share link. The link hands

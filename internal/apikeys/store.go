@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -181,7 +182,14 @@ type APIKey struct {
 	UpstreamKeyID string `dynamodbav:"upstream_key_id,omitempty"`
 	// UpstreamKind classifies the upstream credential for revoke handlers.
 	UpstreamKind string `dynamodbav:"upstream_kind,omitempty"`
+	// OwnerEmail identifies the viewer who owns a personal key.
+	OwnerEmail string `dynamodbav:"owner_email,omitempty"`
+	// MonthlyCostLimit is the calendar-month cost cap in cents (0 = unlimited).
+	MonthlyCostLimit int64 `dynamodbav:"monthly_cost_limit,omitempty"`
 }
+
+// ErrOwnerKeyExists is returned when an owner already has a key for a provider.
+var ErrOwnerKeyExists = errors.New("owner already has a key for this provider")
 
 // KeyRateLimits carries optional per-key rate-limit overrides for CreateKey.
 // Zero fields mean "no override" for that window.
@@ -308,6 +316,10 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 				AttributeName: aws.String("provider"),
 				AttributeType: types.ScalarAttributeTypeS,
 			},
+			{
+				AttributeName: aws.String("owner_email"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
 		},
 		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 			{
@@ -316,6 +328,22 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 					{
 						AttributeName: aws.String("provider"),
 						KeyType:       types.KeyTypeHash,
+					},
+				},
+				Projection: &types.Projection{
+					ProjectionType: types.ProjectionTypeAll,
+				},
+			},
+			{
+				IndexName: aws.String("OwnerProviderIndex"),
+				KeySchema: []types.KeySchemaElement{
+					{
+						AttributeName: aws.String("owner_email"),
+						KeyType:       types.KeyTypeHash,
+					},
+					{
+						AttributeName: aws.String("provider"),
+						KeyType:       types.KeyTypeRange,
 					},
 				},
 				Projection: &types.Projection{
@@ -425,6 +453,62 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 	return apiKey, nil
 }
 
+// CreatePersonalKey creates a viewer-owned personal API key for one provider.
+func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, actualKey, description string, monthlyCostLimit int64, meta KeyCreateMeta) (*APIKey, error) {
+	existing, err := s.GetOwnerKeyByProvider(ctx, ownerEmail, provider)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, ErrOwnerKeyExists
+	}
+
+	newKey, err := GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	apiKey := &APIKey{
+		PK:               newKey,
+		Provider:         provider,
+		ActualKey:        actualKey,
+		DailyCostLimit:   0,
+		MonthlyCostLimit: monthlyCostLimit,
+		OwnerEmail:       ownerEmail,
+		Description:      description,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Enabled:          true,
+		Tags:             map[string]string{"personal": "true"},
+		Provisioned:      meta.Provisioned,
+		UpstreamKeyID:    meta.UpstreamKeyID,
+		UpstreamKind:     meta.UpstreamKind,
+	}
+
+	av, err := attributevalue.MarshalMap(apiKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal API key: %w", err)
+	}
+
+	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.tableName),
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(pk)"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create personal API key: %w", err)
+	}
+
+	s.logger.Info("Created personal API key",
+		"key", RedactKey(newKey),
+		"provider", provider,
+		"owner_email", ownerEmail,
+		"monthly_cost_limit", monthlyCostLimit)
+
+	return apiKey, nil
+}
+
 // GetKeyRecord retrieves an API key without enabled/expiry enforcement.
 // Used by admin tooling that must inspect or mutate disabled keys.
 func (s *Store) GetKeyRecord(ctx context.Context, key string) (*APIKey, error) {
@@ -490,6 +574,9 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 		case "daily_cost_limit":
 			updateExpr.WriteString(", daily_cost_limit = :daily_cost_limit")
 			exprAttrValues[":daily_cost_limit"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", value.(int64))}
+		case "monthly_cost_limit":
+			updateExpr.WriteString(", monthly_cost_limit = :monthly_cost_limit")
+			exprAttrValues[":monthly_cost_limit"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", value.(int64))}
 		case "description":
 			updateExpr.WriteString(", #desc = :description")
 			exprAttrNames["#desc"] = "description"
@@ -640,6 +727,58 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 	}
 
 	return keys, nil
+}
+
+// ListKeysByOwner returns personal keys owned by ownerEmail, optionally filtered by provider.
+func (s *Store) ListKeysByOwner(ctx context.Context, ownerEmail, providerFilter string) ([]*APIKey, error) {
+	keyCond := "owner_email = :owner"
+	exprValues := map[string]types.AttributeValue{
+		":owner": &types.AttributeValueMemberS{Value: ownerEmail},
+	}
+	if providerFilter != "" {
+		keyCond += " AND provider = :provider"
+		exprValues[":provider"] = &types.AttributeValueMemberS{Value: providerFilter}
+	}
+
+	queryInput := &dynamodb.QueryInput{
+		TableName:                 aws.String(s.tableName),
+		IndexName:                 aws.String("OwnerProviderIndex"),
+		KeyConditionExpression:    aws.String(keyCond),
+		ExpressionAttributeValues: exprValues,
+	}
+
+	var keys []*APIKey
+	for {
+		result, err := s.client.Query(ctx, queryInput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query API keys by owner: %w", err)
+		}
+		for _, item := range result.Items {
+			var apiKey APIKey
+			if err := attributevalue.UnmarshalMap(item, &apiKey); err != nil {
+				s.logger.Warn("Failed to unmarshal API key", "error", err)
+				continue
+			}
+			keys = append(keys, &apiKey)
+		}
+		if len(result.LastEvaluatedKey) == 0 {
+			break
+		}
+		queryInput.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+	return keys, nil
+}
+
+// GetOwnerKeyByProvider returns the owner's key for a provider, or nil if none exists.
+func (s *Store) GetOwnerKeyByProvider(ctx context.Context, ownerEmail, provider string) (*APIKey, error) {
+	keys, err := s.ListKeysByOwner(ctx, ownerEmail, provider)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	return keys[0], nil
 }
 
 // LookupProxyKey returns the DynamoDB record for a proxy bearer token

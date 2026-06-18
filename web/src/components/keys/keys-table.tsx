@@ -7,6 +7,13 @@ import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { formatDailyCostLimit } from "../../lib/format";
 import type { APIKey, PiiRedactSetting, Provider } from "../../types";
 
+function formatMonthlyCostLimit(cents?: number): string {
+  if (!cents || cents <= 0) {
+    return "Unlimited";
+  }
+  return `$${(cents / 100).toFixed(2)} / month`;
+}
+
 function piiLabel(value?: PiiRedactSetting): string {
   if (value === true) return "On";
   if (value === false) return "Off";
@@ -19,6 +26,7 @@ interface KeysTableProps {
   onEdit: (record: APIKey) => void;
   onDelete: (record: APIKey) => void;
   canDelete?: boolean;
+  viewerMode?: boolean;
   sharingKey?: string | null;
   maskKey: (key: string) => string;
   formatRateLimits: (record: APIKey) => string;
@@ -30,12 +38,13 @@ export default function KeysTable({
   onEdit,
   onDelete,
   canDelete = true,
+  viewerMode = false,
   sharingKey,
   maskKey,
   formatRateLimits,
 }: KeysTableProps) {
-  const columns = useMemo<ColumnDef<APIKey, unknown>[]>(
-    () => [
+  const columns = useMemo<ColumnDef<APIKey, unknown>[]>(() => {
+    const cols: ColumnDef<APIKey, unknown>[] = [
       {
         id: "key",
         accessorKey: "key",
@@ -60,28 +69,39 @@ export default function KeysTable({
       },
       {
         id: "costLimit",
-        accessorKey: "daily_cost_limit",
-        header: "Cost limit",
-        cell: ({ getValue }) => formatDailyCostLimit(getValue<number>()),
+        accessorKey: viewerMode ? "monthly_cost_limit" : "daily_cost_limit",
+        header: viewerMode ? "Monthly limit" : "Cost limit",
+        cell: ({ row }) =>
+          viewerMode
+            ? formatMonthlyCostLimit(row.original.monthly_cost_limit)
+            : formatDailyCostLimit(row.getValue<number>()),
       },
-      {
-        id: "rateLimits",
-        accessorFn: (row) => formatRateLimits(row),
-        header: "Rate limits",
-        cell: ({ getValue }) => (
-          <span className="max-w-[10rem] truncate text-xs text-base-content/70" title={getValue<string>()}>
-            {getValue<string>()}
-          </span>
-        ),
-      },
-      {
-        id: "pii",
-        accessorKey: "redact_pii",
-        header: "PII redact",
-        cell: ({ getValue }) => (
-          <span className="badge badge-ghost badge-sm">{piiLabel(getValue<PiiRedactSetting>())}</span>
-        ),
-      },
+    ];
+
+    if (!viewerMode) {
+      cols.push(
+        {
+          id: "rateLimits",
+          accessorFn: (row) => formatRateLimits(row),
+          header: "Rate limits",
+          cell: ({ getValue }) => (
+            <span className="max-w-[10rem] truncate text-xs text-base-content/70" title={getValue<string>()}>
+              {getValue<string>()}
+            </span>
+          ),
+        },
+        {
+          id: "pii",
+          accessorKey: "redact_pii",
+          header: "PII redact",
+          cell: ({ getValue }) => (
+            <span className="badge badge-ghost badge-sm">{piiLabel(getValue<PiiRedactSetting>())}</span>
+          ),
+        },
+      );
+    }
+
+    cols.push(
       {
         id: "description",
         accessorKey: "description",
@@ -127,9 +147,10 @@ export default function KeysTable({
           </div>
         ),
       },
-    ],
-    [keys, maskKey, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey],
-  );
+    );
+
+    return cols;
+  }, [keys, maskKey, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey, viewerMode]);
 
   return (
     <DataTable

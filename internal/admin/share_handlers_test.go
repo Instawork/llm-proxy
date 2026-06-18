@@ -190,3 +190,63 @@ func TestKeyToResponse_IncludesRateLimits(t *testing.T) {
 	assert.Equal(t, 10, resp.RateLimitRPM)
 	assert.Equal(t, 20, resp.RateLimitTPM)
 }
+
+func TestHandleGetShare_ViewerScoped(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	ownKey, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+	ownLink, err := store.CreateShareLink(ctx, ownKey.PK, "viewer@example.com")
+	require.NoError(t, err)
+
+	ownReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/share/"+ownLink.ID(), nil)
+	ownReq = mux.SetURLVars(ownReq, map[string]string{"id": ownLink.ID()})
+	ownRec := httptest.NewRecorder()
+	h.handleGetShare(ownRec, ownReq)
+	require.Equal(t, http.StatusOK, ownRec.Code)
+
+	orgKey, err := store.CreateKey(ctx, "anthropic", "sk-org", "", 0, nil, nil)
+	require.NoError(t, err)
+	orgLink, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+	require.NoError(t, err)
+
+	orgReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/share/"+orgLink.ID(), nil)
+	orgReq = mux.SetURLVars(orgReq, map[string]string{"id": orgLink.ID()})
+	orgRec := httptest.NewRecorder()
+	h.handleGetShare(orgRec, orgReq)
+	assert.Equal(t, http.StatusForbidden, orgRec.Code)
+
+	publicReq := httptest.NewRequest(http.MethodGet, "/admin/api/share/"+orgLink.ID(), nil)
+	publicReq = mux.SetURLVars(publicReq, map[string]string{"id": orgLink.ID()})
+	publicRec := httptest.NewRecorder()
+	h.handleGetShare(publicRec, publicReq)
+	require.Equal(t, http.StatusOK, publicRec.Code)
+}
+
+func TestHandleCreateShare_ViewerOwnKeyOnly(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	ownKey, err := store.CreatePersonalKey(ctx, "viewer@example.com", "gemini", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(map[string]string{"key": ownKey.PK})
+	ownReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/share", body)
+	ownReq.Host = "llm-proxy:9002"
+	ownRec := httptest.NewRecorder()
+	h.handleCreateShare(ownRec, ownReq)
+	require.Equal(t, http.StatusCreated, ownRec.Code)
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "", 0, nil, nil)
+	require.NoError(t, err)
+	orgBody, _ := json.Marshal(map[string]string{"key": orgKey.PK})
+	orgReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/share", orgBody)
+	orgRec := httptest.NewRecorder()
+	h.handleCreateShare(orgRec, orgReq)
+	assert.Equal(t, http.StatusForbidden, orgRec.Code)
+}

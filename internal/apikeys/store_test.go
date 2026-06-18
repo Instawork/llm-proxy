@@ -353,3 +353,36 @@ func TestStore_ListKeys_ScanError(t *testing.T) {
 	_, err := store.ListKeys(context.Background(), "")
 	require.Error(t, err)
 }
+
+func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+
+	key, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-viewer", "mine", 1000, KeyCreateMeta{})
+	require.NoError(t, err)
+	assert.Equal(t, "viewer@example.com", key.OwnerEmail)
+	assert.Equal(t, int64(1000), key.MonthlyCostLimit)
+	assert.Equal(t, int64(0), key.DailyCostLimit)
+	assert.Equal(t, "true", key.Tags["personal"])
+
+	existing, err := store.GetOwnerKeyByProvider(ctx, "viewer@example.com", "openai")
+	require.NoError(t, err)
+	require.NotNil(t, existing)
+	assert.Equal(t, key.PK, existing.PK)
+
+	_, err = store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-dup", "", 1000, KeyCreateMeta{})
+	require.ErrorIs(t, err, ErrOwnerKeyExists)
+
+	keys, err := store.ListKeysByOwner(ctx, "viewer@example.com", "")
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.Equal(t, key.PK, keys[0].PK)
+
+	filtered, err := store.ListKeysByOwner(ctx, "viewer@example.com", "anthropic")
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+
+	other, err := store.ListKeysByOwner(ctx, "other@example.com", "")
+	require.NoError(t, err)
+	assert.Empty(t, other)
+}

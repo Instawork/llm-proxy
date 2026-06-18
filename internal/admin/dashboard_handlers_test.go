@@ -315,10 +315,13 @@ func TestRegisterRoutes_ServesDashboardAPI(t *testing.T) {
 	yamlCfg := config.GetDefaultYAMLConfig()
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
 
+	userStore := testAdminUserStore(t)
+
 	r := mux.NewRouter()
 	RegisterRoutes(r, Deps{
 		Logger:       testLogger(),
 		YAMLConfig:   yamlCfg,
+		UserStore:    userStore,
 		CostSummary:  costRec.Snapshot,
 		UsageSummary: usageRec.Snapshot,
 		PIISummary:   piiRec.Snapshot,

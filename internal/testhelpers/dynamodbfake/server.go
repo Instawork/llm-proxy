@@ -194,10 +194,29 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "Query", "Scan":
 		tableName, _ := input["TableName"].(string)
 		filterExpr, _ := input["FilterExpression"].(string)
+		keyCondExpr, _ := input["KeyConditionExpression"].(string)
 		attrValues, _ := input["ExpressionAttributeValues"].(map[string]any)
 		var items []any
 		for _, it := range f.tables[tableName] {
 			item, _ := it.(map[string]any)
+			if keyCondExpr != "" && strings.Contains(keyCondExpr, "owner_email") {
+				wantOwner := extractAttrValueString(attrValues, ":owner")
+				if wantOwner != "" && !strings.EqualFold(ExtractDDBString(item, "owner_email"), wantOwner) {
+					continue
+				}
+				if strings.Contains(keyCondExpr, "provider =") {
+					wantProvider := extractAttrValueString(attrValues, ":provider")
+					if wantProvider != "" && ExtractDDBString(item, "provider") != wantProvider {
+						continue
+					}
+				}
+			}
+			if keyCondExpr != "" && strings.Contains(keyCondExpr, "provider =") && !strings.Contains(keyCondExpr, "owner_email") {
+				wantProvider := extractAttrValueString(attrValues, ":provider")
+				if wantProvider != "" && ExtractDDBString(item, "provider") != wantProvider {
+					continue
+				}
+			}
 			if filterExpr != "" && strings.Contains(filterExpr, "sk =") {
 				wantSK := extractAttrValueString(attrValues, ":profile")
 				if wantSK != "" && ExtractDDBString(item, "sk") != wantSK {

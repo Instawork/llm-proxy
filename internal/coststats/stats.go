@@ -213,6 +213,27 @@ func (r *Recorder) RecordRequest(
 	r.mu.Unlock()
 
 	r.QueueDelta(dayKey, delta)
+	r.applyMonthlyKeySpendFromDelta(context.Background(), delta)
+}
+
+func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta adminrollup.Delta) {
+	if r == nil {
+		return
+	}
+	byKey := delta.Dimensions["by_key"]
+	if len(byKey) == 0 {
+		return
+	}
+	month := time.Now().UTC().Format("2006-01")
+	for field, spendUSD := range byKey {
+		member, f, ok := adminrollup.ParseDimMemberField(field)
+		if !ok || f != "spend_usd" || spendUSD == 0 {
+			continue
+		}
+		if err := r.ApplyFleetMonthlyKeySpend(ctx, adminrollup.MetricCost, month, member, spendUSD); err != nil {
+			log.Printf("coststats: apply monthly key spend failed key=%s spend_usd=%f error=%v", member, spendUSD, err)
+		}
+	}
 }
 
 func (r *Recorder) costDeltaLocked() adminrollup.Delta {
@@ -436,4 +457,53 @@ func (r *Recorder) KeySpendUSDDetailed(ctx context.Context, keyID string) (spend
 		return fleet, false
 	}
 	return local, false
+}
+
+// KeyMonthlySpendUSD returns recorded monthly spend for a masked iw: key.
+func (r *Recorder) KeyMonthlySpendUSD(ctx context.Context, keyID string) float64 {
+	spend, _ := r.KeyMonthlySpendUSDDetailed(ctx, keyID)
+	return spend
+}
+
+// ReserveKeyMonthlySpend atomically reserves an estimated cost for keyID against
+// its monthly cap across the fleet. See ReserveKeySpend for the return contract.
+func (r *Recorder) ReserveKeyMonthlySpend(ctx context.Context, keyID string, estimateUSD float64, limitCents int64) (allowed, reservationActive bool) {
+	if r == nil || keyID == "" || limitCents <= 0 {
+		return true, false
+	}
+	month := time.Now().UTC().Format("2006-01")
+	allowed, bound, err := r.ReserveFleetKeyMonthlySpend(ctx, adminrollup.MetricCost, month, keyID, estimateUSD, limitCents)
+	if !bound || err != nil {
+		return true, false
+	}
+	return allowed, true
+}
+
+// AdjustKeyMonthlyReservation changes keyID's outstanding monthly fleet
+// reservation by deltaUSD (negative to release).
+func (r *Recorder) AdjustKeyMonthlyReservation(ctx context.Context, keyID string, deltaUSD float64) {
+	if r == nil || keyID == "" || deltaUSD == 0 {
+		return
+	}
+	month := time.Now().UTC().Format("2006-01")
+	if err := r.AdjustFleetKeyMonthlyReservation(ctx, adminrollup.MetricCost, month, keyID, deltaUSD); err != nil {
+		log.Printf("coststats: adjust monthly reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
+	}
+}
+
+// KeyMonthlySpendUSDDetailed is KeyMonthlySpendUSD plus a degraded flag.
+func (r *Recorder) KeyMonthlySpendUSDDetailed(ctx context.Context, keyID string) (spendUSD float64, degraded bool) {
+	if r == nil || keyID == "" {
+		return 0, false
+	}
+	month := time.Now().UTC().Format("2006-01")
+
+	fleet, bound, err := r.FleetKeyMonthlySpendUSD(ctx, adminrollup.MetricCost, month, keyID)
+	if bound && err != nil {
+		return 0, true
+	}
+	if bound {
+		return fleet, false
+	}
+	return 0, false
 }

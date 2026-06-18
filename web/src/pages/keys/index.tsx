@@ -30,6 +30,7 @@ import type {
 } from "../../types";
 
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
+const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
 
 type PiiFormValue = "inherit" | "on" | "off";
 
@@ -119,7 +120,10 @@ export default function KeysPage() {
   const { data: config } = useConfig();
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
   const canBypassPiiBedrockPolicy = Boolean(me?.can_bypass_pii_off_non_bedrock_policy);
-  const canDeleteKeys = me?.role === "admin";
+  const isViewer = me?.role === "viewer";
+  const canDeleteKeys = isViewer || me?.role === "admin";
+  const viewerMonthlyCents = me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 1000;
+  const viewerMonthlyDollars = (viewerMonthlyCents / 100).toFixed(2);
   const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
   const [providerFilter, setProviderFilter] = useState<Provider | "">("");
@@ -170,9 +174,15 @@ export default function KeysPage() {
   }, [modalOpen, editingKey, piiOffRequiresBedrock, form.provider]);
 
   const availableProviders = useMemo(() => {
+    if (isViewer) {
+      const owned = new Set(keys.map((k) => k.provider));
+      return VIEWER_PROVIDERS.filter((p) => !owned.has(p));
+    }
     if (!piiOffRequiresBedrock) return PROVIDERS;
     return ["bedrock"] as Provider[];
-  }, [piiOffRequiresBedrock]);
+  }, [isViewer, keys, piiOffRequiresBedrock]);
+
+  const canCreateKey = !isViewer || availableProviders.length > 0;
 
   const providerAutoProvision = Boolean(
     provisioning?.enabled && provisioning.providers?.[form.provider]?.auto_provision,
@@ -194,7 +204,8 @@ export default function KeysPage() {
 
   const openCreate = () => {
     setEditingKey(null);
-    setForm(defaultForm);
+    const nextProvider = isViewer ? availableProviders[0] ?? "openai" : defaultForm.provider;
+    setForm({ ...defaultForm, provider: nextProvider });
     setManualKeyEntry(false);
     setModalOpen(true);
   };
@@ -235,6 +246,13 @@ export default function KeysPage() {
 
     try {
       if (editingKey) {
+        if (isViewer) {
+          await updateKey.mutateAsync({
+            key: editingKey.key,
+            body: { description: form.description },
+          });
+          push("Key updated", "success");
+        } else {
         await updateKey.mutateAsync({
           key: editingKey.key,
           body: {
@@ -246,6 +264,24 @@ export default function KeysPage() {
           },
         });
         push("Key updated", "success");
+        }
+      } else if (isViewer) {
+        const useAutoProvision = providerAutoProvision && !manualKeyEntry;
+        const body: CreateAPIKeyRequest = {
+          provider: form.provider,
+          description: form.description,
+        };
+        if (useAutoProvision) {
+          body.auto_provision = true;
+        } else {
+          if (!form.actual_key.trim()) {
+            push("Provider API key is required", "error");
+            return;
+          }
+          body.actual_key = form.actual_key;
+        }
+        await createKey.mutateAsync(body);
+        push("Personal key created", "success");
       } else {
         const useAutoProvision = providerAutoProvision && !manualKeyEntry;
         if (!useAutoProvision && !form.actual_key.trim()) {
@@ -295,23 +331,34 @@ export default function KeysPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="API Keys"
-        description="Key registry is DynamoDB. Spend and PII stats on each key are in-memory (today only)."
+        title={isViewer ? "My API Keys" : "API Keys"}
+        description={
+          isViewer
+            ? `Personal proxy keys (one per provider). Monthly spend is capped at $${viewerMonthlyDollars}.`
+            : "Key registry is DynamoDB. Spend and PII stats on each key are in-memory (today only)."
+        }
         actions={
           <>
-            <select
-              className="select select-bordered select-sm"
-              value={providerFilter}
-              onChange={(event) => setProviderFilter(event.target.value as Provider | "")}
+            {!isViewer ? (
+              <select
+                className="select select-bordered select-sm"
+                value={providerFilter}
+                onChange={(event) => setProviderFilter(event.target.value as Provider | "")}
+              >
+                <option value="">All providers</option>
+                {PROVIDERS.map((provider) => (
+                  <option key={provider} value={provider}>
+                    {provider}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!canCreateKey}
+              onClick={openCreate}
             >
-              <option value="">All providers</option>
-              {PROVIDERS.map((provider) => (
-                <option key={provider} value={provider}>
-                  {provider}
-                </option>
-              ))}
-            </select>
-            <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
               Create key
             </button>
           </>
@@ -327,11 +374,17 @@ export default function KeysPage() {
           <LoadingBlock />
         ) : visibleKeys.length === 0 ? (
           <EmptyState
-            message="No API keys yet. Create a proxy key to route provider requests through iw: keys."
+            message={
+              isViewer
+                ? "No personal keys yet. Create one proxy key per provider to route LLM requests."
+                : "No API keys yet. Create a proxy key to route provider requests through iw: keys."
+            }
             action={
-              <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
-                Create your first key
-              </button>
+              canCreateKey ? (
+                <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
+                  Create your first key
+                </button>
+              ) : undefined
             }
           />
         ) : (
@@ -341,6 +394,7 @@ export default function KeysPage() {
             onEdit={openEdit}
             onDelete={setDeleteTarget}
             canDelete={canDeleteKeys}
+            viewerMode={isViewer}
             sharingKey={sharingKey}
             maskKey={maskKey}
             formatRateLimits={formatRateLimits}
@@ -351,7 +405,9 @@ export default function KeysPage() {
       {modalOpen ? (
         <dialog className="modal modal-open" open>
           <div className="modal-box max-w-lg">
-            <h3 className="text-lg font-semibold">{editingKey ? "Edit API key" : "Create API key"}</h3>
+            <h3 className="text-lg font-semibold">
+              {editingKey ? "Edit API key" : isViewer ? "Create personal key" : "Create API key"}
+            </h3>
             <form className="mt-4 space-y-4" onSubmit={onSubmit}>
               <label className="form-control w-full">
                 <span className="label-text">Provider</span>
@@ -369,7 +425,7 @@ export default function KeysPage() {
                     </option>
                   ))}
                 </select>
-                {piiOffRequiresBedrock ? (
+                {piiOffRequiresBedrock && !isViewer ? (
                   <span className="label-text-alt text-base-content/60">
                     PII redaction off requires the Bedrock provider.
                   </span>
@@ -382,7 +438,7 @@ export default function KeysPage() {
                 </div>
               ) : null}
 
-              {showAnthropicTierSelect ? (
+              {!isViewer && showAnthropicTierSelect ? (
                 <label className="form-control w-full">
                   <span className="label-text">Anthropic tier</span>
                   <select
@@ -458,6 +514,14 @@ export default function KeysPage() {
                 />
               </label>
 
+              {isViewer && !editingKey ? (
+                <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
+                  Monthly spend limit: <span className="font-medium">${viewerMonthlyDollars}</span> (set by
+                  your organization).
+                </div>
+              ) : null}
+
+              {!isViewer ? (
               <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
                 <label className="form-control w-full">
                   <span className="label-text">Daily cost limit (USD)</span>
@@ -580,6 +644,7 @@ export default function KeysPage() {
                   </label>
                 </div>
               </div>
+              ) : null}
 
               <div className="modal-action">
                 <button type="button" className="btn btn-ghost" onClick={closeModal}>

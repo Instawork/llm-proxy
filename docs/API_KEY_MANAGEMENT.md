@@ -41,12 +41,48 @@ The system automatically creates a DynamoDB table with the following structure:
 - **Attributes**:
   - `provider`: LLM provider (openai, anthropic, gemini)
   - `actual_key`: The real provider API key
-  - `daily_cost_limit`: 24-hour cost limit in cents
+  - `daily_cost_limit`: 24-hour cost limit in cents (`0` = unlimited)
+  - `monthly_cost_limit`: calendar-month cost limit in cents (`0` = unlimited)
+  - `owner_email`: Owner email for personal keys (empty for org-wide keys)
   - `description`: Optional key description
   - `enabled`: Whether the key is active
   - `created_at`, `updated_at`: Timestamps
   - `expires_at`: Optional expiration date
   - `tags`: Key-value tags for organization
+
+### Global secondary index: `OwnerProviderIndex`
+
+Personal (viewer-owned) keys are indexed by owner and provider:
+
+- **Partition key**: `owner_email`
+- **Sort key**: `provider`
+
+Dev/test tables created by the proxy include this GSI automatically. **Existing staging and production tables** must have the index added before deploying viewer personal keys:
+
+```bash
+aws dynamodb update-table \
+  --table-name llm-proxy-api-keys \
+  --attribute-definitions \
+    AttributeName=owner_email,AttributeType=S \
+    AttributeName=provider,AttributeType=S \
+  --global-secondary-index-updates \
+    '[{"Create":{"IndexName":"OwnerProviderIndex","KeySchema":[{"AttributeName":"owner_email","KeyType":"HASH"},{"AttributeName":"provider","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}}]'
+```
+
+Wait for the index to reach `ACTIVE` before rolling out the feature.
+
+## Viewer personal keys
+
+Dashboard users with the **viewer** role can manage personal proxy keys only:
+
+- **One key per provider** (`openai`, `anthropic`, `gemini`; Bedrock is not available)
+- **Monthly spend cap** (default **$10/month**, configured via `admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents` in `configs/base.yml`)
+- **No daily cap** on personal keys (`daily_cost_limit` is `0`)
+- Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
+- Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
+- Signed-in viewers resolving a share link must own the underlying key; unsigned share URLs continue to work as capability links
+
+Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
 ## Using the Key Management Tool
 

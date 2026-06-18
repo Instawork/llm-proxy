@@ -48,6 +48,7 @@ type authenticator struct {
 	devFrontendOrigin string
 	userStore         *adminusers.Store
 	editorLimits      config.EditorLimitsConfig
+	viewerLimits      config.ViewerLimitsConfig
 	logger            *slog.Logger
 }
 
@@ -91,6 +92,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		devFrontendOrigin: adminCfg.DevCORSOrigin,
 		userStore:         userStore,
 		editorLimits:      adminCfg.EditorLimits,
+		viewerLimits:      adminCfg.ViewerLimits,
 		logger:            logger,
 	}
 
@@ -410,6 +412,11 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 	if role == string(adminusers.RoleEditor) && a.editorLimits.MaxDailyCostLimitCents > 0 {
 		resp.EditorLimits = &EditorLimitsResponse{
 			MaxDailyCostLimitCents: a.editorLimits.MaxDailyCostLimitCents,
+		}
+	}
+	if role == string(adminusers.RoleViewer) {
+		resp.ViewerLimits = &ViewerLimitsResponse{
+			PersonalMonthlyCostLimitCents: viewerPersonalMonthlyLimitFromConfig(a.viewerLimits),
 		}
 	}
 	return resp, nil

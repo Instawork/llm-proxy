@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/gorilla/mux"
@@ -227,4 +228,68 @@ func TestPublicBaseURL_YAMLOverride(t *testing.T) {
 	}}}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	assert.Equal(t, "https://llm.example.com", h.publicBaseURL(req))
+}
+
+func TestViewerPersonalKeys(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents = 1000
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+
+	listReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys", nil)
+	listRec := httptest.NewRecorder()
+	h.handleListKeys(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+	var listResp []KeyResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	assert.Empty(t, listResp)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:  "openai",
+		ActualKey: "sk-viewer",
+		Description: "mine",
+	})
+	createReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)
+	createRec := httptest.NewRecorder()
+	h.handleCreateKey(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+
+	var created KeyResponse
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
+	assert.Equal(t, int64(1000), created.MonthlyCostLimit)
+	assert.Equal(t, "viewer@example.com", created.OwnerEmail)
+	assert.Equal(t, int64(0), created.DailyCostLimit)
+
+	dupReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)
+	dupRec := httptest.NewRecorder()
+	h.handleCreateKey(dupRec, dupReq)
+	assert.Equal(t, http.StatusConflict, dupRec.Code)
+
+	patchReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+created.Key, []byte(`{"enabled": false}`))
+	patchReq = mux.SetURLVars(patchReq, map[string]string{"key": created.Key})
+	patchRec := httptest.NewRecorder()
+	h.handleUpdateKey(patchRec, patchReq)
+	assert.Equal(t, http.StatusForbidden, patchRec.Code)
+
+	patchDescReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+created.Key, []byte(`{"description": "updated"}`))
+	patchDescReq = mux.SetURLVars(patchDescReq, map[string]string{"key": created.Key})
+	patchDescRec := httptest.NewRecorder()
+	h.handleUpdateKey(patchDescRec, patchDescReq)
+	require.Equal(t, http.StatusOK, patchDescRec.Code)
+
+	getOrgReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+orgKey.PK, nil)
+	getOrgReq = mux.SetURLVars(getOrgReq, map[string]string{"key": orgKey.PK})
+	getOrgRec := httptest.NewRecorder()
+	h.handleGetKey(getOrgRec, getOrgReq)
+	assert.Equal(t, http.StatusForbidden, getOrgRec.Code)
+
+	delReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+created.Key, nil)
+	delReq = mux.SetURLVars(delReq, map[string]string{"key": created.Key})
+	delRec := httptest.NewRecorder()
+	h.handleDeleteKey(delRec, delReq)
+	assert.Equal(t, http.StatusNoContent, delRec.Code)
 }

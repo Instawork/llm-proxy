@@ -34,6 +34,10 @@ const (
 	// restarts across midnight before the day-rollover archive runs) self-
 	// expires instead of leaking forever.
 	todayTTL = 48 * time.Hour
+
+	// monthTTL bounds monthly per-key spend hashes. It is longer than a calendar
+	// month so in-progress months are rewritten before expiry.
+	monthTTL = 35 * 24 * time.Hour
 )
 
 // DayRecord is one UTC calendar day of rolled-up stats (stored in Redis).
@@ -128,6 +132,14 @@ func todayKey(metric, day string) string {
 	return fmt.Sprintf("%s%s:today:%s", keyPrefix, metric, day)
 }
 
+func monthKey(metric, month string) string {
+	return fmt.Sprintf("%s%s:month:%s:by_key", keyPrefix, metric, month)
+}
+
+func monthReservedKey(metric, month string) string {
+	return fmt.Sprintf("%s%s:month:%s:%s", keyPrefix, metric, month, monthReservedDim)
+}
+
 // ApplyDelta atomically folds an instance delta into today's hash aggregates.
 func (s *Store) ApplyDelta(ctx context.Context, metric, day string, d Delta) error {
 	if s == nil || d.empty() {
@@ -156,6 +168,23 @@ func (s *Store) KeySpendUSD(ctx context.Context, metric, day, keyID string) (flo
 		return 0, nil
 	}
 	return s.be.hget(ctx, dimKey(metric, day, "by_key"), dimMemberField(keyID, "spend_usd"))
+}
+
+// KeyMonthlySpendUSD reads the fleet-wide monthly spend (USD) recorded for a
+// single masked key in the given metric/month's by_key hash.
+func (s *Store) KeyMonthlySpendUSD(ctx context.Context, metric, month, keyID string) (float64, error) {
+	if s == nil || s.be == nil || keyID == "" {
+		return 0, nil
+	}
+	return s.be.hget(ctx, monthKey(metric, month), dimMemberField(keyID, "spend_usd"))
+}
+
+// ApplyMonthlyKeySpend atomically folds spendUSD into the monthly per-key hash.
+func (s *Store) ApplyMonthlyKeySpend(ctx context.Context, metric, month, keyID string, spendUSD float64) error {
+	if s == nil || s.be == nil || keyID == "" || spendUSD == 0 {
+		return nil
+	}
+	return s.be.hincrbyfloat(ctx, monthKey(metric, month), dimMemberField(keyID, "spend_usd"), spendUSD, monthTTL)
 }
 
 func (s *Store) loadHash(ctx context.Context, key string) (map[string]float64, error) {
