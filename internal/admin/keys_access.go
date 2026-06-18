@@ -64,10 +64,10 @@ func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) err
 	return nil
 }
 
-func (h *handler) validateViewerPersonalCreate(r *http.Request, req *CreateKeyRequest, userEmail string) error {
+func (h *handler) validatePersonalCreate(r *http.Request, req *CreateKeyRequest, userEmail string) error {
 	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
 	if !isViewerPersonalProvider(req.Provider) {
-		return fmt.Errorf("viewers may only create personal keys for openai, anthropic, or gemini")
+		return fmt.Errorf("personal keys may only be created for openai, anthropic, or gemini")
 	}
 	if err := validateProvisionedKeyOnly(adminusers.RoleViewer, req); err != nil {
 		return err

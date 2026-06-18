@@ -148,8 +148,11 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if role == adminusers.RoleViewer {
-		if err := h.validateViewerPersonalCreate(r, &req, user.Email); err != nil {
+	// Viewers always create personal keys; higher roles may opt in via the
+	// "personal" flag so an admin can mint a personal testing key for themselves.
+	wantsPersonal := role == adminusers.RoleViewer || req.Personal
+	if wantsPersonal {
+		if err := h.validatePersonalCreate(r, &req, user.Email); err != nil {
 			if errors.Is(err, apikeys.ErrOwnerKeyExists) {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
