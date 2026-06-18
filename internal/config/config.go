@@ -437,10 +437,10 @@ type APIKeyManagementConfig struct {
 	// pre-provision the table via Terraform and leave this false.
 	AutoCreateTable bool `yaml:"auto_create_table"`
 	// KeyPrefix is the prefix base (without separator, e.g. "iw") used for
-	// proxy API keys. New keys are generated as "<base>-<random>", and
-	// "<base>-", "<base>_", and "<base>:" are accepted on lookup. Blank
-	// falls back to apikeys.DefaultKeyPrefixBase. Overridable at runtime
-	// via the LLM_PROXY_API_KEY_PREFIX env var.
+	// proxy API keys. New keys are generated as "sk-<base>-<random>", and
+	// "sk-<base>-", "<base>-", "<base>_", and "<base>:" are accepted on
+	// lookup. Blank falls back to apikeys.DefaultKeyPrefixBase. Overridable
+	// at runtime via the LLM_PROXY_API_KEY_PREFIX env var.
 	KeyPrefix string `yaml:"key_prefix"`
 	// Provisioning configures automatic upstream key minting for the admin UI.
 	Provisioning KeyProvisioningConfig `yaml:"provisioning,omitempty"`

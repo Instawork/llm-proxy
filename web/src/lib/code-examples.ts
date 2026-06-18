@@ -355,9 +355,9 @@ export function codeExamples(ctx: Ctx): CodeExample[] {
 }
 
 // Placeholder for the Cursor/Replit prompt — real key stays on the share page only.
-export const PROMPT_KEY_PLACEHOLDER = "iw:YOUR_PROXY_KEY_HERE";
+export const PROMPT_KEY_PLACEHOLDER = "sk-iw-YOUR_PROXY_KEY_HERE";
 
-const IW_KEY_IN_TEXT = /iw:[a-f0-9]{32,}/gi;
+const PROXY_KEY_IN_TEXT = /(?:sk-[a-z0-9]+-|iw[:_-])[a-f0-9]{32,}/gi;
 
 /** Strip proxy keys from text meant for external AI assistants (Cursor, Replit, etc.). */
 export function scrubProxyKeyFromText(text: string, knownKey?: string): string {
@@ -365,7 +365,7 @@ export function scrubProxyKeyFromText(text: string, knownKey?: string): string {
   if (knownKey) {
     out = out.split(knownKey).join(PROMPT_KEY_PLACEHOLDER);
   }
-  return out.replace(IW_KEY_IN_TEXT, PROMPT_KEY_PLACEHOLDER);
+  return out.replace(PROXY_KEY_IN_TEXT, PROMPT_KEY_PLACEHOLDER);
 }
 
 // assistantPrompt returns a ready-to-paste prompt for Cursor / Replit / other
@@ -392,7 +392,7 @@ Please update my project to route all ${provider} calls through it.
 Proxy base URL: ${baseUrl}
 Proxy API key placeholder: ${PROMPT_KEY_PLACEHOLDER}
 
-Important — the real iw: key is NOT in this prompt. Before I can run anything, tell me to open the \
+Important — the real proxy key is NOT in this prompt. Before I can run anything, tell me to open the \
 LLM Proxy share page, copy my API key from the "API key" field, and paste it into ${envKeyName} \
 (or replace ${PROMPT_KEY_PLACEHOLDER} wherever you wire the client). Do not invent or guess a key.
 

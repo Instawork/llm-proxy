@@ -794,7 +794,8 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 
 	// Resolve the proxy key prefix base, env var taking precedence over YAML.
 	// A blank value leaves the apikeys default in place. New keys are minted
-	// as "<base>_<random>"; legacy "<base>:" keys still validate.
+	// as "sk-<base>-<random>"; legacy "<base>-" / "<base>_" / "<base>:" keys
+	// still validate.
 	keyPrefixBase := os.Getenv("LLM_PROXY_API_KEY_PREFIX")
 	if keyPrefixBase == "" {
 		keyPrefixBase = apiKeyConfig.KeyPrefix

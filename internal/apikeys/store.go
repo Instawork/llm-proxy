@@ -24,10 +24,11 @@ const (
 	KeyLength = 32
 
 	// DefaultKeyPrefixBase is the default prefix base (without separator).
-	// New keys are generated as "<base>-<hex>"; legacy "<base>_",
-	// "<base>:", and "<base>-" forms are accepted on lookup.
+	// New keys are generated as "sk-<base>-<hex>"; legacy "<base>-",
+	// "<base>_", and "<base>:" forms are accepted on lookup.
 	DefaultKeyPrefixBase = "iw"
 
+	keyPrefixSkLead              = "sk-"
 	keyPrefixSepNew              = "-"
 	keyPrefixSepLegacyUnderscore = "_"
 	keyPrefixSepLegacyColon      = ":"
@@ -38,24 +39,33 @@ var (
 	// e.g. "iw". Set once at startup via SetKeyPrefixBase.
 	keyPrefixBase = DefaultKeyPrefixBase
 
-	// KeyPrefix is the prefix used to GENERATE new keys ("<base>-").
+	// KeyPrefix is the prefix used to GENERATE new keys ("sk-<base>-").
 	// Exported for backwards compatibility with callers/tests that build
 	// keys as KeyPrefix+"...". Do NOT use it to decide whether a string is
 	// one of our keys — that must accept legacy separators too, so use
 	// HasKeyPrefix / TrimKeyPrefix instead.
-	KeyPrefix = keyPrefixBase + keyPrefixSepNew
+	KeyPrefix = generationKeyPrefix(keyPrefixBase)
 
 	// acceptedKeyPrefixes lists every prefix recognized as one of our proxy
 	// keys, current separator first. Kept in sync by SetKeyPrefixBase.
-	acceptedKeyPrefixes = []string{
-		keyPrefixBase + keyPrefixSepNew,
-		keyPrefixBase + keyPrefixSepLegacyUnderscore,
-		keyPrefixBase + keyPrefixSepLegacyColon,
-	}
+	acceptedKeyPrefixes = acceptedKeyPrefixesForBase(keyPrefixBase)
 )
 
+func generationKeyPrefix(base string) string {
+	return keyPrefixSkLead + base + keyPrefixSepNew
+}
+
+func acceptedKeyPrefixesForBase(base string) []string {
+	return []string{
+		generationKeyPrefix(base),
+		base + keyPrefixSepNew,
+		base + keyPrefixSepLegacyUnderscore,
+		base + keyPrefixSepLegacyColon,
+	}
+}
+
 // SetKeyPrefixBase configures the proxy key prefix base (e.g. "iw"). New
-// keys are then generated as "<base>-<hex>", while lookups continue to
+// keys are then generated as "sk-<base>-<hex>", while lookups continue to
 // accept "<base>-", "<base>_", and "<base>:" for keys minted under older
 // separators. A blank base is ignored so a missing config value falls back
 // to the default. Call once at startup before serving traffic — it is not
@@ -66,19 +76,15 @@ func SetKeyPrefixBase(base string) {
 		return
 	}
 	keyPrefixBase = base
-	KeyPrefix = base + keyPrefixSepNew
-	acceptedKeyPrefixes = []string{
-		base + keyPrefixSepNew,
-		base + keyPrefixSepLegacyUnderscore,
-		base + keyPrefixSepLegacyColon,
-	}
+	KeyPrefix = generationKeyPrefix(base)
+	acceptedKeyPrefixes = acceptedKeyPrefixesForBase(base)
 }
 
 // KeyPrefixBase returns the configured prefix base (without separator).
 func KeyPrefixBase() string { return keyPrefixBase }
 
 // HasKeyPrefix reports whether k carries a recognized proxy-key prefix
-// (current "<base>-" or legacy "<base>_" / "<base>:").
+// (current "sk-<base>-" or legacy "<base>-" / "<base>_" / "<base>:").
 func HasKeyPrefix(k string) bool {
 	_, ok := matchedKeyPrefix(k)
 	return ok
@@ -380,7 +386,7 @@ type KeyCreateMeta struct {
 }
 
 // GenerateKey generates a new API key using the current generation prefix
-// ("<base>-", e.g. "iw-").
+// ("sk-<base>-", e.g. "sk-iw-").
 func GenerateKey() (string, error) {
 	bytes := make([]byte, KeyLength)
 	if _, err := rand.Read(bytes); err != nil {
@@ -694,16 +700,19 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 			queryInput.ExclusiveStartKey = result.LastEvaluatedKey
 		}
 	} else {
-		// Scan all keys. Filter on the prefix base (e.g. "iw") so BOTH the
-		// current "iw_" keys and legacy "iw:" keys are returned, while
-		// co-located share-link records (pk "share:<uuid>") never get
-		// unmarshaled into the key list. Paginate so large key sets are
-		// not truncated at DynamoDB's 1 MiB response limit.
+		// Scan all keys. Match current "sk-<base>-" keys and legacy
+		// "<base>-" / "<base>_" / "<base>:" keys, while co-located
+		// share-link records (pk "share:<uuid>") never get unmarshaled
+		// into the key list. Paginate so large key sets are not truncated
+		// at DynamoDB's 1 MiB response limit.
 		scanInput := &dynamodb.ScanInput{
-			TableName:        aws.String(s.tableName),
-			FilterExpression: aws.String("begins_with(pk, :pfx)"),
+			TableName: aws.String(s.tableName),
+			FilterExpression: aws.String(
+				"begins_with(pk, :skPfx) OR begins_with(pk, :legacyPfx)",
+			),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":pfx": &types.AttributeValueMemberS{Value: keyPrefixBase},
+				":skPfx":     &types.AttributeValueMemberS{Value: generationKeyPrefix(keyPrefixBase)},
+				":legacyPfx": &types.AttributeValueMemberS{Value: keyPrefixBase},
 			},
 		}
 		for {
@@ -782,7 +791,7 @@ func (s *Store) GetOwnerKeyByProvider(ctx context.Context, ownerEmail, provider 
 }
 
 // LookupProxyKey returns the DynamoDB record for a proxy bearer token
-// (current "<base>_" or legacy "<base>:" form).
+// (current "sk-<base>-" or legacy "<base>-" / "<base>_" / "<base>:" form).
 func (s *Store) LookupProxyKey(ctx context.Context, bearer string) (*APIKey, error) {
 	if !HasKeyPrefix(bearer) {
 		return nil, nil

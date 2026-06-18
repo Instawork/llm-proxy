@@ -34,11 +34,34 @@ func TestGenerateKey_HasPrefixAndIsRandom(t *testing.T) {
 	a, err := GenerateKey()
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(a, KeyPrefix))
+	assert.True(t, strings.HasPrefix(a, "sk-"))
 	assert.Greater(t, len(a), len(KeyPrefix)+10)
 
 	b, err := GenerateKey()
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b, "two generated keys should differ")
+}
+
+func TestSetKeyPrefixBase_GeneratesSkPrefixedKeys(t *testing.T) {
+	t.Cleanup(func() { SetKeyPrefixBase(DefaultKeyPrefixBase) })
+
+	SetKeyPrefixBase("acme")
+	assert.Equal(t, "sk-acme-", KeyPrefix)
+
+	key, err := GenerateKey()
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(key, "sk-acme-"))
+}
+
+func TestHasKeyPrefix_AcceptsCurrentLegacyAndRejectsUpstreamSk(t *testing.T) {
+	t.Cleanup(func() { SetKeyPrefixBase(DefaultKeyPrefixBase) })
+
+	assert.True(t, HasKeyPrefix(KeyPrefix+"abc123"))
+	assert.True(t, HasKeyPrefix("iw:legacy"))
+	assert.True(t, HasKeyPrefix("iw_legacy"))
+	assert.True(t, HasKeyPrefix("iw-legacy"))
+	assert.False(t, HasKeyPrefix("sk-direct"))
+	assert.False(t, HasKeyPrefix("sk-proj-upstream"))
 }
 
 // ----------------------------------------------------------------------------
