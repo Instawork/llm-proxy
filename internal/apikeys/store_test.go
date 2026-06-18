@@ -437,16 +437,16 @@ func TestStore_GetKeyRecord_LoadsMonthlyCostLimit(t *testing.T) {
 	pk := KeyPrefix + "personal-monthly"
 	now := time.Now().Format(time.RFC3339Nano)
 	fake.InjectItem("test-keys", pk, map[string]any{
-		"pk":                  map[string]any{"S": pk},
-		"provider":            map[string]any{"S": "gemini"},
-		"actual_key":          map[string]any{"S": "real"},
-		"daily_cost_limit":    map[string]any{"N": "0"},
-		"monthly_cost_limit":  map[string]any{"N": "1000"},
-		"owner_email":         map[string]any{"S": "viewer@example.com"},
-		"tags":                map[string]any{"M": map[string]any{"personal": map[string]any{"S": "true"}}},
-		"created_at":          map[string]any{"S": now},
-		"updated_at":          map[string]any{"S": now},
-		"enabled":             map[string]any{"BOOL": true},
+		"pk":                 map[string]any{"S": pk},
+		"provider":           map[string]any{"S": "gemini"},
+		"actual_key":         map[string]any{"S": "real"},
+		"daily_cost_limit":   map[string]any{"N": "0"},
+		"monthly_cost_limit": map[string]any{"N": "1000"},
+		"owner_email":        map[string]any{"S": "viewer@example.com"},
+		"tags":               map[string]any{"M": map[string]any{"personal": map[string]any{"S": "true"}}},
+		"created_at":         map[string]any{"S": now},
+		"updated_at":         map[string]any{"S": now},
+		"enabled":            map[string]any{"BOOL": true},
 	})
 
 	record, err := store.GetKeyRecord(context.Background(), pk)
