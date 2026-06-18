@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	sessionName        = "llm-proxy-admin-session"
-	sessionUserEmail   = "user_email"
-	sessionUserName    = "user_name"
-	sessionUserPicture = "user_picture"
-	sessionOAuthState  = "oauth_state"
+	sessionName          = "llm-proxy-admin-session"
+	sessionUserEmail     = "user_email"
+	sessionUserName      = "user_name"
+	sessionUserPicture   = "user_picture"
+	sessionOAuthState    = "oauth_state"
 	sessionOAuthRedirect = "oauth_redirect"
 )
 

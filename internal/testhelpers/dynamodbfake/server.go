@@ -232,7 +232,7 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 			item, _ := it.(map[string]any)
 			if keyCondExpr != "" && strings.Contains(keyCondExpr, "owner_email") {
 				wantOwner := extractAttrValueString(attrValues, ":owner")
-				if wantOwner != "" && !strings.EqualFold(ExtractDDBString(item, "owner_email"), wantOwner) {
+				if wantOwner != "" && ExtractDDBString(item, "owner_email") != wantOwner {
 					continue
 				}
 				if strings.Contains(keyCondExpr, "provider =") {
