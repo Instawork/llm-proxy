@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
@@ -87,7 +88,7 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	}
 }
 
-func TestAPIKeyValidationMiddleware_StashesProxyKeyInContext(t *testing.T) {
+func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
@@ -95,6 +96,9 @@ func TestAPIKeyValidationMiddleware_StashesProxyKeyInContext(t *testing.T) {
 	mw := APIKeyValidationMiddleware(pm, store, false)
 
 	iwKey := apikeys.KeyPrefix + "proxy"
+	if !strings.HasPrefix(iwKey, "sk-") {
+		t.Fatalf("proxy fixture should use sk- generation prefix, got %q", iwKey)
+	}
 	var captured *apikeys.APIKey
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec, ok := apikeys.FromContext(r.Context())

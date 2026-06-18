@@ -1,3 +1,5 @@
+import { trimProxyKeyPrefix } from "./proxy-key";
+
 const compactFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -42,7 +44,7 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   return `$${amount.toFixed(2)}`;
 }
 
-/** Masked iw: key identity matching middleware.MaskKeyID for joining spend stats.
+/** Masked proxy key identity matching middleware.MaskKeyID for joining spend stats.
  * A bare 12-char prefix collides across keys sharing that prefix, so we append
  * an FNV-1a/32 hash of the whole key (mirrors the Go backend byte-for-byte;
  * keys are ASCII so char/byte encodings agree). */
@@ -64,7 +66,7 @@ function fnv1a32Hex(s: string): string {
 const SCOPE_SUFFIX_LEN = 4;
 
 function redactScopeSecret(value: string): string {
-  const body = value.startsWith("iw:") ? value.slice(3) : value;
+  const body = trimProxyKeyPrefix(value);
   if (body.length <= SCOPE_SUFFIX_LEN) return "••••";
   return `••••${body.slice(-SCOPE_SUFFIX_LEN)}`;
 }

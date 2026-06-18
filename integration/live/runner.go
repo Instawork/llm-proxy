@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 )
 
 type Runner struct {
@@ -180,8 +182,8 @@ func (r *Runner) runAdmin(ctx context.Context) []Result {
 		out = append(out, failResult("admin", "keys-crud", "create: "+err.Error()))
 		return out
 	}
-	if !strings.HasPrefix(key.Key, "iw:") {
-		out = append(out, failResult("admin", "keys-crud", "expected iw: prefix, got "+key.Key))
+	if !apikeys.HasKeyPrefix(key.Key) {
+		out = append(out, failResult("admin", "keys-crud", "expected proxy key prefix, got "+key.Key))
 	} else if err := r.admin.DeleteKey(ctx, key.Key); err != nil {
 		out = append(out, failResult("admin", "keys-crud", "delete: "+err.Error()))
 	} else {

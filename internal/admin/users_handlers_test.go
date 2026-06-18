@@ -313,5 +313,40 @@ func TestHandleDevLoginEnsuresUser(t *testing.T) {
 
 	user, err := h.deps.UserStore.GetUser(context.Background(), "fresh@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, adminusers.RoleEditor, user.Role)
+	assert.Equal(t, adminusers.RoleViewer, user.Role)
+}
+
+func TestHandleDevLoginDefaultDevEmailIsAdmin(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "dev@example.com")
+
+	loginRec := httptest.NewRecorder()
+	loginBody, _ := json.Marshal(map[string]string{"redirect": "http://localhost:9002/admin/"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/auth/dev-login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	h.auth.handleDevLogin(loginRec, loginReq)
+	require.Equal(t, http.StatusOK, loginRec.Code)
+
+	user, err := h.deps.UserStore.GetUser(context.Background(), "dev@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, adminusers.RoleAdmin, user.Role)
+}
+
+func TestHandleDevLoginExplicitRoleOverridesDefault(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "dev@example.com")
+
+	loginRec := httptest.NewRecorder()
+	loginBody, _ := json.Marshal(map[string]string{
+		"redirect": "http://localhost:9002/admin/",
+		"role":     "viewer",
+	})
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/auth/dev-login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	h.auth.handleDevLogin(loginRec, loginReq)
+	require.Equal(t, http.StatusOK, loginRec.Code)
+
+	user, err := h.deps.UserStore.GetUser(context.Background(), "dev@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, adminusers.RoleViewer, user.Role)
 }

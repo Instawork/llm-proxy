@@ -3,7 +3,7 @@ import { useState } from "react";
 import { CopyButton } from "./copy-button";
 
 export function maskKey(key: string): string {
-  if (key.length <= 12) return "iw:••••";
+  if (key.length <= 12) return "••••";
   return `${key.slice(0, 7)}${"•".repeat(18)}${key.slice(-4)}`;
 }
 

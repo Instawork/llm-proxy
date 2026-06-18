@@ -4,10 +4,20 @@ import { useSearchParams } from "react-router-dom";
 import { authBaseUrl, baseUrl } from "../client";
 import LLMProxyLogo from "../components/llm-proxy-logo";
 import { useToast } from "../components/ui/toast";
+import type { AdminRole } from "../types";
+
+const DEV_ROLES: AdminRole[] = ["viewer", "editor", "admin"];
+
+const DEV_ROLE_LABELS: Record<AdminRole, string> = {
+  viewer: "Viewer — monitoring only",
+  editor: "Editor — keys and monitoring",
+  admin: "Admin — full access",
+};
 
 export default function LoginPage() {
   const [params] = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const [devRole, setDevRole] = useState<AdminRole>("admin");
   const { push } = useToast();
 
   const afterLoginPath = () => {
@@ -31,7 +41,7 @@ export default function LoginPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ redirect }),
+        body: JSON.stringify({ redirect, role: devRole }),
       });
       if (!response.ok) {
         throw new Error(await response.text());
@@ -62,14 +72,31 @@ export default function LoginPage() {
 
         <div className="flex flex-col gap-3">
           {import.meta.env.DEV ? (
-            <button
-              type="button"
-              className="btn btn-primary btn-lg"
-              disabled={loading}
-              onClick={onDevLogin}
-            >
-              {loading ? <span className="loading loading-spinner" /> : "Dev login (local session)"}
-            </button>
+            <>
+              <label className="form-control w-full">
+                <span className="label-text text-base-content/70">User type</span>
+                <select
+                  className="select select-bordered w-full"
+                  value={devRole}
+                  disabled={loading}
+                  onChange={(e) => setDevRole(e.target.value as AdminRole)}
+                >
+                  {DEV_ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {DEV_ROLE_LABELS[role]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary btn-lg"
+                disabled={loading}
+                onClick={onDevLogin}
+              >
+                {loading ? <span className="loading loading-spinner" /> : "Dev login (local session)"}
+              </button>
+            </>
           ) : null}
           <button type="button" className="btn btn-outline btn-lg gap-2" onClick={onGoogleLogin}>
             <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
