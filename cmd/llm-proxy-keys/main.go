@@ -48,10 +48,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  Create a key:    -provider=openai -key=sk-xxx -desc=\"Production key\" -cost-limit=50000\n")
 		fmt.Fprintf(os.Stderr, "  List keys:       -list\n")
-		fmt.Fprintf(os.Stderr, "  Show key:        -show=iw:xxx\n")
-		fmt.Fprintf(os.Stderr, "  Delete key:      -delete=iw:xxx\n")
-		fmt.Fprintf(os.Stderr, "  Disable key:     -disable=iw:xxx\n")
-		fmt.Fprintf(os.Stderr, "  Enable key:      -enable=iw:xxx\n\n")
+		fmt.Fprintf(os.Stderr, "  Show key:        -show=sk-iw-xxx\n")
+		fmt.Fprintf(os.Stderr, "  Delete key:      -delete=sk-iw-xxx\n")
+		fmt.Fprintf(os.Stderr, "  Disable key:     -disable=sk-iw-xxx\n")
+		fmt.Fprintf(os.Stderr, "  Enable key:      -enable=sk-iw-xxx\n\n")
 		fmt.Fprintf(os.Stderr, "Pool commands:\n")
 		fmt.Fprintf(os.Stderr, "  pool add:        pool add --provider anthropic --key sk-ant-api03-...\n")
 		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n\n")
@@ -78,6 +78,12 @@ func main() {
 		logger.Error("API key management is not enabled in configuration")
 		os.Exit(1)
 	}
+
+	keyPrefixBase := os.Getenv("LLM_PROXY_API_KEY_PREFIX")
+	if keyPrefixBase == "" {
+		keyPrefixBase = yamlConfig.Features.APIKeyManagement.KeyPrefix
+	}
+	apikeys.SetKeyPrefixBase(keyPrefixBase)
 
 	// Create API key store. The CLI is normally used in local dev where
 	// AutoCreateTable=true is desirable; defer to YAML config so the same

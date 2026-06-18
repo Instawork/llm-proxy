@@ -321,7 +321,8 @@ func (r *Runner) costLimitAtomicityStress(ctx context.Context) (bool, string) {
 	if ok > bound {
 		return false, fmt.Sprintf(
 			"OVERSHOOT: admitted ok=%d > bound=%d (maxAllowed=%d perReq=%.6f cap=%.4f fired=%d) — reservation not atomic",
-			ok, bound, maxAllowed, perReq, capUSD, fired)
+			ok, bound, maxAllowed, perReq, capUSD, fired,
+		)
 	}
 
 	// And recorded spend must also stay bounded once the async tracker flushes.
@@ -337,7 +338,8 @@ func (r *Runner) costLimitAtomicityStress(ctx context.Context) (bool, string) {
 	}
 	return true, fmt.Sprintf(
 		"atomic under load: fired=%d ok=%d blocked=%d other=%d (maxAllowed≈%d perReq=%.6f) spend=%.6f cap=%.4f",
-		fired, ok, blocked, other, maxAllowed, perReq, spent, capUSD)
+		fired, ok, blocked, other, maxAllowed, perReq, spent, capUSD,
+	)
 }
 
 // costRollupAggregation proves the Redis cost rollup (the by_key INCRBYFLOAT

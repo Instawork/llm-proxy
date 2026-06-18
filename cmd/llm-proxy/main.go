@@ -794,7 +794,8 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 
 	// Resolve the proxy key prefix base, env var taking precedence over YAML.
 	// A blank value leaves the apikeys default in place. New keys are minted
-	// as "<base>_<random>"; legacy "<base>:" keys still validate.
+	// as "sk-<base>-<random>"; legacy "<base>-" / "<base>_" / "<base>:" keys
+	// still validate.
 	keyPrefixBase := os.Getenv("LLM_PROXY_API_KEY_PREFIX")
 	if keyPrefixBase == "" {
 		keyPrefixBase = apiKeyConfig.KeyPrefix
@@ -1347,7 +1348,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	fakeAllowed := isFakeModeAllowed(yamlConfig)
 	fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
 	if fakeAllowed {
-		logger.Warn("🎭 Fake upstream: ENABLED — synthetic LLM responses, no real provider calls",
+		logger.Warn(
+			"🎭 Fake upstream: ENABLED — synthetic LLM responses, no real provider calls",
 			"chaos_failure_rate", yamlConfig.Features.FakeUpstream.ChaosFailureRate,
 		)
 	} else if yamlConfig.Features.FakeUpstream.Enabled {

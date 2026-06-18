@@ -31,7 +31,7 @@ features:
     enabled: true
     table_name: "llm-proxy-api-keys"
     region: "us-west-2"
-    # New keys are minted as "iw-<random>"; legacy "iw_" and "iw:" keys still validate.
+    # New keys are minted as "sk-<base>-<random>"; legacy "<base>-" / "<base>_" / "<base>:" keys still validate.
     key_prefix: "iw"
     provisioning:
       enabled: true

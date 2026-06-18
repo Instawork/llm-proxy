@@ -186,6 +186,7 @@ func (a *authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 type devLoginRequest struct {
 	Redirect string `json:"redirect"`
+	Role     string `json:"role"`
 }
 
 func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
@@ -199,11 +200,24 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 		email = "dev@example.com"
 	}
 
+	var req devLoginRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req)
+	}
+
 	redirectTarget := r.URL.Query().Get("redirect")
-	if redirectTarget == "" && r.Body != nil {
-		var req devLoginRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err == nil {
-			redirectTarget = req.Redirect
+	if redirectTarget == "" {
+		redirectTarget = req.Redirect
+	}
+
+	roleParam := strings.TrimSpace(r.URL.Query().Get("role"))
+	if roleParam == "" {
+		roleParam = strings.TrimSpace(req.Role)
+	}
+	if roleParam != "" {
+		if _, err := adminusers.ParseRole(roleParam); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 
@@ -213,15 +227,24 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	session.Values[sessionUserPicture] = devUserPicture("Dev User")
 
 	if a.userStore != nil {
-		user, created, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User"))
+		user, _, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User"))
 		if err != nil {
 			a.logger.Error("admin auth: dev ensure user failed", "error", err, "email", email)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if user.Role == adminusers.RoleViewer && (created || isDefaultDevBypassEmail(email)) {
-			if err := a.userStore.SetRole(r.Context(), email, adminusers.RoleEditor); err != nil {
-				a.logger.Error("admin auth: dev promote to editor failed", "error", err, "email", email)
+		if roleParam != "" {
+			targetRole, _ := adminusers.ParseRole(roleParam)
+			if user.Role != targetRole {
+				if err := a.userStore.SetRole(r.Context(), email, targetRole); err != nil {
+					a.logger.Error("admin auth: dev set role failed", "error", err, "email", email, "role", targetRole)
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+			}
+		} else if isDefaultDevBypassEmail(email) && user.Role != adminusers.RoleAdmin {
+			if err := a.userStore.SetRole(r.Context(), email, adminusers.RoleAdmin); err != nil {
+				a.logger.Error("admin auth: dev set role failed", "error", err, "email", email, "role", adminusers.RoleAdmin)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}

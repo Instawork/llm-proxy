@@ -206,8 +206,24 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			if filterExpr != "" && strings.Contains(filterExpr, "begins_with") {
 				pkVal := ExtractDDBString(item, "pk")
-				pfx := extractAttrValueString(attrValues, ":pfx")
-				if pfx != "" && !strings.HasPrefix(pkVal, pfx) {
+				prefixes := []string{
+					extractAttrValueString(attrValues, ":pfx"),
+					extractAttrValueString(attrValues, ":skPfx"),
+					extractAttrValueString(attrValues, ":legacyPfx"),
+				}
+				hasPrefixFilter := false
+				matched := false
+				for _, pfx := range prefixes {
+					if pfx == "" {
+						continue
+					}
+					hasPrefixFilter = true
+					if strings.HasPrefix(pkVal, pfx) {
+						matched = true
+						break
+					}
+				}
+				if hasPrefixFilter && !matched {
 					continue
 				}
 			}

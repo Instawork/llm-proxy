@@ -231,11 +231,13 @@ func (f *fakeReserver) ReserveKeySpend(_ context.Context, _ string, estimateUSD 
 	}
 	return f.allow, f.active
 }
+
 func (f *fakeReserver) AdjustKeyReservation(_ context.Context, _ string, deltaUSD float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.adjustments = append(f.adjustments, deltaUSD)
 }
+
 func (f *fakeReserver) totalAdjust() float64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
