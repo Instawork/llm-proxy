@@ -102,17 +102,49 @@ jobs:
           command: make test-integration
 
   fuzz-tests:
-    docker:
-      - image: cimg/base:stable
+    # Machine executor (not the Docker executor): the fuzz CLI talks to the
+    # proxy over http://localhost:9002, and containers started via
+    # setup_remote_docker are NOT reachable on localhost. A Linux VM runs the
+    # docker-compose stack locally so the fuzzer can reach it.
+    machine:
+      image: ubuntu-2204:current
     working_directory: ~/llm-proxy
     steps:
-      - setup_go_environment
+      - checkout
+      - go/install:
+          version: "1.24.5"
+          cache-key: 'go-mod-{{ .Environment.CACHE_VERSION }}-{{ checksum "go.mod" }}'
+      - run:
+          name: Download dependencies
+          command: make install
       - run:
           name: Run fake-mode unit tests with race detector
           command: make fuzz-test
       - run:
-          name: Build fuzz CLI
-          command: make build-fuzz
+          name: Start llm-proxy stack in fuzz mode (proxy + redis + dynamodb)
+          command: |
+            mkdir -p logs
+            ENVIRONMENT=fuzz \
+            LLM_PROXY_ALLOW_FAKE_MODE=1 \
+            LLM_PROXY_ALLOW_TEST_MODE=1 \
+              docker compose up -d --build llm-proxy redis dynamodb
+      - run:
+          name: Wait for proxy /health
+          command: |
+            for i in $(seq 1 90); do
+              if curl -sf http://localhost:9002/health > /dev/null; then
+                echo "proxy healthy"; exit 0
+              fi
+              sleep 2
+            done
+            echo "proxy did not become healthy in time"; exit 1
+      - run:
+          name: Run fuzz-all (excluding Presidio-dependent PII scenarios)
+          command: make fuzz-all-no-pii
+      - run:
+          name: Dump proxy logs on failure
+          command: docker compose logs --no-color llm-proxy
+          when: on_fail
 
   build-and-push:
     docker:

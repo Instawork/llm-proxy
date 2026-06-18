@@ -94,6 +94,7 @@ help:
 	@echo "  fuzz-test      - Run fake-mode unit tests with -race"
 	@echo "  fuzz           - Smoke fuzz scenarios (needs fuzz-mode proxy)"
 	@echo "  fuzz-all       - All fuzz scenarios"
+	@echo "  fuzz-all-no-pii - All fuzz scenarios except Presidio-dependent PII (CI)"
 	@echo "  fuzz-chaos     - Circuit/chaos fuzz scenarios"
 	@echo "  fuzz-matrix    - Rate-limit/circuit scenarios on Redis + memory backends"
 	@echo "  install-snippet-deps - Install node/python/go deps for snippet smoke tests"
@@ -361,6 +362,12 @@ fuzz: build-fuzz
 .PHONY: fuzz-all
 fuzz-all: build-fuzz
 	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario all $(FUZZ_ARGS)
+
+.PHONY: fuzz-all-no-pii
+fuzz-all-no-pii: build-fuzz
+	@echo "$(BLUE)Running all fuzz scenarios except Presidio-dependent PII ones...$(NC)"
+	@cd $(LIVE_INTEGRATION_DIR) && go run ./cmd/llm-proxy-fuzz -scenario all-no-pii $(FUZZ_ARGS)
+	@echo "$(GREEN)✓ fuzz-all-no-pii completed$(NC)"
 
 .PHONY: fuzz-chaos
 fuzz-chaos: build-fuzz

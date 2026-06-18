@@ -68,6 +68,36 @@ func AllScenarios() []string {
 	}
 }
 
+// PIIScenarios require the Presidio analyzer sidecar (make test-pii-up) and
+// pii_redact enabled in configs/fuzz.yml. They are split out so CI can run the
+// full matrix without pulling the ~8 GB Presidio image.
+func PIIScenarios() []string {
+	return []string{
+		"pii-presidio-redaction",
+		"pii-wire-restore-email",
+		"pii-wire-seal-ssn",
+		"pii-concurrent-no-bleed",
+	}
+}
+
+// AllScenariosNoPII is AllScenarios minus the Presidio-dependent PII scenarios.
+// Used by CI (make fuzz-all-no-pii) where standing up the Presidio sidecar is
+// too heavy; PII redaction is covered by the dedicated live/pii suites.
+func AllScenariosNoPII() []string {
+	pii := make(map[string]bool, len(PIIScenarios()))
+	for _, name := range PIIScenarios() {
+		pii[name] = true
+	}
+	all := AllScenarios()
+	out := make([]string, 0, len(all))
+	for _, name := range all {
+		if !pii[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // StressScenarios are the high-concurrency atomicity/race stress tests that
 // hammer the Redis-backed reservation, counter, probe-slot, and rollup paths
 // plus PII cross-request isolation. The PII case requires the Presidio sidecar
@@ -142,6 +172,12 @@ func MatrixScenarios() []string {
 func ParseScenarioList(raw string) []string {
 	if raw == "" || raw == "all" {
 		return AllScenarios()
+	}
+	if raw == "all-no-pii" {
+		return AllScenariosNoPII()
+	}
+	if raw == "pii" {
+		return PIIScenarios()
 	}
 	if raw == "cost-limit" {
 		return CostLimitScenarios()
