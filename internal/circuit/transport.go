@@ -107,16 +107,22 @@ const maxErrorStringLength = 256
 // bare `<provider>` fallback) so operators can correlate a log line to a
 // specific Redis hash.  It always equals provider + ":" + model when both
 // are set; we precompute it once instead of inferring it at log time.
+//
+// UpstreamError carries a compact parse of the upstream JSON error body
+// (e.g. Gemini status=UNAVAILABLE, OpenAI code=insufficient_quota).
+// Populated before the response body is drained; omitted from metric tags
+// because message text is high-cardinality.
 type failureContext struct {
-	Provider    string
-	Model       string
-	CBKey       string
-	Caller      string
-	Path        string
-	Method      string
-	StatusCode  int
-	Kind        FailureKind
-	ErrorString string
+	Provider      string
+	Model         string
+	CBKey         string
+	Caller        string
+	Path          string
+	Method        string
+	StatusCode    int
+	Kind          FailureKind
+	ErrorString   string
+	UpstreamError string
 }
 
 // newFailureContext builds the canonical context for a failure event.
@@ -218,10 +224,34 @@ func (fc failureContext) withKind(k FailureKind) failureContext {
 	return fc
 }
 
+func (fc failureContext) withUpstreamError(detail string) failureContext {
+	fc.UpstreamError = truncateString(detail)
+	return fc
+}
+
+// enrichedFailureContext builds failureContext and attaches an upstream
+// error summary.  When capturedDetail is empty and resp.Body is still
+// readable, the detail is peeked from the response body.
+func (t *Transport) enrichedFailureContext(req *http.Request, resp *http.Response, err error, capturedDetail string) failureContext {
+	fc := t.newFailureContext(req, resp, err)
+	if capturedDetail != "" {
+		fc = fc.withUpstreamError(capturedDetail)
+		fc.Kind = refineFailureKindFromUpstreamDetail(t.provider, capturedDetail, fc.Kind)
+		return fc
+	}
+	if err == nil && resp != nil && resp.StatusCode >= 400 && resp.Body != nil {
+		if detail := peekUpstreamErrorDetail(t.provider, resp); detail != "" {
+			fc = fc.withUpstreamError(detail)
+			fc.Kind = refineFailureKindFromUpstreamDetail(t.provider, detail, fc.Kind)
+		}
+	}
+	return fc
+}
+
 // attrs returns a slog-friendly attribute slice with a stable schema.
 // The exact field set is documented on failureContext above.
 func (fc failureContext) attrs() []any {
-	return []any{
+	attrs := []any{
 		"provider", fc.Provider,
 		"model", fc.Model,
 		"cb_key", fc.CBKey,
@@ -232,6 +262,10 @@ func (fc failureContext) attrs() []any {
 		"failure_kind", string(fc.Kind),
 		"error", fc.ErrorString,
 	}
+	if fc.UpstreamError != "" {
+		attrs = append(attrs, "upstream_error", fc.UpstreamError)
+	}
+	return attrs
 }
 
 // metricTags returns the dogstatsd tag set matching attrs().
@@ -704,7 +738,7 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 				"key", key, "error", recErr)
 		}
 		t.maybeRecordRollup(ctx, key, openedNow)
-		fc := t.newFailureContext(req, resp, err)
+		fc := t.enrichedFailureContext(req, resp, err, "")
 		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
 			append(
 				fc.attrs(),
@@ -714,12 +748,12 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		t.emit("terminal_failure", fc)
 
 	case FailureClassGlobalRateLimit:
-		fc := t.newFailureContext(req, resp, err)
+		fc := t.enrichedFailureContext(req, resp, err, "")
 		t.log.Info("circuit: log-mode global_rate_limit_observed (passing through)", fc.attrs()...)
 		t.emit("global_rate_limit", fc)
 
 	case FailureClassLocalRateLimit:
-		fc := t.newFailureContext(req, resp, err)
+		fc := t.enrichedFailureContext(req, resp, err, "")
 		t.log.Info("circuit: log-mode local_rate_limit_observed (passing through)", fc.attrs()...)
 		t.emit("local_rate_limit", fc)
 	}
@@ -819,7 +853,7 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 	upstreamDur := time.Since(rtStart)
 
 	class := ClassifyResponse(t.provider, resp, err)
-	fc := t.newFailureContext(req, resp, err)
+	fc := t.enrichedFailureContext(req, resp, err, "")
 	tags := append(fc.metricTags(), "reason:"+reasonTag, "outcome:"+string(class))
 	if t.metrics != nil {
 		_ = t.metrics.Incr("circuit.bypass", tags, 1.0)
@@ -1013,7 +1047,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		// rollup window, at which point traffic is allowed through to re-probe;
 		// if quota is still exhausted the next failure re-arms it.
 		if fc == FailureClassInsufficientQuota {
-			evt := t.newFailureContext(req, resp, err)
+			upstreamDetail := peekUpstreamErrorDetail(t.provider, resp)
+			evt := t.enrichedFailureContext(req, resp, err, upstreamDetail)
 			// Open the BARE-provider breaker so every OpenAI model fast-fails
 			// until recovery.  ForceOpen uses one cooldown period, after which
 			// the breaker auto-promotes to HalfOpen and a single probe re-tests
@@ -1024,7 +1059,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				t.log.Warn("circuit: ForceOpen (insufficient_quota) error",
 					"provider", t.provider, "error", fErr)
 			} else if t.activity != nil {
-				t.activity.RecordOpened(t.provider, t.provider, "insufficient_quota")
+				t.activity.RecordOpened(t.provider, t.provider, "insufficient_quota", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
 			}
 			t.log.Warn("circuit: insufficient_quota — forcing provider open, passing upstream response through",
 				append(evt.attrs(),
@@ -1034,9 +1069,10 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			return resp, err
 		}
 
-		// Capture before drain so emitFailureMetric / failureAttrs see
-		// the real upstream status.  Note: lastResp.Body is not safe to
-		// read after the drain below, but lastResp.StatusCode is.
+		// Capture before drain so failure logs retain the upstream error
+		// body (Gemini UNAVAILABLE, OpenAI insufficient_quota, etc.).
+		// lastResp.Body is not safe to read after the drain below.
+		upstreamDetail := peekUpstreamErrorDetail(t.provider, resp)
 		lastResp = resp
 		lastErr = err
 
@@ -1054,6 +1090,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				firstRateLimitAt:  firstRateLimitAt,
 				lastResp:          lastResp,
 				lastErr:           lastErr,
+				lastUpstreamError: upstreamDetail,
 			}
 			resp2, err2, done := t.handleRateLimitFailure(ctx, req, key, fc, retryAfterSec, st)
 			rateLimitAttempts = st.rateLimitAttempts
@@ -1081,6 +1118,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				transientAttempts: transientAttempts,
 				lastResp:          lastResp,
 				lastErr:           lastErr,
+				lastUpstreamError: upstreamDetail,
 			}
 			resp2, err2, done := t.handleDegradedFailure(ctx, req, key, resp, err, st)
 			transientAttempts = st.transientAttempts
@@ -1108,6 +1146,7 @@ type retryLoopState struct {
 	firstRateLimitAt  time.Time
 	lastResp          *http.Response // post-drain — only StatusCode / Header safe
 	lastErr           error
+	lastUpstreamError string // parsed from body before drain
 }
 
 // handleRateLimitFailure runs the rate-limit branch of runWithRetries.
@@ -1131,7 +1170,7 @@ func (t *Transport) handleRateLimitFailure(
 	st *retryLoopState,
 ) (*http.Response, error, bool) {
 	if st.rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
-		evt := t.newFailureContext(req, st.lastResp, st.lastErr)
+		evt := t.enrichedFailureContext(req, st.lastResp, st.lastErr, st.lastUpstreamError)
 		t.log.Warn("circuit: rate-limit retries exhausted",
 			append(
 				evt.attrs(),
@@ -1146,7 +1185,7 @@ func (t *Transport) handleRateLimitFailure(
 			if int(elapsed) >= t.cfg.GlobalRateLimitEscalationWindow {
 				t.log.Warn("circuit: global rate-limit escalated to provider_degraded",
 					append(evt.attrs(), "elapsed_seconds", elapsed)...)
-				resp, err := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr)
+				resp, err := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
 				return resp, err, true
 			}
 		}
@@ -1192,21 +1231,21 @@ func (t *Transport) handleDegradedFailure(
 	switch t.cfg.RetryContributionMode {
 	case "on":
 		t.log.Info("circuit: retried failure contributing to degradation score",
-			append(t.newFailureContext(req, resp, err).attrs(),
+			append(t.enrichedFailureContext(req, resp, err, st.lastUpstreamError).attrs(),
 				"attempt", st.transientAttempts)...)
 		_, openedNow, _ := t.store.RecordTerminalFailure(ctx, key)
 		t.maybeRecordRollup(ctx, key, openedNow)
 	case "log":
 		t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
-			append(t.newFailureContext(req, resp, err).attrs(),
+			append(t.enrichedFailureContext(req, resp, err, st.lastUpstreamError).attrs(),
 				"attempt", st.transientAttempts)...)
 	}
 
 	if st.transientAttempts >= t.cfg.MaxTransientRetries {
 		t.log.Warn("circuit: transient retries exhausted, recording terminal failure",
-			append(t.newFailureContext(req, st.lastResp, st.lastErr).attrs(),
+			append(t.enrichedFailureContext(req, st.lastResp, st.lastErr, st.lastUpstreamError).attrs(),
 				"attempts", st.transientAttempts)...)
-		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr)
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
 		return respT, errT, true
 	}
 
@@ -1335,7 +1374,7 @@ func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, err
 		errors.Is(err, context.DeadlineExceeded) {
 		t.log.Info("circuit: probe aborted by caller context, releasing probe slot without state change",
 			append(
-				t.newFailureContext(req, resp, err).attrs(),
+				t.enrichedFailureContext(req, resp, err, "").attrs(),
 				"ctx_err", truncateError(ctxErr),
 			)...)
 		drainResponseBody(resp)
@@ -1431,7 +1470,11 @@ func (t *Transport) recordProbeSuccess(ctx context.Context, req *http.Request, r
 // outage stays tripped instead of aging out after the original
 // Closed → Open event expires.
 func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, resp *http.Response, err error, key string) (*http.Response, error) {
-	evt := t.newFailureContext(req, resp, err)
+	upstreamDetail := ""
+	if resp != nil {
+		upstreamDetail = peekUpstreamErrorDetail(t.provider, resp)
+	}
+	evt := t.enrichedFailureContext(req, resp, err, upstreamDetail)
 	t.log.Warn("circuit: probe failed, re-opening circuit",
 		append(evt.attrs(), "new_state", StateOpen.String())...)
 	t.emit("probe_failed", evt)
@@ -1440,7 +1483,7 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 		if resp != nil {
 			status = resp.StatusCode
 		}
-		t.activity.RecordProbeReopened(t.provider, key, status, string(evt.Kind))
+		t.activity.RecordProbeReopened(t.provider, key, status, string(evt.Kind), evt.UpstreamError)
 	}
 	drainResponseBody(resp)
 	_ = t.store.RecordProbeFailed(ctx, key)
@@ -1455,23 +1498,19 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 // drain — only StatusCode / Header are safe to read on lastResp) so the
 // emitted log line and dogstatsd counter retain status_code, model,
 // failure_kind, and error context that would otherwise be lost between
-// retry exhaustion and synthetic-response emission.
-//
-// `key` is the per-request breaker key threaded down from runWithRetries
-// so this call lands on the same per-model state machine that the
-// retry loop just exercised; recomputing it here would risk an
-// extractor drift between the two call sites.
-func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, key string, lastResp *http.Response, lastErr error) (*http.Response, error) {
+// retry exhaustion and synthetic-response emission.  upstreamError was
+// parsed from the response body before drain.
+func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, key string, lastResp *http.Response, lastErr error, upstreamError string) (*http.Response, error) {
+	evt := t.enrichedFailureContext(req, lastResp, lastErr, upstreamError)
 	newState, openedNow, err := t.store.RecordTerminalFailure(ctx, key)
 	if err != nil {
 		t.log.Error("circuit: RecordTerminalFailure error", "key", key, "error", err)
 	}
 	if openedNow && t.activity != nil {
-		t.activity.RecordOpened(t.provider, key, "threshold")
+		t.activity.RecordOpened(t.provider, key, "threshold", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
 	}
 	t.maybeRecordRollup(ctx, key, openedNow)
 
-	evt := t.newFailureContext(req, lastResp, lastErr)
 	attrs := append(
 		evt.attrs(),
 		"new_state", newState.String(),

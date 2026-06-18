@@ -207,6 +207,56 @@ func TestClassify_Gemini_503(t *testing.T) {
 	}
 }
 
+func TestPeekUpstreamErrorDetail_Gemini_UNAVAILABLE(t *testing.T) {
+	body := `{"error":{"code":503,"message":"The model is overloaded. Please try again later.","status":"UNAVAILABLE"}}`
+	r := respWithBody(503, nil, body)
+	got := peekUpstreamErrorDetail("gemini", r)
+	want := "UNAVAILABLE: The model is overloaded. Please try again later."
+	if got != want {
+		t.Fatalf("peekUpstreamErrorDetail(gemini) = %q, want %q", got, want)
+	}
+	// Body must remain readable after peek.
+	rest, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if string(rest) != body {
+		t.Fatalf("restored body = %q, want %q", string(rest), body)
+	}
+}
+
+func TestPeekUpstreamErrorDetail_OpenAI_InsufficientQuota(t *testing.T) {
+	body := `{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}`
+	r := respWithBody(429, nil, body)
+	got := peekUpstreamErrorDetail("openai", r)
+	want := "insufficient_quota: You exceeded your current quota, please check your plan and billing details."
+	if got != want {
+		t.Fatalf("peekUpstreamErrorDetail(openai) = %q, want %q", got, want)
+	}
+}
+
+func TestPeekUpstreamErrorDetail_Anthropic_Overloaded(t *testing.T) {
+	body := `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+	r := respWithBody(529, nil, body)
+	got := peekUpstreamErrorDetail("anthropic", r)
+	want := "overloaded_error: Overloaded"
+	if got != want {
+		t.Fatalf("peekUpstreamErrorDetail(anthropic) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatUpstreamErrorDetail_TruncatesLongMessage(t *testing.T) {
+	longMsg := strings.Repeat("x", maxErrorStringLength+50)
+	body := `{"error":{"status":"UNAVAILABLE","message":"` + longMsg + `"}}`
+	got := formatUpstreamErrorDetail("gemini", []byte(body))
+	if !strings.HasSuffix(got, "...(truncated)") {
+		t.Fatalf("expected truncated suffix, got len=%d tail=%q", len(got), got[len(got)-20:])
+	}
+	if len(got) > maxErrorStringLength+len("...(truncated)") {
+		t.Fatalf("truncated detail too long: %d", len(got))
+	}
+}
+
 func TestClassify_Gemini_504_DeadlineExceeded(t *testing.T) {
 	fc := ClassifyResponse("gemini", resp(504, nil), nil)
 	if fc != FailureClassDegraded {
@@ -319,6 +369,44 @@ func TestClassifyResponse_DefaultBranches(t *testing.T) {
 	assert.Equal(t, FailureClassDegraded, ClassifyResponse("gemini", mkResp(599), nil))
 	assert.Equal(t, FailureClassNone, ClassifyResponse("anthropic", mkResp(418), nil))
 	assert.Equal(t, FailureClassNone, ClassifyResponse("gemini", mkResp(418), nil))
+}
+
+func TestRefineFailureKindFromUpstreamDetail(t *testing.T) {
+	detail := "UNAVAILABLE: The model is overloaded."
+	assert.Equal(t, KindGeminiUnavailable, refineFailureKindFromUpstreamDetail("gemini", detail, KindHTTP503))
+	assert.Equal(t, KindAnthropicOverloaded, refineFailureKindFromUpstreamDetail("anthropic", "overloaded_error: Overloaded", KindHTTPOverloaded))
+	assert.Equal(t, KindOpenAIInsufficientQuota, refineFailureKindFromUpstreamDetail("openai", "insufficient_quota: quota", KindHTTP429Quota))
+}
+
+func TestClassifyFailureKind_ProviderSpecific(t *testing.T) {
+	geminiUnavailable := respWithBody(503, nil, `{"error":{"status":"UNAVAILABLE","message":"The model is overloaded."}}`)
+	assert.Equal(t, KindGeminiUnavailable, ClassifyFailureKind("gemini", geminiUnavailable, nil))
+
+	geminiQuota := respWithBody(429, nil, `{"error":{"status":"RESOURCE_EXHAUSTED","message":"You exceeded your current quota, please check your plan."}}`)
+	assert.Equal(t, KindGeminiResourceExhausted, ClassifyFailureKind("gemini", geminiQuota, nil))
+	assert.Equal(t, FailureClassGlobalRateLimit, ClassifyResponse("gemini", geminiQuota, nil))
+
+	geminiRateLimit := respWithBody(429, nil, `{"error":{"status":"RESOURCE_EXHAUSTED","message":"Too many requests per minute"}}`)
+	assert.Equal(t, KindGeminiResourceExhausted, ClassifyFailureKind("gemini", geminiRateLimit, nil))
+	assert.Equal(t, FailureClassLocalRateLimit, ClassifyResponse("gemini", geminiRateLimit, nil))
+
+	anthropicOverloaded := respWithBody(529, nil, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)
+	assert.Equal(t, KindAnthropicOverloaded, ClassifyFailureKind("anthropic", anthropicOverloaded, nil))
+
+	anthropicRateLimit := respWithBody(429, map[string]string{
+		"anthropic-ratelimit-requests-remaining": "10",
+		"anthropic-ratelimit-tokens-remaining":   "0",
+	}, `{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}`)
+	assert.Equal(t, KindAnthropicRateLimit, ClassifyFailureKind("anthropic", anthropicRateLimit, nil))
+
+	anthropicAPIError := respWithBody(500, nil, `{"type":"error","error":{"type":"api_error","message":"Internal error"}}`)
+	assert.Equal(t, KindAnthropicAPIError, ClassifyFailureKind("anthropic", anthropicAPIError, nil))
+
+	anthropicTimeout := respWithBody(504, nil, `{"type":"error","error":{"type":"timeout_error","message":"Request timed out"}}`)
+	assert.Equal(t, KindAnthropicTimeout, ClassifyFailureKind("anthropic", anthropicTimeout, nil))
+
+	openAIQuota := respWithBody(429, nil, `{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`)
+	assert.Equal(t, KindOpenAIInsufficientQuota, ClassifyFailureKind("openai", openAIQuota, nil))
 }
 
 func TestClassifyFailureKind_TransportErrors(t *testing.T) {

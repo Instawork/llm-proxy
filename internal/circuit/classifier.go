@@ -116,19 +116,106 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 	}
 }
 
-// peekOpenAIErrorCode reads up to openAIPeekBytes from resp.Body, extracts
-// the top-level error.code field, and restores the body so downstream
-// consumers still see the full response.  Returns "" on any read or parse
-// failure (fail-open — caller falls back to header heuristics).
-const openAIPeekBytes = 512
+// responseBodyPeekBytes is how much of an upstream error body we read for
+// classification and observability.  Kept small so we never buffer a full
+// multi-megabyte error page into memory on the hot path.
+const responseBodyPeekBytes = 512
 
+type geminiErrorEnvelope struct {
+	Error struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type anthropicErrorEnvelope struct {
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type openAIErrorEnvelope struct {
+	Error struct {
+		Code    string `json:"code"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// peekOpenAIErrorCode reads up to responseBodyPeekBytes from resp.Body,
+// extracts the top-level error.code field, and restores the body so
+// downstream consumers still see the full response.  Returns "" on any read
+// or parse failure (fail-open — caller falls back to header heuristics).
 func peekOpenAIErrorCode(resp *http.Response) string {
-	if resp == nil || resp.Body == nil {
+	return peekOpenAIErrorField(resp, func(e openAIErrorEnvelope) string { return e.Error.Code })
+}
+
+func peekOpenAIErrorField(resp *http.Response, pick func(openAIErrorEnvelope) string) string {
+	buf := peekResponseBodyPrefix(resp)
+	if len(buf) == 0 {
 		return ""
 	}
+	var envelope openAIErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return ""
+	}
+	return pick(envelope)
+}
+
+func peekGeminiErrorStatus(resp *http.Response) string {
+	return peekGeminiErrorField(resp, func(e geminiErrorEnvelope) string { return e.Error.Status })
+}
+
+func peekGeminiErrorField(resp *http.Response, pick func(geminiErrorEnvelope) string) string {
+	buf := peekResponseBodyPrefix(resp)
+	if len(buf) == 0 {
+		return ""
+	}
+	var envelope geminiErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return ""
+	}
+	return pick(envelope)
+}
+
+func peekAnthropicErrorType(resp *http.Response) string {
+	buf := peekResponseBodyPrefix(resp)
+	if len(buf) == 0 {
+		return ""
+	}
+	var envelope anthropicErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Error.Type
+}
+
+func gemini429IsQuota(resp *http.Response) bool {
+	buf := peekResponseBodyPrefix(resp)
+	if len(buf) == 0 {
+		return false
+	}
+	var envelope geminiErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return false
+	}
+	if envelope.Error.Status != "RESOURCE_EXHAUSTED" {
+		return false
+	}
+	msg := strings.ToLower(envelope.Error.Message)
+	return strings.Contains(msg, "quota")
+}
+
+// peekResponseBodyPrefix reads up to responseBodyPeekBytes from resp.Body
+// and restores the stream so callers can still forward or drain the full
+// body afterward.  Returns nil when resp / Body is nil.
+func peekResponseBodyPrefix(resp *http.Response) []byte {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
 	orig := resp.Body
-	buf, _ := io.ReadAll(io.LimitReader(orig, openAIPeekBytes))
-	// Restore body: stitch what we read back onto the remaining stream.
+	buf, _ := io.ReadAll(io.LimitReader(orig, responseBodyPeekBytes))
 	// Preserve the original Closer so closing resp.Body still releases the
 	// upstream connection (io.NopCloser would swallow Close and leak it).
 	resp.Body = struct {
@@ -138,18 +225,96 @@ func peekOpenAIErrorCode(resp *http.Response) string {
 		Reader: io.MultiReader(bytes.NewReader(buf), orig),
 		Closer: orig,
 	}
+	return buf
+}
+
+// peekUpstreamErrorDetail extracts a compact, provider-aware summary from
+// an upstream error response body for circuit observability logs.  Safe to
+// call before drainResponseBody; the body is restored for subsequent reads.
+func peekUpstreamErrorDetail(provider string, resp *http.Response) string {
+	buf := peekResponseBodyPrefix(resp)
 	if len(buf) == 0 {
 		return ""
 	}
-	var envelope struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+	return formatUpstreamErrorDetail(provider, buf)
+}
+
+func formatUpstreamErrorDetail(provider string, buf []byte) string {
+	switch provider {
+	case "gemini":
+		return formatGeminiErrorDetail(buf)
+	case "openai":
+		return formatOpenAIErrorDetail(buf)
+	case "anthropic":
+		return formatAnthropicErrorDetail(buf)
+	default:
+		return formatGenericErrorDetail(buf)
 	}
+}
+
+func formatGeminiErrorDetail(buf []byte) string {
+	var envelope geminiErrorEnvelope
 	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return formatGenericErrorDetail(buf)
+	}
+	return joinUpstreamErrorParts(envelope.Error.Status, envelope.Error.Message)
+}
+
+func formatOpenAIErrorDetail(buf []byte) string {
+	var envelope openAIErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return formatGenericErrorDetail(buf)
+	}
+	kind := envelope.Error.Code
+	if kind == "" {
+		kind = envelope.Error.Type
+	}
+	return joinUpstreamErrorParts(kind, envelope.Error.Message)
+}
+
+func formatAnthropicErrorDetail(buf []byte) string {
+	var envelope anthropicErrorEnvelope
+	if err := json.Unmarshal(buf, &envelope); err != nil {
+		return formatGenericErrorDetail(buf)
+	}
+	return joinUpstreamErrorParts(envelope.Error.Type, envelope.Error.Message)
+}
+
+func formatGenericErrorDetail(buf []byte) string {
+	s := strings.TrimSpace(string(buf))
+	if s == "" {
 		return ""
 	}
-	return envelope.Error.Code
+	if len(s) > maxErrorStringLength {
+		return s[:maxErrorStringLength] + "...(truncated)"
+	}
+	return s
+}
+
+func joinUpstreamErrorParts(kind, message string) string {
+	kind = strings.TrimSpace(kind)
+	message = strings.TrimSpace(message)
+	switch {
+	case kind != "" && message != "":
+		return truncateString(kind + ": " + message)
+	case kind != "":
+		return truncateString(kind)
+	case message != "":
+		return truncateString(message)
+	default:
+		return ""
+	}
+}
+
+// truncateString bounds free-form upstream error text for slog attributes.
+func truncateString(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxErrorStringLength {
+		return s[:maxErrorStringLength] + "...(truncated)"
+	}
+	return s
 }
 
 func classifyGemini(status int, resp *http.Response) FailureClass {
@@ -158,10 +323,10 @@ func classifyGemini(status int, resp *http.Response) FailureClass {
 		return FailureClassDegraded
 	case 504: // DEADLINE_EXCEEDED
 		return FailureClassDegraded
-	case 429: // RESOURCE_EXHAUSTED
-		// Gemini does not expose granular rate-limit headers the way OpenAI
-		// and Anthropic do, so we treat all 429s as localized for now and let
-		// the escalation window promote them to global/degraded if needed.
+	case 429: // RESOURCE_EXHAUSTED — quota vs transient rate limit
+		if gemini429IsQuota(resp) {
+			return FailureClassGlobalRateLimit
+		}
 		return FailureClassLocalRateLimit
 	case 401, 403:
 		return FailureClassNone
@@ -317,6 +482,22 @@ const (
 	// an upstream signal, so it gets its own kind to avoid showing up
 	// next to provider-degradation events on dashboards.
 	KindBodyTooLarge FailureKind = "body_too_large"
+
+	// Provider-specific kinds parsed from upstream JSON error bodies.
+	// Gemini: https://ai.google.dev/gemini-api/docs/troubleshooting
+	KindGeminiUnavailable       FailureKind = "gemini_unavailable"
+	KindGeminiResourceExhausted FailureKind = "gemini_resource_exhausted"
+	KindGeminiInternal          FailureKind = "gemini_internal"
+	KindGeminiDeadlineExceeded  FailureKind = "gemini_deadline_exceeded"
+
+	// Anthropic: https://docs.anthropic.com/en/api/errors
+	KindAnthropicOverloaded      FailureKind = "anthropic_overloaded"
+	KindAnthropicRateLimit       FailureKind = "anthropic_rate_limit"
+	KindAnthropicAPIError        FailureKind = "anthropic_api_error"
+	KindAnthropicTimeout         FailureKind = "anthropic_timeout"
+	KindAnthropicRequestTooLarge FailureKind = "anthropic_request_too_large"
+
+	KindOpenAIInsufficientQuota FailureKind = "openai_insufficient_quota"
 )
 
 // ClassifyFailureKind returns a string label describing the cause of a
@@ -338,6 +519,12 @@ func ClassifyFailureKind(provider string, resp *http.Response, err error) Failur
 	if status < 400 {
 		return KindNone
 	}
+	base := classifyHTTPFailureKind(provider, resp, err)
+	return refineProviderFailureKind(provider, status, resp, base)
+}
+
+func classifyHTTPFailureKind(provider string, resp *http.Response, err error) FailureKind {
+	status := resp.StatusCode
 	switch status {
 	case 500:
 		return KindHTTP500
@@ -350,9 +537,6 @@ func ClassifyFailureKind(provider string, resp *http.Response, err error) Failur
 	case 529:
 		return KindHTTPOverloaded
 	case 429:
-		// Mirror the LocalRateLimit/GlobalRateLimit split from
-		// ClassifyResponse so dashboards can break 429s out from each
-		// other without re-deriving the global/local bucket.
 		fc := ClassifyResponse(provider, resp, err)
 		switch fc {
 		case FailureClassInsufficientQuota:
@@ -367,6 +551,123 @@ func ClassifyFailureKind(provider string, resp *http.Response, err error) Failur
 		return KindHTTP5xxOther
 	}
 	return KindHTTP4xx
+}
+
+func refineProviderFailureKind(provider string, status int, resp *http.Response, base FailureKind) FailureKind {
+	switch provider {
+	case "gemini":
+		return refineGeminiFailureKind(status, resp, base)
+	case "anthropic":
+		return refineAnthropicFailureKind(status, resp, base)
+	case "openai":
+		return refineOpenAIFailureKind(status, resp, base)
+	default:
+		return base
+	}
+}
+
+func refineGeminiFailureKind(status int, resp *http.Response, base FailureKind) FailureKind {
+	switch status {
+	case 503:
+		if peekGeminiErrorStatus(resp) == "UNAVAILABLE" {
+			return KindGeminiUnavailable
+		}
+	case 429:
+		if peekGeminiErrorStatus(resp) == "RESOURCE_EXHAUSTED" {
+			return KindGeminiResourceExhausted
+		}
+	case 500:
+		if peekGeminiErrorStatus(resp) == "INTERNAL" {
+			return KindGeminiInternal
+		}
+	case 504:
+		if peekGeminiErrorStatus(resp) == "DEADLINE_EXCEEDED" {
+			return KindGeminiDeadlineExceeded
+		}
+	}
+	return base
+}
+
+func refineAnthropicFailureKind(status int, resp *http.Response, base FailureKind) FailureKind {
+	errType := peekAnthropicErrorType(resp)
+	switch status {
+	case 529:
+		if errType == "overloaded_error" || errType == "" {
+			return KindAnthropicOverloaded
+		}
+	case 429:
+		if errType == "rate_limit_error" {
+			return KindAnthropicRateLimit
+		}
+	case 500:
+		if errType == "api_error" {
+			return KindAnthropicAPIError
+		}
+	case 504:
+		if errType == "timeout_error" {
+			return KindAnthropicTimeout
+		}
+	case 413:
+		if errType == "request_too_large" {
+			return KindAnthropicRequestTooLarge
+		}
+	}
+	return base
+}
+
+func refineOpenAIFailureKind(status int, resp *http.Response, base FailureKind) FailureKind {
+	if status == 429 && peekOpenAIErrorCode(resp) == "insufficient_quota" {
+		return KindOpenAIInsufficientQuota
+	}
+	return base
+}
+
+// upstreamDetailCode extracts the provider error code/type prefix from a
+// compact upstream_error log value ("CODE: message" → "CODE").
+func upstreamDetailCode(detail string) string {
+	idx := strings.Index(detail, ":")
+	if idx <= 0 {
+		return strings.TrimSpace(detail)
+	}
+	return strings.TrimSpace(detail[:idx])
+}
+
+// refineFailureKindFromUpstreamDetail maps a captured upstream_error string
+// back to a provider-specific FailureKind when the response body has already
+// been drained and ClassifyFailureKind can no longer peek it.
+func refineFailureKindFromUpstreamDetail(provider string, detail string, base FailureKind) FailureKind {
+	code := upstreamDetailCode(detail)
+	switch provider {
+	case "gemini":
+		switch code {
+		case "UNAVAILABLE":
+			return KindGeminiUnavailable
+		case "RESOURCE_EXHAUSTED":
+			return KindGeminiResourceExhausted
+		case "INTERNAL":
+			return KindGeminiInternal
+		case "DEADLINE_EXCEEDED":
+			return KindGeminiDeadlineExceeded
+		}
+	case "anthropic":
+		switch code {
+		case "overloaded_error":
+			return KindAnthropicOverloaded
+		case "rate_limit_error":
+			return KindAnthropicRateLimit
+		case "api_error":
+			return KindAnthropicAPIError
+		case "timeout_error":
+			return KindAnthropicTimeout
+		case "request_too_large":
+			return KindAnthropicRequestTooLarge
+		}
+	case "openai":
+		if code == "insufficient_quota" {
+			return KindOpenAIInsufficientQuota
+		}
+	}
+	return base
 }
 
 // classifyTransportErrorKind is the network-error sibling of

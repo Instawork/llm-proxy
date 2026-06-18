@@ -12,7 +12,7 @@ func TestRecorder_ProbeLifecycle(t *testing.T) {
 	r.RecordProbe("openai", "openai")
 	r.RecordProbeClosed("openai", "openai", 200)
 	r.RecordProbe("openai", "openai:gpt-4o")
-	r.RecordProbeReopened("openai", "openai:gpt-4o", 429, "http_429_quota")
+	r.RecordProbeReopened("openai", "openai:gpt-4o", 429, "http_429_quota", "insufficient_quota: quota exceeded")
 
 	snap := r.Snapshot()
 	require.Equal(t, true, snap["available"])
@@ -23,6 +23,7 @@ func TestRecorder_ProbeLifecycle(t *testing.T) {
 	events, ok := snap["recent_events"].([]activityEvent)
 	require.True(t, ok)
 	require.Len(t, events, 4)
+	assert.Equal(t, "insufficient_quota: quota exceeded", events[0].UpstreamError)
 	assert.Equal(t, EventProbeReopened, events[0].Kind)
 	assert.Equal(t, "open", events[0].NewState)
 	assert.Equal(t, EventProbe, events[1].Kind)
@@ -38,7 +39,7 @@ func TestRecorder_FastFailAndOpened(t *testing.T) {
 	r.RecordFastFail("gemini", "gemini:gemini-2.5-flash-lite")
 	r.RecordFastFail("gemini", "gemini:gemini-2.5-flash-lite")
 	r.RecordFastFail("openai", "openai")
-	r.RecordOpened("openai", "openai", "insufficient_quota")
+	r.RecordOpened("openai", "openai", "insufficient_quota", "openai_insufficient_quota", "insufficient_quota: quota exceeded", 429)
 
 	snap := r.Snapshot()
 	assert.Equal(t, int64(2), snap["checks_total"])

@@ -27,14 +27,15 @@ const (
 )
 
 type activityEvent struct {
-	Time        int64  `json:"time"`
-	Provider    string `json:"provider"`
-	Key         string `json:"key,omitempty"`
-	Kind        string `json:"kind"`
-	NewState    string `json:"new_state,omitempty"`
-	StatusCode  int    `json:"status_code,omitempty"`
-	FailureKind string `json:"failure_kind,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	Time          int64  `json:"time"`
+	Provider      string `json:"provider"`
+	Key           string `json:"key,omitempty"`
+	Kind          string `json:"kind"`
+	NewState      string `json:"new_state,omitempty"`
+	StatusCode    int    `json:"status_code,omitempty"`
+	FailureKind   string `json:"failure_kind,omitempty"`
+	UpstreamError string `json:"upstream_error,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 }
 
 type activityFlushed struct {
@@ -257,14 +258,15 @@ func (r *Recorder) RecordProbeClosed(provider, key string, statusCode int) {
 }
 
 // RecordProbeReopened records a failed half-open probe (circuit open again).
-func (r *Recorder) RecordProbeReopened(provider, key string, statusCode int, failureKind string) {
+func (r *Recorder) RecordProbeReopened(provider, key string, statusCode int, failureKind, upstreamError string) {
 	e := activityEvent{
-		Provider:    provider,
-		Key:         key,
-		Kind:        EventProbeReopened,
-		NewState:    "open",
-		StatusCode:  statusCode,
-		FailureKind: failureKind,
+		Provider:      provider,
+		Key:           key,
+		Kind:          EventProbeReopened,
+		NewState:      "open",
+		StatusCode:    statusCode,
+		FailureKind:   failureKind,
+		UpstreamError: upstreamError,
 	}
 	r.recordActivity("probes_failed", provider, e, func() {
 		r.probesFailed++
@@ -272,13 +274,16 @@ func (r *Recorder) RecordProbeReopened(provider, key string, statusCode int, fai
 }
 
 // RecordOpened records a circuit trip (failure threshold or force-open).
-func (r *Recorder) RecordOpened(provider, key, reason string) {
+func (r *Recorder) RecordOpened(provider, key, reason, failureKind, upstreamError string, statusCode int) {
 	e := activityEvent{
-		Provider: provider,
-		Key:      key,
-		Kind:     EventOpened,
-		NewState: "open",
-		Reason:   reason,
+		Provider:      provider,
+		Key:           key,
+		Kind:          EventOpened,
+		NewState:      "open",
+		Reason:        reason,
+		FailureKind:   failureKind,
+		UpstreamError: upstreamError,
+		StatusCode:    statusCode,
 	}
 	r.recordActivity("circuits_opened", provider, e, func() {
 		r.circuitsOpened++

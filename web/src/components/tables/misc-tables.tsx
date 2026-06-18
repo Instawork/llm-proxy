@@ -322,6 +322,9 @@ export function CircuitActivityTable({
             <span className="text-xs text-base-content/70">
               {e.status_code ? `HTTP ${e.status_code}` : null}
               {e.failure_kind ? ` ${e.failure_kind}` : null}
+              {e.upstream_error ? (
+                <span className="block text-base-content/60">{e.upstream_error}</span>
+              ) : null}
               {e.reason ? e.reason : null}
               {scope === "model" && e.key ? (
                 <span className="block font-mono text-base-content/50">{e.key}</span>
