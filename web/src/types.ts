@@ -79,6 +79,7 @@ export interface CreateAPIKeyRequest {
   provider: Provider;
   actual_key?: string;
   auto_provision?: boolean;
+  personal?: boolean;
   description?: string;
   daily_cost_limit?: number;
   enabled?: boolean;
@@ -126,7 +127,12 @@ export interface ConfigSummary {
 
 export interface DailyHistoryRow {
   day: string;
-  [key: string]: string | number | boolean | undefined | Record<string, unknown>;
+  [key: string]:
+    | string
+    | number
+    | boolean
+    | undefined
+    | Record<string, unknown>;
 }
 
 export interface StatsWithDailyHistory {
