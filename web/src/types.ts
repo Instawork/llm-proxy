@@ -178,6 +178,7 @@ export interface CircuitActivityEvent {
   new_state?: string;
   status_code?: number;
   failure_kind?: string;
+  upstream_error?: string;
   reason?: string;
 }
 

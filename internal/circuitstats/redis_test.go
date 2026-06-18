@@ -28,7 +28,7 @@ func TestRedisRecorder_ProbeLifecycle(t *testing.T) {
 	r.RecordProbe("openai", "openai")
 	r.RecordProbeClosed("openai", "openai", 200)
 	r.RecordProbe("openai", "openai:gpt-4o")
-	r.RecordProbeReopened("openai", "openai:gpt-4o", 429, "http_429_quota")
+	r.RecordProbeReopened("openai", "openai:gpt-4o", 429, "http_429_quota", "")
 
 	// Allow async check increments to settle if any were fired.
 	time.Sleep(10 * time.Millisecond)

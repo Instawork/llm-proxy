@@ -98,8 +98,8 @@ type ActivityRecorder interface {
 	RecordFastFail(provider, key string)
 	RecordProbe(provider, key string)
 	RecordProbeClosed(provider, key string, statusCode int)
-	RecordProbeReopened(provider, key string, statusCode int, failureKind string)
-	RecordOpened(provider, key, reason string)
+	RecordProbeReopened(provider, key string, statusCode int, failureKind, upstreamError string)
+	RecordOpened(provider, key, reason, failureKind, upstreamError string, statusCode int)
 }
 
 // WithActivityRecorder wires dashboard activity counters/events. Pass nil to

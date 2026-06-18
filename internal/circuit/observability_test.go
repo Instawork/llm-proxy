@@ -108,7 +108,7 @@ func TestClassifyFailureKind_HTTPStatuses(t *testing.T) {
 		{"502", "anthropic", 502, KindHTTP502},
 		{"503", "gemini", 503, KindHTTP503},
 		{"504", "openai", 504, KindHTTP504},
-		{"529 Anthropic overloaded", "anthropic", 529, KindHTTPOverloaded},
+		{"529 Anthropic overloaded", "anthropic", 529, KindAnthropicOverloaded},
 		{"507 misc 5xx", "openai", 507, KindHTTP5xxOther},
 		{"400 bad request", "openai", 400, KindHTTP4xx},
 		{"401 auth", "anthropic", 401, KindHTTP4xx},
@@ -145,8 +145,8 @@ func TestClassifyFailureKind_429_LocalVsGlobal(t *testing.T) {
 
 	// Quota: OpenAI 429 whose body carries error.code=insufficient_quota.
 	quota := respWithBody(429, nil, `{"error":{"code":"insufficient_quota"}}`)
-	if got := ClassifyFailureKind("openai", quota, nil); got != KindHTTP429Quota {
-		t.Fatalf("insufficient_quota 429 → want %q, got %q", KindHTTP429Quota, got)
+	if got := ClassifyFailureKind("openai", quota, nil); got != KindOpenAIInsufficientQuota {
+		t.Fatalf("insufficient_quota 429 → want %q, got %q", KindOpenAIInsufficientQuota, got)
 	}
 }
 
@@ -438,6 +438,54 @@ func TestEnforce_HandleTerminalFailure_PreservesLastFailureContext(t *testing.T)
 		if _, ok := tags[want]; !ok {
 			t.Fatalf("missing tag %q on circuit.terminal_failure (tags=%v)", want, terminalCalls[0].Tags)
 		}
+	}
+}
+
+func TestEnforce_HandleTerminalFailure_LogsGeminiUpstreamError(t *testing.T) {
+	buf := &bytes.Buffer{}
+	log := captureLogs(buf)
+
+	geminiBody := `{"error":{"code":503,"message":"The model is overloaded. Please try again later.","status":"UNAVAILABLE"}}`
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Status:     http.StatusText(http.StatusServiceUnavailable),
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(geminiBody)),
+		}, nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    1,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(
+		inner, store, cfg, "gemini", log,
+		WithModelExtractor(fakeModelFn("gemini-2.5-flash-lite")),
+	)
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gemini-2.5-flash-lite"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	resp.Body.Close()              //nolint:errcheck
+
+	terminalEntry := findLogLine(t, buf, "terminal failure, returning degraded signal")
+	if terminalEntry == nil {
+		t.Fatalf("expected terminal failure log line; got %s", buf.String())
+	}
+	got, _ := terminalEntry["upstream_error"].(string)
+	want := "UNAVAILABLE: The model is overloaded. Please try again later."
+	if got != want {
+		t.Fatalf("terminal failure upstream_error = %q, want %q", got, want)
+	}
+	if gotKind, _ := terminalEntry["failure_kind"].(string); gotKind != string(KindGeminiUnavailable) {
+		t.Fatalf("terminal failure failure_kind = %q, want %q", gotKind, KindGeminiUnavailable)
 	}
 }
 
