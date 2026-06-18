@@ -377,6 +377,22 @@ func TestStore_ListKeys_ScanError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStore_EnsureOwnerProviderIndexOnExistingTable(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+
+	store, err := NewStore(StoreConfig{
+		TableName:       "test-keys",
+		Region:          "us-west-2",
+		AutoCreateTable: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	_, err = store.ListKeysByOwner(context.Background(), "viewer@example.com", "")
+	require.NoError(t, err)
+}
+
 func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
 	store, _ := newFakeStore(t)
 	ctx := context.Background()

@@ -197,7 +197,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
     icon: navIcons[item.to],
   }));
 
-  const navSections = [{ heading: "Monitoring", items: monitoringItems }];
+  const navSections: { heading: string; items: typeof monitoringItems }[] = [];
+  if (monitoringItems.length > 0) {
+    navSections.push({ heading: "Monitoring", items: monitoringItems });
+  }
   if (manageItems.length > 0) {
     navSections.push({ heading: "Manage", items: manageItems });
   }

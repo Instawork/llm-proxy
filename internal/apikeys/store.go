@@ -294,12 +294,12 @@ func (s *Store) verifyTableExists(ctx context.Context) error {
 // ensureTableExists creates the DynamoDB table if it doesn't exist
 func (s *Store) ensureTableExists(ctx context.Context) error {
 	// Check if table exists
-	_, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+	desc, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(s.tableName),
 	})
 	if err == nil {
 		s.logger.Debug("API key table already exists", "table", s.tableName)
-		return nil
+		return s.ensureOwnerProviderIndex(ctx, desc)
 	}
 
 	// Create table if it doesn't exist
@@ -376,6 +376,111 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 
 	s.logger.Info("API key table created successfully", "table", s.tableName)
 	return nil
+}
+
+const ownerProviderIndexName = "OwnerProviderIndex"
+
+func ownerProviderIndexActive(desc *dynamodb.DescribeTableOutput) bool {
+	if desc == nil || desc.Table == nil {
+		return false
+	}
+	for _, gsi := range desc.Table.GlobalSecondaryIndexes {
+		if aws.ToString(gsi.IndexName) == ownerProviderIndexName &&
+			gsi.IndexStatus == types.IndexStatusActive {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) ensureOwnerProviderIndex(ctx context.Context, desc *dynamodb.DescribeTableOutput) error {
+	if ownerProviderIndexActive(desc) {
+		return nil
+	}
+
+	hasOwnerAttr := false
+	hasProviderAttr := false
+	if desc != nil && desc.Table != nil {
+		for _, ad := range desc.Table.AttributeDefinitions {
+			switch aws.ToString(ad.AttributeName) {
+			case "owner_email":
+				hasOwnerAttr = true
+			case "provider":
+				hasProviderAttr = true
+			}
+		}
+	}
+
+	attrDefs := make([]types.AttributeDefinition, 0, 2)
+	if !hasOwnerAttr {
+		attrDefs = append(attrDefs, types.AttributeDefinition{
+			AttributeName: aws.String("owner_email"),
+			AttributeType: types.ScalarAttributeTypeS,
+		})
+	}
+	if !hasProviderAttr {
+		attrDefs = append(attrDefs, types.AttributeDefinition{
+			AttributeName: aws.String("provider"),
+			AttributeType: types.ScalarAttributeTypeS,
+		})
+	}
+
+	s.logger.Info("Adding OwnerProviderIndex GSI to API key table", "table", s.tableName)
+	updateInput := &dynamodb.UpdateTableInput{
+		TableName: aws.String(s.tableName),
+		GlobalSecondaryIndexUpdates: []types.GlobalSecondaryIndexUpdate{
+			{
+				Create: &types.CreateGlobalSecondaryIndexAction{
+					IndexName: aws.String(ownerProviderIndexName),
+					KeySchema: []types.KeySchemaElement{
+						{
+							AttributeName: aws.String("owner_email"),
+							KeyType:       types.KeyTypeHash,
+						},
+						{
+							AttributeName: aws.String("provider"),
+							KeyType:       types.KeyTypeRange,
+						},
+					},
+					Projection: &types.Projection{
+						ProjectionType: types.ProjectionTypeAll,
+					},
+				},
+			},
+		},
+	}
+	if len(attrDefs) > 0 {
+		updateInput.AttributeDefinitions = attrDefs
+	}
+
+	if _, err := s.client.UpdateTable(ctx, updateInput); err != nil {
+		return fmt.Errorf("failed to add OwnerProviderIndex GSI: %w", err)
+	}
+	return s.waitForOwnerProviderIndex(ctx)
+}
+
+func (s *Store) waitForOwnerProviderIndex(ctx context.Context) error {
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for %s GSI", ownerProviderIndexName)
+		}
+
+		desc, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+			TableName: aws.String(s.tableName),
+		})
+		if err != nil {
+			return err
+		}
+		if ownerProviderIndexActive(desc) {
+			s.logger.Info("OwnerProviderIndex GSI is active", "table", s.tableName)
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // KeyCreateMeta carries optional auto-provision metadata for CreateKey.
