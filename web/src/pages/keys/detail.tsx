@@ -135,9 +135,7 @@ export default function KeyDetailPage() {
                 : "Per-key cost, PII, and rate-limit stats."
         }
         actions={
-          isViewer ? undefined : (
-            <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
-          )
+          <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
         }
       />
 
@@ -196,9 +194,9 @@ export default function KeyDetailPage() {
         </div>
       ) : null}
 
-      {!isViewer ? (
+      {keyRecord ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "xl:grid-cols-3" : "xl:grid-cols-4"}`}>
             <LiveStat
               title="Spend today"
               value={formatUsd(costToday?.spend_usd ?? 0)}
@@ -217,12 +215,14 @@ export default function KeyDetailPage() {
               hint={`${recentPii.length} recent events`}
               source={piiSource}
             />
-            <LiveStat
-              title="Rate usage"
-              value={rateUsage.reduce((s, r) => s + r.requests, 0).toLocaleString()}
-              hint="requests in live windows"
-              source={rateSource}
-            />
+            {!isViewer ? (
+              <LiveStat
+                title="Rate usage"
+                value={rateUsage.reduce((s, r) => s + r.requests, 0).toLocaleString()}
+                hint="requests in live windows"
+                source={rateSource}
+              />
+            ) : null}
           </div>
 
           {stats?.rollup_available && costHistory.length > 0 ? (
@@ -288,26 +288,32 @@ export default function KeyDetailPage() {
               <div className="grid gap-4 p-5 sm:grid-cols-2">
                 <Meta label="Recent events" value={recentPii.length} />
                 <Meta label="Top-key count" value={piiToday?.detections ?? 0} />
-                <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
-                <Meta label="Per-key override" value={keyRecord ? piiLabel(keyRecord.redact_pii) : "—"} />
+                {!isViewer ? (
+                  <>
+                    <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
+                    <Meta label="Per-key override" value={keyRecord ? piiLabel(keyRecord.redact_pii) : "—"} />
+                  </>
+                ) : null}
               </div>
               <KeyPiiEventsTable rows={recentPii} />
             </Section>
           </div>
 
-          <Section
-            title="Rate limits"
-            subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
-            source={rateSource}
-          >
-            <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-              <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord?.rate_limit_rpm)} />
-              <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord?.rate_limit_tpm)} />
-              <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord?.rate_limit_rpd)} />
-              <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord?.rate_limit_tpd)} />
-            </div>
-            <KeyRateUsageTable rows={rateUsage} />
-          </Section>
+          {!isViewer ? (
+            <Section
+              title="Rate limits"
+              subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
+              source={rateSource}
+            >
+              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord?.rate_limit_rpm)} />
+                <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord?.rate_limit_tpm)} />
+                <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord?.rate_limit_rpd)} />
+                <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord?.rate_limit_tpd)} />
+              </div>
+              <KeyRateUsageTable rows={rateUsage} />
+            </Section>
+          ) : null}
         </>
       ) : null}
     </div>

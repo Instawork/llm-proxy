@@ -76,7 +76,7 @@ export function useKeyStats(key: string | undefined) {
   return useQuery({
     queryKey: queryKeys.keyStats(key ?? ""),
     queryFn: () => apiFetch<KeyStatsResponse>(`/admin/api/keys/${encodeURIComponent(key!)}/stats`),
-    enabled: Boolean(key) && roleAtLeast(role, "editor"),
+    enabled: Boolean(key) && roleAtLeast(role, "viewer"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });

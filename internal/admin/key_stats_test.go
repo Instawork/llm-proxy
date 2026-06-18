@@ -96,6 +96,28 @@ func TestHandleKeyStats_ForbiddenForOtherUsersKey(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
+func TestHandleKeyStats_ViewerOwnKey(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	personal, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-viewer", "mine", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+
+	costRec := coststats.NewRecorder()
+	masked := middleware.MaskKeyID(personal.PK)
+	costRec.RecordRequest("openai", masked, "secret-user", "gpt-4o", 0.02, 0.01, 0.01, 20, 10)
+	h.deps.CostSummary = costRec.Snapshot
+	h.deps.PIISummary = pii.NewRecorder().Snapshot
+
+	rec, body := keyStatsRequest(t, h, "viewer@example.com", personal.PK)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, masked, body.MaskedKeyID)
+	require.InDelta(t, 0.02, body.CostToday.SpendUSD, 1e-9)
+	require.Len(t, body.RecentCost, 1)
+}
+
 func TestHandleKeyStats_NotFoundForMissingKey(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	rec, _ := keyStatsRequest(t, h, "admin@example.com", apikeys.KeyPrefix+"missing")
