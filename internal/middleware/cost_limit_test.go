@@ -86,7 +86,8 @@ type monthlySpendReader struct {
 	monthlyUSD float64
 }
 
-func (m monthlySpendReader) KeySpendUSD(context.Context, string) float64   { return m.dailyUSD }
+func (m monthlySpendReader) KeySpendUSD(context.Context, string) float64 { return m.dailyUSD }
+
 func (m monthlySpendReader) KeyMonthlySpendUSD(context.Context, string) float64 { return m.monthlyUSD }
 
 // Two distinct keys that share the first 12 characters must NOT share a spend
@@ -261,11 +262,13 @@ func (f *fakeReserver) ReserveKeySpend(_ context.Context, _ string, estimateUSD 
 	}
 	return f.allow, f.active
 }
+
 func (f *fakeReserver) AdjustKeyReservation(_ context.Context, _ string, deltaUSD float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.adjustments = append(f.adjustments, deltaUSD)
 }
+
 func (f *fakeReserver) totalAdjust() float64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()

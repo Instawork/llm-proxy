@@ -249,8 +249,8 @@ func TestViewerPersonalKeys(t *testing.T) {
 	assert.Empty(t, listResp)
 
 	body, _ := json.Marshal(CreateKeyRequest{
-		Provider:  "openai",
-		ActualKey: "sk-viewer",
+		Provider:    "openai",
+		ActualKey:   "sk-viewer",
 		Description: "mine",
 	})
 	createReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)

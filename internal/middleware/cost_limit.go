@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	costLimitReasonHeader = "X-Cost-Limit-Reason"
-	costLimitCentsHeader  = "X-Cost-Limit-Cents"
-	costSpendCentsHeader  = "X-Cost-Spend-Cents"
-	costLimitExceeded     = "daily_cost_limit_exceeded"
+	costLimitReasonHeader    = "X-Cost-Limit-Reason"
+	costLimitCentsHeader     = "X-Cost-Limit-Cents"
+	costSpendCentsHeader     = "X-Cost-Spend-Cents"
+	costLimitExceeded        = "daily_cost_limit_exceeded"
 	costLimitMonthlyExceeded = "monthly_cost_limit_exceeded"
-	costLimitDegraded     = "daily_cost_limit_read_degraded"
+	costLimitDegraded        = "daily_cost_limit_read_degraded"
 
 	// defaultReservationGrace is how long a reconciled reservation lingers
 	// after a request completes before it is released. It must comfortably

@@ -65,7 +65,8 @@ return 1
 `)
 
 func (b *redisBackend) reserveUnderLimit(ctx context.Context, spendHashKey, spendField, reservedHashKey, reservedField string, estimate float64, limitCents int64, ttl time.Duration) (bool, error) {
-	res, err := reserveUnderLimitScript.Run(ctx, b.rdb,
+	res, err := reserveUnderLimitScript.Run(
+		ctx, b.rdb,
 		[]string{spendHashKey, reservedHashKey},
 		spendField, reservedField,
 		strconv.FormatFloat(estimate, 'f', -1, 64),
@@ -79,7 +80,8 @@ func (b *redisBackend) reserveUnderLimit(ctx context.Context, spendHashKey, spen
 }
 
 func (b *redisBackend) addReserved(ctx context.Context, reservedHashKey, reservedField string, delta float64, ttl time.Duration) error {
-	return addReservedScript.Run(ctx, b.rdb,
+	return addReservedScript.Run(
+		ctx, b.rdb,
 		[]string{reservedHashKey},
 		reservedField,
 		strconv.FormatFloat(delta, 'f', -1, 64),
@@ -160,7 +162,8 @@ func (s *Store) ReserveKeySpend(ctx context.Context, metric, day, keyID string, 
 	if s == nil || s.be == nil || keyID == "" {
 		return true, nil
 	}
-	return s.be.reserveUnderLimit(ctx,
+	return s.be.reserveUnderLimit(
+		ctx,
 		dimKey(metric, day, "by_key"), dimMemberField(keyID, "spend_usd"),
 		dimKey(metric, day, reservedDim), keyID,
 		estimateUSD, limitCents, todayTTL,
@@ -190,7 +193,8 @@ func (s *Store) ReserveKeyMonthlySpend(ctx context.Context, metric, month, keyID
 	if s == nil || s.be == nil || keyID == "" {
 		return true, nil
 	}
-	return s.be.reserveUnderLimit(ctx,
+	return s.be.reserveUnderLimit(
+		ctx,
 		monthKey(metric, month), dimMemberField(keyID, "spend_usd"),
 		monthReservedKey(metric, month), keyID,
 		estimateUSD, limitCents, monthTTL,

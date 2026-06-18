@@ -56,24 +56,24 @@ type UpdateUserRoleRequest struct {
 
 // KeyResponse is a safe JSON view of an API key record.
 type KeyResponse struct {
-	Key            string            `json:"key"`
-	Provider       string            `json:"provider"`
-	Description    string            `json:"description,omitempty"`
+	Key              string            `json:"key"`
+	Provider         string            `json:"provider"`
+	Description      string            `json:"description,omitempty"`
 	DailyCostLimit   int64             `json:"daily_cost_limit"`
 	MonthlyCostLimit int64             `json:"monthly_cost_limit,omitempty"`
 	OwnerEmail       string            `json:"owner_email,omitempty"`
 	Enabled          bool              `json:"enabled"`
-	Tags           map[string]string `json:"tags,omitempty"`
-	RedactPII      *bool             `json:"redact_pii,omitempty"`
-	RateLimitRPM   int               `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM   int               `json:"rate_limit_tpm,omitempty"`
-	RateLimitRPD   int               `json:"rate_limit_rpd,omitempty"`
-	RateLimitTPD   int               `json:"rate_limit_tpd,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	ExpiresAt      *time.Time        `json:"expires_at,omitempty"`
-	ActualKey      string            `json:"actual_key,omitempty"`
-	Provisioned    bool              `json:"provisioned,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	RedactPII        *bool             `json:"redact_pii,omitempty"`
+	RateLimitRPM     int               `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD     int               `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD     int               `json:"rate_limit_tpd,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	ExpiresAt        *time.Time        `json:"expires_at,omitempty"`
+	ActualKey        string            `json:"actual_key,omitempty"`
+	Provisioned      bool              `json:"provisioned,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
@@ -172,15 +172,15 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 		MonthlyCostLimit: k.MonthlyCostLimit,
 		OwnerEmail:       k.OwnerEmail,
 		Enabled:          k.Enabled,
-		Tags:           k.Tags,
-		RedactPII:      k.RedactPII,
-		RateLimitRPM:   k.RateLimitRPM,
-		RateLimitTPM:   k.RateLimitTPM,
-		RateLimitRPD:   k.RateLimitRPD,
-		RateLimitTPD:   k.RateLimitTPD,
-		CreatedAt:      k.CreatedAt,
-		UpdatedAt:      k.UpdatedAt,
-		ExpiresAt:      k.ExpiresAt,
+		Tags:             k.Tags,
+		RedactPII:        k.RedactPII,
+		RateLimitRPM:     k.RateLimitRPM,
+		RateLimitTPM:     k.RateLimitTPM,
+		RateLimitRPD:     k.RateLimitRPD,
+		RateLimitTPD:     k.RateLimitTPD,
+		CreatedAt:        k.CreatedAt,
+		UpdatedAt:        k.UpdatedAt,
+		ExpiresAt:        k.ExpiresAt,
 	}
 	if includeActualKey {
 		resp.ActualKey = maskedActualKey
