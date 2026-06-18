@@ -20,13 +20,6 @@ func isViewerPersonalProvider(provider string) bool {
 	return ok
 }
 
-func isPersonalKey(key *apikeys.APIKey) bool {
-	if key == nil || key.Tags == nil {
-		return false
-	}
-	return key.Tags["personal"] == "true"
-}
-
 func canAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
 	if role.AtLeast(adminusers.RoleEditor) {
 		return true
@@ -72,6 +65,7 @@ func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) err
 }
 
 func (h *handler) validateViewerPersonalCreate(r *http.Request, req *CreateKeyRequest, userEmail string) error {
+	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
 	if !isViewerPersonalProvider(req.Provider) {
 		return fmt.Errorf("viewers may only create personal keys for openai, anthropic, or gemini")
 	}

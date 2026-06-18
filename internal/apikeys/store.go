@@ -282,13 +282,19 @@ func NewStore(cfg StoreConfig) (*Store, error) {
 	return store, nil
 }
 
-// verifyTableExists checks that the configured table is reachable without
-// attempting to create it. Used for the default (production-safe) path.
+// verifyTableExists checks that the configured table is reachable and has the
+// OwnerProviderIndex GSI required for personal keys.
 func (s *Store) verifyTableExists(ctx context.Context) error {
-	_, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+	desc, err := s.client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(s.tableName),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if !ownerProviderIndexActive(desc) {
+		return fmt.Errorf("table %s is missing required GSI %s", s.tableName, ownerProviderIndexName)
+	}
+	return nil
 }
 
 // ensureTableExists creates the DynamoDB table if it doesn't exist
@@ -379,6 +385,18 @@ func (s *Store) ensureTableExists(ctx context.Context) error {
 }
 
 const ownerProviderIndexName = "OwnerProviderIndex"
+
+func normalizeOwnerEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func ownerProviderLockPK(ownerEmail, provider string) string {
+	return "owner-lock:" + normalizeOwnerEmail(ownerEmail) + ":" + normalizeProvider(provider)
+}
 
 func ownerProviderIndexActive(desc *dynamodb.DescribeTableOutput) bool {
 	if desc == nil || desc.Table == nil {
@@ -566,6 +584,9 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 
 // CreatePersonalKey creates a viewer-owned personal API key for one provider.
 func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, actualKey, description string, monthlyCostLimit int64, meta KeyCreateMeta) (*APIKey, error) {
+	ownerEmail = normalizeOwnerEmail(ownerEmail)
+	provider = normalizeProvider(provider)
+
 	existing, err := s.GetOwnerKeyByProvider(ctx, ownerEmail, provider)
 	if err != nil {
 		return nil, err
@@ -574,8 +595,30 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 		return nil, ErrOwnerKeyExists
 	}
 
+	lockPK := ownerProviderLockPK(ownerEmail, provider)
+	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.tableName),
+		Item: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: lockPK},
+		},
+		ConditionExpression: aws.String("attribute_not_exists(pk)"),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil, ErrOwnerKeyExists
+		}
+		return nil, fmt.Errorf("failed to acquire owner/provider lock: %w", err)
+	}
+
 	newKey, err := GenerateKey()
 	if err != nil {
+		_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.tableName),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: lockPK},
+			},
+		})
 		return nil, err
 	}
 
@@ -599,6 +642,12 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 
 	av, err := attributevalue.MarshalMap(apiKey)
 	if err != nil {
+		_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.tableName),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: lockPK},
+			},
+		})
 		return nil, fmt.Errorf("failed to marshal API key: %w", err)
 	}
 
@@ -608,6 +657,12 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
+		_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.tableName),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: lockPK},
+			},
+		})
 		return nil, fmt.Errorf("failed to create personal API key: %w", err)
 	}
 
@@ -758,7 +813,12 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 
 // DeleteKey deletes an API key
 func (s *Store) DeleteKey(ctx context.Context, key string) error {
-	_, err := s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	record, err := s.GetKeyRecord(ctx, key)
+	if err != nil {
+		return fmt.Errorf("failed to delete API key: %w", err)
+	}
+
+	_, err = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: key},
@@ -767,6 +827,15 @@ func (s *Store) DeleteKey(ctx context.Context, key string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete API key: %w", err)
+	}
+
+	if record.OwnerEmail != "" && record.Provider != "" {
+		_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.tableName),
+			Key: map[string]types.AttributeValue{
+				"pk": &types.AttributeValueMemberS{Value: ownerProviderLockPK(record.OwnerEmail, record.Provider)},
+			},
+		})
 	}
 
 	s.logger.Info("Deleted API key", "key", RedactKey(key))
@@ -845,6 +914,9 @@ func (s *Store) ListKeys(ctx context.Context, provider string) ([]*APIKey, error
 
 // ListKeysByOwner returns personal keys owned by ownerEmail, optionally filtered by provider.
 func (s *Store) ListKeysByOwner(ctx context.Context, ownerEmail, providerFilter string) ([]*APIKey, error) {
+	ownerEmail = normalizeOwnerEmail(ownerEmail)
+	providerFilter = normalizeProvider(providerFilter)
+
 	keyCond := "owner_email = :owner"
 	exprValues := map[string]types.AttributeValue{
 		":owner": &types.AttributeValueMemberS{Value: ownerEmail},

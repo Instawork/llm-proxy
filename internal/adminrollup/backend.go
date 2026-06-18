@@ -3,11 +3,18 @@ package adminrollup
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
 )
+
+var hincrbyfloatScript = redis.NewScript(`
+local newVal = redis.call("HINCRBYFLOAT", KEYS[1], ARGV[1], ARGV[2])
+redis.call("EXPIRE", KEYS[1], tonumber(ARGV[3]))
+return newVal
+`)
 
 // Backend kinds.
 const (
@@ -112,10 +119,19 @@ func (b *redisBackend) hget(ctx context.Context, key, field string) (float64, er
 }
 
 func (b *redisBackend) hincrbyfloat(ctx context.Context, key, field string, delta float64, ttl time.Duration) error {
-	if err := b.rdb.HIncrByFloat(ctx, key, field, delta).Err(); err != nil {
-		return err
+	ttlSec := int64(ttl / time.Second)
+	if ttl > 0 && ttlSec < 1 {
+		ttlSec = 1
 	}
-	return b.rdb.Expire(ctx, key, ttl).Err()
+	_, err := hincrbyfloatScript.Run(
+		ctx,
+		b.rdb,
+		[]string{key},
+		field,
+		strconv.FormatFloat(delta, 'f', -1, 64),
+		ttlSec,
+	).Result()
+	return err
 }
 
 func (b *redisBackend) trySetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {

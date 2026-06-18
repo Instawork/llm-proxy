@@ -21,7 +21,7 @@ func newFakeStore(t *testing.T) (*Store, *dynamodbfake.Server) {
 	t.Helper()
 	fake := dynamodbfake.New(t)
 	dynamodbfake.UseFakeDynamo(t, fake.URL())
-	store, err := NewStore(StoreConfig{TableName: "test-keys", Region: "us-west-2"})
+	store, err := NewStore(StoreConfig{TableName: "test-keys", Region: "us-west-2", AutoCreateTable: true})
 	require.NoError(t, err)
 	return store, fake
 }
@@ -412,10 +412,16 @@ func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
 	_, err = store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-dup", "", 1000, KeyCreateMeta{})
 	require.ErrorIs(t, err, ErrOwnerKeyExists)
 
+	require.NoError(t, store.DeleteKey(ctx, key.PK))
+
+	recreated, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-viewer-2", "mine again", 1000, KeyCreateMeta{})
+	require.NoError(t, err)
+	assert.NotEqual(t, key.PK, recreated.PK)
+
 	keys, err := store.ListKeysByOwner(ctx, "viewer@example.com", "")
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
-	assert.Equal(t, key.PK, keys[0].PK)
+	assert.Equal(t, recreated.PK, keys[0].PK)
 
 	filtered, err := store.ListKeysByOwner(ctx, "viewer@example.com", "anthropic")
 	require.NoError(t, err)

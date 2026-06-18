@@ -300,6 +300,10 @@ func enforceReadOnly(
 
 	if rec.MonthlyCostLimit > 0 {
 		if monthlyReader == nil {
+			if opt.FailClosedOnReadError {
+				writeCostDegraded(w, prov, rec, rec.MonthlyCostLimit)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

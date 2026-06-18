@@ -46,7 +46,7 @@ func testAdminHandler(t *testing.T) (*handler, *apikeys.Store) {
 	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "admin@example.com")
 
 	ensureTestDynamoFake(t)
-	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2"})
+	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2", AutoCreateTable: true})
 	require.NoError(t, err)
 
 	userStore := testAdminUserStore(t)

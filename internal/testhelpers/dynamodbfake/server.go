@@ -237,14 +237,14 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 				}
 				if strings.Contains(keyCondExpr, "provider =") {
 					wantProvider := extractAttrValueString(attrValues, ":provider")
-					if wantProvider != "" && ExtractDDBString(item, "provider") != wantProvider {
+					if wantProvider != "" && !strings.EqualFold(ExtractDDBString(item, "provider"), wantProvider) {
 						continue
 					}
 				}
 			}
 			if keyCondExpr != "" && strings.Contains(keyCondExpr, "provider =") && !strings.Contains(keyCondExpr, "owner_email") {
 				wantProvider := extractAttrValueString(attrValues, ":provider")
-				if wantProvider != "" && ExtractDDBString(item, "provider") != wantProvider {
+				if wantProvider != "" && !strings.EqualFold(ExtractDDBString(item, "provider"), wantProvider) {
 					continue
 				}
 			}

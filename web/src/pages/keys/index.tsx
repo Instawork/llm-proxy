@@ -125,7 +125,8 @@ export default function KeysPage() {
   const provisionedKeysOnly = !isAdmin;
   const canDeleteKeys = isViewer || me?.role === "admin";
   const viewerMonthlyCents = me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 1000;
-  const viewerMonthlyDollars = (viewerMonthlyCents / 100).toFixed(2);
+  const viewerMonthlyLimitLabel =
+    viewerMonthlyCents > 0 ? `$${(viewerMonthlyCents / 100).toFixed(2)}` : "Unlimited";
   const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
   const bulkKeyDescription = me?.email?.split("@")[0]?.trim() ?? "";
@@ -181,7 +182,9 @@ export default function KeysPage() {
     let providers: Provider[];
     if (isViewer) {
       const owned = new Set(keys.map((k) => k.provider));
-      providers = VIEWER_PROVIDERS.filter((p) => !owned.has(p));
+      providers = VIEWER_PROVIDERS.filter(
+        (p) => !owned.has(p) || p === editingKey?.provider,
+      );
     } else if (!piiOffRequiresBedrock) {
       providers = [...PROVIDERS];
     } else {
@@ -191,7 +194,7 @@ export default function KeysPage() {
       return providers;
     }
     return providers.filter((p) => provisioning.providers?.[p]?.auto_provision);
-  }, [isViewer, keys, piiOffRequiresBedrock, provisionedKeysOnly, provisioning]);
+  }, [isViewer, keys, editingKey?.provider, piiOffRequiresBedrock, provisionedKeysOnly, provisioning]);
 
   const canCreateKey = availableProviders.length > 0;
 
@@ -421,7 +424,9 @@ export default function KeysPage() {
         title={isViewer ? "My API Keys" : "API Keys"}
         description={
           isViewer
-            ? `Personal proxy keys (one per provider). Monthly spend is capped at $${viewerMonthlyDollars}.`
+            ? viewerMonthlyCents > 0
+              ? `Personal proxy keys (one per provider). Monthly spend is capped at ${viewerMonthlyLimitLabel}.`
+              : "Personal proxy keys (one per provider). Monthly spend is unlimited."
             : "Key registry is DynamoDB. Spend and PII stats on each key are in-memory (today only)."
         }
         actions={
@@ -451,6 +456,14 @@ export default function KeysPage() {
           </>
         }
       />
+
+      {isViewer ? (
+        <div className="glass-panel border-l-4 border-l-[#4A154B] px-4 py-3 text-sm text-base-content/80">
+          These are meant for local testing. If you are deploying something, request a key for that service in{" "}
+          <span className="rounded bg-[#4A154B]/10 px-1 font-bold text-[#4A154B]">#it-helpdesk</span> in{" "}
+          <span className="rounded bg-[#4A154B]/10 px-1 font-bold text-[#4A154B]">Slack</span>.
+        </div>
+      ) : null}
 
       {error ? (
         <ErrorAlert message={error instanceof Error ? error.message : "Failed to load keys"} />
@@ -639,8 +652,8 @@ export default function KeysPage() {
 
               {isViewer && !editingKey ? (
                 <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
-                  Monthly spend limit: <span className="font-medium">${viewerMonthlyDollars}</span> (set by
-                  your organization).
+                  Monthly spend limit:{" "}
+                  <span className="font-medium">{viewerMonthlyLimitLabel}</span> (set by your organization).
                 </div>
               ) : null}
 

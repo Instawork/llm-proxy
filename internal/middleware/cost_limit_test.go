@@ -199,6 +199,31 @@ func (d degradedSpendReader) KeySpendUSDDetailed(context.Context, string) (float
 	return d.localUSD, true
 }
 
+func TestCostLimitMiddleware_MonthlyLimitNoReaderFailClosed(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	reader := dailyOnlySpendReader{}
+	key := &apikeys.APIKey{PK: "iw:abc123456789", DailyCostLimit: 0, MonthlyCostLimit: 1000}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	CostLimitMiddleware(pm, reader, CostLimitOptions{FailClosedOnReadError: true})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next should not be called when failing closed")
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("fail-closed should return 503, got %d", rr.Code)
+	}
+	if got := rr.Header().Get(costLimitReasonHeader); got != costLimitDegraded {
+		t.Fatalf("reason header = %q want %q", got, costLimitDegraded)
+	}
+}
+
+type dailyOnlySpendReader struct{}
+
+func (dailyOnlySpendReader) KeySpendUSD(context.Context, string) float64 { return 0 }
+
 func TestCostLimitMiddleware_DegradedFailOpenEnforcesLocal(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})
