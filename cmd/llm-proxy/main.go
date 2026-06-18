@@ -1629,6 +1629,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			RateLimitSummary: rateLimitSummaryFunc(),
 			CircuitActivity:  circuitActivitySummaryFunc(),
 			KeyProvisioner:   globalKeyProvisioner,
+			AdminRollupStore: globalAdminRollupStore,
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}

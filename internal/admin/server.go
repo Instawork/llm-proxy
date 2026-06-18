@@ -80,6 +80,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/keys", roleHandler(auth, adminusers.RoleViewer, h.handleListKeys)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys", roleHandler(auth, adminusers.RoleViewer, h.handleCreateKey)).Methods(http.MethodPost, http.MethodOptions)
 	api.Handle("/provisioning", roleHandler(auth, adminusers.RoleViewer, h.handleProvisioning)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys/{key:.+}/stats", roleHandler(auth, adminusers.RoleEditor, h.handleKeyStats)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleViewer, h.handleGetKey)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleViewer, h.handleUpdateKey)).Methods(http.MethodPatch, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, adminusers.RoleViewer, h.handleDeleteKey)).Methods(http.MethodDelete, http.MethodOptions)

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -19,6 +20,7 @@ type Deps struct {
 	APIKeyStoreError error
 	UserStore        *adminusers.Store
 	UserStoreError   error
+	AdminRollupStore *adminrollup.Store
 	RateLimiter      ratelimit.RateLimiter
 	HealthFunc       http.HandlerFunc
 	CostSummary      func() map[string]interface{}

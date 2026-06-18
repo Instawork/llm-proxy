@@ -4,10 +4,10 @@ import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "../ui/data-table";
 import { ProviderBadge } from "../ui/page-header";
 import { formatCount, formatUsd } from "../../lib/format";
-import type { CostRecentEvent, PIIRecentEvent } from "../../types";
+import type { KeyCostRecentEvent, KeyPIIRecentEvent } from "../../types";
 
-function piiOutcomeBadge(outcome: PIIRecentEvent["outcome"]) {
-  const map: Record<PIIRecentEvent["outcome"], string> = {
+function piiOutcomeBadge(outcome: KeyPIIRecentEvent["outcome"]) {
+  const map: Record<KeyPIIRecentEvent["outcome"], string> = {
     ok: "badge-success",
     fail_open: "badge-warning",
     fail_closed: "badge-error",
@@ -16,8 +16,8 @@ function piiOutcomeBadge(outcome: PIIRecentEvent["outcome"]) {
   return <span className={`badge badge-sm ${map[outcome]}`}>{outcome}</span>;
 }
 
-export function KeyCostEventsTable({ rows }: { rows: CostRecentEvent[] }) {
-  const columns = useMemo<ColumnDef<CostRecentEvent, unknown>[]>(
+export function KeyCostEventsTable({ rows }: { rows: KeyCostRecentEvent[] }) {
+  const columns = useMemo<ColumnDef<KeyCostRecentEvent, unknown>[]>(
     () => [
       {
         id: "time",
@@ -81,8 +81,8 @@ export function KeyCostEventsTable({ rows }: { rows: CostRecentEvent[] }) {
   );
 }
 
-export function KeyPiiEventsTable({ rows }: { rows: PIIRecentEvent[] }) {
-  const columns = useMemo<ColumnDef<PIIRecentEvent, unknown>[]>(
+export function KeyPiiEventsTable({ rows }: { rows: KeyPIIRecentEvent[] }) {
+  const columns = useMemo<ColumnDef<KeyPIIRecentEvent, unknown>[]>(
     () => [
       {
         id: "time",
@@ -118,7 +118,7 @@ export function KeyPiiEventsTable({ rows }: { rows: PIIRecentEvent[] }) {
         id: "outcome",
         accessorKey: "outcome",
         header: "Outcome",
-        cell: ({ getValue }) => piiOutcomeBadge(getValue<PIIRecentEvent["outcome"]>()),
+        cell: ({ getValue }) => piiOutcomeBadge(getValue<KeyPIIRecentEvent["outcome"]>()),
       },
       {
         id: "latency",

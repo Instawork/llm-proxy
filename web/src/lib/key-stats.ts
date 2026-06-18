@@ -1,35 +1,6 @@
 import { maskKeyId } from "./format";
 import { redactedRateLimitScopeForKey } from "./key-routes";
-import type {
-  CostRecentEvent,
-  CostStats,
-  PIIRecentEvent,
-  PIIStats,
-  RateLimitConfig,
-  RateLimitsResponse,
-} from "../types";
-
-export function costStatsForKey(stats: CostStats | undefined, key: string) {
-  const masked = maskKeyId(key);
-  return stats?.by_key?.find((row) => row.key_id === masked || row.key_id === key);
-}
-
-export function costRecentForKey(stats: CostStats | undefined, key: string): CostRecentEvent[] {
-  const masked = maskKeyId(key);
-  return (stats?.recent ?? []).filter((ev) => ev.key_id === masked || ev.key_id === key);
-}
-
-export function piiRecentForKey(stats: PIIStats | undefined, key: string): PIIRecentEvent[] {
-  const masked = maskKeyId(key);
-  return (stats?.recent ?? []).filter((ev) => ev.key_id === masked);
-}
-
-export function piiDetectionsForKey(stats: PIIStats | undefined, key: string): number {
-  const masked = maskKeyId(key);
-  const fromTop = stats?.top_keys?.find((row) => row.name === masked)?.count;
-  if (fromTop !== undefined) return fromTop;
-  return piiRecentForKey(stats, key).filter((ev) => ev.entity_total > 0).length;
-}
+import type { RateLimitConfig, RateLimitsResponse } from "../types";
 
 export function rateLimitScopeForKey(key: string): string {
   return `key:${key}`;

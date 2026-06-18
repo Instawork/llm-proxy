@@ -190,21 +190,6 @@ export function aggCostByProvider(
   return [...acc.values()].sort((a, b) => b.spend_usd - a.spend_usd);
 }
 
-/** Per-day spend for one masked key (for the key-detail sparkline). */
-export function costSeriesForKey(
-  rows: DailyHistoryRow[] | undefined,
-  maskedKey: string,
-  range: RangeKey = "7d",
-): { labels: string[]; values: number[]; available: boolean } {
-  const slice = sliceRange(rows, range === "today" ? "7d" : range);
-  if (!slice.length || !maskedKey) return { labels: [], values: [], available: false };
-  const values = slice.map((row) => {
-    const match = asArray(row.by_key).find((r) => String(r.key_id ?? "") === maskedKey);
-    return match ? asNum(match.spend_usd) : 0;
-  });
-  return { labels: slice.map((r) => r.day.slice(5)), values, available: true };
-}
-
 // --- Usage breakdowns (scope maps) ------------------------------------------
 
 export interface ScopeAgg {
