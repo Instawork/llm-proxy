@@ -24,7 +24,10 @@ import (
 // (dim "reserved", field = masked key id) so it shares the day's TTL and is
 // cleaned up by the same day-rollover archive path.
 
-const reservedDim = "reserved"
+const (
+	reservedDim      = "reserved"
+	monthReservedDim = "month_reserved"
+)
 
 // reserveUnderLimitScript atomically reserves estimate for a key IFF the
 // combined recorded spend + outstanding reservations is still under the cap.
@@ -182,4 +185,27 @@ func (s *Store) ReservedKeySpendUSD(ctx context.Context, metric, day, keyID stri
 		return 0, nil
 	}
 	return s.be.hget(ctx, dimKey(metric, day, reservedDim), keyID)
+}
+
+// ReserveKeyMonthlySpend atomically reserves an estimated cost for keyID against
+// its monthly cap. limitCents must be > 0.
+func (s *Store) ReserveKeyMonthlySpend(ctx context.Context, metric, month, keyID string, estimateUSD float64, limitCents int64) (bool, error) {
+	if s == nil || s.be == nil || keyID == "" {
+		return true, nil
+	}
+	return s.be.reserveUnderLimit(
+		ctx,
+		monthKey(metric, month), dimMemberField(keyID, "spend_usd"),
+		monthReservedKey(metric, month), keyID,
+		estimateUSD, limitCents, monthTTL,
+	)
+}
+
+// AddKeyMonthlyReservation adjusts keyID's outstanding monthly reservation by
+// delta (negative to release). The stored value is floored at 0.
+func (s *Store) AddKeyMonthlyReservation(ctx context.Context, metric, month, keyID string, deltaUSD float64) error {
+	if s == nil || s.be == nil || keyID == "" {
+		return nil
+	}
+	return s.be.addReserved(ctx, monthReservedKey(metric, month), keyID, deltaUSD, monthTTL)
 }

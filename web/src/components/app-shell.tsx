@@ -6,30 +6,52 @@ import UserAvatar from "./user-avatar";
 import { DataSourceKey } from "./ui/data-source";
 import { useLogout, useMe } from "../hooks/queries";
 import { navItemsForRole } from "../lib/nav";
-import { toggleTheme, useTheme } from "../lib/theme";
+import { toggleTheme, useTheme, useThemePreference, setThemeAuto } from "../lib/theme";
 
 function ThemeToggle() {
   const theme = useTheme();
+  const preference = useThemePreference();
+  const isAuto = preference === "auto";
   const isDark = theme === "dark";
+
   return (
-    <button
-      type="button"
-      className="btn btn-ghost btn-sm w-full justify-start gap-2 px-2 text-base-content/70"
-      onClick={() => toggleTheme()}
-      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-    >
-      {isDark ? (
-        <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.8">
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.8">
-          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
-        </svg>
-      )}
-      {isDark ? "Light mode" : "Dark mode"}
-    </button>
+    <div className="space-y-1">
+      <label className="flex cursor-pointer items-start justify-between gap-2 px-2 py-1">
+        <div className="min-w-0">
+          <p className="text-sm text-base-content/70">Dark / Light</p>
+          <p className="text-[0.65rem] text-base-content/45">
+            {isAuto ? `Auto · ${isDark ? "dark" : "light"} (system)` : "Manual"}
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          className="toggle toggle-primary toggle-xs mt-0.5 shrink-0"
+          checked={isAuto}
+          onChange={(event) => setThemeAuto(event.target.checked)}
+          aria-label="Automatically match system dark or light mode"
+        />
+      </label>
+      {!isAuto ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm w-full justify-start gap-2 px-2 text-base-content/70"
+          onClick={() => toggleTheme()}
+          aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {isDark ? (
+            <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.8">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.8">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+            </svg>
+          )}
+          {isDark ? "Switch to light" : "Switch to dark"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -197,7 +219,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
     icon: navIcons[item.to],
   }));
 
-  const navSections = [{ heading: "Monitoring", items: monitoringItems }];
+  const navSections: { heading: string; items: typeof monitoringItems }[] = [];
+  if (monitoringItems.length > 0) {
+    navSections.push({ heading: "Monitoring", items: monitoringItems });
+  }
   if (manageItems.length > 0) {
     navSections.push({ heading: "Manage", items: manageItems });
   }

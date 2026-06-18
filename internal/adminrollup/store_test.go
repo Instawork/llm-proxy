@@ -58,6 +58,25 @@ func TestStoreKeySpendUSD(t *testing.T) {
 	}
 }
 
+func TestStoreKeyMonthlySpendUSD(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	month := "2026-06"
+
+	if v, err := store.KeyMonthlySpendUSD(ctx, MetricCost, month, "iw:abc"); err != nil || v != 0 {
+		t.Fatalf("missing key monthly spend = %v err=%v", v, err)
+	}
+
+	require.NoError(t, store.ApplyMonthlyKeySpend(ctx, MetricCost, month, "iw:abc", 1.25))
+	require.NoError(t, store.ApplyMonthlyKeySpend(ctx, MetricCost, month, "iw:abc", 1.25))
+
+	v, err := store.KeyMonthlySpendUSD(ctx, MetricCost, month, "iw:abc")
+	require.NoError(t, err)
+	if v != 2.50 {
+		t.Fatalf("fleet key monthly spend = %v want 2.50", v)
+	}
+}
+
 func TestReserveKeySpend(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

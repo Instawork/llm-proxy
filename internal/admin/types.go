@@ -19,11 +19,17 @@ type UserResponse struct {
 	Role                            string                `json:"role"`
 	CanBypassPIIOffNonBedrockPolicy bool                  `json:"can_bypass_pii_off_non_bedrock_policy"`
 	EditorLimits                    *EditorLimitsResponse `json:"editor_limits,omitempty"`
+	ViewerLimits                    *ViewerLimitsResponse `json:"viewer_limits,omitempty"`
 }
 
 // EditorLimitsResponse exposes editor caps to the UI.
 type EditorLimitsResponse struct {
 	MaxDailyCostLimitCents int64 `json:"max_daily_cost_limit_cents"`
+}
+
+// ViewerLimitsResponse exposes viewer personal-key caps to the UI.
+type ViewerLimitsResponse struct {
+	PersonalMonthlyCostLimitCents int64 `json:"personal_monthly_cost_limit_cents"`
 }
 
 // AdminUserRecord is a user in the admin roster.
@@ -50,22 +56,24 @@ type UpdateUserRoleRequest struct {
 
 // KeyResponse is a safe JSON view of an API key record.
 type KeyResponse struct {
-	Key            string            `json:"key"`
-	Provider       string            `json:"provider"`
-	Description    string            `json:"description,omitempty"`
-	DailyCostLimit int64             `json:"daily_cost_limit"`
-	Enabled        bool              `json:"enabled"`
-	Tags           map[string]string `json:"tags,omitempty"`
-	RedactPII      *bool             `json:"redact_pii,omitempty"`
-	RateLimitRPM   int               `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM   int               `json:"rate_limit_tpm,omitempty"`
-	RateLimitRPD   int               `json:"rate_limit_rpd,omitempty"`
-	RateLimitTPD   int               `json:"rate_limit_tpd,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	ExpiresAt      *time.Time        `json:"expires_at,omitempty"`
-	ActualKey      string            `json:"actual_key,omitempty"`
-	Provisioned    bool              `json:"provisioned,omitempty"`
+	Key              string            `json:"key"`
+	Provider         string            `json:"provider"`
+	Description      string            `json:"description,omitempty"`
+	DailyCostLimit   int64             `json:"daily_cost_limit"`
+	MonthlyCostLimit int64             `json:"monthly_cost_limit,omitempty"`
+	OwnerEmail       string            `json:"owner_email,omitempty"`
+	Enabled          bool              `json:"enabled"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	RedactPII        *bool             `json:"redact_pii,omitempty"`
+	RateLimitRPM     int               `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD     int               `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD     int               `json:"rate_limit_tpd,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	ExpiresAt        *time.Time        `json:"expires_at,omitempty"`
+	ActualKey        string            `json:"actual_key,omitempty"`
+	Provisioned      bool              `json:"provisioned,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
@@ -157,20 +165,22 @@ type ProvisioningProvider struct {
 
 func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	resp := KeyResponse{
-		Key:            k.PK,
-		Provider:       k.Provider,
-		Description:    k.Description,
-		DailyCostLimit: k.DailyCostLimit,
-		Enabled:        k.Enabled,
-		Tags:           k.Tags,
-		RedactPII:      k.RedactPII,
-		RateLimitRPM:   k.RateLimitRPM,
-		RateLimitTPM:   k.RateLimitTPM,
-		RateLimitRPD:   k.RateLimitRPD,
-		RateLimitTPD:   k.RateLimitTPD,
-		CreatedAt:      k.CreatedAt,
-		UpdatedAt:      k.UpdatedAt,
-		ExpiresAt:      k.ExpiresAt,
+		Key:              k.PK,
+		Provider:         k.Provider,
+		Description:      k.Description,
+		DailyCostLimit:   k.DailyCostLimit,
+		MonthlyCostLimit: k.MonthlyCostLimit,
+		OwnerEmail:       k.OwnerEmail,
+		Enabled:          k.Enabled,
+		Tags:             k.Tags,
+		RedactPII:        k.RedactPII,
+		RateLimitRPM:     k.RateLimitRPM,
+		RateLimitTPM:     k.RateLimitTPM,
+		RateLimitRPD:     k.RateLimitRPD,
+		RateLimitTPD:     k.RateLimitTPD,
+		CreatedAt:        k.CreatedAt,
+		UpdatedAt:        k.UpdatedAt,
+		ExpiresAt:        k.ExpiresAt,
 	}
 	if includeActualKey {
 		resp.ActualKey = maskedActualKey

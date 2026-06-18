@@ -196,6 +196,8 @@ type AdminDashboardConfig struct {
 	Users AdminUsersConfig `yaml:"users"`
 	// EditorLimits caps what editors may set when creating/updating keys.
 	EditorLimits EditorLimitsConfig `yaml:"editor_limits"`
+	// ViewerLimits caps viewer personal-key permissions.
+	ViewerLimits ViewerLimitsConfig `yaml:"viewer_limits"`
 }
 
 // AdminUsersConfig configures the admin user DynamoDB store.
@@ -216,6 +218,13 @@ type EditorLimitsConfig struct {
 	// MaxDailyCostLimitCents is the maximum daily_cost_limit (cents) editors
 	// may set on keys. Zero means no cap.
 	MaxDailyCostLimitCents int64 `yaml:"max_daily_cost_limit_cents"`
+}
+
+// ViewerLimitsConfig caps viewer personal-key permissions.
+type ViewerLimitsConfig struct {
+	// PersonalMonthlyCostLimitCents is the monthly spend cap (cents) applied
+	// to viewer personal keys. Defaults to 1000 when unset.
+	PersonalMonthlyCostLimitCents int64 `yaml:"personal_monthly_cost_limit_cents"`
 }
 
 // AdminRollupsConfig configures daily rollups for the admin UI.
@@ -439,7 +448,9 @@ type APIKeyManagementConfig struct {
 
 // KeyProvisioningConfig controls server-side upstream API key creation.
 type KeyProvisioningConfig struct {
-	Enabled   bool                        `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// DevFake mints local-only upstream credentials without calling vendor APIs.
+	DevFake   bool                        `yaml:"dev_fake,omitempty"`
 	OpenAI    OpenAIProvisioningConfig    `yaml:"openai,omitempty"`
 	Gemini    GeminiProvisioningConfig    `yaml:"gemini,omitempty"`
 	Anthropic AnthropicProvisioningConfig `yaml:"anthropic,omitempty"`
@@ -993,6 +1004,10 @@ func (c *YAMLConfig) Validate() error {
 
 	if c.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents < 0 {
 		return fmt.Errorf("invalid admin_dashboard configuration: editor_limits.max_daily_cost_limit_cents cannot be negative")
+	}
+
+	if c.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents < 0 {
+		return fmt.Errorf("invalid admin_dashboard configuration: viewer_limits.personal_monthly_cost_limit_cents cannot be negative")
 	}
 
 	return nil

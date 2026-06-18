@@ -18,7 +18,7 @@ import {
 } from "../../components/ui/data-source";
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
-import { useCost, useKey, usePII, useRateLimits } from "../../hooks/queries";
+import { useCost, useKey, useMe, usePII, useRateLimits } from "../../hooks/queries";
 import { aggCostByKey, DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
 import { formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
@@ -30,6 +30,13 @@ import {
   rateLimitOverrideForKey,
   rateLimitUsageForKey,
 } from "../../lib/key-stats";
+
+function formatMonthlyCostLimit(cents?: number): string {
+  if (!cents || cents <= 0) {
+    return "Unlimited";
+  }
+  return `$${(cents / 100).toFixed(2)} / month`;
+}
 
 function piiLabel(value: boolean | null | undefined): string {
   if (value === true) return "On";
@@ -43,6 +50,8 @@ function formatLimit(value?: number): string {
 
 export default function KeyDetailPage() {
   const { key: keyParam } = useParams<{ key: string }>();
+  const { data: me } = useMe();
+  const isViewer = me?.role === "viewer";
   const keyValue = keyParam ? decodeKeyRouteParam(keyParam) : undefined;
   const validKey = isProxyKey(keyValue) ? keyValue : undefined;
 
@@ -128,12 +137,18 @@ export default function KeyDetailPage() {
         title={title}
         description={
           notFound
-            ? "This key is not registered (it may have been deleted). Live stats below are matched by masked key id."
-            : keyRecord?.description
-              ? masked
-              : "Per-key cost, PII, and rate-limit stats."
+            ? "This key is not registered (it may have been deleted)."
+            : isViewer
+              ? "Your personal proxy key."
+              : keyRecord?.description
+                ? masked
+                : "Per-key cost, PII, and rate-limit stats."
         }
-        actions={<LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />}
+        actions={
+          isViewer ? undefined : (
+            <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
+          )
+        }
       />
 
       {notFound ? (
@@ -153,7 +168,9 @@ export default function KeyDetailPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <ProviderBadge provider={keyRecord.provider} />
                 <StatusBadge active={keyRecord.enabled} activeLabel="Enabled" inactiveLabel="Disabled" />
-                <span className="badge badge-ghost badge-sm">PII {piiLabel(keyRecord.redact_pii)}</span>
+                {!isViewer ? (
+                  <span className="badge badge-ghost badge-sm">PII {piiLabel(keyRecord.redact_pii)}</span>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <MaskedKey value={keyRecord.key} />
@@ -164,18 +181,24 @@ export default function KeyDetailPage() {
               ) : null}
             </div>
             <div className="grid gap-3 text-sm sm:grid-cols-2">
-              <Meta label="Daily cost limit" value={formatDailyCostLimit(keyRecord.daily_cost_limit)} />
-              <Meta
-                label="Rate limits"
-                value={
-                  [
-                    keyRecord.rate_limit_rpm ? `${keyRecord.rate_limit_rpm} rpm` : null,
-                    keyRecord.rate_limit_tpm ? `${keyRecord.rate_limit_tpm.toLocaleString()} tpm` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "—"
-                }
-              />
+              {isViewer ? (
+                <Meta label="Monthly cost limit" value={formatMonthlyCostLimit(keyRecord.monthly_cost_limit)} />
+              ) : (
+                <>
+                  <Meta label="Daily cost limit" value={formatDailyCostLimit(keyRecord.daily_cost_limit)} />
+                  <Meta
+                    label="Rate limits"
+                    value={
+                      [
+                        keyRecord.rate_limit_rpm ? `${keyRecord.rate_limit_rpm} rpm` : null,
+                        keyRecord.rate_limit_tpm ? `${keyRecord.rate_limit_tpm.toLocaleString()} tpm` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "—"
+                    }
+                  />
+                </>
+              )}
               <Meta label="Created" value={new Date(keyRecord.created_at).toLocaleString()} />
               <Meta label="Updated" value={new Date(keyRecord.updated_at).toLocaleString()} />
             </div>
@@ -183,6 +206,8 @@ export default function KeyDetailPage() {
         </div>
       ) : null}
 
+      {!isViewer ? (
+        <>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <LiveStat title="Spend today" value={formatUsd(spendTodayValue)} hint="tracked cost" source={keyCostSource} />
         <LiveStat
@@ -257,6 +282,8 @@ export default function KeyDetailPage() {
         </div>
         <KeyRateUsageTable rows={rateUsage} />
       </Section>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
@@ -157,4 +158,41 @@ func TestHandleDevLogin_PreservesExistingAdminRole(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.Default()
+}
+
+func TestSanitizeRedirect_Localhost(t *testing.T) {
+	safe, target := sanitizeRedirect("http://localhost:5173/admin/keys", "http://localhost:5173")
+	if !safe || target != "http://localhost:5173/admin/keys" {
+		t.Fatalf("sanitizeRedirect = %v %q", safe, target)
+	}
+}
+
+func TestHandleLogin_StoresOAuthRedirect(t *testing.T) {
+	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "test-secret-at-least-32-bytes-long")
+	t.Setenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID", "test-client")
+	t.Setenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET", "test-secret")
+
+	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
+		DevBypassLogin: true,
+		DevCORSOrigin:  "http://localhost:5173",
+	}, nil)
+	if err != nil {
+		t.Fatalf("newAuthenticator: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/auth/login?redirect="+url.QueryEscape("http://localhost:5173/admin/keys"), nil)
+	rec := httptest.NewRecorder()
+	auth.handleLogin(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	session, err := auth.sessionStore.Get(req, sessionName)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	stored, _ := session.Values[sessionOAuthRedirect].(string)
+	if stored != "http://localhost:5173/admin/keys" {
+		t.Fatalf("stored redirect = %q", stored)
+	}
 }

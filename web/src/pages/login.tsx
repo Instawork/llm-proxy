@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { authBaseUrl, baseUrl } from "../client";
 import LLMProxyLogo from "../components/llm-proxy-logo";
 import { useToast } from "../components/ui/toast";
+import { adminAbsoluteUrl, adminAppPath } from "../lib/admin-path";
 import type { AdminRole } from "../types";
 
 const DEV_ROLES: AdminRole[] = ["viewer", "editor", "admin"];
@@ -23,20 +24,20 @@ export default function LoginPage() {
   const afterLoginPath = () => {
     const redirect = params.get("redirect");
     if (redirect && redirect.startsWith("/")) {
-      return redirect;
+      return adminAppPath(redirect.split("?")[0] ?? redirect, redirect.includes("?") ? redirect.slice(redirect.indexOf("?")) : "");
     }
     return "/";
   };
 
   const onGoogleLogin = () => {
-    const redirect = encodeURIComponent(`${window.location.origin}/admin${afterLoginPath()}`);
+    const redirect = encodeURIComponent(adminAbsoluteUrl(afterLoginPath()));
     window.location.href = `${authBaseUrl}/admin/auth/login?redirect=${redirect}`;
   };
 
   const onDevLogin = async () => {
     setLoading(true);
     try {
-      const redirect = `${window.location.origin}/admin${afterLoginPath()}`;
+      const redirect = adminAbsoluteUrl(afterLoginPath());
       const response = await fetch(`${baseUrl}/admin/auth/dev-login`, {
         method: "POST",
         credentials: "include",
@@ -47,7 +48,7 @@ export default function LoginPage() {
         throw new Error(await response.text());
       }
       const body = (await response.json()) as { redirect?: string };
-      window.location.href = body.redirect ?? `${window.location.origin}/admin${afterLoginPath()}`;
+      window.location.href = body.redirect ?? redirect;
     } catch (err) {
       push(err instanceof Error ? err.message : "Dev login failed", "error");
     } finally {

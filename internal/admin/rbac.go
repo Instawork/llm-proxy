@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
+	"github.com/Instawork/llm-proxy/internal/config"
 )
 
 func (a *authenticator) userRole(r *http.Request) (adminusers.Role, error) {
@@ -78,6 +79,20 @@ func (h *handler) editorMaxDailyCostCents() int64 {
 		return 0
 	}
 	return h.deps.YAMLConfig.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents
+}
+
+func viewerPersonalMonthlyLimitFromConfig(cfg config.ViewerLimitsConfig) int64 {
+	if cfg.PersonalMonthlyCostLimitCents > 0 {
+		return cfg.PersonalMonthlyCostLimitCents
+	}
+	return 1000
+}
+
+func (h *handler) viewerPersonalMonthlyLimit() int64 {
+	if h.deps.YAMLConfig == nil {
+		return 1000
+	}
+	return viewerPersonalMonthlyLimitFromConfig(h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits)
 }
 
 func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {

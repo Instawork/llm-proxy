@@ -193,6 +193,59 @@ func (b *RecorderBinding) AdjustFleetKeyReservation(ctx context.Context, metric,
 	return s.AddKeyReservation(ctx, metric, day, keyID, deltaUSD)
 }
 
+// FleetKeyMonthlySpendUSD returns the fleet-wide monthly spend (USD) recorded
+// across all instances for keyID on the given metric/month.
+func (b *RecorderBinding) FleetKeyMonthlySpendUSD(ctx context.Context, metric, month, keyID string) (float64, bool, error) {
+	s, _ := b.deps()
+	if s == nil {
+		return 0, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	v, err := s.KeyMonthlySpendUSD(ctx, metric, month, keyID)
+	if err != nil {
+		return 0, true, err
+	}
+	return v, true, nil
+}
+
+// ApplyFleetMonthlyKeySpend atomically folds spendUSD into the monthly per-key
+// hash. No-op when unbound.
+func (b *RecorderBinding) ApplyFleetMonthlyKeySpend(ctx context.Context, metric, month, keyID string, spendUSD float64) error {
+	s, _ := b.deps()
+	if s == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	return s.ApplyMonthlyKeySpend(ctx, metric, month, keyID, spendUSD)
+}
+
+// ReserveFleetKeyMonthlySpend atomically reserves estimateUSD for keyID against
+// its monthly cap across the fleet.
+func (b *RecorderBinding) ReserveFleetKeyMonthlySpend(ctx context.Context, metric, month, keyID string, estimateUSD float64, limitCents int64) (allowed, bound bool, err error) {
+	s, _ := b.deps()
+	if s == nil {
+		return false, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	allowed, err = s.ReserveKeyMonthlySpend(ctx, metric, month, keyID, estimateUSD, limitCents)
+	return allowed, true, err
+}
+
+// AdjustFleetKeyMonthlyReservation adjusts keyID's outstanding monthly
+// reservation by deltaUSD (negative to release). No-op when unbound.
+func (b *RecorderBinding) AdjustFleetKeyMonthlyReservation(ctx context.Context, metric, month, keyID string, deltaUSD float64) error {
+	s, _ := b.deps()
+	if s == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, mergeHistoryTimeout)
+	defer cancel()
+	return s.AddKeyMonthlyReservation(ctx, metric, month, keyID, deltaUSD)
+}
+
 // FlushRollup forces pending Redis writes (for shutdown; no-op if unbound).
 func (b *RecorderBinding) FlushRollup() {
 	if _, p := b.deps(); p != nil {

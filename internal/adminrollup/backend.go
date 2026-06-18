@@ -3,11 +3,18 @@ package adminrollup
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
 )
+
+var hincrbyfloatScript = redis.NewScript(`
+local newVal = redis.call("HINCRBYFLOAT", KEYS[1], ARGV[1], ARGV[2])
+redis.call("EXPIRE", KEYS[1], tonumber(ARGV[3]))
+return newVal
+`)
 
 // Backend kinds.
 const (
@@ -32,6 +39,8 @@ type backend interface {
 	// hget returns a single numeric hash field. A missing key/field yields
 	// (0, nil) — absence is not an error for read-through callers.
 	hget(ctx context.Context, key, field string) (float64, error)
+	// hincrbyfloat atomically increments a hash field and sets key TTL.
+	hincrbyfloat(ctx context.Context, key, field string, delta float64, ttl time.Duration) error
 	trySetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error)
 	// reserveUnderLimit atomically reserves estimate against (recorded spend +
 	// outstanding reservations) vs limitCents. Returns true when reserved.
@@ -107,6 +116,22 @@ func (b *redisBackend) hget(ctx context.Context, key, field string) (float64, er
 		return 0, err
 	}
 	return v, nil
+}
+
+func (b *redisBackend) hincrbyfloat(ctx context.Context, key, field string, delta float64, ttl time.Duration) error {
+	ttlSec := int64(ttl / time.Second)
+	if ttl > 0 && ttlSec < 1 {
+		ttlSec = 1
+	}
+	_, err := hincrbyfloatScript.Run(
+		ctx,
+		b.rdb,
+		[]string{key},
+		field,
+		strconv.FormatFloat(delta, 'f', -1, 64),
+		ttlSec,
+	).Result()
+	return err
 }
 
 func (b *redisBackend) trySetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
@@ -208,6 +233,23 @@ func (b *memoryBackend) hget(_ context.Context, key, field string) (float64, err
 		return h[field], nil
 	}
 	return 0, nil
+}
+
+func (b *memoryBackend) hincrbyfloat(_ context.Context, key, field string, delta float64, ttl time.Duration) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h := b.hash[key]
+	if h == nil {
+		h = make(memHash)
+		b.hash[key] = h
+	}
+	h[field] += delta
+	exp := time.Time{}
+	if ttl > 0 {
+		exp = time.Now().Add(ttl)
+	}
+	b.data[key] = memEntry{value: "hash", expiresAt: exp}
+	return nil
 }
 
 func (b *memoryBackend) trySetNX(_ context.Context, key, value string, ttl time.Duration) (bool, error) {

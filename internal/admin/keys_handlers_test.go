@@ -3,16 +3,48 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeProvisioner struct {
+	key string
+}
+
+func (f *fakeProvisioner) Provision(_ context.Context, _ provision.ProvisionRequest) (provision.Result, error) {
+	return provision.Result{
+		ActualKey:    f.key,
+		UpstreamID:   "upstream-1",
+		UpstreamKind: provision.UpstreamKindOpenAIServiceAccount,
+	}, nil
+}
+
+func (f *fakeProvisioner) Revoke(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (f *fakeProvisioner) PoolStatus(_ context.Context) (int, bool) {
+	return 1, true
+}
+
+func withTestProvisioner(t *testing.T, h *handler, providers ...string) {
+	t.Helper()
+	byProvider := map[string]provision.Provisioner{}
+	for _, p := range providers {
+		byProvider[p] = &fakeProvisioner{key: "sk-provisioned-" + p}
+	}
+	h.deps.KeyProvisioner = provision.NewManager(slog.Default(), byProvider)
+}
 
 func boolPtr(v bool) *bool { return &v }
 
@@ -227,4 +259,107 @@ func TestPublicBaseURL_YAMLOverride(t *testing.T) {
 	}}}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	assert.Equal(t, "https://llm.example.com", h.publicBaseURL(req))
+}
+
+func TestViewerPersonalKeys(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents = 1000
+	withTestProvisioner(t, h, "openai")
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+
+	listReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys", nil)
+	listRec := httptest.NewRecorder()
+	h.handleListKeys(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+	var listResp []KeyResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	assert.Empty(t, listResp)
+
+	manualBody, _ := json.Marshal(CreateKeyRequest{
+		Provider:  "openai",
+		ActualKey: "sk-viewer",
+	})
+	manualReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", manualBody)
+	manualRec := httptest.NewRecorder()
+	h.handleCreateKey(manualRec, manualReq)
+	assert.Equal(t, http.StatusBadRequest, manualRec.Code)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:      "openai",
+		Description:   "mine",
+		AutoProvision: true,
+	})
+	createReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)
+	createRec := httptest.NewRecorder()
+	h.handleCreateKey(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+
+	var created KeyResponse
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
+	assert.Equal(t, int64(1000), created.MonthlyCostLimit)
+	assert.Equal(t, "viewer@example.com", created.OwnerEmail)
+	assert.Equal(t, int64(0), created.DailyCostLimit)
+
+	dupReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)
+	dupRec := httptest.NewRecorder()
+	h.handleCreateKey(dupRec, dupReq)
+	assert.Equal(t, http.StatusConflict, dupRec.Code)
+
+	patchReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+created.Key, []byte(`{"enabled": false}`))
+	patchReq = mux.SetURLVars(patchReq, map[string]string{"key": created.Key})
+	patchRec := httptest.NewRecorder()
+	h.handleUpdateKey(patchRec, patchReq)
+	assert.Equal(t, http.StatusForbidden, patchRec.Code)
+
+	patchDescReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+created.Key, []byte(`{"description": "updated"}`))
+	patchDescReq = mux.SetURLVars(patchDescReq, map[string]string{"key": created.Key})
+	patchDescRec := httptest.NewRecorder()
+	h.handleUpdateKey(patchDescRec, patchDescReq)
+	require.Equal(t, http.StatusOK, patchDescRec.Code)
+
+	getOrgReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+orgKey.PK, nil)
+	getOrgReq = mux.SetURLVars(getOrgReq, map[string]string{"key": orgKey.PK})
+	getOrgRec := httptest.NewRecorder()
+	h.handleGetKey(getOrgRec, getOrgReq)
+	assert.Equal(t, http.StatusForbidden, getOrgRec.Code)
+
+	delReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+created.Key, nil)
+	delReq = mux.SetURLVars(delReq, map[string]string{"key": created.Key})
+	delRec := httptest.NewRecorder()
+	h.handleDeleteKey(delRec, delReq)
+	assert.Equal(t, http.StatusNoContent, delRec.Code)
+}
+
+func TestEditorCreateKeyRequiresAutoProvision(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	ctx := context.Background()
+	withTestProvisioner(t, h, "openai")
+	_, err := h.deps.UserStore.CreateUser(ctx, "editor@example.com", adminusers.RoleEditor)
+	require.NoError(t, err)
+
+	manualBody, _ := json.Marshal(CreateKeyRequest{
+		Provider:       "openai",
+		ActualKey:      "sk-editor",
+		DailyCostLimit: 1000,
+	})
+	manualReq := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", manualBody)
+	manualRec := httptest.NewRecorder()
+	h.handleCreateKey(manualRec, manualReq)
+	assert.Equal(t, http.StatusBadRequest, manualRec.Code)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:       "openai",
+		Description:    "editor key",
+		DailyCostLimit: 1000,
+		AutoProvision:  true,
+	})
+	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKey(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }

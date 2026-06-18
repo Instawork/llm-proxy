@@ -21,7 +21,7 @@ func newFakeStore(t *testing.T) (*Store, *dynamodbfake.Server) {
 	t.Helper()
 	fake := dynamodbfake.New(t)
 	dynamodbfake.UseFakeDynamo(t, fake.URL())
-	store, err := NewStore(StoreConfig{TableName: "test-keys", Region: "us-west-2"})
+	store, err := NewStore(StoreConfig{TableName: "test-keys", Region: "us-west-2", AutoCreateTable: true})
 	require.NoError(t, err)
 	return store, fake
 }
@@ -375,4 +375,59 @@ func TestStore_ListKeys_ScanError(t *testing.T) {
 	fake.FailOnce("Scan", errors.New("InternalServerError"))
 	_, err := store.ListKeys(context.Background(), "")
 	require.Error(t, err)
+}
+
+func TestStore_EnsureOwnerProviderIndexOnExistingTable(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+
+	store, err := NewStore(StoreConfig{
+		TableName:       "test-keys",
+		Region:          "us-west-2",
+		AutoCreateTable: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	_, err = store.ListKeysByOwner(context.Background(), "viewer@example.com", "")
+	require.NoError(t, err)
+}
+
+func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+
+	key, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-viewer", "mine", 1000, KeyCreateMeta{})
+	require.NoError(t, err)
+	assert.Equal(t, "viewer@example.com", key.OwnerEmail)
+	assert.Equal(t, int64(1000), key.MonthlyCostLimit)
+	assert.Equal(t, int64(0), key.DailyCostLimit)
+	assert.Equal(t, "true", key.Tags["personal"])
+
+	existing, err := store.GetOwnerKeyByProvider(ctx, "viewer@example.com", "openai")
+	require.NoError(t, err)
+	require.NotNil(t, existing)
+	assert.Equal(t, key.PK, existing.PK)
+
+	_, err = store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-dup", "", 1000, KeyCreateMeta{})
+	require.ErrorIs(t, err, ErrOwnerKeyExists)
+
+	require.NoError(t, store.DeleteKey(ctx, key.PK))
+
+	recreated, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-viewer-2", "mine again", 1000, KeyCreateMeta{})
+	require.NoError(t, err)
+	assert.NotEqual(t, key.PK, recreated.PK)
+
+	keys, err := store.ListKeysByOwner(ctx, "viewer@example.com", "")
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.Equal(t, recreated.PK, keys[0].PK)
+
+	filtered, err := store.ListKeysByOwner(ctx, "viewer@example.com", "anthropic")
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+
+	other, err := store.ListKeysByOwner(ctx, "other@example.com", "")
+	require.NoError(t, err)
+	assert.Empty(t, other)
 }

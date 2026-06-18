@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	costLimitReasonHeader = "X-Cost-Limit-Reason"
-	costLimitCentsHeader  = "X-Cost-Limit-Cents"
-	costSpendCentsHeader  = "X-Cost-Spend-Cents"
-	costLimitExceeded     = "daily_cost_limit_exceeded"
-	costLimitDegraded     = "daily_cost_limit_read_degraded"
+	costLimitReasonHeader    = "X-Cost-Limit-Reason"
+	costLimitCentsHeader     = "X-Cost-Limit-Cents"
+	costSpendCentsHeader     = "X-Cost-Spend-Cents"
+	costLimitExceeded        = "daily_cost_limit_exceeded"
+	costLimitMonthlyExceeded = "monthly_cost_limit_exceeded"
+	costLimitDegraded        = "daily_cost_limit_read_degraded"
 
 	// defaultReservationGrace is how long a reconciled reservation lingers
 	// after a request completes before it is released. It must comfortably
@@ -43,6 +44,11 @@ type KeySpendReader interface {
 	KeySpendUSD(ctx context.Context, maskedKeyID string) float64
 }
 
+// KeyMonthlySpendReader returns rolling per-key spend for the current UTC month.
+type KeyMonthlySpendReader interface {
+	KeyMonthlySpendUSD(ctx context.Context, maskedKeyID string) float64
+}
+
 // KeySpendReaderDetailed is an optional extension of KeySpendReader that also
 // reports whether the spend read was degraded — i.e. a fleet rollup store is
 // bound but its (Redis) read failed, so the returned spend is local-only and
@@ -50,6 +56,11 @@ type KeySpendReader interface {
 // middleware fail closed when fleet visibility is lost.
 type KeySpendReaderDetailed interface {
 	KeySpendUSDDetailed(ctx context.Context, maskedKeyID string) (spendUSD float64, degraded bool)
+}
+
+// KeyMonthlySpendReaderDetailed is the monthly counterpart of KeySpendReaderDetailed.
+type KeyMonthlySpendReaderDetailed interface {
+	KeyMonthlySpendUSDDetailed(ctx context.Context, maskedKeyID string) (spendUSD float64, degraded bool)
 }
 
 // KeySpendReserver is an optional extension that enables synchronous,
@@ -61,6 +72,12 @@ type KeySpendReaderDetailed interface {
 type KeySpendReserver interface {
 	ReserveKeySpend(ctx context.Context, maskedKeyID string, estimateUSD float64, limitCents int64) (allowed, reservationActive bool)
 	AdjustKeyReservation(ctx context.Context, maskedKeyID string, deltaUSD float64)
+}
+
+// KeyMonthlySpendReserver is the monthly counterpart of KeySpendReserver.
+type KeyMonthlySpendReserver interface {
+	ReserveKeyMonthlySpend(ctx context.Context, maskedKeyID string, estimateUSD float64, limitCents int64) (allowed, reservationActive bool)
+	AdjustKeyMonthlyReservation(ctx context.Context, maskedKeyID string, deltaUSD float64)
 }
 
 // CostEstimator returns the USD cost for a (provider, model) call with the
@@ -89,15 +106,15 @@ type CostLimitOptions struct {
 }
 
 // CostLimitMiddleware blocks provider requests when an iw: key's recorded daily
-// spend has reached its daily_cost_limit (cents). A limit of zero (or any
-// non-positive value) means unlimited.
+// and/or monthly spend has reached its configured cost limits (cents). A limit
+// of zero (or any non-positive value) means unlimited for that window.
 //
-// When the spend reader also supports reservations (KeySpendReserver) and a
-// cost Estimate function is configured, enforcement is synchronous and
-// cluster-wide: an estimated cost is atomically reserved before the request,
-// reconciled to the actual cost afterward, and released after a grace period.
-// Otherwise it falls back to reading recorded spend (which can briefly
-// overshoot under concurrency / async tracking lag).
+// When the spend reader also supports reservations (KeySpendReserver /
+// KeyMonthlySpendReserver) and a cost Estimate function is configured,
+// enforcement is synchronous and cluster-wide: an estimated cost is atomically
+// reserved before the request, reconciled to the actual cost afterward, and
+// released after a grace period. Otherwise it falls back to reading recorded
+// spend (which can briefly overshoot under concurrency / async tracking lag).
 func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, opts ...CostLimitOptions) func(http.Handler) http.Handler {
 	if spend == nil {
 		return func(next http.Handler) http.Handler { return next }
@@ -107,7 +124,10 @@ func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, op
 		opt = opts[0]
 	}
 	detailed, _ := spend.(KeySpendReaderDetailed)
+	monthlyReader, _ := spend.(KeyMonthlySpendReader)
+	monthlyDetailed, _ := spend.(KeyMonthlySpendReaderDetailed)
 	reserver, _ := spend.(KeySpendReserver)
+	monthlyReserver, _ := spend.(KeyMonthlySpendReserver)
 	grace := opt.ReservationGrace
 	if grace <= 0 {
 		grace = defaultReservationGrace
@@ -122,7 +142,7 @@ func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, op
 			}
 
 			rec, ok := apikeys.FromContext(r.Context())
-			if !ok || rec == nil || rec.DailyCostLimit <= 0 {
+			if !ok || rec == nil || !hasCostLimit(rec) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -130,17 +150,21 @@ func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, op
 			masked := MaskKeyID(rec.PK)
 
 			// Reservation path: synchronous, cluster-wide enforcement.
-			if reserver != nil && opt.Estimate != nil {
-				if handled := tryReserveAndServe(w, r, next, prov, rec, masked, reserver, opt, grace); handled {
+			if opt.Estimate != nil && (reserver != nil || monthlyReserver != nil) {
+				if handled := tryReserveAndServe(w, r, next, prov, rec, masked, reserver, monthlyReserver, opt, grace); handled {
 					return
 				}
 				// reservationActive was false (unbound store / backend error):
 				// fall through to read-only enforcement below.
 			}
 
-			enforceReadOnly(w, r, next, prov, rec, masked, spend, detailed, opt)
+			enforceReadOnly(w, r, next, prov, rec, masked, spend, detailed, monthlyReader, monthlyDetailed, opt)
 		})
 	}
+}
+
+func hasCostLimit(rec *apikeys.APIKey) bool {
+	return rec.DailyCostLimit > 0 || rec.MonthlyCostLimit > 0
 }
 
 // tryReserveAndServe runs the reservation enforcement path. It returns true
@@ -149,36 +173,73 @@ func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, op
 func tryReserveAndServe(
 	w http.ResponseWriter, r *http.Request, next http.Handler,
 	prov providers.Provider, rec *apikeys.APIKey, masked string,
-	reserver KeySpendReserver, opt CostLimitOptions, grace time.Duration,
+	reserver KeySpendReserver, monthlyReserver KeyMonthlySpendReserver,
+	opt CostLimitOptions, grace time.Duration,
 ) bool {
+	needDaily := rec.DailyCostLimit > 0
+	needMonthly := rec.MonthlyCostLimit > 0
+
 	estInput, model := providers.EstimateRequestTokens(r, opt.Estimation, prov)
 	estimate := opt.Estimate(prov.GetName(), model, estInput, defaultEstimateOutputTokens)
 	if estimate <= 0 {
-		// Nothing meaningful to reserve (no pricing for this model); let the
-		// read-only path handle enforcement.
 		return false
 	}
 
-	allowed, active := reserver.ReserveKeySpend(r.Context(), masked, estimate, rec.DailyCostLimit)
-	if !active {
-		return false
+	var dailyReserved bool
+	if needDaily {
+		if reserver == nil {
+			return false
+		}
+		allowed, active := reserver.ReserveKeySpend(r.Context(), masked, estimate, rec.DailyCostLimit)
+		if !active {
+			return false
+		}
+		if !allowed {
+			writeCostBlocked(w, prov, rec, rec.DailyCostLimit, costLimitExceeded, "daily cost limit exceeded")
+			return true
+		}
+		dailyReserved = true
 	}
-	if !allowed {
-		writeCostBlocked(w, prov, rec, rec.DailyCostLimit)
-		return true
+
+	if needMonthly {
+		if monthlyReserver == nil {
+			if dailyReserved {
+				reserver.AdjustKeyReservation(context.Background(), masked, -estimate)
+			}
+			return false
+		}
+		allowed, active := monthlyReserver.ReserveKeyMonthlySpend(r.Context(), masked, estimate, rec.MonthlyCostLimit)
+		if !active {
+			if dailyReserved {
+				reserver.AdjustKeyReservation(context.Background(), masked, -estimate)
+			}
+			return false
+		}
+		if !allowed {
+			if dailyReserved {
+				reserver.AdjustKeyReservation(context.Background(), masked, -estimate)
+			}
+			writeCostBlocked(w, prov, rec, rec.MonthlyCostLimit, costLimitMonthlyExceeded, "monthly cost limit exceeded")
+			return true
+		}
 	}
 
 	sw := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
 	next.ServeHTTP(sw, r)
 
-	// Reconcile the reservation to the actual cost, then schedule its release
-	// after the grace window (by which point the async tracker has recorded
-	// the actual spend into by_key).
 	actual := reconcileActualCost(w, sw, prov.GetName(), model, estimate, opt.Estimate)
-	reserver.AdjustKeyReservation(context.Background(), masked, actual-estimate)
-	time.AfterFunc(grace, func() {
-		reserver.AdjustKeyReservation(context.Background(), masked, -actual)
-	})
+	if dailyReserved {
+		reserver.AdjustKeyReservation(context.Background(), masked, actual-estimate)
+		time.AfterFunc(grace, func() {
+			reserver.AdjustKeyReservation(context.Background(), masked, -actual)
+		})
+	}
+	if needMonthly && monthlyReserver != nil {
+		monthlyReserver.AdjustKeyMonthlyReservation(context.Background(), masked, actual-estimate)
+		time.AfterFunc(grace, func() {
+			monthlyReserver.AdjustKeyMonthlyReservation(context.Background(), masked, -actual)
+		})
+	}
 	return true
 }
 
@@ -210,57 +271,95 @@ func reconcileActualCost(w http.ResponseWriter, sw *statusCapturingWriter, provi
 func enforceReadOnly(
 	w http.ResponseWriter, r *http.Request, next http.Handler,
 	prov providers.Provider, rec *apikeys.APIKey, masked string,
-	spend KeySpendReader, detailed KeySpendReaderDetailed, opt CostLimitOptions,
+	spend KeySpendReader, detailed KeySpendReaderDetailed,
+	monthlyReader KeyMonthlySpendReader, monthlyDetailed KeyMonthlySpendReaderDetailed,
+	opt CostLimitOptions,
 ) {
-	var spendUSD float64
-	var degraded bool
-	if detailed != nil {
-		spendUSD, degraded = detailed.KeySpendUSDDetailed(r.Context(), masked)
-	} else {
-		spendUSD = spend.KeySpendUSD(r.Context(), masked)
-	}
-
-	if degraded {
-		if opt.FailClosedOnReadError {
-			w.Header().Set(costLimitReasonHeader, costLimitDegraded)
-			log.Printf("costlimit: fail-closed (fleet spend read degraded) provider=%s key_prefix=%s limit_cents=%d",
+	if rec.DailyCostLimit > 0 {
+		var spendUSD float64
+		var degraded bool
+		if detailed != nil {
+			spendUSD, degraded = detailed.KeySpendUSDDetailed(r.Context(), masked)
+		} else {
+			spendUSD = spend.KeySpendUSD(r.Context(), masked)
+		}
+		if degraded {
+			if opt.FailClosedOnReadError {
+				writeCostDegraded(w, prov, rec, rec.DailyCostLimit)
+				return
+			}
+			log.Printf("costlimit: WARN fleet spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
 				prov.GetName(), prefix(rec.PK), rec.DailyCostLimit)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "cost limit temporarily unverifiable",
-			})
+		}
+		spendCents := int64(math.Ceil(spendUSD * 100))
+		if spendCents >= rec.DailyCostLimit {
+			writeCostBlockedWithSpend(w, prov, rec, rec.DailyCostLimit, spendCents, costLimitExceeded, "daily cost limit exceeded")
 			return
 		}
-		log.Printf("costlimit: WARN fleet spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
-			prov.GetName(), prefix(rec.PK), rec.DailyCostLimit)
 	}
 
-	spendCents := int64(math.Ceil(spendUSD * 100))
-	if spendCents < rec.DailyCostLimit {
-		next.ServeHTTP(w, r)
-		return
+	if rec.MonthlyCostLimit > 0 {
+		if monthlyReader == nil {
+			if opt.FailClosedOnReadError {
+				writeCostDegraded(w, prov, rec, rec.MonthlyCostLimit)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		var spendUSD float64
+		var degraded bool
+		if monthlyDetailed != nil {
+			spendUSD, degraded = monthlyDetailed.KeyMonthlySpendUSDDetailed(r.Context(), masked)
+		} else {
+			spendUSD = monthlyReader.KeyMonthlySpendUSD(r.Context(), masked)
+		}
+		if degraded {
+			if opt.FailClosedOnReadError {
+				writeCostDegraded(w, prov, rec, rec.MonthlyCostLimit)
+				return
+			}
+			log.Printf("costlimit: WARN fleet monthly spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
+				prov.GetName(), prefix(rec.PK), rec.MonthlyCostLimit)
+		}
+		spendCents := int64(math.Ceil(spendUSD * 100))
+		if spendCents >= rec.MonthlyCostLimit {
+			writeCostBlockedWithSpend(w, prov, rec, rec.MonthlyCostLimit, spendCents, costLimitMonthlyExceeded, "monthly cost limit exceeded")
+			return
+		}
 	}
-	writeCostBlockedWithSpend(w, prov, rec, rec.DailyCostLimit, spendCents)
+
+	next.ServeHTTP(w, r)
 }
 
-func writeCostBlocked(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64) {
-	w.Header().Set(costLimitReasonHeader, costLimitExceeded)
-	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
-	log.Printf("costlimit: block (reserved) provider=%s key_prefix=%s limit_cents=%d",
+func writeCostDegraded(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64) {
+	w.Header().Set(costLimitReasonHeader, costLimitDegraded)
+	log.Printf("costlimit: fail-closed (fleet spend read degraded) provider=%s key_prefix=%s limit_cents=%d",
 		prov.GetName(), prefix(rec.PK), limitCents)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusPaymentRequired)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": "daily cost limit exceeded"})
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": "cost limit temporarily unverifiable",
+	})
 }
 
-func writeCostBlockedWithSpend(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents, spendCents int64) {
-	w.Header().Set(costLimitReasonHeader, costLimitExceeded)
+func writeCostBlocked(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64, reason, msg string) {
+	w.Header().Set(costLimitReasonHeader, reason)
 	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
-	w.Header().Set(costSpendCentsHeader, strconv.FormatInt(spendCents, 10))
-	log.Printf("costlimit: block provider=%s key_prefix=%s spend_cents=%d limit_cents=%d",
-		prov.GetName(), prefix(rec.PK), spendCents, limitCents)
+	log.Printf("costlimit: block (reserved) provider=%s key_prefix=%s limit_cents=%d reason=%s",
+		prov.GetName(), prefix(rec.PK), limitCents, reason)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusPaymentRequired)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": "daily cost limit exceeded"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func writeCostBlockedWithSpend(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents, spendCents int64, reason, msg string) {
+	w.Header().Set(costLimitReasonHeader, reason)
+	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
+	w.Header().Set(costSpendCentsHeader, strconv.FormatInt(spendCents, 10))
+	log.Printf("costlimit: block provider=%s key_prefix=%s spend_cents=%d limit_cents=%d reason=%s",
+		prov.GetName(), prefix(rec.PK), spendCents, limitCents, reason)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusPaymentRequired)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

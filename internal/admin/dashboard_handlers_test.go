@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/circuitstats"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -315,10 +316,15 @@ func TestRegisterRoutes_ServesDashboardAPI(t *testing.T) {
 	yamlCfg := config.GetDefaultYAMLConfig()
 	yamlCfg.Features.AdminDashboard.DevBypassLogin = true
 
+	userStore := testAdminUserStore(t)
+	_, err := userStore.CreateUser(context.Background(), "admin@example.com", adminusers.RoleAdmin)
+	require.NoError(t, err)
+
 	r := mux.NewRouter()
 	RegisterRoutes(r, Deps{
 		Logger:       testLogger(),
 		YAMLConfig:   yamlCfg,
+		UserStore:    userStore,
 		CostSummary:  costRec.Snapshot,
 		UsageSummary: usageRec.Snapshot,
 		PIISummary:   piiRec.Snapshot,

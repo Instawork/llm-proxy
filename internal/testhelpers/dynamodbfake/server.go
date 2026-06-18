@@ -38,11 +38,12 @@ import (
 // body, but adding the race detector to CI exposes the issue
 // immediately.
 type Server struct {
-	t      *testing.T
-	srv    *httptest.Server
-	mu     sync.Mutex
-	tables map[string]map[string]any // table -> pk -> item
-	failOn map[string]error          // op -> next-call error
+	t       *testing.T
+	srv     *httptest.Server
+	mu      sync.Mutex
+	tables  map[string]map[string]any  // table -> pk -> item
+	indexes map[string]map[string]bool // table -> gsi name -> present
+	failOn  map[string]error           // op -> next-call error
 }
 
 // New starts a fake DynamoDB server and registers a t.Cleanup hook that
@@ -50,9 +51,10 @@ type Server struct {
 func New(t *testing.T) *Server {
 	t.Helper()
 	f := &Server{
-		t:      t,
-		tables: make(map[string]map[string]any),
-		failOn: make(map[string]error),
+		t:       t,
+		tables:  make(map[string]map[string]any),
+		indexes: make(map[string]map[string]bool),
+		failOn:  make(map[string]error),
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
@@ -123,10 +125,39 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch op {
 	case "DescribeTable":
-		// Pretend the table always exists.  Skips the CreateTable +
-		// TableExistsWaiter dance during store constructors.
-		_, _ = w.Write([]byte(`{"Table":{"TableStatus":"ACTIVE","TableName":"x"}}`))
+		tableName, _ := input["TableName"].(string)
+		_ = json.NewEncoder(w).Encode(f.describeTableResponse(tableName))
 	case "CreateTable":
+		tableName, _ := input["TableName"].(string)
+		if f.indexes[tableName] == nil {
+			f.indexes[tableName] = make(map[string]bool)
+		}
+		if gsis, ok := input["GlobalSecondaryIndexes"].([]any); ok {
+			for _, raw := range gsis {
+				gsi, _ := raw.(map[string]any)
+				name, _ := gsi["IndexName"].(string)
+				if name != "" {
+					f.indexes[tableName][name] = true
+				}
+			}
+		}
+		_, _ = w.Write([]byte(`{"TableDescription":{"TableStatus":"ACTIVE"}}`))
+	case "UpdateTable":
+		tableName, _ := input["TableName"].(string)
+		if f.indexes[tableName] == nil {
+			f.indexes[tableName] = make(map[string]bool)
+		}
+		if updates, ok := input["GlobalSecondaryIndexUpdates"].([]any); ok {
+			for _, raw := range updates {
+				update, _ := raw.(map[string]any)
+				if create, ok := update["Create"].(map[string]any); ok {
+					name, _ := create["IndexName"].(string)
+					if name != "" {
+						f.indexes[tableName][name] = true
+					}
+				}
+			}
+		}
 		_, _ = w.Write([]byte(`{"TableDescription":{"TableStatus":"ACTIVE"}}`))
 	case "PutItem":
 		tableName, _ := input["TableName"].(string)
@@ -194,10 +225,29 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "Query", "Scan":
 		tableName, _ := input["TableName"].(string)
 		filterExpr, _ := input["FilterExpression"].(string)
+		keyCondExpr, _ := input["KeyConditionExpression"].(string)
 		attrValues, _ := input["ExpressionAttributeValues"].(map[string]any)
 		var items []any
 		for _, it := range f.tables[tableName] {
 			item, _ := it.(map[string]any)
+			if keyCondExpr != "" && strings.Contains(keyCondExpr, "owner_email") {
+				wantOwner := extractAttrValueString(attrValues, ":owner")
+				if wantOwner != "" && ExtractDDBString(item, "owner_email") != wantOwner {
+					continue
+				}
+				if strings.Contains(keyCondExpr, "provider =") {
+					wantProvider := extractAttrValueString(attrValues, ":provider")
+					if wantProvider != "" && !strings.EqualFold(ExtractDDBString(item, "provider"), wantProvider) {
+						continue
+					}
+				}
+			}
+			if keyCondExpr != "" && strings.Contains(keyCondExpr, "provider =") && !strings.Contains(keyCondExpr, "owner_email") {
+				wantProvider := extractAttrValueString(attrValues, ":provider")
+				if wantProvider != "" && !strings.EqualFold(ExtractDDBString(item, "provider"), wantProvider) {
+					continue
+				}
+			}
 			if filterExpr != "" && strings.Contains(filterExpr, "sk =") {
 				wantSK := extractAttrValueString(attrValues, ":profile")
 				if wantSK != "" && ExtractDDBString(item, "sk") != wantSK {
@@ -274,6 +324,23 @@ func extractAttrValueString(attrs map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func (f *Server) describeTableResponse(tableName string) map[string]any {
+	gsis := make([]any, 0)
+	for name := range f.indexes[tableName] {
+		gsis = append(gsis, map[string]any{
+			"IndexName":   name,
+			"IndexStatus": "ACTIVE",
+		})
+	}
+	return map[string]any{
+		"Table": map[string]any{
+			"TableStatus":            "ACTIVE",
+			"TableName":              tableName,
+			"GlobalSecondaryIndexes": gsis,
+		},
+	}
 }
 
 // UseFakeDynamo points the AWS SDK at the given URL via env vars and

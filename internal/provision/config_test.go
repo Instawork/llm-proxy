@@ -57,3 +57,32 @@ func TestRuntimeFromYAML_OpenAIProjectExpandEnv(t *testing.T) {
 
 	assert.Equal(t, "proj-from-env", rt.OpenAIProjectID)
 }
+
+func TestNewManagerFromRuntime_DevFake(t *testing.T) {
+	rt := RuntimeFromYAML(config.KeyProvisioningConfig{
+		Enabled: true,
+		DevFake: true,
+	})
+
+	mgr, err := NewManagerFromRuntime(rt, nil)
+	require.NoError(t, err)
+	require.True(t, mgr.Enabled())
+
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		p, ok := mgr.ForProvider(provider)
+		require.True(t, ok, provider)
+		res, provErr := p.Provision(t.Context(), ProvisionRequest{Name: "dev-test"})
+		require.NoError(t, provErr, provider)
+		assert.NotEmpty(t, res.ActualKey, provider)
+	}
+
+	anthropic, ok := mgr.ForProvider("anthropic")
+	require.True(t, ok)
+	tiered, ok := anthropic.(interface {
+		TierStatus() (defaultTier string, tiers []string)
+	})
+	require.True(t, ok)
+	defaultTier, tiers := tiered.TierStatus()
+	assert.Equal(t, TierMetered, defaultTier)
+	assert.ElementsMatch(t, []string{TierMetered, TierElevated, TierUnrestricted}, tiers)
+}

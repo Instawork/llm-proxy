@@ -12,7 +12,7 @@ import (
 func TestNewPerKeyOverrideProvider(t *testing.T) {
 	fake := dynamodbfake.New(t)
 	dynamodbfake.UseFakeDynamo(t, fake.URL())
-	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2"})
+	store, err := apikeys.NewStore(apikeys.StoreConfig{TableName: "test-keys", Region: "us-west-2", AutoCreateTable: true})
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}

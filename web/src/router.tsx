@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
+import DefaultRedirect from "./components/default-redirect";
 import AppShell from "./components/app-shell";
 import RequireRole from "./components/require-role";
 import ErrorBoundary from "./components/ui/error-boundary";
@@ -42,11 +43,46 @@ export default function Router() {
               </RequireRole>,
             )}
           />
-          <Route path="/usage" element={shell(<UsagePage />)} />
-          <Route path="/circuit" element={shell(<CircuitPage />)} />
-          <Route path="/rate-limits" element={shell(<RateLimitsPage />)} />
-          <Route path="/cost" element={shell(<CostPage />)} />
-          <Route path="/pii" element={shell(<PIIPage />)} />
+          <Route
+            path="/usage"
+            element={shell(
+              <RequireRole minRole="editor">
+                <UsagePage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/circuit"
+            element={shell(
+              <RequireRole minRole="editor">
+                <CircuitPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/rate-limits"
+            element={shell(
+              <RequireRole minRole="editor">
+                <RateLimitsPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/cost"
+            element={shell(
+              <RequireRole minRole="editor">
+                <CostPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/pii"
+            element={shell(
+              <RequireRole minRole="editor">
+                <PIIPage />
+              </RequireRole>,
+            )}
+          />
           <Route
             path="/config"
             element={shell(
@@ -58,7 +94,7 @@ export default function Router() {
           <Route
             path="/keys/:key"
             element={shell(
-              <RequireRole minRole="editor">
+              <RequireRole minRole="viewer">
                 <KeyDetailPage />
               </RequireRole>,
             )}
@@ -66,7 +102,7 @@ export default function Router() {
           <Route
             path="/keys"
             element={shell(
-              <RequireRole minRole="editor">
+              <RequireRole minRole="viewer">
                 <KeysPage />
               </RequireRole>,
             )}
@@ -79,7 +115,7 @@ export default function Router() {
               </RequireRole>,
             )}
           />
-          <Route path="*" element={<Navigate to="/usage" replace />} />
+          <Route path="*" element={<DefaultRedirect />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

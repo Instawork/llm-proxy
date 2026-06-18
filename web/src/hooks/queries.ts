@@ -53,7 +53,7 @@ export function useKeys(provider?: Provider) {
   return useQuery({
     queryKey: queryKeys.keys(provider),
     queryFn: () => apiFetch<APIKey[]>(`/admin/api/keys${query}`),
-    enabled: roleAtLeast(role, "editor"),
+    enabled: roleAtLeast(role, "viewer"),
   });
 }
 
@@ -63,7 +63,7 @@ export function useKey(key: string | undefined) {
   return useQuery({
     queryKey: queryKeys.key(key ?? ""),
     queryFn: () => apiFetch<APIKey>(`/admin/api/keys/${encodeURIComponent(key!)}`),
-    enabled: Boolean(key) && roleAtLeast(role, "editor"),
+    enabled: Boolean(key) && roleAtLeast(role, "viewer"),
   });
 }
 
@@ -78,22 +78,28 @@ export function useConfig() {
 }
 
 export function useHealth() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.health,
     // history=1 opts into the Redis-backed circuit daily_history; bare
     // /health (infra liveness probe) stays Redis-free.
     queryFn: () => apiFetch<HealthResponse>("/admin/api/health?history=1"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
 }
 
 export function useCircuitActivity() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.circuitActivity,
     queryFn: () => apiFetch<CircuitActivityResponse>("/admin/api/circuit-activity"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
@@ -105,45 +111,57 @@ export function useProvisioning() {
   return useQuery({
     queryKey: queryKeys.provisioning,
     queryFn: () => apiFetch<ProvisioningStatus>("/admin/api/provisioning"),
-    enabled: roleAtLeast(role, "editor"),
+    enabled: roleAtLeast(role, "viewer"),
   });
 }
 
 export function useRateLimits() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.rateLimits,
     queryFn: () => apiFetch<RateLimitsResponse>("/admin/api/rate-limits"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
 }
 
 export function useCost() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.cost,
     queryFn: () => apiFetch<CostResponse>("/admin/api/cost"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
 }
 
 export function useUsage() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.usage,
     queryFn: () => apiFetch<UsageResponse>("/admin/api/usage"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
 }
 
 export function usePII() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
   return useQuery({
     queryKey: queryKeys.pii,
     queryFn: () => apiFetch<PIIResponse>("/admin/api/pii"),
+    enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });

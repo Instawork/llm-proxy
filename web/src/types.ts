@@ -8,6 +8,10 @@ export interface EditorLimits {
   max_daily_cost_limit_cents: number;
 }
 
+export interface ViewerLimits {
+  personal_monthly_cost_limit_cents: number;
+}
+
 export interface AdminUser {
   email: string;
   name?: string;
@@ -15,6 +19,7 @@ export interface AdminUser {
   role?: AdminRole;
   can_bypass_pii_off_non_bedrock_policy?: boolean;
   editor_limits?: EditorLimits;
+  viewer_limits?: ViewerLimits;
 }
 
 export interface AdminUserRecord {
@@ -41,6 +46,8 @@ export interface APIKey {
   provider: Provider;
   description?: string;
   daily_cost_limit: number;
+  monthly_cost_limit?: number;
+  owner_email?: string;
   enabled: boolean;
   redact_pii?: PiiRedactSetting;
   rate_limit_rpm?: number;

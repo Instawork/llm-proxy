@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	sessionName        = "llm-proxy-admin-session"
-	sessionUserEmail   = "user_email"
-	sessionUserName    = "user_name"
-	sessionUserPicture = "user_picture"
-	sessionOAuthState  = "oauth_state"
+	sessionName          = "llm-proxy-admin-session"
+	sessionUserEmail     = "user_email"
+	sessionUserName      = "user_name"
+	sessionUserPicture   = "user_picture"
+	sessionOAuthState    = "oauth_state"
+	sessionOAuthRedirect = "oauth_redirect"
 )
 
 type authConfig struct {
@@ -48,6 +49,7 @@ type authenticator struct {
 	devFrontendOrigin string
 	userStore         *adminusers.Store
 	editorLimits      config.EditorLimitsConfig
+	viewerLimits      config.ViewerLimitsConfig
 	logger            *slog.Logger
 }
 
@@ -91,6 +93,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		devFrontendOrigin: adminCfg.DevCORSOrigin,
 		userStore:         userStore,
 		editorLimits:      adminCfg.EditorLimits,
+		viewerLimits:      adminCfg.ViewerLimits,
 		logger:            logger,
 	}
 
@@ -172,6 +175,11 @@ func (a *authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	session, _ := a.sessionStore.Get(r, sessionName)
 	session.Values[sessionOAuthState] = state
+	if redirectTarget := r.URL.Query().Get("redirect"); redirectTarget != "" {
+		if safe, target := sanitizeRedirect(redirectTarget, a.devFrontendOrigin); safe {
+			session.Values[sessionOAuthRedirect] = target
+		}
+	}
 	if err := session.Save(r, w); err != nil {
 		a.logger.Error("admin auth: failed to save oauth state", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -384,6 +392,12 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if a.devFrontendOrigin != "" {
 		redirectTarget = strings.TrimRight(a.devFrontendOrigin, "/") + "/admin/"
 	}
+	if stored, ok := session.Values[sessionOAuthRedirect].(string); ok && stored != "" {
+		if safe, target := sanitizeRedirect(stored, a.devFrontendOrigin); safe {
+			redirectTarget = target
+		}
+	}
+	delete(session.Values, sessionOAuthRedirect)
 	http.Redirect(w, r, redirectTarget, http.StatusFound)
 }
 
@@ -433,6 +447,11 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 	if role == string(adminusers.RoleEditor) && a.editorLimits.MaxDailyCostLimitCents > 0 {
 		resp.EditorLimits = &EditorLimitsResponse{
 			MaxDailyCostLimitCents: a.editorLimits.MaxDailyCostLimitCents,
+		}
+	}
+	if role == string(adminusers.RoleViewer) {
+		resp.ViewerLimits = &ViewerLimitsResponse{
+			PersonalMonthlyCostLimitCents: viewerPersonalMonthlyLimitFromConfig(a.viewerLimits),
 		}
 	}
 	return resp, nil
