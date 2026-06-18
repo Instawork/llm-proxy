@@ -81,6 +81,7 @@ type CreateKeyRequest struct {
 	Provider       string            `json:"provider"`
 	ActualKey      string            `json:"actual_key,omitempty"`
 	AutoProvision  bool              `json:"auto_provision,omitempty"`
+	Personal       bool              `json:"personal,omitempty"`
 	Description    string            `json:"description,omitempty"`
 	DailyCostLimit int64             `json:"daily_cost_limit"`
 	Tags           map[string]string `json:"tags,omitempty"`

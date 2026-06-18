@@ -335,6 +335,34 @@ func TestViewerPersonalKeys(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, delRec.Code)
 }
 
+func TestAdminCreatePersonalKey(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents = 1000
+	withTestProvisioner(t, h, "openai")
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:      "openai",
+		Description:   "my personal key",
+		AutoProvision: true,
+		Personal:      true,
+	})
+	createReq := authenticatedRequestAs(t, h, "admin@example.com", http.MethodPost, "/admin/api/keys", body)
+	createRec := httptest.NewRecorder()
+	h.handleCreateKey(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+
+	var created KeyResponse
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
+	assert.Equal(t, int64(1000), created.MonthlyCostLimit)
+	assert.Equal(t, "admin@example.com", created.OwnerEmail)
+	assert.Equal(t, int64(0), created.DailyCostLimit)
+
+	dupReq := authenticatedRequestAs(t, h, "admin@example.com", http.MethodPost, "/admin/api/keys", body)
+	dupRec := httptest.NewRecorder()
+	h.handleCreateKey(dupRec, dupReq)
+	assert.Equal(t, http.StatusConflict, dupRec.Code)
+}
+
 func TestEditorCreateKeyRequiresAutoProvision(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	ctx := context.Background()
