@@ -32,7 +32,8 @@ features:
     key_prefix: "iw"
     auto_create_table: true
     provisioning:
-      enabled: false
+      enabled: true
+      dev_fake: true
   circuit_breaker:
     enabled: true
     backend: "redis"

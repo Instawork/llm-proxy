@@ -54,12 +54,29 @@ func viewerPersonalMonthlyLimitCents(h *handler) int64 {
 	return h.viewerPersonalMonthlyLimit()
 }
 
+func requiresProvisionedKey(role adminusers.Role) bool {
+	return role == adminusers.RoleViewer || role == adminusers.RoleEditor
+}
+
+func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) error {
+	if !requiresProvisionedKey(role) {
+		return nil
+	}
+	if strings.TrimSpace(req.ActualKey) != "" {
+		return fmt.Errorf("manual provider keys are not allowed for your role; use auto_provision")
+	}
+	if !req.AutoProvision {
+		return fmt.Errorf("auto_provision is required for your role")
+	}
+	return nil
+}
+
 func (h *handler) validateViewerPersonalCreate(r *http.Request, req *CreateKeyRequest, userEmail string) error {
 	if !isViewerPersonalProvider(req.Provider) {
 		return fmt.Errorf("viewers may only create personal keys for openai, anthropic, or gemini")
 	}
-	if strings.TrimSpace(req.ActualKey) == "" && !req.AutoProvision {
-		return fmt.Errorf("actual_key is required unless auto_provision is true")
+	if err := validateProvisionedKeyOnly(adminusers.RoleViewer, req); err != nil {
+		return err
 	}
 	if req.DailyCostLimit != 0 {
 		return fmt.Errorf("daily_cost_limit cannot be set on personal keys")

@@ -215,6 +215,11 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateProvisionedKeyOnly(role, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	if err := apikeys.ValidatePIIOffBedrockPolicy(
 		h.globalPIIEnabled(),
 		req.Provider,

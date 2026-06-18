@@ -448,7 +448,9 @@ type APIKeyManagementConfig struct {
 
 // KeyProvisioningConfig controls server-side upstream API key creation.
 type KeyProvisioningConfig struct {
-	Enabled   bool                        `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// DevFake mints local-only upstream credentials without calling vendor APIs.
+	DevFake   bool                        `yaml:"dev_fake,omitempty"`
 	OpenAI    OpenAIProvisioningConfig    `yaml:"openai,omitempty"`
 	Gemini    GeminiProvisioningConfig    `yaml:"gemini,omitempty"`
 	Anthropic AnthropicProvisioningConfig `yaml:"anthropic,omitempty"`

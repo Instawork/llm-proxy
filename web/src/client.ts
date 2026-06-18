@@ -1,5 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 
+import { adminLoginRedirectUrl } from "./lib/admin-path";
+
 // Relative paths keep API calls on the same origin as the UI — works for Vite
 // dev (proxy) and Go-served dist (including localhost:9002). Using hostname
 // alone drops non-default ports and breaks share pages served from :9002.
@@ -36,8 +38,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (response.status === 401) {
-    const redirect = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = `/admin/login?redirect=${redirect}`;
+    window.location.href = adminLoginRedirectUrl();
     throw new APIClientError(401, "Unauthorized");
   }
 

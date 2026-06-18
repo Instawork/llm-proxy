@@ -13,6 +13,7 @@ import (
 // RuntimeConfig is resolved provisioning configuration (secrets from env).
 type RuntimeConfig struct {
 	Enabled bool
+	DevFake bool
 
 	OpenAIEnabled   bool
 	OpenAIAdminKey  string
@@ -36,6 +37,7 @@ type RuntimeConfig struct {
 func RuntimeFromYAML(cfg config.KeyProvisioningConfig) RuntimeConfig {
 	rt := RuntimeConfig{
 		Enabled:              cfg.Enabled,
+		DevFake:              cfg.DevFake,
 		OpenAIEnabled:        cfg.OpenAI.Enabled,
 		OpenAIProjectID:      os.ExpandEnv(cfg.OpenAI.ProjectID),
 		GeminiEnabled:        cfg.Gemini.Enabled,
@@ -87,6 +89,15 @@ func resolveAnthropicTierKeys(cfg map[string]string) map[string]string {
 func NewManagerFromRuntime(rt RuntimeConfig, logger *slog.Logger) (*Manager, error) {
 	if !rt.Enabled {
 		return NewManager(nil, nil), nil
+	}
+
+	if rt.DevFake {
+		byProvider := map[string]Provisioner{
+			"openai":    NewFake("openai"),
+			"anthropic": NewFakeAnthropic(),
+			"gemini":    NewFake("gemini"),
+		}
+		return NewManager(logger, byProvider), nil
 	}
 
 	byProvider := map[string]Provisioner{}
