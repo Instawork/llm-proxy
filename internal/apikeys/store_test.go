@@ -431,3 +431,28 @@ func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, other)
 }
+
+func TestStore_GetKeyRecord_LoadsMonthlyCostLimit(t *testing.T) {
+	store, fake := newFakeStore(t)
+	pk := KeyPrefix + "personal-monthly"
+	now := time.Now().Format(time.RFC3339Nano)
+	fake.InjectItem("test-keys", pk, map[string]any{
+		"pk":                  map[string]any{"S": pk},
+		"provider":            map[string]any{"S": "gemini"},
+		"actual_key":          map[string]any{"S": "real"},
+		"daily_cost_limit":    map[string]any{"N": "0"},
+		"monthly_cost_limit":  map[string]any{"N": "1000"},
+		"owner_email":         map[string]any{"S": "viewer@example.com"},
+		"tags":                map[string]any{"M": map[string]any{"personal": map[string]any{"S": "true"}}},
+		"created_at":          map[string]any{"S": now},
+		"updated_at":          map[string]any{"S": now},
+		"enabled":             map[string]any{"BOOL": true},
+	})
+
+	record, err := store.GetKeyRecord(context.Background(), pk)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.True(t, IsPersonalKey(record))
+	assert.Equal(t, int64(0), record.DailyCostLimit)
+	assert.Equal(t, int64(1000), record.MonthlyCostLimit)
+}

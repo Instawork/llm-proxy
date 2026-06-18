@@ -1,3 +1,4 @@
+import type { APIKey } from "../types";
 import { trimProxyKeyPrefix } from "./proxy-key";
 
 const compactFormatter = new Intl.NumberFormat("en-US", {
@@ -28,6 +29,45 @@ export function percent(ratio: number | undefined | null, digits = 1): string {
 export function formatDailyCostLimit(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents <= 0) return "Unlimited";
   return `$${(cents / 100).toFixed(2)}/day`;
+}
+
+/** Formats per-key monthly cost limit (cents). Zero means unlimited. */
+export function formatMonthlyCostLimit(cents: number | undefined | null): string {
+  if (cents === undefined || cents === null || cents <= 0) return "Unlimited";
+  return `$${(cents / 100).toFixed(2)}/month`;
+}
+
+export function isPersonalKey(
+  key: Pick<APIKey, "tags" | "owner_email">,
+): boolean {
+  if (key.tags?.personal === "true") return true;
+  return Boolean(key.owner_email?.trim());
+}
+
+/** Daily cap for org keys; monthly cap for personal keys. */
+export function formatKeySpendCap(
+  key: Pick<
+    APIKey,
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+  >,
+): string {
+  if (isPersonalKey(key)) {
+    return formatMonthlyCostLimit(key.monthly_cost_limit);
+  }
+  return formatDailyCostLimit(key.daily_cost_limit);
+}
+
+/** Spend cap in cents: monthly for personal keys, daily for org keys. */
+export function keySpendCapCents(
+  key: Pick<
+    APIKey,
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+  >,
+): number {
+  if (isPersonalKey(key)) {
+    return key.monthly_cost_limit ?? 0;
+  }
+  return key.daily_cost_limit ?? 0;
 }
 
 /** Dollars string for the key edit form. Empty when unlimited (0 cents). */

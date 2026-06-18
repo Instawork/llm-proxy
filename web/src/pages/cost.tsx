@@ -25,7 +25,7 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatCount, formatUsd, maskKeyId } from "../lib/format";
+import { compact, formatCount, formatUsd, keySpendCapCents, maskKeyId } from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
 import type { CostKeySpend } from "../types";
 
@@ -101,7 +101,7 @@ export default function CostPage() {
   const keyList = keys.data ?? [];
   const byKey = stats?.by_key ?? [];
   const recent = stats?.recent ?? [];
-  const withLimits = keyList.filter((k) => (k.daily_cost_limit ?? 0) > 0);
+  const withLimits = keyList.filter((k) => keySpendCapCents(k) > 0);
 
   // Prefer fleet-wide Redis rollups whenever Redis is available — including
   // "today" — since in-process memory only reflects this one pod and undercounts
@@ -132,7 +132,7 @@ export default function CostPage() {
       label: key.description || maskKeyId(key.key),
       key,
       spendUsd: spendByMaskedKey(byKey, key.key),
-      limitUsd: (key.daily_cost_limit ?? 0) / 100,
+      limitUsd: keySpendCapCents(key) / 100,
       requests: byKey.find((entry) => entry.key_id === maskKeyId(key.key))?.requests ?? 0,
     }))
     .filter((row) => row.limitUsd > 0 || row.spendUsd > 0)
@@ -258,8 +258,8 @@ export default function CostPage() {
       ) : null}
 
       <ChartCard
-        title="Spend vs daily limit"
-        subtitle="Spend is today's rollup; limits from key config (DynamoDB)"
+        title="Spend vs limit"
+        subtitle="Spend is today's rollup; caps from key config (DynamoDB)"
         source={breakdownSource}
       >
         <GroupedBarChart
@@ -271,7 +271,7 @@ export default function CostPage() {
               color: chartPalette.primary,
             },
             {
-              label: "Daily limit",
+              label: "Spend cap",
               values: limitChartRows.map((row) => row.limitUsd),
               color: chartPalette.info,
             },
@@ -292,7 +292,7 @@ export default function CostPage() {
 
       <SectionPanel
         title="Per-key spend vs limit"
-        subtitle="Spend is today's rollup; daily limits are stored on the key (DynamoDB)"
+        subtitle="Spend is today's rollup; caps are stored on the key (DynamoDB)"
         source={breakdownSource}
       >
         <LimitSpendTable rows={limitRows} keys={keyList} />

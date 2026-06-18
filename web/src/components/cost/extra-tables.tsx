@@ -5,7 +5,7 @@ import KeyLink from "../ui/key-link";
 import DataTable from "../ui/data-table";
 import { ProviderBadge } from "../ui/page-header";
 import { topDisplayRows } from "../../lib/group-rows";
-import { formatDailyCostLimit, formatUsd } from "../../lib/format";
+import { formatKeySpendCap, formatUsd } from "../../lib/format";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 import type { APIKey, CostRecentEvent, CostTransport } from "../../types";
 import { chartPalette } from "../charts/chart-setup";
@@ -84,9 +84,9 @@ export function LimitSpendTable({ rows, keys }: { rows: LimitSpendRow[]; keys: A
       {
         id: "limit",
         accessorKey: "limitUsd",
-        header: "Daily limit",
+        header: "Spend cap",
         cell: ({ row }) =>
-          row.original.isOthers ? "—" : formatDailyCostLimit(row.original.key.daily_cost_limit),
+          row.original.isOthers ? "—" : formatKeySpendCap(row.original.key),
       },
       {
         id: "requests",

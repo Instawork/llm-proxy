@@ -192,7 +192,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	fmt.Printf("Key:         %s\n", apiKey.PK)
 	fmt.Printf("Provider:    %s\n", apiKey.Provider)
 	fmt.Printf("Description: %s\n", apiKey.Description)
-	fmt.Printf("Cost Limit:  $%.2f/day\n", float64(apiKey.DailyCostLimit)/100)
+	fmt.Printf("Cost Limit:  %s\n", formatKeyCostLimit(apiKey))
 	fmt.Printf("Created:     %s\n", apiKey.CreatedAt.Format(time.RFC3339))
 	if len(apiKey.Tags) > 0 {
 		fmt.Printf("Tags:        %v\n", apiKey.Tags)
@@ -224,11 +224,11 @@ func handleList(ctx context.Context, store *apikeys.Store, provider string, logg
 	// prints once) or fetch the underlying record directly.
 	for _, key := range keys {
 		fmt.Fprintf(
-			w, "%s\t%s\t%s\t$%.2f/day\t%v\t%s\n",
+			w, "%s\t%s\t%s\t%s\t%v\t%s\n",
 			apikeys.RedactKey(key.PK),
 			key.Provider,
 			key.Description,
-			float64(key.DailyCostLimit)/100,
+			formatKeyCostLimit(key),
 			key.Enabled,
 			key.CreatedAt.Format("2006-01-02"),
 		)
@@ -248,7 +248,7 @@ func handleShow(ctx context.Context, store *apikeys.Store, keyID string, logger 
 	fmt.Printf("Key:         %s\n", apikeys.RedactKey(key.PK))
 	fmt.Printf("Provider:    %s\n", key.Provider)
 	fmt.Printf("Description: %s\n", key.Description)
-	fmt.Printf("Cost Limit:  $%.2f/day\n", float64(key.DailyCostLimit)/100)
+	fmt.Printf("Cost Limit:  %s\n", formatKeyCostLimit(key))
 	fmt.Printf("Enabled:     %v\n", key.Enabled)
 	fmt.Printf("Created:     %s\n", key.CreatedAt.Format(time.RFC3339))
 	fmt.Printf("Updated:     %s\n", key.UpdatedAt.Format(time.RFC3339))
@@ -297,4 +297,17 @@ func handleEnable(ctx context.Context, store *apikeys.Store, keyID string, logge
 	}
 
 	fmt.Printf("✅ API key %s enabled successfully\n", keyID)
+}
+
+func formatKeyCostLimit(key *apikeys.APIKey) string {
+	if apikeys.IsPersonalKey(key) {
+		if key.MonthlyCostLimit <= 0 {
+			return "Unlimited/month"
+		}
+		return fmt.Sprintf("$%.2f/month", float64(key.MonthlyCostLimit)/100)
+	}
+	if key.DailyCostLimit <= 0 {
+		return "Unlimited/day"
+	}
+	return fmt.Sprintf("$%.2f/day", float64(key.DailyCostLimit)/100)
 }

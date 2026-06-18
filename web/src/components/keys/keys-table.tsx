@@ -4,15 +4,8 @@ import type { ColumnDef } from "@tanstack/react-table";
 import KeyLink from "../ui/key-link";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
-import { formatDailyCostLimit } from "../../lib/format";
+import { formatKeySpendCap } from "../../lib/format";
 import type { APIKey, PiiRedactSetting, Provider } from "../../types";
-
-function formatMonthlyCostLimit(cents?: number): string {
-  if (!cents || cents <= 0) {
-    return "Unlimited";
-  }
-  return `$${(cents / 100).toFixed(2)} / month`;
-}
 
 function piiLabel(value?: PiiRedactSetting): string {
   if (value === true) return "On";
@@ -69,12 +62,9 @@ export default function KeysTable({
       },
       {
         id: "costLimit",
-        accessorKey: viewerMode ? "monthly_cost_limit" : "daily_cost_limit",
-        header: viewerMode ? "Monthly limit" : "Cost limit",
-        cell: ({ row }) =>
-          viewerMode
-            ? formatMonthlyCostLimit(row.original.monthly_cost_limit)
-            : formatDailyCostLimit(row.original.daily_cost_limit),
+        accessorFn: (row) => formatKeySpendCap(row),
+        header: viewerMode ? "Monthly limit" : "Spend cap",
+        cell: ({ row }) => formatKeySpendCap(row.original),
       },
     ];
 

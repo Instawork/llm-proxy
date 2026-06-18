@@ -20,17 +20,16 @@ import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
 import { useKey, useKeyStats, useMe, usePII, useRateLimits } from "../../hooks/queries";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
-import { formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
+import {
+  formatDailyCostLimit,
+  formatMonthlyCostLimit,
+  formatUsd,
+  isPersonalKey,
+  maskKeyId,
+} from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
 import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
 import type { KeyStatsSource } from "../../types";
-
-function formatMonthlyCostLimit(cents?: number): string {
-  if (!cents || cents <= 0) {
-    return "Unlimited";
-  }
-  return `$${(cents / 100).toFixed(2)} / month`;
-}
 
 function piiLabel(value: boolean | null | undefined): string {
   if (value === true) return "On";
@@ -169,7 +168,7 @@ export default function KeyDetailPage() {
               ) : null}
             </div>
             <div className="grid gap-3 text-sm sm:grid-cols-2">
-              {isViewer ? (
+              {isViewer || isPersonalKey(keyRecord) ? (
                 <Meta label="Monthly cost limit" value={formatMonthlyCostLimit(keyRecord.monthly_cost_limit)} />
               ) : (
                 <>

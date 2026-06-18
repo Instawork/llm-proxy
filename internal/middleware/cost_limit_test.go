@@ -81,6 +81,55 @@ func TestCostLimitMonthlyExceeded(t *testing.T) {
 	}
 }
 
+func TestCostLimitMiddleware_EnforcesDailyAndMonthly(t *testing.T) {
+	reader := monthlySpendReader{dailyUSD: 0.5, monthlyUSD: 0.5}
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	key := &apikeys.APIKey{PK: "iw:abc123456789", DailyCostLimit: 100, MonthlyCostLimit: 1000}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	called := false
+	CostLimitMiddleware(pm, reader)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, req)
+
+	if !called || rr.Code != http.StatusOK {
+		t.Fatalf("expected request allowed under both caps: code=%d called=%v", rr.Code, called)
+	}
+
+	reader.monthlyUSD = 11.0
+	req = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr = httptest.NewRecorder()
+	CostLimitMiddleware(pm, reader)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next should not be called")
+	})).ServeHTTP(rr, req)
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected monthly block, got %d", rr.Code)
+	}
+	if got := rr.Header().Get(costLimitReasonHeader); got != costLimitMonthlyExceeded {
+		t.Fatalf("reason header = %q want %q", got, costLimitMonthlyExceeded)
+	}
+
+	reader = monthlySpendReader{dailyUSD: 2.0, monthlyUSD: 0.5}
+	req = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr = httptest.NewRecorder()
+	CostLimitMiddleware(pm, reader)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next should not be called")
+	})).ServeHTTP(rr, req)
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected daily block, got %d", rr.Code)
+	}
+	if got := rr.Header().Get(costLimitReasonHeader); got != costLimitExceeded {
+		t.Fatalf("reason header = %q want %q", got, costLimitExceeded)
+	}
+}
+
 type monthlySpendReader struct {
 	dailyUSD   float64
 	monthlyUSD float64
