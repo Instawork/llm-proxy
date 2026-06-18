@@ -131,7 +131,7 @@ func TestHandleKeyStats_StripsUserIDFromRecentCost(t *testing.T) {
 
 	masked := middleware.MaskKeyID(created.PK)
 	costRec := coststats.NewRecorder()
-	costRec.RecordRequest("openai", masked, "secret-user", "gpt-4o", 0.01, 0.005, 0.005, 10, 5)
+	costRec.RecordRequest("openai", created.PK, "secret-user", "gpt-4o", 0.01, 0.005, 0.005, 10, 5)
 	h.deps.CostSummary = costRec.Snapshot
 	h.deps.PIISummary = pii.NewRecorder().Snapshot
 
@@ -143,12 +143,95 @@ func TestHandleKeyStats_StripsUserIDFromRecentCost(t *testing.T) {
 
 	rawBody := rec.Body.String()
 	assert.NotContains(t, rawBody, "secret-user")
+	assert.NotContains(t, rawBody, created.PK)
 	assert.NotContains(t, rawBody, "user_id")
 
 	var body keyStatsResponse
 	require.NoError(t, json.Unmarshal([]byte(rawBody), &body))
 	require.Len(t, body.RecentCost, 1)
+	require.Equal(t, masked, body.RecentCost[0].KeyID)
 	require.InDelta(t, 0.01, body.RecentCost[0].SpendUSD, 1e-9)
+}
+
+func TestHandleKeyStats_IndependentMetricMerge(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	day := time.Now().UTC().Format("2006-01-02")
+
+	created, err := store.CreateKey(context.Background(), "openai", "upstream", "stats key", 0, nil, nil, apikeys.KeyRateLimits{})
+	require.NoError(t, err)
+
+	rollup := testAdminRollupStore(t)
+	masked := middleware.MaskKeyID(created.PK)
+	require.NoError(t, rollup.ApplyDelta(ctx, adminrollup.MetricPII, day, adminrollup.Delta{
+		Totals: map[string]float64{"requests_scanned": 2},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {masked: 2},
+		},
+	}))
+
+	h.deps.AdminRollupStore = rollup
+	h.deps.CostSummary = coststats.NewRecorder().Snapshot
+	h.deps.PIISummary = pii.NewRecorder().Snapshot
+
+	rec, body := keyStatsRequest(t, h, "admin@example.com", created.PK)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, body.RollupAvailable)
+	require.Equal(t, "redislive", body.CostToday.Source)
+	require.Equal(t, "redis", body.PIIToday.Source)
+	require.Equal(t, int64(2), body.PIIToday.Detections)
+}
+
+func TestHandleKeyStats_RollupReadFailureFallsBackToMemory(t *testing.T) {
+	h, store := testAdminHandler(t)
+	created, err := store.CreateKey(context.Background(), "openai", "upstream", "stats key", 0, nil, nil, apikeys.KeyRateLimits{})
+	require.NoError(t, err)
+
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	rollup, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis: &config.RedisConfig{
+			Address: mr.Addr(),
+			DB:      6,
+			DBSet:   true,
+		},
+		HistoryDays: 7,
+	})
+	require.NoError(t, err)
+	mr.Close()
+	t.Cleanup(func() { _ = rollup.Close() })
+
+	costRec := coststats.NewRecorder()
+	masked := middleware.MaskKeyID(created.PK)
+	costRec.RecordRequest("openai", masked, "user", "gpt-4o", 0.05, 0.025, 0.025, 10, 5)
+	h.deps.AdminRollupStore = rollup
+	h.deps.CostSummary = costRec.Snapshot
+	h.deps.PIISummary = pii.NewRecorder().Snapshot
+
+	rec, body := keyStatsRequest(t, h, "admin@example.com", created.PK)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.False(t, body.RollupAvailable)
+	require.Equal(t, "memory", body.CostToday.Source)
+	require.Equal(t, "memory", body.PIIToday.Source)
+	require.InDelta(t, 0.05, body.CostToday.SpendUSD, 1e-9)
+}
+
+func TestMergeKeyStatsRollupBoundIndependent(t *testing.T) {
+	redisCost := adminrollup.KeyCostDayStats{SpendUSD: 1.0}
+	gotCost := mergeKeyCostStats(memoryKeyCost{}, redisCost, true, true)
+	require.Equal(t, "redis", gotCost.Source)
+	require.InDelta(t, 1.0, gotCost.SpendUSD, 1e-9)
+
+	gotCostBound := mergeKeyCostStats(memoryKeyCost{}, redisCost, true, false)
+	require.Equal(t, "memory", gotCostBound.Source)
+
+	gotPII := mergeKeyPIIStats(0, 4, true, true)
+	require.Equal(t, "redis", gotPII.Source)
+	require.Equal(t, int64(4), gotPII.Detections)
+
+	gotPIIBound := mergeKeyPIIStats(0, 4, true, false)
+	require.Equal(t, "memory", gotPIIBound.Source)
 }
 
 func TestHandleKeyStats_StoreUnavailable(t *testing.T) {

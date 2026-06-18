@@ -124,7 +124,8 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 	var redisCostOK bool
 	var redisPII int64
 	var redisPIIOK bool
-	var rollupReadsOK bool
+	costRollupOK := false
+	piiRollupOK := false
 	if h.deps.AdminRollupStore != nil {
 		resp.RollupBackend = h.deps.AdminRollupStore.Backend()
 
@@ -137,8 +138,9 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		if piiErr != nil {
 			h.deps.Logger.Error("admin: key pii stats read failed", "key", masked, "error", piiErr)
 		}
-		rollupReadsOK = costErr == nil && piiErr == nil
-		resp.RollupAvailable = rollupReadsOK
+		costRollupOK = costErr == nil
+		piiRollupOK = piiErr == nil
+		resp.RollupAvailable = costRollupOK && piiRollupOK
 
 		if costSeries, _, histErr := h.deps.AdminRollupStore.KeyCostDailySeries(ctx, masked, 7); histErr != nil {
 			h.deps.Logger.Error("admin: key cost history read failed", "key", masked, "error", histErr)
@@ -152,8 +154,8 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.CostToday = mergeKeyCostStats(memCost, redisCost, redisCostOK, rollupReadsOK)
-	resp.PIIToday = mergeKeyPIIStats(memPII, redisPII, redisPIIOK, rollupReadsOK)
+	resp.CostToday = mergeKeyCostStats(memCost, redisCost, redisCostOK, costRollupOK)
+	resp.PIIToday = mergeKeyPIIStats(memPII, redisPII, redisPIIOK, piiRollupOK)
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -250,7 +252,7 @@ func sanitizeRecentCost(rows []map[string]interface{}) []keyCostRecentResponse {
 		out = append(out, keyCostRecentResponse{
 			Time:           int64(asFloat(row["time"])),
 			Provider:       asString(row["provider"]),
-			KeyID:          asString(row["key_id"]),
+			KeyID:          middleware.MaskKeyID(asString(row["key_id"])),
 			SpendUSD:       asFloat(row["spend_usd"]),
 			InputSpendUSD:  asFloat(row["input_spend_usd"]),
 			OutputSpendUSD: asFloat(row["output_spend_usd"]),
@@ -274,7 +276,7 @@ func sanitizeRecentPII(rows []map[string]interface{}) []keyPIIRecentResponse {
 		out = append(out, keyPIIRecentResponse{
 			Time:         int64(asFloat(row["time"])),
 			Provider:     asString(row["provider"]),
-			KeyID:        asString(row["key_id"]),
+			KeyID:        middleware.MaskKeyID(asString(row["key_id"])),
 			EntityCounts: entityCounts,
 			EntityTotal:  int(asFloat(row["entity_total"])),
 			DurationMs:   asFloat(row["duration_ms"]),

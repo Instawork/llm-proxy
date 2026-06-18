@@ -108,7 +108,7 @@ export default function KeyDetailPage() {
     );
   }
 
-  if (keyQuery.isLoading && !statsQuery.data && !rateQuery.data) {
+  if (keyQuery.isPending || statsQuery.isPending || (!isViewer && rateQuery.isPending)) {
     return <LoadingBlock />;
   }
 
@@ -145,7 +145,7 @@ export default function KeyDetailPage() {
         </div>
       ) : null}
 
-      {keyRecord ? (
+      {keyRecord && !notFound ? (
         <div className="glass-panel p-5">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-base-content/70">Key metadata</span>
@@ -194,7 +194,7 @@ export default function KeyDetailPage() {
         </div>
       ) : null}
 
-      {keyRecord ? (
+      {keyRecord && !notFound ? (
         <>
           <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "xl:grid-cols-3" : "xl:grid-cols-4"}`}>
             <LiveStat
