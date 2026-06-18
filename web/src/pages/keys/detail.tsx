@@ -18,18 +18,12 @@ import {
 } from "../../components/ui/data-source";
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
-import { useCost, useKey, useMe, usePII, useRateLimits } from "../../hooks/queries";
-import { aggCostByKey, DAILY_HISTORY_SUBTITLE, costSeriesForKey } from "../../lib/daily-history";
+import { useKey, useKeyStats, useMe, usePII, useRateLimits } from "../../hooks/queries";
+import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import { formatDailyCostLimit, formatUsd, maskKeyId } from "../../lib/format";
 import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
-import {
-  costRecentForKey,
-  costStatsForKey,
-  piiDetectionsForKey,
-  piiRecentForKey,
-  rateLimitOverrideForKey,
-  rateLimitUsageForKey,
-} from "../../lib/key-stats";
+import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
+import type { KeyStatsSource } from "../../types";
 
 function formatMonthlyCostLimit(cents?: number): string {
   if (!cents || cents <= 0) {
@@ -48,6 +42,14 @@ function formatLimit(value?: number): string {
   return value && value > 0 ? value.toLocaleString() : "∞";
 }
 
+function statsSource(source: KeyStatsSource): DataSource {
+  return source;
+}
+
+function chartLabels(points: { day: string }[]): string[] {
+  return points.map((p) => p.day.slice(5));
+}
+
 export default function KeyDetailPage() {
   const { key: keyParam } = useParams<{ key: string }>();
   const { data: me } = useMe();
@@ -56,50 +58,38 @@ export default function KeyDetailPage() {
   const validKey = isProxyKey(keyValue) ? keyValue : undefined;
 
   const keyQuery = useKey(validKey);
-  const costQuery = useCost();
+  const statsQuery = useKeyStats(validKey);
   const piiQuery = usePII();
   const rateQuery = useRateLimits();
 
   const keyRecord = keyQuery.data;
   const keyError = keyQuery.error;
+  const stats = statsQuery.data;
 
   const masked = validKey ? maskKeyId(validKey) : "";
-  const costStats = costStatsForKey(costQuery.data?.stats, validKey ?? "");
-  const costRecent = costRecentForKey(costQuery.data?.stats, validKey ?? "");
-  const piiRecent = piiRecentForKey(piiQuery.data?.stats, validKey ?? "");
-  const piiDetections = piiDetectionsForKey(piiQuery.data?.stats, validKey ?? "");
   const rateUsage = rateLimitUsageForKey(rateQuery.data, validKey ?? "");
   const rateOverride = rateLimitOverrideForKey(rateQuery.data, validKey ?? "");
   const rateSource = rateLimitUsageSource(rateQuery.data?.backend);
-  const costHistory = costQuery.data?.stats?.daily_history;
-  const hasCostRedis = Boolean(costQuery.data?.stats?.daily_history_available);
-  const keySpend7d = costSeriesForKey(costHistory, masked, "7d");
-  // Prefer the fleet-wide Redis today rollup for this key over this pod's memory.
-  const keyTodayCost = hasCostRedis
-    ? aggCostByKey(costHistory, "today").find((r) => r.key_id === masked)
-    : undefined;
-  const spendTodayValue = keyTodayCost ? keyTodayCost.spend_usd : (costStats?.spend_usd ?? 0);
-  const requestsTodayValue = keyTodayCost ? keyTodayCost.requests : (costStats?.requests ?? 0);
-  const keyCostSource: DataSource = keyTodayCost ? "redislive" : "memory";
-  // PII detections come from the fleet-wide top_keys rollup (overlaid by
-  // MergeToday) when Redis is on; only falls back to the memory ring buffer for
-  // keys outside the rolled-up top-N.
-  const hasPiiRedis = Boolean(piiQuery.data?.stats?.daily_history_available);
-  const piiSource: DataSource = hasPiiRedis ? "redislive" : "memory";
+
+  const costToday = stats?.cost_today;
+  const piiToday = stats?.pii_today;
+  const costSource = statsSource(costToday?.source ?? "memory");
+  const piiSource = statsSource(piiToday?.source ?? "memory");
+  const costHistory = stats?.cost_history ?? [];
+  const piiHistory = stats?.pii_history ?? [];
+  const recentCost = stats?.recent_cost ?? [];
+  const recentPii = stats?.recent_pii ?? [];
 
   const liveUpdatedAt = Math.max(
-    costQuery.dataUpdatedAt,
-    piiQuery.dataUpdatedAt,
+    statsQuery.dataUpdatedAt,
     rateQuery.dataUpdatedAt,
     keyQuery.dataUpdatedAt,
   );
-  const liveFetching =
-    costQuery.isFetching || piiQuery.isFetching || rateQuery.isFetching || keyQuery.isFetching;
+  const liveFetching = statsQuery.isFetching || rateQuery.isFetching || keyQuery.isFetching;
 
   const refreshAll = () => {
     keyQuery.refetch();
-    costQuery.refetch();
-    piiQuery.refetch();
+    statsQuery.refetch();
     rateQuery.refetch();
   };
 
@@ -118,7 +108,7 @@ export default function KeyDetailPage() {
     );
   }
 
-  if (keyQuery.isLoading && !costQuery.data && !piiQuery.data && !rateQuery.data) {
+  if (keyQuery.isPending || statsQuery.isPending || (!isViewer && rateQuery.isPending)) {
     return <LoadingBlock />;
   }
 
@@ -145,19 +135,17 @@ export default function KeyDetailPage() {
                 : "Per-key cost, PII, and rate-limit stats."
         }
         actions={
-          isViewer ? undefined : (
-            <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
-          )
+          <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
         }
       />
 
       {notFound ? (
         <div className="alert alert-warning">
-          <span>Key metadata unavailable — showing stats for {masked} only.</span>
+          <span>Key metadata unavailable — open this page from a registered key to see stats.</span>
         </div>
       ) : null}
 
-      {keyRecord ? (
+      {keyRecord && !notFound ? (
         <div className="glass-panel p-5">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-base-content/70">Key metadata</span>
@@ -206,82 +194,126 @@ export default function KeyDetailPage() {
         </div>
       ) : null}
 
-      {!isViewer ? (
+      {keyRecord && !notFound ? (
         <>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <LiveStat title="Spend today" value={formatUsd(spendTodayValue)} hint="tracked cost" source={keyCostSource} />
-        <LiveStat
-          title="Requests"
-          value={requestsTodayValue.toLocaleString()}
-          hint="cost tracker"
-          source={keyCostSource}
-        />
-        <LiveStat
-          title="PII detections"
-          value={piiDetections.toLocaleString()}
-          hint={`${piiRecent.length} recent events`}
-          source={piiSource}
-        />
-        <LiveStat
-          title="Rate usage"
-          value={rateUsage.reduce((s, r) => s + r.requests, 0).toLocaleString()}
-          hint="requests in live windows"
-          source={rateSource}
-        />
-      </div>
-
-      {hasCostRedis && keySpend7d.available ? (
-        <ChartCard
-          title="Spend over time"
-          subtitle={`Last 7 days for this key · ${DAILY_HISTORY_SUBTITLE}`}
-          source="redis"
-        >
-          <BarChart
-            labels={keySpend7d.labels}
-            values={keySpend7d.values}
-            label="Daily spend (USD)"
-            colors={keySpend7d.labels.map(() => chartPalette.primary())}
-          />
-        </ChartCard>
-      ) : null}
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Cost" subtitle="Today's tracked spend for this key" source="memory">
-          <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
-            <Meta label="Total spend" value={formatUsd(costStats?.spend_usd ?? 0)} />
-            <Meta label="Input spend" value={formatUsd(costStats?.input_spend_usd ?? 0)} />
-            <Meta label="Output spend" value={formatUsd(costStats?.output_spend_usd ?? 0)} />
-            <Meta label="Requests" value={costStats?.requests ?? 0} />
-            <Meta label="Input tokens" value={(costStats?.input_tokens ?? 0).toLocaleString()} />
-            <Meta label="Output tokens" value={(costStats?.output_tokens ?? 0).toLocaleString()} />
+          <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "xl:grid-cols-3" : "xl:grid-cols-4"}`}>
+            <LiveStat
+              title="Spend today"
+              value={formatUsd(costToday?.spend_usd ?? 0)}
+              hint="tracked cost"
+              source={costSource}
+            />
+            <LiveStat
+              title="Requests"
+              value={(costToday?.requests ?? 0).toLocaleString()}
+              hint="cost tracker"
+              source={costSource}
+            />
+            <LiveStat
+              title="PII detections"
+              value={(piiToday?.detections ?? 0).toLocaleString()}
+              hint={`${recentPii.length} recent events`}
+              source={piiSource}
+            />
+            {!isViewer ? (
+              <LiveStat
+                title="Rate usage"
+                value={rateUsage.reduce((s, r) => s + r.requests, 0).toLocaleString()}
+                hint="requests in live windows"
+                source={rateSource}
+              />
+            ) : null}
           </div>
-          <KeyCostEventsTable rows={costRecent} />
-        </Section>
 
-        <Section title="PII redaction" subtitle="Recent events are memory-only (last 50)" source="memory">
-          <div className="grid gap-4 p-5 sm:grid-cols-2">
-            <Meta label="Recent events" value={piiRecent.length} />
-            <Meta label="Top-key count" value={piiDetections} />
-            <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
-            <Meta label="Per-key override" value={keyRecord ? piiLabel(keyRecord.redact_pii) : "—"} />
+          {stats?.rollup_available && costHistory.length > 0 ? (
+            <ChartCard
+              title="Spend over time"
+              subtitle={`Last 7 days for this key · ${DAILY_HISTORY_SUBTITLE}`}
+              source="redis"
+            >
+              <BarChart
+                labels={chartLabels(costHistory)}
+                values={costHistory.map((p) => p.value)}
+                label="Daily spend (USD)"
+                colors={costHistory.map(() => chartPalette.primary())}
+              />
+            </ChartCard>
+          ) : null}
+
+          {stats?.rollup_available && piiHistory.length > 0 ? (
+            <ChartCard
+              title="PII detections over time"
+              subtitle={`Last 7 days for this key · ${DAILY_HISTORY_SUBTITLE}`}
+              source="redis"
+            >
+              <BarChart
+                labels={chartLabels(piiHistory)}
+                values={piiHistory.map((p) => p.value)}
+                label="Daily detections"
+                colors={piiHistory.map(() => chartPalette.warning())}
+              />
+            </ChartCard>
+          ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Section
+              title="Cost"
+              subtitle={
+                stats?.rollup_available
+                  ? "Today's fleet-wide rollup for this key (direct Redis read) · recent events below are memory-only (last 50)"
+                  : "Today's tracked spend for this key · recent events are memory-only (last 50)"
+              }
+              source={costSource}
+            >
+              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
+                <Meta label="Total spend" value={formatUsd(costToday?.spend_usd ?? 0)} />
+                <Meta label="Input spend" value={formatUsd(costToday?.input_spend_usd ?? 0)} />
+                <Meta label="Output spend" value={formatUsd(costToday?.output_spend_usd ?? 0)} />
+                <Meta label="Requests" value={costToday?.requests ?? 0} />
+                <Meta label="Input tokens" value={(costToday?.input_tokens ?? 0).toLocaleString()} />
+                <Meta label="Output tokens" value={(costToday?.output_tokens ?? 0).toLocaleString()} />
+              </div>
+              <KeyCostEventsTable rows={recentCost} />
+            </Section>
+
+            <Section
+              title="PII redaction"
+              subtitle={
+                stats?.rollup_available
+                  ? "Detection count from fleet-wide Redis (direct read) · recent events below are memory-only (last 50)"
+                  : "Recent events are memory-only (last 50)"
+              }
+              source={piiSource}
+            >
+              <div className="grid gap-4 p-5 sm:grid-cols-2">
+                <Meta label="Recent events" value={recentPii.length} />
+                <Meta label="Top-key count" value={piiToday?.detections ?? 0} />
+                {!isViewer ? (
+                  <>
+                    <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
+                    <Meta label="Per-key override" value={keyRecord ? piiLabel(keyRecord.redact_pii) : "—"} />
+                  </>
+                ) : null}
+              </div>
+              <KeyPiiEventsTable rows={recentPii} />
+            </Section>
           </div>
-          <KeyPiiEventsTable rows={piiRecent} />
-        </Section>
-      </div>
 
-      <Section
-        title="Rate limits"
-        subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
-        source={rateSource}
-      >
-        <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-          <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord?.rate_limit_rpm)} />
-          <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord?.rate_limit_tpm)} />
-          <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord?.rate_limit_rpd)} />
-          <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord?.rate_limit_tpd)} />
-        </div>
-        <KeyRateUsageTable rows={rateUsage} />
-      </Section>
+          {!isViewer ? (
+            <Section
+              title="Rate limits"
+              subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
+              source={rateSource}
+            >
+              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord?.rate_limit_rpm)} />
+                <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord?.rate_limit_tpm)} />
+                <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord?.rate_limit_rpd)} />
+                <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord?.rate_limit_tpd)} />
+              </div>
+              <KeyRateUsageTable rows={rateUsage} />
+            </Section>
+          ) : null}
         </>
       ) : null}
     </div>

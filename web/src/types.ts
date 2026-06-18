@@ -128,11 +128,11 @@ export interface ConfigSummary {
 export interface DailyHistoryRow {
   day: string;
   [key: string]:
-    | string
-    | number
-    | boolean
-    | undefined
-    | Record<string, unknown>;
+  | string
+  | number
+  | boolean
+  | undefined
+  | Record<string, unknown>;
 }
 
 export interface StatsWithDailyHistory {
@@ -395,4 +395,61 @@ export interface ShareInfo {
 
 export interface APIError {
   error: string;
+}
+
+export type KeyStatsSource = "memory" | "redis" | "redislive";
+
+export interface KeyCostStats {
+  source: KeyStatsSource;
+  spend_usd: number;
+  input_spend_usd: number;
+  output_spend_usd: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface KeyPIIStats {
+  source: KeyStatsSource;
+  detections: number;
+}
+
+export interface KeyDayPoint {
+  day: string;
+  value: number;
+}
+
+export interface KeyCostRecentEvent {
+  time: number;
+  provider: string;
+  key_id?: string;
+  spend_usd: number;
+  input_spend_usd?: number;
+  output_spend_usd?: number;
+  input_tokens: number;
+  output_tokens: number;
+  model?: string;
+}
+
+export interface KeyPIIRecentEvent {
+  time: number;
+  provider: string;
+  key_id?: string;
+  entity_counts: Record<string, number>;
+  entity_total: number;
+  duration_ms: number;
+  outcome: "ok" | "fail_open" | "fail_closed" | "oversize";
+}
+
+export interface KeyStatsResponse {
+  masked_key_id: string;
+  day: string;
+  rollup_available: boolean;
+  rollup_backend?: string;
+  cost_today: KeyCostStats;
+  pii_today: KeyPIIStats;
+  cost_history: KeyDayPoint[];
+  pii_history: KeyDayPoint[];
+  recent_cost: KeyCostRecentEvent[];
+  recent_pii: KeyPIIRecentEvent[];
 }

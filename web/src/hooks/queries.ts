@@ -11,6 +11,7 @@ import type {
   CreateAdminUserRequest,
   CreateAPIKeyRequest,
   HealthResponse,
+  KeyStatsResponse,
   CircuitActivityResponse,
   PIIResponse,
   ProvisioningStatus,
@@ -28,6 +29,7 @@ export const queryKeys = {
   me: ["admin", "me"] as const,
   keys: (provider?: string) => ["admin", "keys", provider ?? "all"] as const,
   key: (key: string) => ["admin", "keys", "detail", key] as const,
+  keyStats: (key: string) => ["admin", "keys", "stats", key] as const,
   config: ["admin", "config"] as const,
   health: ["admin", "health"] as const,
   circuitActivity: ["admin", "circuit-activity"] as const,
@@ -64,6 +66,19 @@ export function useKey(key: string | undefined) {
     queryKey: queryKeys.key(key ?? ""),
     queryFn: () => apiFetch<APIKey>(`/admin/api/keys/${encodeURIComponent(key!)}`),
     enabled: Boolean(key) && roleAtLeast(role, "viewer"),
+  });
+}
+
+export function useKeyStats(key: string | undefined) {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
+  const refetchInterval = usePollInterval();
+  return useQuery({
+    queryKey: queryKeys.keyStats(key ?? ""),
+    queryFn: () => apiFetch<KeyStatsResponse>(`/admin/api/keys/${encodeURIComponent(key!)}/stats`),
+    enabled: Boolean(key) && roleAtLeast(role, "viewer"),
+    refetchInterval,
+    refetchIntervalInBackground: true,
   });
 }
 

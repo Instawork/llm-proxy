@@ -13,11 +13,13 @@ import { formatShareExpiry } from "../../lib/share-expiry";
 import { dailyCostLimitFormDollars } from "../../lib/format";
 import {
   useConfig,
+  useCost,
   useCreateKey,
   useCreateShare,
   useDeleteKey,
   useKeys,
   useMe,
+  usePII,
   useProvisioning,
   useUpdateKey,
 } from "../../hooks/queries";
@@ -116,10 +118,27 @@ function rateLimitsFromForm(form: KeyFormState) {
   };
 }
 
+function keyStatsDescription(hasCostRedis: boolean, hasPiiRedis: boolean): string {
+  if (hasCostRedis && hasPiiRedis) {
+    return "Key registry is DynamoDB. Per-key spend and PII stats use Redis rollups (today updates live).";
+  }
+  if (hasCostRedis) {
+    return "Key registry is DynamoDB. Per-key spend uses Redis rollups; PII stats are in-memory (today only).";
+  }
+  if (hasPiiRedis) {
+    return "Key registry is DynamoDB. Per-key PII stats use Redis rollups; spend is in-memory (today only).";
+  }
+  return "Key registry is DynamoDB. Spend and PII stats on each key are in-memory (today only).";
+}
+
 export default function KeysPage() {
   const { push } = useToast();
   const { data: me } = useMe();
   const { data: config } = useConfig();
+  const { data: costData } = useCost();
+  const { data: piiData } = usePII();
+  const hasCostRedis = Boolean(costData?.stats?.daily_history_available);
+  const hasPiiRedis = Boolean(piiData?.stats?.daily_history_available);
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
   const canBypassPiiBedrockPolicy = Boolean(
     me?.can_bypass_pii_off_non_bedrock_policy,
@@ -555,7 +574,7 @@ export default function KeysPage() {
             ? viewerMonthlyCents > 0
               ? `Personal proxy keys (one per provider). Monthly spend is capped at ${viewerMonthlyLimitLabel}.`
               : "Personal proxy keys (one per provider). Monthly spend is unlimited."
-            : "Key registry is DynamoDB. Spend and PII stats on each key are in-memory (today only)."
+            : keyStatsDescription(hasCostRedis, hasPiiRedis)
         }
         actions={
           <>
