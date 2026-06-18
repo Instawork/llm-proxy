@@ -102,10 +102,10 @@ jobs:
           command: make test-integration
 
   fuzz-tests:
-    # Machine executor (not the Docker executor): the fuzz CLI talks to the
-    # proxy over http://localhost:9002, and containers started via
-    # setup_remote_docker are NOT reachable on localhost. A Linux VM runs the
-    # docker-compose stack locally so the fuzzer can reach it.
+    # Machine executor (not the Docker executor): the fuzz CLI and the proxy
+    # talk over http://localhost, and the proxy reaches redis/dynamodb on
+    # published localhost ports. Containers started via setup_remote_docker
+    # are NOT reachable on localhost, so a Linux VM is required.
     machine:
       image: ubuntu-2204:current
     working_directory: ~/llm-proxy
@@ -121,29 +121,51 @@ jobs:
           name: Run fake-mode unit tests with race detector
           command: make fuzz-test
       - run:
-          name: Start llm-proxy stack in fuzz mode (proxy + redis + dynamodb)
+          name: Start redis + dynamodb (published on localhost)
+          command: docker compose up -d redis dynamodb
+      - run:
+          name: Resolve compose service hostnames to localhost
+          # configs/fuzz.yml hardcodes the compose hostnames (redis:6379,
+          # dynamodb:8000). The proxy runs on the host here, so point those
+          # names at the published localhost ports instead of editing the YAML.
+          command: echo "127.0.0.1 redis dynamodb" | sudo tee -a /etc/hosts
+      - run:
+          name: Build proxy binary
+          command: make build
+      - run:
+          name: Start llm-proxy in fuzz (fake-upstream) mode
           command: |
             mkdir -p logs
             ENVIRONMENT=fuzz \
             LLM_PROXY_ALLOW_FAKE_MODE=1 \
             LLM_PROXY_ALLOW_TEST_MODE=1 \
-              docker compose up -d --build llm-proxy redis dynamodb
+            PORT=9002 \
+            AWS_REGION=us-west-2 \
+            AWS_DEFAULT_REGION=us-west-2 \
+            AWS_ACCESS_KEY_ID=local \
+            AWS_SECRET_ACCESS_KEY=local \
+            AWS_ENDPOINT_URL=http://dynamodb:8000 \
+            LLM_PROXY_ADMIN_SESSION_SECRET=ci-fuzz-session-secret \
+              nohup ./bin/llm-proxy > logs/proxy.log 2>&1 &
+            echo "started llm-proxy (pid $!)"
       - run:
           name: Wait for proxy /health
           command: |
-            for i in $(seq 1 90); do
+            for i in $(seq 1 60); do
               if curl -sf http://localhost:9002/health > /dev/null; then
                 echo "proxy healthy"; exit 0
               fi
-              sleep 2
+              sleep 1
             done
             echo "proxy did not become healthy in time"; exit 1
       - run:
           name: Run fuzz-all (excluding Presidio-dependent PII scenarios)
           command: make fuzz-all-no-pii
       - run:
-          name: Dump proxy logs on failure
-          command: docker compose logs --no-color llm-proxy
+          name: Dump proxy + service logs on failure
+          command: |
+            echo "===== proxy log ====="; cat logs/proxy.log || true
+            echo "===== redis/dynamodb ====="; docker compose logs --no-color redis dynamodb || true
           when: on_fail
 
   build-and-push:
