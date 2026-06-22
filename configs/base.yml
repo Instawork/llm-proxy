@@ -143,7 +143,7 @@ retired_models:
         - claude-sonnet-4-20250514
     "claude-opus-4-0":
       retired_date: "2026-06-15"
-      replacement: claude-opus-4-8
+      replacement: claude-opus-4-7
       aliases:
         - claude-opus-4
         - claude-opus-4-20250514

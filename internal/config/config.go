@@ -1429,6 +1429,9 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 // GetModelConfig returns the model configuration for a provider and model name,
 // resolving aliases to the canonical model entry.
 func (c *YAMLConfig) GetModelConfig(provider, model string) (*ModelConfig, string) {
+	if c == nil || model == "" {
+		return nil, ""
+	}
 	providerConfig, exists := c.Providers[provider]
 	if !exists {
 		return nil, ""

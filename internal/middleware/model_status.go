@@ -45,6 +45,9 @@ func ModelStatusMiddleware(
 				emitModelMetric(metrics, "model.retired_call", providerName, model)
 				if err := providers.WriteRetiredModelResponse(w, provider, model, entry); err != nil {
 					log.Printf("model status: failed to encode retired response: %v", err)
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set(providers.HeaderModelRetired, "model_retired")
+					w.WriteHeader(http.StatusNotFound)
 					fmt.Fprintf(w, `{"error":"model retired"}`)
 				}
 				return
@@ -57,7 +60,7 @@ func ModelStatusMiddleware(
 			} else if modelCfg == nil {
 				recorder.RecordUnknown(providerName, model)
 				log.Printf("model status: unrecognized model %q for provider %q", model, providerName)
-				emitModelMetric(metrics, "model.unknown_call", providerName, model)
+				emitModelMetric(metrics, "model.unknown_call", providerName, "__unknown__")
 			}
 
 			next.ServeHTTP(w, r)
