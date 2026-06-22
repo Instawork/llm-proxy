@@ -143,7 +143,7 @@ retired_models:
         - claude-sonnet-4-20250514
     "claude-opus-4-0":
       retired_date: "2026-06-15"
-      replacement: claude-opus-4-7
+      replacement: claude-opus-4-8
       aliases:
         - claude-opus-4
         - claude-opus-4-20250514
@@ -618,6 +618,19 @@ providers:
       burst_requests: 100
 
     models:
+      "claude-opus-4-8":
+        enabled: true
+        aliases: ["claude-opus-4.8", "claude-opus-4-8-20260528"]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 5.00
+          output: 25.00
       "claude-opus-4-7":
         enabled: true
         aliases: ["claude-opus-4.7", "claude-opus-4-7-20260416"]
@@ -690,7 +703,7 @@ providers:
       "claude-opus-4-1":
         enabled: true
         deprecated: true
-        replacement: "claude-opus-4-7"
+        replacement: "claude-opus-4-8"
         aliases: ["claude-opus-4-1-20250805", "claude-opus-4.1"]
         limits:
           tokens_per_minute: 40_000
