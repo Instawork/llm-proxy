@@ -7,15 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    onnxtr \
-    onnxruntime \
-    fastapi \
-    uvicorn \
-    python-multipart
+COPY requirements.txt main.py ./
 
-COPY main.py .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8000
 

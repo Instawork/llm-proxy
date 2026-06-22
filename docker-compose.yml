@@ -153,11 +153,6 @@ services:
     container_name: llm-proxy-ocr-sidecar
     ports:
       - "${OCR_SIDECAR_PORT:-8000}:8000"
-    environment:
-      - OCR_MAX_WORKERS=${OCR_MAX_WORKERS:-}
-      - OCR_MAX_CONCURRENCY=${OCR_MAX_CONCURRENCY:-}
-      - OCR_QUEUE_TIMEOUT_SEC=${OCR_QUEUE_TIMEOUT_SEC:-5.0}
-      - OCR_INFER_TIMEOUT_SEC=${OCR_INFER_TIMEOUT_SEC:-30.0}
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s

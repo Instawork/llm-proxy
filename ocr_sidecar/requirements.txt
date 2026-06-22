@@ -1,0 +1,6 @@
+onnxtr
+onnxruntime
+opencv-python-headless
+fastapi
+uvicorn
+python-multipart

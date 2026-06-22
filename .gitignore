@@ -29,6 +29,7 @@ go.work
 # Live integration binary output
 integration/bin/
 integration/snippets/python/.venv/
+ocr_sidecar/.venv/
 integration/snippets/python/.deps-hash
 integration/snippets/node/node_modules/
 integration/snippets/node/.deps-hash

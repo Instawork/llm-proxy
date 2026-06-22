@@ -13,10 +13,25 @@ from onnxtr.models import ocr_predictor
 logger = logging.getLogger("ocr_sidecar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-OCR_MAX_WORKERS = int(os.getenv("OCR_MAX_WORKERS", str(os.cpu_count() or 4)))
-OCR_MAX_CONCURRENCY = int(os.getenv("OCR_MAX_CONCURRENCY", str(OCR_MAX_WORKERS)))
-OCR_QUEUE_TIMEOUT_SEC = float(os.getenv("OCR_QUEUE_TIMEOUT_SEC", "5.0"))
-OCR_INFER_TIMEOUT_SEC = float(os.getenv("OCR_INFER_TIMEOUT_SEC", "30.0"))
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if raw == "":
+        return default
+    return int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if raw == "":
+        return default
+    return float(raw)
+
+
+_default_workers = os.cpu_count() or 4
+OCR_MAX_WORKERS = _env_int("OCR_MAX_WORKERS", _default_workers)
+OCR_MAX_CONCURRENCY = _env_int("OCR_MAX_CONCURRENCY", OCR_MAX_WORKERS)
+OCR_QUEUE_TIMEOUT_SEC = _env_float("OCR_QUEUE_TIMEOUT_SEC", 5.0)
+OCR_INFER_TIMEOUT_SEC = _env_float("OCR_INFER_TIMEOUT_SEC", 30.0)
 
 predictor: Any = None
 executor: ThreadPoolExecutor | None = None
