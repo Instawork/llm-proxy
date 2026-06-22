@@ -119,6 +119,17 @@ function ShieldIcon() {
   );
 }
 
+function ModelStatusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <path d="m12 2 8 4.5v7L12 18l-8-4.5v-7L12 2Z" />
+      <path d="m12 18 8-4.5" />
+      <path d="M12 18V9" />
+      <path d="m4 7.5 8 4.5" />
+    </svg>
+  );
+}
+
 function ConfigIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
@@ -204,6 +215,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     "/rate-limits": <GaugeIcon />,
     "/cost": <CostIcon />,
     "/pii": <ShieldIcon />,
+    "/model-status": <ModelStatusIcon />,
     "/keys": <KeyIcon />,
     "/config": <ConfigIcon />,
     "/users": <UsersIcon />,

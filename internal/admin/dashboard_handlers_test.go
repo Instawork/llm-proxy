@@ -15,6 +15,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/pii"
+	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/Instawork/llm-proxy/internal/usagestats"
 	"github.com/gorilla/mux"
@@ -30,17 +31,29 @@ func testDashboardHandler(t *testing.T) (*handler, *apikeys.Store) {
 	usageRec := usagestats.NewRecorder()
 	piiRec := pii.NewRecorder()
 	circuitRec := circuitstats.NewRecorder()
+	modelStatusRec := modelstatusstats.NewRecorder()
 	costRec.RecordRequest("openai", "iw:abc1234", "user-1", "gpt-4", 0.01, 0.005, 0.005, 100, 50)
 	usageRec.RecordRequest("openai", "gpt-4", "iw:abc1234", "user-1", 100, 50)
 	piiRec.RecordRedaction("openai", "iw:secret-key", nil, 0, time.Millisecond, pii.OutcomeOK)
 	circuitRec.RecordProbe("openai", "openai")
 	circuitRec.RecordProbeClosed("openai", "openai", 200)
+	modelStatusRec.RecordRetired("openai", "o1-mini")
+	modelStatusRec.RecordUnknown("openai", "typo-model")
 
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
+	h.deps.YAMLConfig.RetiredModels = map[string]map[string]config.RetiredModelEntry{
+		"openai": {
+			"o1-mini": {
+				RetiredDate: "2025-10-27",
+				Replacement: "o4-mini",
+			},
+		},
+	}
 	h.deps.CostSummary = costRec.Snapshot
 	h.deps.UsageSummary = usageRec.Snapshot
 	h.deps.PIISummary = piiRec.Snapshot
 	h.deps.CircuitActivity = circuitRec.Snapshot
+	h.deps.ModelStatusSummary = modelStatusRec.Snapshot
 	h.deps.RateLimiter = ratelimit.NewMemoryLimiter(h.deps.YAMLConfig)
 	h.deps.HealthFunc = func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -209,6 +222,36 @@ func TestHandleCircuitActivity_Unavailable(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
 	assert.Equal(t, false, body["available"])
+}
+
+func TestHandleModelStatus(t *testing.T) {
+	h, _ := testDashboardHandler(t)
+	rec := httptest.NewRecorder()
+	h.handleModelStatus(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/model-status", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	body := decodeJSONBody(t, rec)
+	stats, ok := body["stats"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, stats["available"])
+	assert.Equal(t, float64(1), stats["retired_total"])
+	assert.Equal(t, float64(1), stats["unknown_total"])
+
+	registry, ok := body["registry"].(map[string]interface{})
+	require.True(t, ok)
+	retired, ok := registry["retired"].([]interface{})
+	require.True(t, ok)
+	require.NotEmpty(t, retired)
+}
+
+func TestHandleModelStatus_Unavailable(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	rec := httptest.NewRecorder()
+	h.handleModelStatus(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/model-status", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decodeJSONBody(t, rec)
+	stats := body["stats"].(map[string]interface{})
+	assert.Equal(t, false, stats["available"])
 }
 
 func TestHandleRateLimits_WithSnapshotAndRedactedOverrides(t *testing.T) {

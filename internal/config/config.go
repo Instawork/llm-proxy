@@ -42,6 +42,19 @@ type YAMLConfig struct {
 
 	// Providers configuration
 	Providers map[string]ProviderConfig `yaml:"providers"`
+
+	// RetiredModels maps provider -> model slug -> retirement metadata for
+	// request-time short-circuiting before upstream calls.
+	RetiredModels map[string]map[string]RetiredModelEntry `yaml:"retired_models"`
+}
+
+// RetiredModelEntry describes a single retired model. The map key in
+// retired_models is the canonical slug; Aliases lists alternate slugs that
+// resolve to the same retirement metadata.
+type RetiredModelEntry struct {
+	RetiredDate string   `yaml:"retired_date"`
+	Replacement string   `yaml:"replacement"`
+	Aliases     []string `yaml:"aliases,omitempty"`
 }
 
 // FeaturesConfig represents feature toggle configuration
@@ -634,8 +647,10 @@ type ProviderConfig struct {
 
 // ModelConfig represents configuration for a specific model
 type ModelConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Aliases []string `yaml:"aliases,omitempty"` // Alternative model names
+	Enabled     bool     `yaml:"enabled"`
+	Deprecated  bool     `yaml:"deprecated,omitempty"`
+	Replacement string   `yaml:"replacement,omitempty"`
+	Aliases     []string `yaml:"aliases,omitempty"` // Alternative model names
 	// Pricing can be a single price, or a list of tiers.
 	Pricing interface{} `yaml:"pricing,omitempty"`
 }
@@ -1010,6 +1025,50 @@ func (c *YAMLConfig) Validate() error {
 		return fmt.Errorf("invalid admin_dashboard configuration: viewer_limits.personal_monthly_cost_limit_cents cannot be negative")
 	}
 
+	if err := c.validateRetiredModels(); err != nil {
+		return fmt.Errorf("invalid retired_models configuration: %w", err)
+	}
+
+	return nil
+}
+
+func (c *YAMLConfig) validateRetiredModels() error {
+	if c == nil || len(c.RetiredModels) == 0 {
+		return nil
+	}
+	for provider, models := range c.RetiredModels {
+		if len(models) == 0 {
+			continue
+		}
+		seen := make(map[string]string)
+		for canonical, entry := range models {
+			if canonical == "" {
+				return fmt.Errorf("provider %q has an empty retired model key", provider)
+			}
+			if entry.RetiredDate == "" {
+				return fmt.Errorf("provider %q retired model %q: retired_date is required", provider, canonical)
+			}
+			if entry.Replacement == "" {
+				return fmt.Errorf("provider %q retired model %q: replacement is required", provider, canonical)
+			}
+			if other, ok := seen[canonical]; ok {
+				return fmt.Errorf("provider %q: duplicate retired slug %q (also listed under %q)", provider, canonical, other)
+			}
+			seen[canonical] = canonical
+			for _, alias := range entry.Aliases {
+				if alias == "" {
+					return fmt.Errorf("provider %q retired model %q: empty alias", provider, canonical)
+				}
+				if alias == canonical {
+					return fmt.Errorf("provider %q retired model %q: alias duplicates canonical name", provider, canonical)
+				}
+				if other, ok := seen[alias]; ok {
+					return fmt.Errorf("provider %q: retired slug %q is listed twice (under %q and %q)", provider, alias, other, canonical)
+				}
+				seen[alias] = canonical
+			}
+		}
+	}
 	return nil
 }
 
@@ -1365,6 +1424,52 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 	}
 
 	return mp, nil
+}
+
+// GetModelConfig returns the model configuration for a provider and model name,
+// resolving aliases to the canonical model entry.
+func (c *YAMLConfig) GetModelConfig(provider, model string) (*ModelConfig, string) {
+	if c == nil || model == "" {
+		return nil, ""
+	}
+	providerConfig, exists := c.Providers[provider]
+	if !exists {
+		return nil, ""
+	}
+	if mc, ok := providerConfig.Models[model]; ok {
+		return &mc, model
+	}
+	for canonicalName, mc := range providerConfig.Models {
+		for _, alias := range mc.Aliases {
+			if alias == model {
+				return &mc, canonicalName
+			}
+		}
+	}
+	return nil, ""
+}
+
+// LookupRetiredModel returns retirement metadata when the provider/model slug
+// is listed in retired_models (canonical name or alias).
+func (c *YAMLConfig) LookupRetiredModel(provider, model string) (RetiredModelEntry, bool) {
+	if c == nil || model == "" {
+		return RetiredModelEntry{}, false
+	}
+	providerModels, ok := c.RetiredModels[provider]
+	if !ok {
+		return RetiredModelEntry{}, false
+	}
+	if entry, ok := providerModels[model]; ok {
+		return entry, true
+	}
+	for _, entry := range providerModels {
+		for _, alias := range entry.Aliases {
+			if alias == model {
+				return entry, true
+			}
+		}
+	}
+	return RetiredModelEntry{}, false
 }
 
 // GetModelPricing returns the pricing information for a specific provider and model
