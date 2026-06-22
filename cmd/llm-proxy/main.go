@@ -28,6 +28,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/fake"
 	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/middleware"
+	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/provision"
@@ -1419,6 +1420,16 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
 	}
+
+	var modelStatusRecorder *modelstatusstats.Recorder
+	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
+		modelStatusRecorder = modelstatusstats.NewRecorder(rs.RedisClient())
+	} else {
+		modelStatusRecorder = modelstatusstats.NewRecorder(nil)
+	}
+	modelStatusMetrics := initializeCircuitMetrics(yamlConfig)
+	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, modelStatusRecorder, modelStatusMetrics))
+
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
 		costLimitOpts := middleware.CostLimitOptions{
 			FailClosedOnReadError: yamlConfig.Features.CostTracking.FailClosedOnReadError,

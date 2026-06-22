@@ -119,6 +119,58 @@ features:
   #     # endpoint_url: http://localhost:4566  # MinIO/localstack
 
 # =============================================================================
+# RETIRED MODELS (short-circuited at proxy — 410 Gone)
+# =============================================================================
+
+retired_models:
+  openai:
+    "o1-mini": { retired_date: "2025-10-27", replacement: "o4-mini" }
+    "o1-mini-2024-09-12": { retired_date: "2025-10-27", replacement: "o4-mini" }
+    "o1-preview": { retired_date: "2025-07-28", replacement: "o3" }
+    "o1-preview-2024-09-12": { retired_date: "2025-07-28", replacement: "o3" }
+  anthropic:
+    "claude-sonnet-4-0": { retired_date: "2026-06-15", replacement: "claude-sonnet-4-6" }
+    "claude-sonnet-4": { retired_date: "2026-06-15", replacement: "claude-sonnet-4-6" }
+    "claude-sonnet-4-20250514": { retired_date: "2026-06-15", replacement: "claude-sonnet-4-6" }
+    "claude-opus-4-0": { retired_date: "2026-06-15", replacement: "claude-opus-4-8" }
+    "claude-opus-4": { retired_date: "2026-06-15", replacement: "claude-opus-4-8" }
+    "claude-opus-4-20250514": { retired_date: "2026-06-15", replacement: "claude-opus-4-8" }
+    "claude-3-7-sonnet": { retired_date: "2026-02-19", replacement: "claude-sonnet-4-6" }
+    "claude-3-7-sonnet-latest": { retired_date: "2026-02-19", replacement: "claude-sonnet-4-6" }
+    "claude-3.7-sonnet": { retired_date: "2026-02-19", replacement: "claude-sonnet-4-6" }
+    "claude-sonnet-3.7": { retired_date: "2026-02-19", replacement: "claude-sonnet-4-6" }
+    "claude-3-7-sonnet-20250219": { retired_date: "2026-02-19", replacement: "claude-sonnet-4-6" }
+    "claude-3-5-sonnet": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-3-5-sonnet-latest": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-3.5-sonnet": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-sonnet-3.5": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-3-5-sonnet-20241022": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-3-5-sonnet-20240628": { retired_date: "2025-10-28", replacement: "claude-sonnet-4-6" }
+    "claude-3-5-haiku": { retired_date: "2026-02-19", replacement: "claude-haiku-4-5" }
+    "claude-3-5-haiku-latest": { retired_date: "2026-02-19", replacement: "claude-haiku-4-5" }
+    "claude-3.5-haiku": { retired_date: "2026-02-19", replacement: "claude-haiku-4-5" }
+    "claude-haiku-3.5": { retired_date: "2026-02-19", replacement: "claude-haiku-4-5" }
+    "claude-3-5-haiku-20241022": { retired_date: "2026-02-19", replacement: "claude-haiku-4-5" }
+    "claude-3-haiku-20240307": { retired_date: "2026-04-20", replacement: "claude-haiku-4-5" }
+    "claude-3-haiku": { retired_date: "2026-04-20", replacement: "claude-haiku-4-5" }
+    "claude-haiku": { retired_date: "2026-04-20", replacement: "claude-haiku-4-5" }
+  gemini:
+    "gemini-2.0-flash": { retired_date: "2026-06-01", replacement: "gemini-3.5-flash" }
+    "gemini-flash-2.0": { retired_date: "2026-06-01", replacement: "gemini-3.5-flash" }
+    "gemini-2-0-flash": { retired_date: "2026-06-01", replacement: "gemini-3.5-flash" }
+    "gemini-2.0-flash-001": { retired_date: "2026-06-01", replacement: "gemini-3.5-flash" }
+    "gemini-2.0-flash-exp": { retired_date: "2026-06-01", replacement: "gemini-3.5-flash" }
+    "gemini-2.0-flash-lite": { retired_date: "2026-06-01", replacement: "gemini-3.1-flash-lite" }
+    "gemini-flash-lite-2.0": { retired_date: "2026-06-01", replacement: "gemini-3.1-flash-lite" }
+    "gemini-2-0-flash-lite": { retired_date: "2026-06-01", replacement: "gemini-3.1-flash-lite" }
+    "gemini-2.0-flash-lite-001": { retired_date: "2026-06-01", replacement: "gemini-3.1-flash-lite" }
+    "gemini-2.0-flash-lite-exp": { retired_date: "2026-06-01", replacement: "gemini-3.1-flash-lite" }
+    "gemini-3-pro": { retired_date: "2026-03-09", replacement: "gemini-3.1-pro" }
+    "gemini-3-pro-preview": { retired_date: "2026-03-09", replacement: "gemini-3.1-pro" }
+    "gemini-3-0-pro": { retired_date: "2026-03-09", replacement: "gemini-3.1-pro" }
+  bedrock: {}
+
+# =============================================================================
 # PROVIDER CONFIGURATIONS
 # =============================================================================
 
@@ -284,7 +336,7 @@ providers:
           output: 1.50
       "o1":
         enabled: true
-        aliases: ["o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12"]
+        aliases: ["o1-2024-12-17"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -295,19 +347,6 @@ providers:
         pricing:
           input: 15.00
           output: 60.00
-      "o1-mini":
-        enabled: true
-        aliases: ["o1-mini-2024-09-12"]
-        limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
-        pricing:
-          input: 1.10
-          output: 4.40
       "o3-mini":
         enabled: true
         aliases: ["o3-mini-2025-01-31"]
@@ -323,12 +362,7 @@ providers:
           output: 4.40
       "o4-mini":
         enabled: true
-        aliases:
-          [
-            "o4-mini-2025-04-16",
-            "o4-mini-deep-research",
-            "o4-mini-deep-research-2025-06-26",
-          ]
+        aliases: ["o4-mini-2025-04-16"]
         limits:
           tokens_per_minute: 200_000
           requests_per_minute: 2_000
@@ -341,8 +375,7 @@ providers:
           output: 4.40
       "o3":
         enabled: true
-        aliases:
-          ["o3-2025-04-16", "o3-deep-research", "o3-deep-research-2025-06-26"]
+        aliases: ["o3-2025-04-16"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -431,6 +464,58 @@ providers:
         pricing:
           input: 30.00
           output: 180.00
+      "gpt-5.5":
+        enabled: true
+        aliases: ["gpt-5.5-2026-04-23"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 5.00
+          output: 30.00
+      "gpt-5.5-pro":
+        enabled: true
+        aliases: ["gpt-5.5-pro-2026-04-23"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 30.00
+          output: 180.00
+      "o3-deep-research":
+        enabled: true
+        aliases: ["o3-deep-research-2025-06-26"]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 40.00
+      "o4-mini-deep-research":
+        enabled: true
+        aliases: ["o4-mini-deep-research-2025-06-26"]
+        limits:
+          tokens_per_minute: 200_000
+          requests_per_minute: 2_000
+          tokens_per_day: 4_800_000
+          requests_per_day: 2_880_000
+          burst_tokens: 20_000
+          burst_requests: 200
+        pricing:
+          input: 2.00
+          output: 8.00
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -539,19 +624,6 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
-      "claude-opus-4-0":
-        enabled: true
-        aliases: ["claude-opus-4", "claude-opus-4-20250514"]
-        limits:
-          tokens_per_minute: 40_000
-          requests_per_minute: 1_000
-          tokens_per_day: 960_000
-          requests_per_day: 1_440_000
-          burst_tokens: 4_000
-          burst_requests: 100
-        pricing:
-          input: 15.00
-          output: 75.00
       "claude-sonnet-4-6":
         enabled: true
         aliases: ["claude-sonnet-4.6", "claude-sonnet-4-6-20260217"]
@@ -563,29 +635,8 @@ providers:
           burst_tokens: 8_000
           burst_requests: 100
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
-      "claude-sonnet-4-0":
-        enabled: true
-        aliases: ["claude-sonnet-4", "claude-sonnet-4-20250514"]
-        limits:
-          tokens_per_minute: 80_000
-          requests_per_minute: 1_000
-          tokens_per_day: 1_920_000
-          requests_per_day: 1_440_000
-          burst_tokens: 8_000
-          burst_requests: 100
-        pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "claude-sonnet-4-5":
         enabled: true
         aliases: ["claude-sonnet-4-5-20250929", "claude-sonnet-4.5"]
@@ -603,28 +654,10 @@ providers:
           - threshold: 0
             input: 6.00
             output: 22.50
-      "claude-3-7-sonnet":
-        enabled: true
-        aliases:
-          [
-            "claude-3-7-sonnet-latest",
-            "claude-3.7-sonnet",
-            "claude-sonnet-3.7",
-            "claude-3-7-sonnet-20250219",
-          ]
-        limits:
-          tokens_per_minute: 80_000
-          requests_per_minute: 1_000
-          tokens_per_day: 1_920_000
-          requests_per_day: 1_440_000
-          burst_tokens: 8_000
-          burst_requests: 100
-        pricing:
-          input: 3.00
-          output: 15.00
-
       "claude-opus-4-1":
         enabled: true
+        deprecated: true
+        replacement: "claude-opus-4-7"
         aliases: ["claude-opus-4-1-20250805", "claude-opus-4.1"]
         limits:
           tokens_per_minute: 40_000
@@ -636,26 +669,6 @@ providers:
         pricing:
           input: 15.00
           output: 75.00
-      "claude-3-5-sonnet":
-        enabled: true
-        aliases:
-          [
-            "claude-3-5-sonnet-latest",
-            "claude-3.5-sonnet",
-            "claude-sonnet-3.5",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-sonnet-20240628",
-          ]
-        limits:
-          tokens_per_minute: 80_000
-          requests_per_minute: 1_000
-          tokens_per_day: 1_920_000
-          requests_per_day: 1_440_000
-          burst_tokens: 8_000
-          burst_requests: 100
-        pricing:
-          input: 3.00
-          output: 15.00
       "claude-haiku-4-5":
         enabled: true
         aliases: ["claude-haiku-4.5", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251015"]
@@ -669,38 +682,6 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
-      "claude-3-5-haiku":
-        enabled: true
-        aliases:
-          [
-            "claude-3-5-haiku-latest",
-            "claude-3.5-haiku",
-            "claude-haiku-3.5",
-            "claude-3-5-haiku-20241022",
-          ]
-        limits:
-          tokens_per_minute: 100_000
-          requests_per_minute: 1_000
-          tokens_per_day: 2_400_000
-          requests_per_day: 1_440_000
-          burst_tokens: 10_000
-          burst_requests: 100
-        pricing:
-          input: 0.80
-          output: 4.00
-      "claude-3-haiku-20240307":
-        enabled: true
-        aliases: ["claude-3-haiku", "claude-haiku"]
-        limits:
-          tokens_per_minute: 100_000
-          requests_per_minute: 1_000
-          tokens_per_day: 2_400_000
-          requests_per_day: 1_440_000
-          burst_tokens: 10_000
-          burst_requests: 100
-        pricing:
-          input: 0.25
-          output: 1.25
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
@@ -820,23 +801,6 @@ providers:
           - threshold: 0
             input: 4.00
             output: 18.00
-      "gemini-3-pro":
-        enabled: true
-        aliases: ["gemini-3-pro-preview", "gemini-3-0-pro"]
-        limits:
-          tokens_per_minute: 5_000_000
-          requests_per_minute: 1_000
-          tokens_per_day: 120_000_000
-          requests_per_day: 1_440_000
-          burst_tokens: 500_000
-          burst_requests: 100
-        pricing:
-          - threshold: 200_000
-            input: 2.00
-            output: 12.00
-          - threshold: 0
-            input: 4.00
-            output: 18.00
       "gemini-3-flash":
         enabled: true
         aliases: ["gemini-3-flash-preview", "gemini-3-0-flash"]
@@ -850,6 +814,19 @@ providers:
         pricing:
           input: 0.50
           output: 3.00
+      "gemini-3.5-flash":
+        enabled: true
+        aliases: ["gemini-flash-3.5"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 1.50
+          output: 9.00
       "gemini-3.1-flash-lite":
         enabled: true
         aliases: ["gemini-3.1-flash-lite-preview", "gemini-3-1-flash-lite"]
@@ -865,6 +842,8 @@ providers:
           output: 1.50
       "gemini-2.5-pro":
         enabled: true
+        deprecated: true
+        replacement: "gemini-3.1-pro"
         aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
         limits:
           tokens_per_minute: 5_000_000
@@ -942,43 +921,6 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
-      "gemini-2.0-flash":
-        enabled: true
-        aliases:
-          [
-            "gemini-flash-2.0",
-            "gemini-2-0-flash",
-            "gemini-2.0-flash-001",
-            "gemini-2.0-flash-exp",
-          ]
-        limits:
-          tokens_per_minute: 10_000_000
-          requests_per_minute: 10_000
-          tokens_per_day: 240_000_000
-          requests_per_day: 14_400_000
-          burst_tokens: 1_000_000
-          burst_requests: 1_000
-        pricing:
-          input: 0.10
-          output: 0.40
-      "gemini-2.0-flash-lite":
-        enabled: true
-        aliases:
-          [
-            "gemini-flash-lite-2.0",
-            "gemini-2.0-flash-lite-001",
-            "gemini-2.0-flash-lite-exp",
-          ]
-        limits:
-          tokens_per_minute: 10_000_000
-          requests_per_minute: 10_000
-          tokens_per_day: 240_000_000
-          requests_per_day: 14_400_000
-          burst_tokens: 1_000_000
-          burst_requests: 1_000
-        pricing:
-          input: 0.075
-          output: 0.30
       "gemini-1.5-pro":
         enabled: true
         aliases:
