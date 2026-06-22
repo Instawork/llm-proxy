@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -44,7 +43,10 @@ func ModelStatusMiddleware(
 			if entry, retired := cfg.LookupRetiredModel(providerName, model); retired {
 				recorder.RecordRetired(providerName, model)
 				emitModelMetric(metrics, "model.retired_call", providerName, model)
-				writeRetiredResponse(w, providerName, model, entry)
+				if err := providers.WriteRetiredModelResponse(w, provider, model, entry); err != nil {
+					log.Printf("model status: failed to encode retired response: %v", err)
+					fmt.Fprintf(w, `{"error":"model retired"}`)
+				}
 				return
 			}
 
@@ -71,67 +73,4 @@ func emitModelMetric(metrics circuit.MetricsSink, name, provider, model string) 
 		"model:" + model,
 	}
 	_ = metrics.Incr(name, tags, 1)
-}
-
-func retiredMessage(model string, entry config.RetiredModelEntry) string {
-	msg := fmt.Sprintf("The model '%s' has been retired", model)
-	if entry.RetiredDate != "" {
-		msg += fmt.Sprintf(" as of %s", entry.RetiredDate)
-	}
-	if entry.Replacement != "" {
-		msg += fmt.Sprintf(". Migrate to '%s'", entry.Replacement)
-	}
-	msg += "."
-	return msg
-}
-
-func writeRetiredResponse(w http.ResponseWriter, providerName, model string, entry config.RetiredModelEntry) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusGone)
-	body, err := formatRetiredError(providerName, model, entry)
-	if err != nil {
-		log.Printf("model status: failed to encode retired response: %v", err)
-		fmt.Fprintf(w, `{"error":"model retired"}`)
-		return
-	}
-	_, _ = w.Write(body)
-}
-
-func formatRetiredError(providerName, model string, entry config.RetiredModelEntry) ([]byte, error) {
-	msg := retiredMessage(model, entry)
-	switch providerName {
-	case "anthropic":
-		return json.Marshal(map[string]interface{}{
-			"type": "error",
-			"error": map[string]string{
-				"type":    "not_found_error",
-				"message": msg,
-			},
-		})
-	case "gemini":
-		return json.Marshal(map[string]interface{}{
-			"error": map[string]interface{}{
-				"code":    410,
-				"message": msg,
-				"status":  "GONE",
-			},
-		})
-	case "bedrock":
-		return json.Marshal(map[string]string{
-			"message": msg,
-		})
-	default:
-		payload := map[string]interface{}{
-			"error": map[string]interface{}{
-				"message": msg,
-				"type":    "invalid_request_error",
-				"param":   "model",
-				"code":    "model_retired",
-			},
-		}
-		if entry.Replacement != "" {
-			payload["error"].(map[string]interface{})["replacement"] = entry.Replacement
-		}
-		return json.Marshal(payload)
-	}
 }
