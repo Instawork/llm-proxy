@@ -58,6 +58,28 @@ curl -s -F "image=@/tmp/ocr-test.png" http://localhost:8000/extract-text
 
 Deactivate the venv when done: `deactivate`. The `.venv/` directory is gitignored.
 
+## Testdata and validation
+
+Committed synthetic fixtures live in `testdata/` (see `testdata/README.md`).
+
+```bash
+# From repo root — OCR + Presidio against PNG fixtures
+make validate-id-gate-pipeline
+
+# Full Go middleware integration (OCR + Presidio + IDGateMiddleware)
+make test-id-gate
+
+# Fargate-like OCR benchmark (Docker --cpus=1 --memory=2g)
+make benchmark-id-gate-fargate
+```
+
+Regenerate PNGs after editing `scripts/generate_testdata.py`:
+
+```bash
+docker run --rm -v "$PWD/ocr_sidecar:/app" -w /app llm-proxy-id-gate-ocr-sidecar \
+  python scripts/generate_testdata.py
+```
+
 ## Go proxy + full gate
 
 The ID gate middleware lives in the main llm-proxy binary. Unit tests:
@@ -75,7 +97,7 @@ docker compose --profile pii_redact up -d ocr-sidecar presidio llm-proxy
 # Send a multimodal chat request with a base64 image_url to the proxy on :9002
 ```
 
-With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embedded images and returns **403** when Presidio detects `US_PASSPORT` or `US_DRIVER_LICENSE` above the score threshold.
+With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embedded images and returns **403** when Presidio detects `US_PASSPORT` or `US_DRIVER_LICENSE` at or above the score threshold (default **0.4** — see `testdata/README.md`).
 
 ## Tuning
 

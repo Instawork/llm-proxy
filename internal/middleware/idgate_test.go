@@ -145,4 +145,8 @@ func TestGovIDHit(t *testing.T) {
 	if !ok || entity != "US_DRIVER_LICENSE" || score != 0.61 {
 		t.Fatalf("got (%v, %q, %v)", ok, entity, score)
 	}
+	ok, _, _ = govIDHit([]redact.Span{{EntityType: "US_PASSPORT", Score: 0.4}}, redact.DefaultGovIDEntityTypes, 0.4)
+	if !ok {
+		t.Fatal("expected score 0.4 to block at threshold 0.4")
+	}
 }

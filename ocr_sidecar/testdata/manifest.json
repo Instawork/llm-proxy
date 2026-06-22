@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "note": "Synthetic images only. Regenerate with: python scripts/generate_testdata.py",
+  "cases": [
+    {
+      "file": "passport_us_block.png",
+      "path": "testdata/passport_us_block.png",
+      "description": "Synthetic US passport card; OCR should yield a 9-digit passport number.",
+      "expect_block": true,
+      "expected_entities": [
+        "US_PASSPORT"
+      ]
+    },
+    {
+      "file": "driver_license_us_block.png",
+      "path": "testdata/driver_license_us_block.png",
+      "description": "Synthetic California-style driver license text.",
+      "expect_block": true,
+      "expected_entities": [
+        "US_DRIVER_LICENSE"
+      ]
+    },
+    {
+      "file": "receipt_clear.png",
+      "path": "testdata/receipt_clear.png",
+      "description": "Non-ID document; should pass the ID gate.",
+      "expect_block": false,
+      "expected_entities": []
+    }
+  ]
+}

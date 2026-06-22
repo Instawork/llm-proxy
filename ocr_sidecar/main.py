@@ -13,6 +13,7 @@ from onnxtr.models import ocr_predictor
 logger = logging.getLogger("ocr_sidecar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     if raw == "":

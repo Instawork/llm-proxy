@@ -113,7 +113,7 @@ features:
     enabled: true
     ocr_sidecar_url: "http://localhost:8000"
     fail_mode: "open"
-    score_threshold: 0.6
+    score_threshold: 0.4
     timeout_ms: 30000
   redact_api:
     enabled: true

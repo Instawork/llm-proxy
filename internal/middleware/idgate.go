@@ -55,7 +55,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 	}
 	scoreThreshold := cfg.ScoreThreshold
 	if scoreThreshold <= 0 {
-		scoreThreshold = 0.6
+		scoreThreshold = 0.4
 	}
 	entityTypes := cfg.EntityTypes
 	if len(entityTypes) == 0 {
@@ -179,7 +179,7 @@ func govIDHit(spans []redact.Span, entityTypes []string, threshold float64) (boo
 		if _, ok := allowed[span.EntityType]; !ok {
 			continue
 		}
-		if span.Score > threshold {
+		if span.Score >= threshold {
 			return true, span.EntityType, span.Score
 		}
 	}
