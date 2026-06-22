@@ -244,17 +244,17 @@ func (s *Store) BeginKeyRequestApproval(ctx context.Context, id, reviewedBy stri
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: KeyRequestPrefix + id},
 		},
-		UpdateExpression: aws.String("SET #status = :approving, reviewed_by = :by, reviewed_at = :at, updated_at = :updated"),
+		UpdateExpression:    aws.String("SET #status = :approving, reviewed_by = :by, reviewed_at = :at, updated_at = :updated"),
 		ConditionExpression: aws.String("#status = :pending"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pending":  &types.AttributeValueMemberS{Value: KeyRequestStatusPending},
+			":pending":   &types.AttributeValueMemberS{Value: KeyRequestStatusPending},
 			":approving": &types.AttributeValueMemberS{Value: KeyRequestStatusApproving},
-			":by":       &types.AttributeValueMemberS{Value: reviewedBy},
-			":at":       reviewedAt,
-			":updated":  updatedAt,
+			":by":        &types.AttributeValueMemberS{Value: reviewedBy},
+			":at":        reviewedAt,
+			":updated":   updatedAt,
 		},
 		ReturnValues: types.ReturnValueAllNew,
 	})
@@ -290,7 +290,7 @@ func (s *Store) CompleteKeyRequestApproval(ctx context.Context, id, createdKey s
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: KeyRequestPrefix + id},
 		},
-		UpdateExpression: aws.String("SET #status = :approved, created_key = :key, updated_at = :updated"),
+		UpdateExpression:    aws.String("SET #status = :approved, created_key = :key, updated_at = :updated"),
 		ConditionExpression: aws.String("#status = :approving"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
@@ -330,7 +330,7 @@ func (s *Store) RollbackKeyRequestApproval(ctx context.Context, id string) error
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: KeyRequestPrefix + id},
 		},
-		UpdateExpression: aws.String("SET #status = :pending, updated_at = :updated REMOVE reviewed_by, reviewed_at, created_key"),
+		UpdateExpression:    aws.String("SET #status = :pending, updated_at = :updated REMOVE reviewed_by, reviewed_at, created_key"),
 		ConditionExpression: aws.String("#status = :approving"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
@@ -365,7 +365,7 @@ func (s *Store) RejectKeyRequest(ctx context.Context, id, reviewedBy, reason str
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: KeyRequestPrefix + id},
 		},
-		UpdateExpression: aws.String("SET #status = :rejected, reviewed_by = :by, reviewed_at = :at, rejection_reason = :reason, updated_at = :updated"),
+		UpdateExpression:    aws.String("SET #status = :rejected, reviewed_by = :by, reviewed_at = :at, rejection_reason = :reason, updated_at = :updated"),
 		ConditionExpression: aws.String("#status = :pending"),
 		ExpressionAttributeNames: map[string]string{
 			"#status": "status",
