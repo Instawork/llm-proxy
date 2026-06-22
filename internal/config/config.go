@@ -161,7 +161,7 @@ type IDGateConfig struct {
 	// "open" (default) passes through; "closed" aborts with 503.
 	FailMode string `yaml:"fail_mode"`
 
-	// ScoreThreshold is the minimum Presidio confidence to block. Default: 0.6.
+	// ScoreThreshold is the minimum Presidio confidence to block. Default: 0.4.
 	ScoreThreshold float64 `yaml:"score_threshold"`
 
 	// EntityTypes scopes gov-ID detection. Empty -> redact.DefaultGovIDEntityTypes.
