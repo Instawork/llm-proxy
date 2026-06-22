@@ -48,10 +48,13 @@ type YAMLConfig struct {
 	RetiredModels map[string]map[string]RetiredModelEntry `yaml:"retired_models"`
 }
 
-// RetiredModelEntry describes a single retired model.
+// RetiredModelEntry describes a single retired model. The map key in
+// retired_models is the canonical slug; Aliases lists alternate slugs that
+// resolve to the same retirement metadata.
 type RetiredModelEntry struct {
-	RetiredDate string `yaml:"retired_date"`
-	Replacement string `yaml:"replacement"`
+	RetiredDate string   `yaml:"retired_date"`
+	Replacement string   `yaml:"replacement"`
+	Aliases     []string `yaml:"aliases,omitempty"`
 }
 
 // FeaturesConfig represents feature toggle configuration
@@ -1022,6 +1025,50 @@ func (c *YAMLConfig) Validate() error {
 		return fmt.Errorf("invalid admin_dashboard configuration: viewer_limits.personal_monthly_cost_limit_cents cannot be negative")
 	}
 
+	if err := c.validateRetiredModels(); err != nil {
+		return fmt.Errorf("invalid retired_models configuration: %w", err)
+	}
+
+	return nil
+}
+
+func (c *YAMLConfig) validateRetiredModels() error {
+	if c == nil || len(c.RetiredModels) == 0 {
+		return nil
+	}
+	for provider, models := range c.RetiredModels {
+		if len(models) == 0 {
+			continue
+		}
+		seen := make(map[string]string)
+		for canonical, entry := range models {
+			if canonical == "" {
+				return fmt.Errorf("provider %q has an empty retired model key", provider)
+			}
+			if entry.RetiredDate == "" {
+				return fmt.Errorf("provider %q retired model %q: retired_date is required", provider, canonical)
+			}
+			if entry.Replacement == "" {
+				return fmt.Errorf("provider %q retired model %q: replacement is required", provider, canonical)
+			}
+			if other, ok := seen[canonical]; ok {
+				return fmt.Errorf("provider %q: duplicate retired slug %q (also listed under %q)", provider, canonical, other)
+			}
+			seen[canonical] = canonical
+			for _, alias := range entry.Aliases {
+				if alias == "" {
+					return fmt.Errorf("provider %q retired model %q: empty alias", provider, canonical)
+				}
+				if alias == canonical {
+					return fmt.Errorf("provider %q retired model %q: alias duplicates canonical name", provider, canonical)
+				}
+				if other, ok := seen[alias]; ok {
+					return fmt.Errorf("provider %q: retired slug %q is listed twice (under %q and %q)", provider, alias, other, canonical)
+				}
+				seen[alias] = canonical
+			}
+		}
+	}
 	return nil
 }
 
@@ -1400,7 +1447,7 @@ func (c *YAMLConfig) GetModelConfig(provider, model string) (*ModelConfig, strin
 }
 
 // LookupRetiredModel returns retirement metadata when the provider/model slug
-// is listed in retired_models.
+// is listed in retired_models (canonical name or alias).
 func (c *YAMLConfig) LookupRetiredModel(provider, model string) (RetiredModelEntry, bool) {
 	if c == nil || model == "" {
 		return RetiredModelEntry{}, false
@@ -1409,8 +1456,17 @@ func (c *YAMLConfig) LookupRetiredModel(provider, model string) (RetiredModelEnt
 	if !ok {
 		return RetiredModelEntry{}, false
 	}
-	entry, ok := providerModels[model]
-	return entry, ok
+	if entry, ok := providerModels[model]; ok {
+		return entry, true
+	}
+	for _, entry := range providerModels {
+		for _, alias := range entry.Aliases {
+			if alias == model {
+				return entry, true
+			}
+		}
+	}
+	return RetiredModelEntry{}, false
 }
 
 // GetModelPricing returns the pricing information for a specific provider and model
