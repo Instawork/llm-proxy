@@ -64,6 +64,7 @@ type FeaturesConfig struct {
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
+	IDGate           IDGateConfig           `yaml:"id_gate"`
 	RedactAPI        RedactAPIConfig        `yaml:"redact_api"`
 	FakeUpstream     FakeUpstreamConfig     `yaml:"fake_upstream"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
@@ -144,6 +145,36 @@ type PIIRedactConfig struct {
 	// DefaultAllowStreaming controls whether wire-mode requests may keep
 	// stream:true. Per-key allow_streaming overrides this. Default: true.
 	DefaultAllowStreaming *bool `yaml:"default_allow_streaming,omitempty"`
+}
+
+// IDGateConfig configures OCR + Presidio scanning of embedded chat images to
+// block government identity documents before they reach an upstream LLM.
+type IDGateConfig struct {
+	// Enabled installs the ID gate middleware when true.
+	Enabled bool `yaml:"enabled"`
+
+	// OCRSidecarURL is the base URL of the OnnxTR OCR sidecar.
+	// docker-compose: http://ocr-sidecar:8000. ECS: localhost in the same task.
+	OCRSidecarURL string `yaml:"ocr_sidecar_url"`
+
+	// FailMode controls behaviour when OCR or Presidio errors.
+	// "open" (default) passes through; "closed" aborts with 503.
+	FailMode string `yaml:"fail_mode"`
+
+	// ScoreThreshold is the minimum Presidio confidence to block. Default: 0.6.
+	ScoreThreshold float64 `yaml:"score_threshold"`
+
+	// EntityTypes scopes gov-ID detection. Empty -> redact.DefaultGovIDEntityTypes.
+	EntityTypes []string `yaml:"entity_types,omitempty"`
+
+	// MaxBodyBytes caps request bodies scanned for images. 0 -> middleware 1 MiB default.
+	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+
+	// MaxImageBytes caps each decoded embedded image. Default: 10 MiB.
+	MaxImageBytes int `yaml:"max_image_bytes,omitempty"`
+
+	// TimeoutMs caps each OCR round trip. Default: 30000.
+	TimeoutMs int `yaml:"timeout_ms"`
 }
 
 // RedactAPIConfig gates the standalone POST /redact endpoint for generic
@@ -1005,9 +1036,15 @@ func (c *YAMLConfig) Validate() error {
 	// Validate PII redaction config if enabled so a typo in fail_mode or
 	// a missing analyzer_url is surfaced via --validate-config rather than
 	// at first request.
-	if c.Features.PIIRedact.Enabled || c.Features.PIIRedact.AllowPerKeyOverride || c.Features.RedactAPI.Enabled {
+	if c.Features.PIIRedact.Enabled || c.Features.PIIRedact.AllowPerKeyOverride || c.Features.RedactAPI.Enabled || c.Features.IDGate.Enabled {
 		if err := c.validatePIIRedactConfig(); err != nil {
 			return fmt.Errorf("invalid pii_redact configuration: %w", err)
+		}
+	}
+
+	if c.Features.IDGate.Enabled {
+		if err := c.validateIDGateConfig(); err != nil {
+			return fmt.Errorf("invalid id_gate configuration: %w", err)
 		}
 	}
 
@@ -1096,6 +1133,36 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	}
 	if r.MaxBodyBytes < 0 {
 		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
+	return nil
+}
+
+func (c *YAMLConfig) validateIDGateConfig() error {
+	g := c.Features.IDGate
+
+	if g.OCRSidecarURL == "" {
+		return fmt.Errorf("ocr_sidecar_url is required when id_gate is enabled")
+	}
+	if c.Features.PIIRedact.AnalyzerURL == "" {
+		return fmt.Errorf("features.pii_redact.analyzer_url is required when id_gate is enabled")
+	}
+
+	switch g.FailMode {
+	case "", "open", "closed":
+	default:
+		return fmt.Errorf("fail_mode must be one of open, closed (got %q)", g.FailMode)
+	}
+	if g.ScoreThreshold < 0 || g.ScoreThreshold > 1 {
+		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", g.ScoreThreshold)
+	}
+	if g.MaxBodyBytes < 0 {
+		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
+	if g.MaxImageBytes < 0 {
+		return fmt.Errorf("max_image_bytes cannot be negative")
+	}
+	if g.TimeoutMs < 0 {
+		return fmt.Errorf("timeout_ms cannot be negative")
 	}
 	return nil
 }

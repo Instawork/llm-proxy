@@ -70,6 +70,12 @@ features:
     analyzer_url: "http://presidio:3000"
     fail_mode: "open"
     allow_per_key_override: true
+  id_gate:
+    enabled: true
+    ocr_sidecar_url: "http://ocr-sidecar:8000"
+    fail_mode: "open"
+    score_threshold: 0.6
+    timeout_ms: 30000
   redact_api:
     enabled: true
     fail_mode: closed

@@ -45,6 +45,7 @@ services:
       # over this network; production ECS task definitions point at
       # localhost in the same task instead.
       - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
+      - OCR_SIDECAR_URL=${OCR_SIDECAR_URL:-http://ocr-sidecar:8000}
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health" ]
@@ -138,6 +139,31 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # OnnxTR OCR sidecar — government ID gate (image text extraction)
+  # ---------------------------------------------------------------------------
+  ocr-sidecar:
+    build:
+      context: ./ocr_sidecar
+      dockerfile: Dockerfile
+    container_name: llm-proxy-ocr-sidecar
+    ports:
+      - "${OCR_SIDECAR_PORT:-8000}:8000"
+    environment:
+      - OCR_MAX_WORKERS=${OCR_MAX_WORKERS:-}
+      - OCR_MAX_CONCURRENCY=${OCR_MAX_CONCURRENCY:-}
+      - OCR_QUEUE_TIMEOUT_SEC=${OCR_QUEUE_TIMEOUT_SEC:-5.0}
+      - OCR_INFER_TIMEOUT_SEC=${OCR_INFER_TIMEOUT_SEC:-30.0}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - llm-proxy-network
     restart: unless-stopped

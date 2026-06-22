@@ -21,6 +21,8 @@ features:
     allow_per_key_override: false
   redact_api:
     enabled: false
+  id_gate:
+    enabled: false
   admin_dashboard:
     # HTTP dashboard server off (UI served only by the standalone service)...
     enabled: false
