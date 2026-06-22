@@ -116,6 +116,8 @@ export default function Router() {
               </RequireRole>,
             )}
           />
+          <Route path="/request-key" element={<Navigate to="/keys?request=1" replace />} />
+          <Route path="/key-requests" element={<Navigate to="/keys?tab=requests" replace />} />
           <Route
             path="/users"
             element={shell(

@@ -225,91 +225,18 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := apikeys.ValidatePIIOffBedrockPolicy(
-		h.globalPIIEnabled(),
-		req.Provider,
-		req.RedactPII,
-		h.adminBypassPIIBedrockPolicy(r),
-	); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	actualKey := strings.TrimSpace(req.ActualKey)
-	var meta apikeys.KeyCreateMeta
-
-	if req.AutoProvision {
-		if h.deps.KeyProvisioner == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "key provisioning is not configured"})
-			return
-		}
-		if _, ok := h.deps.KeyProvisioner.ForProvider(req.Provider); !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "auto_provision is not available for provider " + req.Provider,
-			})
-			return
-		}
-		provName := "llm-proxy:" + provision.SanitizeName(req.Description)
-		tier := ""
-		if req.Tags != nil {
-			tier = strings.TrimSpace(req.Tags["tier"])
-		}
-		res, err := h.deps.KeyProvisioner.Provision(r.Context(), req.Provider, provision.ProvisionRequest{
-			Name: provName,
-			Tier: tier,
-		})
-		if err != nil {
-			if errors.Is(err, provision.ErrEmptyPool) {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-				return
-			}
-			if errors.Is(err, provision.ErrInvalidTier) {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
-			h.deps.Logger.Error("admin: provision upstream key failed", "provider", req.Provider, "error", err)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "failed to provision upstream key"})
-			return
-		}
-		actualKey = res.ActualKey
-		meta = apikeys.KeyCreateMeta{
-			Provisioned:   true,
-			UpstreamKeyID: res.UpstreamID,
-			UpstreamKind:  res.UpstreamKind,
-		}
-		if req.Tags == nil {
-			req.Tags = map[string]string{}
-		}
-		if req.Provider == "anthropic" && res.UpstreamKind == provision.UpstreamKindAnthropicTiered && res.UpstreamID != "" {
-			req.Tags["tier"] = res.UpstreamID
-		}
-	} else if actualKey == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
-		return
-	}
-
 	if err := h.validateEditorCostLimit(r, req.DailyCostLimit); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(
-		r.Context(),
-		req.Provider,
-		actualKey,
-		req.Description,
-		req.DailyCostLimit,
-		req.Tags,
-		req.RedactPII,
-		meta,
-		apikeys.KeyRateLimits{
-			RPM: req.RateLimitRPM,
-			TPM: req.RateLimitTPM,
-			RPD: req.RateLimitRPD,
-			TPD: req.RateLimitTPD,
-		},
-	)
+	key, err := h.createOrgKey(r, role, req)
 	if err != nil {
+		var httpErr *orgKeyError
+		if errors.As(err, &httpErr) {
+			writeJSON(w, httpErr.status, map[string]string{"error": httpErr.message})
+			return
+		}
 		h.deps.Logger.Error("admin: create key failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create key"})
 		return

@@ -74,6 +74,13 @@ func TestValidateEditorCostLimitRejectsOverCap(t *testing.T) {
 	assert.Contains(t, err.Error(), "editor maximum")
 }
 
+func TestValidateKeyRequestDailyCostLimitRejectsOverCap(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	err := h.validateKeyRequestDailyCostLimit(99999999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum")
+}
+
 func TestErrLastAdminMessage(t *testing.T) {
 	assert.Equal(t, "cannot remove the last admin", errLastAdmin.Error())
 }

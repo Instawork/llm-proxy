@@ -203,23 +203,30 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 		key, _ := input["Key"].(map[string]any)
 		storageKey := storageKeyFromAttrs(key)
 		conditionExpr, _ := input["ConditionExpression"].(string)
+		if f.tables[tableName] == nil {
+			f.tables[tableName] = make(map[string]any)
+		}
 		item, exists := f.tables[tableName][storageKey]
 		if strings.Contains(conditionExpr, "attribute_exists") && !exists {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
 			return
 		}
+		itemMap := map[string]any{}
 		if exists {
-			itemMap, _ := item.(map[string]any)
-			if vals, ok := input["ExpressionAttributeValues"].(map[string]any); ok {
-				if role := extractAttrValueString(vals, ":role"); role != "" {
-					itemMap["role"] = map[string]any{"S": role}
-				}
-				if updated := extractAttrValueString(vals, ":updated_at"); updated != "" {
-					itemMap["updated_at"] = map[string]any{"S": updated}
-				}
-			}
-			f.tables[tableName][storageKey] = itemMap
+			itemMap, _ = item.(map[string]any)
+		}
+		if !evaluateUpdateCondition(conditionExpr, itemMap, input) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
+			return
+		}
+		applyUpdateExpression(itemMap, input)
+		f.tables[tableName][storageKey] = itemMap
+		returnValues, _ := input["ReturnValues"].(string)
+		if returnValues == "ALL_NEW" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"Attributes": itemMap})
+			return
 		}
 		_, _ = w.Write([]byte(`{}`))
 	case "Query", "Scan":
@@ -324,6 +331,75 @@ func extractAttrValueString(attrs map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func resolveAttrName(exprNames map[string]any, field string) string {
+	field = strings.TrimSpace(field)
+	if strings.HasPrefix(field, "#") {
+		if exprNames == nil {
+			return strings.TrimPrefix(field, "#")
+		}
+		if mapped, ok := exprNames[field].(string); ok {
+			return mapped
+		}
+	}
+	return field
+}
+
+func evaluateUpdateCondition(conditionExpr string, item map[string]any, input map[string]any) bool {
+	conditionExpr = strings.TrimSpace(conditionExpr)
+	if conditionExpr == "" {
+		return true
+	}
+	exprNames, _ := input["ExpressionAttributeNames"].(map[string]any)
+	exprValues, _ := input["ExpressionAttributeValues"].(map[string]any)
+
+	if strings.Contains(conditionExpr, "#status = :") {
+		statusField := resolveAttrName(exprNames, "#status")
+		actual := ExtractDDBString(item, statusField)
+		for valKey := range exprValues {
+			if strings.Contains(conditionExpr, "= "+valKey) {
+				expected := extractAttrValueString(exprValues, valKey)
+				if actual != expected {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func applyUpdateExpression(item map[string]any, input map[string]any) {
+	updateExpr, _ := input["UpdateExpression"].(string)
+	exprNames, _ := input["ExpressionAttributeNames"].(map[string]any)
+	exprValues, _ := input["ExpressionAttributeValues"].(map[string]any)
+	if updateExpr == "" {
+		return
+	}
+
+	setPart := updateExpr
+	if idx := strings.Index(strings.ToUpper(updateExpr), " REMOVE "); idx >= 0 {
+		removePart := strings.TrimSpace(updateExpr[idx+len(" REMOVE "):])
+		setPart = strings.TrimSpace(updateExpr[:idx])
+		for _, field := range strings.Split(removePart, ",") {
+			field = resolveAttrName(exprNames, strings.TrimSpace(field))
+			delete(item, field)
+		}
+	}
+
+	setPart = strings.TrimSpace(strings.TrimPrefix(setPart, "SET "))
+	for _, assignment := range strings.Split(setPart, ",") {
+		assignment = strings.TrimSpace(assignment)
+		parts := strings.SplitN(assignment, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		field := resolveAttrName(exprNames, strings.TrimSpace(parts[0]))
+		valueKey := strings.TrimSpace(parts[1])
+		if val, ok := exprValues[valueKey].(map[string]any); ok {
+			item[field] = val
+		}
+	}
 }
 
 func (f *Server) describeTableResponse(tableName string) map[string]any {

@@ -41,6 +41,34 @@ export interface UpdateAdminUserRoleRequest {
   role: AdminRole;
 }
 
+export type KeyRequestStatus = "pending" | "approved" | "rejected";
+
+export interface KeyRequestRecord {
+  id: string;
+  requester_email: string;
+  provider: Provider;
+  description: string;
+  daily_cost_limit?: number;
+  status: KeyRequestStatus;
+  created_at: string;
+  updated_at: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  created_key?: string;
+  rejection_reason?: string;
+}
+
+export interface CreateKeyRequestBody {
+  provider: Provider;
+  description: string;
+  daily_cost_limit?: number;
+}
+
+export interface ReviewKeyRequestBody {
+  action: "approve" | "reject";
+  rejection_reason?: string;
+}
+
 export interface APIKey {
   key: string;
   provider: Provider;

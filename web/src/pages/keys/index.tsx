@@ -1,6 +1,16 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
+import KeyRequestsPanel from "../../components/keys/key-requests-panel";
 import KeysTable from "../../components/keys/keys-table";
+import RequestKeyModal from "../../components/keys/request-key-modal";
+import {
+  DeployIcon,
+  KeyRequestsTabIcon,
+  KeyTabIcon,
+  RequestKeyTabIcon,
+  WarningTriangleIcon,
+} from "../../components/ui/key-tab-icons";
 import PageHeader, {
   EmptyState,
   ErrorAlert,
@@ -17,6 +27,7 @@ import {
   useCreateKey,
   useCreateShare,
   useDeleteKey,
+  useKeyRequests,
   useKeys,
   useMe,
   usePII,
@@ -33,6 +44,19 @@ import type {
 
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
+
+type KeysTab = "keys" | "requests";
+
+function parseKeysTab(value: string | null, isAdmin: boolean): KeysTab {
+  if (value === "requests" && isAdmin) return "requests";
+  return "keys";
+}
+
+function keysTabClass(active: boolean): string {
+  return active
+    ? "btn btn-primary btn-sm gap-2 shadow-sm"
+    : "btn btn-ghost btn-sm gap-2 text-base-content/70 hover:text-base-content";
+}
 
 type PiiFormValue = "inherit" | "on" | "off";
 
@@ -133,6 +157,7 @@ function keyStatsDescription(hasCostRedis: boolean, hasPiiRedis: boolean): strin
 
 export default function KeysPage() {
   const { push } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: me } = useMe();
   const { data: config } = useConfig();
   const { data: costData } = useCost();
@@ -144,7 +169,35 @@ export default function KeysPage() {
     me?.can_bypass_pii_off_non_bedrock_policy,
   );
   const isViewer = me?.role === "viewer";
+  const isEditor = me?.role === "editor";
   const isAdmin = me?.role === "admin";
+  const canRequestServiceKey = isViewer || isEditor;
+  const tab = parseKeysTab(searchParams.get("tab"), isAdmin);
+  const { data: pendingRequests = [] } = useKeyRequests("pending");
+  const pendingRequestCount = isAdmin ? pendingRequests.length : 0;
+  const [requestKeyModalOpen, setRequestKeyModalOpen] = useState(false);
+  const handledRequestDeepLink = useRef(false);
+
+  const setTab = (next: KeysTab) => {
+    if (next === "keys") {
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    setSearchParams({ tab: next }, { replace: true });
+  };
+
+  useEffect(() => {
+    if (!canRequestServiceKey || handledRequestDeepLink.current) return;
+    const openRequest =
+      searchParams.get("request") === "1" || searchParams.get("tab") === "request";
+    if (!openRequest) return;
+    handledRequestDeepLink.current = true;
+    setRequestKeyModalOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("request");
+    next.delete("tab");
+    setSearchParams(next, { replace: true });
+  }, [canRequestServiceKey, searchParams, setSearchParams]);
   const provisionedKeysOnly = !isAdmin;
   const canDeleteKeys = isViewer || me?.role === "admin";
   const viewerMonthlyCents =
@@ -577,597 +630,675 @@ export default function KeysPage() {
             : keyStatsDescription(hasCostRedis, hasPiiRedis)
         }
         actions={
-          <>
-            {!isViewer ? (
-              <select
-                className="select select-bordered select-sm"
-                value={providerFilter}
-                onChange={(event) =>
-                  setProviderFilter(event.target.value as Provider | "")
-                }
-              >
-                <option value="">All providers</option>
-                {PROVIDERS.map((provider) => (
-                  <option key={provider} value={provider}>
-                    {provider}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={!canCreateKey}
-              onClick={openCreate}
-            >
-              Create key
-            </button>
-          </>
-        }
-      />
-
-      {isViewer || isAdmin ? (
-        <div className="glass-panel border-l-4 border-l-[#4A154B] px-4 py-3 text-sm text-base-content/80">
-          {isViewer ? (
+          tab === "keys" ? (
             <>
-              These are meant for local testing. If you are deploying something,
-              request a key for that service in{" "}
-              <span className="rounded bg-[#4A154B]/10 px-1 font-bold text-[#4A154B]">
-                #it-helpdesk
-              </span>{" "}
-              in{" "}
-              <span className="rounded bg-[#4A154B]/10 px-1 font-bold text-[#4A154B]">
-                Slack
-              </span>
-              .
-            </>
-          ) : (
-            <>
-              Use <span className="font-medium">Generate Personal Keys</span> below
-              or toggle <span className="font-medium">Personal key</span> in Create
-              key for your own testing keys (one per provider, capped at{" "}
-              {viewerMonthlyLimitLabel}/month). Org-wide service keys stay separate.
-            </>
-          )}
-        </div>
-      ) : null}
-
-      {error ? (
-        <ErrorAlert
-          message={
-            error instanceof Error ? error.message : "Failed to load keys"
-          }
-        />
-      ) : null}
-
-      {canBulkGeneratePersonalKeys && visibleKeys.length > 0 ? (
-        <div className="glass-panel flex flex-col items-center gap-3 px-6 py-8 text-center sm:items-start sm:text-left">
-          <button
-            type="button"
-            className="btn btn-primary btn-lg min-h-16 w-full px-8 text-lg sm:w-auto"
-            disabled={bulkGenerateBusy}
-            onClick={onBulkGeneratePersonalKeys}
-          >
-            {bulkGenerateBusy ? (
-              <span className="loading loading-spinner loading-md" />
-            ) : null}
-            Generate Personal Keys
-          </button>
-          <p className="max-w-2xl text-sm text-base-content/60">
-            {isViewer || isAdmin
-              ? `Creates one auto-provisioned personal key for each provider you do not have yet (${bulkTargetProviders.join(", ")}).`
-              : `Creates one auto-provisioned key for each provider without a key yet (${bulkTargetProviders.join(", ")}).`}
-          </p>
-        </div>
-      ) : null}
-
-      <div className="glass-panel overflow-hidden">
-        {isLoading ? (
-          <LoadingBlock />
-        ) : visibleKeys.length === 0 ? (
-          <EmptyState
-            message={
-              isViewer
-                ? "No personal keys yet. Create one proxy key per provider to route LLM requests."
-                : "No API keys yet. Create a proxy key to route provider requests through iw: keys."
-            }
-            action={
-              canBulkGeneratePersonalKeys ? (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-lg min-h-16 w-full max-w-md px-8 text-lg"
-                  disabled={bulkGenerateBusy}
-                  onClick={onBulkGeneratePersonalKeys}
-                >
-                  {bulkGenerateBusy ? (
-                    <span className="loading loading-spinner loading-md" />
-                  ) : null}
-                  Generate Personal Keys
-                </button>
-              ) : canCreateKey ? (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={openCreate}
-                >
-                  Create your first key
-                </button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <KeysTable
-            keys={visibleKeys}
-            onShare={onShare}
-            onEdit={openEdit}
-            onDelete={setDeleteTarget}
-            canDelete={canDeleteKeys}
-            viewerMode={isViewer}
-            sharingKey={sharingKey}
-            maskKey={maskKey}
-            formatRateLimits={formatRateLimits}
-          />
-        )}
-      </div>
-
-      {modalOpen ? (
-        <dialog className="modal modal-open" open>
-          <div className="modal-box max-w-lg">
-            <h3 className="text-lg font-semibold">
-              {editingKey
-                ? "Edit API key"
-                : treatAsPersonal
-                  ? "Create personal key"
-                  : "Create API key"}
-            </h3>
-            <form className="mt-4 space-y-4" onSubmit={onSubmit}>
-              {!editingKey && !isViewer ? (
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2">
-                  <span className="text-sm">
-                    <span className="font-medium">Personal key</span>
-                    <span className="block text-xs text-base-content/60">
-                      Owned by you, one per provider, capped at{" "}
-                      {viewerMonthlyLimitLabel}/month.
-                    </span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    className="toggle toggle-primary"
-                    checked={personalMode}
-                    onChange={(event) =>
-                      onTogglePersonalMode(event.target.checked)
-                    }
-                  />
-                </label>
-              ) : null}
-
-              <label className="form-control w-full">
-                <span className="label-text">Provider</span>
+              {!isViewer ? (
                 <select
-                  className="select select-bordered w-full"
-                  disabled={Boolean(editingKey)}
-                  value={form.provider}
+                  className="select select-bordered select-sm"
+                  value={providerFilter}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      provider: event.target.value as Provider,
-                    }))
+                    setProviderFilter(event.target.value as Provider | "")
                   }
                 >
-                  {availableProviders.map((provider) => (
+                  <option value="">All providers</option>
+                  {PROVIDERS.map((provider) => (
                     <option key={provider} value={provider}>
                       {provider}
                     </option>
                   ))}
                 </select>
-                {piiOffRequiresBedrock && !treatAsPersonal ? (
-                  <span className="label-text-alt text-base-content/60">
-                    PII redaction off requires the Bedrock provider.
-                  </span>
-                ) : null}
-              </label>
-
-              {!editingKey && useAutoProvision ? (
-                <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-base-content/80">
-                  Upstream key will be created automatically for {form.provider}
-                  .
-                </div>
               ) : null}
-
-              {!editingKey &&
-                (provisionedKeysOnly || treatAsPersonal) &&
-                !providerAutoProvision ? (
-                <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-                  Automatic key provisioning is not available for{" "}
-                  {form.provider}. Choose another provider or contact an
-                  administrator.
-                </div>
-              ) : null}
-
-              {!treatAsPersonal && showAnthropicTierSelect ? (
-                <label className="form-control w-full">
-                  <span className="label-text">Anthropic tier</span>
-                  <select
-                    className="select select-bordered w-full"
-                    value={form.anthropic_tier}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        anthropic_tier: event.target.value,
-                      }))
-                    }
-                  >
-                    {anthropicTierOptions.map((tier) => (
-                      <option key={tier} value={tier}>
-                        {tier}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="label-text-alt text-base-content/60">
-                    metered = tight limits; elevated = trusted workloads;
-                    unrestricted = administrators only.
-                  </span>
-                </label>
-              ) : null}
-
-              {!editingKey &&
-                providerAutoProvision &&
-                !provisionedKeysOnly &&
-                !treatAsPersonal ? (
-                <details
-                  className="rounded-lg border border-base-300 px-3 py-2"
-                  open={manualKeyEntry}
-                  onToggle={(event) =>
-                    setManualKeyEntry(event.currentTarget.open)
-                  }
+              {!isViewer ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!canCreateKey}
+                  onClick={openCreate}
                 >
-                  <summary className="cursor-pointer text-sm font-medium">
-                    Advanced: paste provider key
-                  </summary>
-                  <label className="form-control mt-3 w-full">
-                    <span className="label-text">Provider API key</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      className="input input-bordered w-full font-mono"
-                      placeholder="sk-..."
-                      value={form.actual_key}
+                  Create key
+                </button>
+              ) : null}
+              {canRequestServiceKey ? (
+                <button
+                  type="button"
+                  className={`btn btn-sm gap-2 ${isViewer ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setRequestKeyModalOpen(true)}
+                >
+                  <RequestKeyTabIcon />
+                  Request a key
+                </button>
+              ) : null}
+            </>
+          ) : null
+        }
+      />
+
+      {isAdmin ? (
+        <div className="glass-panel p-2">
+          <div role="tablist" className="flex flex-wrap gap-2" aria-label="API keys sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "keys"}
+              className={keysTabClass(tab === "keys")}
+              onClick={() => setTab("keys")}
+            >
+              <KeyTabIcon />
+              Keys
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "requests"}
+              className={keysTabClass(tab === "requests")}
+              onClick={() => setTab("requests")}
+            >
+              <KeyRequestsTabIcon />
+              Key requests
+              {pendingRequestCount > 0 ? (
+                <span className="badge badge-warning badge-sm border-0">{pendingRequestCount}</span>
+              ) : null}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "keys" && (canRequestServiceKey || isAdmin) ? (
+        canRequestServiceKey ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-warning/50 bg-warning/15 px-4 py-3 shadow-sm lg:flex-nowrap">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning text-warning-content">
+              <WarningTriangleIcon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1 text-sm leading-snug text-base-content/80">
+              <span className="font-semibold text-warning-content">
+                Personal keys are for local testing only.
+              </span>{" "}
+              <span className="font-semibold text-error">
+                Do not deploy with them.
+              </span>{" "}
+              Request an org-wide key with a specific use case; admins will name and provision it.
+            </div>
+            <button
+              type="button"
+              className="btn btn-warning btn-sm shrink-0 gap-2 shadow-sm"
+              onClick={() => setRequestKeyModalOpen(true)}
+            >
+              <DeployIcon />
+              Request a key
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-4 rounded-xl border border-info/40 bg-info/10 px-5 py-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-info/20 text-info">
+              <KeyTabIcon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 text-sm leading-relaxed text-base-content/80">
+              Use <span className="font-medium">Generate Personal Keys</span> below
+              or toggle <span className="font-medium">Personal key</span> in Create
+              key for your own testing keys (one per provider, capped at{" "}
+              {viewerMonthlyLimitLabel}/month). Org-wide service keys stay separate.
+              Review pending requests on the{" "}
+              <button
+                type="button"
+                className="link link-info inline-flex items-center gap-1 font-medium"
+                onClick={() => setTab("requests")}
+              >
+                <KeyRequestsTabIcon className="h-4 w-4" />
+                Key requests
+              </button>{" "}
+              tab.
+            </div>
+          </div>
+        )
+      ) : null}
+
+      {tab === "requests" && isAdmin ? <KeyRequestsPanel /> : null}
+
+      <RequestKeyModal
+        open={requestKeyModalOpen}
+        onClose={() => setRequestKeyModalOpen(false)}
+      />
+
+      {tab === "keys" ? (
+        <>
+          {error ? (
+            <ErrorAlert
+              message={
+                error instanceof Error ? error.message : "Failed to load keys"
+              }
+            />
+          ) : null}
+
+          {canBulkGeneratePersonalKeys && visibleKeys.length > 0 ? (
+            <div className="glass-panel flex flex-col items-center gap-3 px-6 py-8 text-center sm:items-start sm:text-left">
+              <button
+                type="button"
+                className="btn btn-primary btn-lg min-h-16 w-full px-8 text-lg sm:w-auto"
+                disabled={bulkGenerateBusy}
+                onClick={onBulkGeneratePersonalKeys}
+              >
+                {bulkGenerateBusy ? (
+                  <span className="loading loading-spinner loading-md" />
+                ) : null}
+                Generate Personal Keys
+              </button>
+              <p className="max-w-2xl text-sm text-base-content/60">
+                {isViewer || isAdmin
+                  ? `Creates one auto-provisioned personal key for each provider you do not have yet (${bulkTargetProviders.join(", ")}).`
+                  : `Creates one auto-provisioned key for each provider without a key yet (${bulkTargetProviders.join(", ")}).`}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="glass-panel overflow-hidden">
+            {isLoading ? (
+              <LoadingBlock />
+            ) : visibleKeys.length === 0 ? (
+              <EmptyState
+                message={
+                  isViewer
+                    ? "No personal keys yet. Generate one proxy key per provider to route LLM requests."
+                    : "No API keys yet. Create a proxy key to route provider requests through iw: keys."
+                }
+                action={
+                  canBulkGeneratePersonalKeys ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-lg min-h-16 w-full max-w-md px-8 text-lg"
+                      disabled={bulkGenerateBusy}
+                      onClick={onBulkGeneratePersonalKeys}
+                    >
+                      {bulkGenerateBusy ? (
+                        <span className="loading loading-spinner loading-md" />
+                      ) : null}
+                      Generate Personal Keys
+                    </button>
+                  ) : !isViewer && canCreateKey ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={openCreate}
+                    >
+                      Create your first key
+                    </button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <KeysTable
+                keys={visibleKeys}
+                onShare={onShare}
+                onEdit={openEdit}
+                onDelete={setDeleteTarget}
+                canDelete={canDeleteKeys}
+                viewerMode={isViewer}
+                sharingKey={sharingKey}
+                maskKey={maskKey}
+                formatRateLimits={formatRateLimits}
+              />
+            )}
+          </div>
+
+          {modalOpen ? (
+            <dialog className="modal modal-open" open>
+              <div className="modal-box max-w-lg">
+                <h3 className="text-lg font-semibold">
+                  {editingKey
+                    ? "Edit API key"
+                    : treatAsPersonal
+                      ? "Create personal key"
+                      : "Create API key"}
+                </h3>
+                <form className="mt-4 space-y-4" onSubmit={onSubmit}>
+                  {!editingKey && !isViewer ? (
+                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2">
+                      <span className="text-sm">
+                        <span className="font-medium">Personal key</span>
+                        <span className="block text-xs text-base-content/60">
+                          Owned by you, one per provider, capped at{" "}
+                          {viewerMonthlyLimitLabel}/month.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="toggle toggle-primary"
+                        checked={personalMode}
+                        onChange={(event) =>
+                          onTogglePersonalMode(event.target.checked)
+                        }
+                      />
+                    </label>
+                  ) : null}
+
+                  <label className="form-control w-full">
+                    <span className="label-text">Provider</span>
+                    <select
+                      className="select select-bordered w-full"
+                      disabled={Boolean(editingKey)}
+                      value={form.provider}
                       onChange={(event) =>
                         setForm((current) => ({
                           ...current,
-                          actual_key: event.target.value,
+                          provider: event.target.value as Provider,
+                        }))
+                      }
+                    >
+                      {availableProviders.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider}
+                        </option>
+                      ))}
+                    </select>
+                    {piiOffRequiresBedrock && !treatAsPersonal ? (
+                      <span className="label-text-alt text-base-content/60">
+                        PII redaction off requires the Bedrock provider.
+                      </span>
+                    ) : null}
+                  </label>
+
+                  {!editingKey && useAutoProvision ? (
+                    <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-base-content/80">
+                      Upstream key will be created automatically for {form.provider}
+                      .
+                    </div>
+                  ) : null}
+
+                  {!editingKey &&
+                    (provisionedKeysOnly || treatAsPersonal) &&
+                    !providerAutoProvision ? (
+                    <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+                      Automatic key provisioning is not available for{" "}
+                      {form.provider}. Choose another provider or contact an
+                      administrator.
+                    </div>
+                  ) : null}
+
+                  {!treatAsPersonal && showAnthropicTierSelect ? (
+                    <label className="form-control w-full">
+                      <span className="label-text">Anthropic tier</span>
+                      <select
+                        className="select select-bordered w-full"
+                        value={form.anthropic_tier}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            anthropic_tier: event.target.value,
+                          }))
+                        }
+                      >
+                        {anthropicTierOptions.map((tier) => (
+                          <option key={tier} value={tier}>
+                            {tier}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="label-text-alt text-base-content/60">
+                        metered = tight limits; elevated = trusted workloads;
+                        unrestricted = administrators only.
+                      </span>
+                    </label>
+                  ) : null}
+
+                  {!editingKey &&
+                    providerAutoProvision &&
+                    !provisionedKeysOnly &&
+                    !treatAsPersonal ? (
+                    <details
+                      className="rounded-lg border border-base-300 px-3 py-2"
+                      open={manualKeyEntry}
+                      onToggle={(event) =>
+                        setManualKeyEntry(event.currentTarget.open)
+                      }
+                    >
+                      <summary className="cursor-pointer text-sm font-medium">
+                        Advanced: paste provider key
+                      </summary>
+                      <label className="form-control mt-3 w-full">
+                        <span className="label-text">Provider API key</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          className="input input-bordered w-full font-mono"
+                          placeholder="sk-..."
+                          value={form.actual_key}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              actual_key: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </details>
+                  ) : null}
+
+                  {!editingKey &&
+                    !providerAutoProvision &&
+                    !provisionedKeysOnly &&
+                    !treatAsPersonal ? (
+                    <label className="form-control w-full">
+                      <span className="label-text">Provider API key</span>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        className="input input-bordered w-full font-mono"
+                        placeholder="sk-..."
+                        value={form.actual_key}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            actual_key: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  ) : null}
+
+                  <label className="form-control w-full">
+                    <span className="label-text">Description</span>
+                    <textarea
+                      className="textarea textarea-bordered w-full"
+                      rows={2}
+                      placeholder="What is this key used for?"
+                      value={form.description}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          description: event.target.value,
                         }))
                       }
                     />
                   </label>
-                </details>
-              ) : null}
 
-              {!editingKey &&
-                !providerAutoProvision &&
-                !provisionedKeysOnly &&
-                !treatAsPersonal ? (
-                <label className="form-control w-full">
-                  <span className="label-text">Provider API key</span>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    className="input input-bordered w-full font-mono"
-                    placeholder="sk-..."
-                    value={form.actual_key}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        actual_key: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-              ) : null}
+                  {treatAsPersonal && !editingKey ? (
+                    <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
+                      Monthly spend limit:{" "}
+                      <span className="font-medium">{viewerMonthlyLimitLabel}</span>{" "}
+                      (set by your organization).
+                    </div>
+                  ) : null}
 
-              <label className="form-control w-full">
-                <span className="label-text">Description</span>
-                <textarea
-                  className="textarea textarea-bordered w-full"
-                  rows={2}
-                  placeholder="What is this key used for?"
-                  value={form.description}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      description: event.target.value,
-                    }))
-                  }
-                />
-              </label>
+                  {!treatAsPersonal ? (
+                    <>
+                      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                        <label className="form-control w-full">
+                          <span className="label-text">Daily cost limit (USD)</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="input input-bordered w-full"
+                            placeholder="0 = unlimited"
+                            value={form.daily_cost_limit_dollars}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                daily_cost_limit_dollars: event.target.value,
+                              }))
+                            }
+                          />
+                          <p className="mt-1.5 text-xs text-base-content/60">
+                            Leave at 0 for unlimited
+                            {editorMaxDollars != null
+                              ? ` · Editor max $${editorMaxDollars}/day`
+                              : null}
+                          </p>
+                        </label>
 
-              {treatAsPersonal && !editingKey ? (
-                <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
-                  Monthly spend limit:{" "}
-                  <span className="font-medium">{viewerMonthlyLimitLabel}</span>{" "}
-                  (set by your organization).
-                </div>
-              ) : null}
+                        <div className="form-control w-full sm:w-auto">
+                          <span className="label-text">Key status</span>
+                          <label className="flex h-12 cursor-pointer items-center gap-3">
+                            <input
+                              type="checkbox"
+                              className="toggle toggle-primary"
+                              checked={form.enabled}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  enabled: event.target.checked,
+                                }))
+                              }
+                            />
+                            <span className="text-sm font-medium">
+                              {form.enabled ? "Enabled" : "Disabled"}
+                            </span>
+                          </label>
+                        </div>
+                      </div>
 
-              {!treatAsPersonal ? (
-                <>
-                  <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-                    <label className="form-control w-full">
-                      <span className="label-text">Daily cost limit (USD)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        className="input input-bordered w-full"
-                        placeholder="0 = unlimited"
-                        value={form.daily_cost_limit_dollars}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            daily_cost_limit_dollars: event.target.value,
-                          }))
-                        }
-                      />
-                      <p className="mt-1.5 text-xs text-base-content/60">
-                        Leave at 0 for unlimited
-                        {editorMaxDollars != null
-                          ? ` · Editor max $${editorMaxDollars}/day`
-                          : null}
-                      </p>
-                    </label>
-
-                    <div className="form-control w-full sm:w-auto">
-                      <span className="label-text">Key status</span>
-                      <label className="flex h-12 cursor-pointer items-center gap-3">
-                        <input
-                          type="checkbox"
-                          className="toggle toggle-primary"
-                          checked={form.enabled}
+                      <label className="form-control w-full">
+                        <span className="label-text">PII redaction</span>
+                        <select
+                          className="select select-bordered w-full"
+                          value={form.redact_pii}
                           onChange={(event) =>
                             setForm((current) => ({
                               ...current,
-                              enabled: event.target.checked,
+                              redact_pii: event.target.value as PiiFormValue,
                             }))
                           }
-                        />
-                        <span className="text-sm font-medium">
-                          {form.enabled ? "Enabled" : "Disabled"}
-                        </span>
+                        >
+                          <option value="inherit">Inherit global default</option>
+                          <option value="on">On</option>
+                          <option value="off">Off</option>
+                        </select>
+                        {piiOffRequiresBedrock &&
+                          editingKey &&
+                          editingKey.provider !== "bedrock" ? (
+                          <p className="mt-1.5 text-xs text-warning">
+                            Turning PII off requires a Bedrock key. Create a new
+                            Bedrock key instead.
+                          </p>
+                        ) : null}
                       </label>
-                    </div>
-                  </div>
 
-                  <label className="form-control w-full">
-                    <span className="label-text">PII redaction</span>
-                    <select
-                      className="select select-bordered w-full"
-                      value={form.redact_pii}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          redact_pii: event.target.value as PiiFormValue,
-                        }))
+                      <div className="rounded-xl border border-base-300/70 p-4">
+                        <div className="mb-3 text-sm font-medium">Rate limits</div>
+                        <p className="mb-3 text-xs text-base-content/60">
+                          Optional per-key overrides. Leave blank to inherit global
+                          limits. Zero clears an override.
+                        </p>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="form-control">
+                            <span className="label-text text-xs">
+                              Requests / minute
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="input input-bordered input-sm w-full"
+                              placeholder="inherit"
+                              value={form.rate_limit_rpm}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  rate_limit_rpm: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="form-control">
+                            <span className="label-text text-xs">
+                              Tokens / minute
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="input input-bordered input-sm w-full"
+                              placeholder="inherit"
+                              value={form.rate_limit_tpm}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  rate_limit_tpm: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="form-control">
+                            <span className="label-text text-xs">
+                              Requests / day
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="input input-bordered input-sm w-full"
+                              placeholder="inherit"
+                              value={form.rate_limit_rpd}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  rate_limit_rpd: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="form-control">
+                            <span className="label-text text-xs">Tokens / day</span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="input input-bordered input-sm w-full"
+                              placeholder="inherit"
+                              value={form.rate_limit_tpd}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  rate_limit_tpd: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+
+                  <div className="modal-action">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={closeModal}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={
+                        saving ||
+                        (!editingKey &&
+                          (provisionedKeysOnly || treatAsPersonal) &&
+                          !useAutoProvision)
                       }
                     >
-                      <option value="inherit">Inherit global default</option>
-                      <option value="on">On</option>
-                      <option value="off">Off</option>
-                    </select>
-                    {piiOffRequiresBedrock &&
-                      editingKey &&
-                      editingKey.provider !== "bedrock" ? (
-                      <p className="mt-1.5 text-xs text-warning">
-                        Turning PII off requires a Bedrock key. Create a new
-                        Bedrock key instead.
-                      </p>
-                    ) : null}
-                  </label>
-
-                  <div className="rounded-xl border border-base-300/70 p-4">
-                    <div className="mb-3 text-sm font-medium">Rate limits</div>
-                    <p className="mb-3 text-xs text-base-content/60">
-                      Optional per-key overrides. Leave blank to inherit global
-                      limits. Zero clears an override.
-                    </p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="form-control">
-                        <span className="label-text text-xs">
-                          Requests / minute
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          className="input input-bordered input-sm w-full"
-                          placeholder="inherit"
-                          value={form.rate_limit_rpm}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              rate_limit_rpm: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text text-xs">
-                          Tokens / minute
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          className="input input-bordered input-sm w-full"
-                          placeholder="inherit"
-                          value={form.rate_limit_tpm}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              rate_limit_tpm: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text text-xs">
-                          Requests / day
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          className="input input-bordered input-sm w-full"
-                          placeholder="inherit"
-                          value={form.rate_limit_rpd}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              rate_limit_rpd: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text text-xs">Tokens / day</span>
-                        <input
-                          type="number"
-                          min="0"
-                          className="input input-bordered input-sm w-full"
-                          placeholder="inherit"
-                          value={form.rate_limit_tpd}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              rate_limit_tpd: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
+                      {saving ? (
+                        <span className="loading loading-spinner loading-sm" />
+                      ) : null}
+                      {editingKey ? "Save changes" : "Create key"}
+                    </button>
                   </div>
-                </>
-              ) : null}
+                </form>
+              </div>
+              <form method="dialog" className="modal-backdrop">
+                <button type="button" aria-label="Close" onClick={closeModal} />
+              </form>
+            </dialog>
+          ) : null}
 
-              <div className="modal-action">
+          {shareResult ? (
+            <dialog className="modal modal-open" open>
+              <div className="modal-box max-w-lg">
+                <h3 className="text-lg font-semibold">Shareable link created</h3>
+                <p className="py-3 text-sm text-base-content/70">
+                  Send this link to whoever needs the key. They must sign in with an
+                  account on your configured allowed domain to view it. The URL
+                  contains no key material.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 truncate rounded-lg bg-base-200/70 px-3 py-2 font-mono text-sm">
+                    {shareResult.url}
+                  </code>
+                  <CopyButton value={shareResult.url} label="Copy link" />
+                </div>
+                {shareResult.expires_at ? (
+                  <p
+                    className={`mt-3 text-sm ${formatShareExpiry(shareResult.expires_at).urgent
+                      ? "text-warning"
+                      : "text-base-content/60"
+                      }`}
+                  >
+                    {formatShareExpiry(shareResult.expires_at).message}. Re-sharing
+                    the same key within 24 hours reuses this URL.
+                  </p>
+                ) : null}
+                <div className="modal-action">
+                  <a
+                    href={shareResult.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-ghost"
+                  >
+                    Open
+                  </a>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setShareResult(null)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+              <form method="dialog" className="modal-backdrop">
                 <button
                   type="button"
-                  className="btn btn-ghost"
-                  onClick={closeModal}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={
-                    saving ||
-                    (!editingKey &&
-                      (provisionedKeysOnly || treatAsPersonal) &&
-                      !useAutoProvision)
-                  }
-                >
-                  {saving ? (
-                    <span className="loading loading-spinner loading-sm" />
-                  ) : null}
-                  {editingKey ? "Save changes" : "Create key"}
-                </button>
+                  aria-label="Close"
+                  onClick={() => setShareResult(null)}
+                />
+              </form>
+            </dialog>
+          ) : null}
+
+          {deleteTarget ? (
+            <dialog className="modal modal-open" open>
+              <div className="modal-box">
+                <h3 className="text-lg font-semibold">Delete API key?</h3>
+                <p className="py-4 text-sm text-base-content/70">
+                  This will permanently remove{" "}
+                  <span className="code-chip font-mono">
+                    {deleteTarget ? maskKey(deleteTarget.key) : ""}
+                  </span>
+                  .
+                </p>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setDeleteTarget(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-error"
+                    disabled={deleteKey.isPending}
+                    onClick={onDelete}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
-            </form>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button type="button" aria-label="Close" onClick={closeModal} />
-          </form>
-        </dialog>
-      ) : null}
-
-      {shareResult ? (
-        <dialog className="modal modal-open" open>
-          <div className="modal-box max-w-lg">
-            <h3 className="text-lg font-semibold">Shareable link created</h3>
-            <p className="py-3 text-sm text-base-content/70">
-              Send this link to whoever needs the key. They must sign in with an
-              account on your configured allowed domain to view it. The URL
-              contains no key material.
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 truncate rounded-lg bg-base-200/70 px-3 py-2 font-mono text-sm">
-                {shareResult.url}
-              </code>
-              <CopyButton value={shareResult.url} label="Copy link" />
-            </div>
-            {shareResult.expires_at ? (
-              <p
-                className={`mt-3 text-sm ${formatShareExpiry(shareResult.expires_at).urgent
-                    ? "text-warning"
-                    : "text-base-content/60"
-                  }`}
-              >
-                {formatShareExpiry(shareResult.expires_at).message}. Re-sharing
-                the same key within 24 hours reuses this URL.
-              </p>
-            ) : null}
-            <div className="modal-action">
-              <a
-                href={shareResult.url}
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-ghost"
-              >
-                Open
-              </a>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setShareResult(null)}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button
-              type="button"
-              aria-label="Close"
-              onClick={() => setShareResult(null)}
-            />
-          </form>
-        </dialog>
-      ) : null}
-
-      {deleteTarget ? (
-        <dialog className="modal modal-open" open>
-          <div className="modal-box">
-            <h3 className="text-lg font-semibold">Delete API key?</h3>
-            <p className="py-4 text-sm text-base-content/70">
-              This will permanently remove{" "}
-              <span className="code-chip font-mono">
-                {deleteTarget ? maskKey(deleteTarget.key) : ""}
-              </span>
-              .
-            </p>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setDeleteTarget(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-error"
-                disabled={deleteKey.isPending}
-                onClick={onDelete}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button
-              type="button"
-              aria-label="Close"
-              onClick={() => setDeleteTarget(null)}
-            />
-          </form>
-        </dialog>
+              <form method="dialog" className="modal-backdrop">
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => setDeleteTarget(null)}
+                />
+              </form>
+            </dialog>
+          ) : null}
+        </>
       ) : null}
     </div>
   );

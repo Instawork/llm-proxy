@@ -1,11 +1,12 @@
 import type { AdminRole } from "../types";
 
-import { roleAtLeast } from "./rbac";
+import { roleAtLeast, roleAtMost } from "./rbac";
 
 export type NavItem = {
   to: string;
   label: string;
   minRole: AdminRole;
+  maxRole?: AdminRole;
 };
 
 export const MONITORING_NAV: NavItem[] = [
@@ -25,7 +26,12 @@ export const MANAGE_NAV: NavItem[] = [
 ];
 
 export function navItemsForRole(role: AdminRole) {
-  const visible = (items: NavItem[]) => items.filter((item) => roleAtLeast(role, item.minRole));
+  const visible = (items: NavItem[]) =>
+    items.filter(
+      (item) =>
+        roleAtLeast(role, item.minRole) &&
+        (item.maxRole == null || roleAtMost(role, item.maxRole)),
+    );
   return {
     monitoring: visible(MONITORING_NAV),
     manage: visible(MANAGE_NAV),

@@ -10,7 +10,9 @@ import type {
   CostResponse,
   CreateAdminUserRequest,
   CreateAPIKeyRequest,
+  CreateKeyRequestBody,
   HealthResponse,
+  KeyRequestRecord,
   KeyStatsResponse,
   CircuitActivityResponse,
   ModelStatusResponse,
@@ -22,6 +24,7 @@ import type {
   ShareInfo,
   UpdateAdminUserRoleRequest,
   UpdateAPIKeyRequest,
+  ReviewKeyRequestBody,
   UsageResponse,
 } from "../types";
 import { usePollInterval } from "./use-poll-interval";
@@ -41,6 +44,8 @@ export const queryKeys = {
   modelStatus: ["admin", "model-status"] as const,
   provisioning: ["admin", "provisioning"] as const,
   users: ["admin", "users"] as const,
+  keyRequests: (status?: string) => ["admin", "key-requests", status ?? "all"] as const,
+  myKeyRequests: ["admin", "key-requests", "mine"] as const,
 };
 
 export function useMe() {
@@ -309,5 +314,57 @@ export function useDeleteUser() {
     mutationFn: (email: string) =>
       apiFetch<void>(`/admin/api/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.users }),
+  });
+}
+
+export function useKeyRequests(status?: string) {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return useQuery({
+    queryKey: queryKeys.keyRequests(status),
+    queryFn: () => apiFetch<KeyRequestRecord[]>(`/admin/api/key-requests${qs}`),
+    enabled: roleAtLeast(role, "admin"),
+  });
+}
+
+export function useMyKeyRequests() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
+  return useQuery({
+    queryKey: queryKeys.myKeyRequests,
+    queryFn: () => apiFetch<KeyRequestRecord[]>("/admin/api/key-requests/mine"),
+    enabled: role === "viewer" || role === "editor",
+  });
+}
+
+export function useCreateKeyRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateKeyRequestBody) =>
+      apiFetch<KeyRequestRecord>("/admin/api/key-requests", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
+      qc.invalidateQueries({ queryKey: queryKeys.keyRequests() });
+    },
+  });
+}
+
+export function useReviewKeyRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: ReviewKeyRequestBody & { id: string }) =>
+      apiFetch<KeyRequestRecord>(`/admin/api/key-requests/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keyRequests() });
+      qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
+      qc.invalidateQueries({ queryKey: queryKeys.keys() });
+    },
   });
 }

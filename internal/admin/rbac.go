@@ -95,6 +95,25 @@ func (h *handler) viewerPersonalMonthlyLimit() int64 {
 	return viewerPersonalMonthlyLimitFromConfig(h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits)
 }
 
+func (h *handler) keyRequestDefaultDailyCostCents() int64 {
+	max := h.editorMaxDailyCostCents()
+	if max > 0 {
+		return max
+	}
+	return 10000
+}
+
+func (h *handler) validateKeyRequestDailyCostLimit(cents int64) error {
+	if cents < 0 {
+		return fmt.Errorf("daily_cost_limit cannot be negative (got %d); use 0 for unlimited", cents)
+	}
+	max := h.keyRequestDefaultDailyCostCents()
+	if max > 0 && cents > max {
+		return fmt.Errorf("daily_cost_limit exceeds maximum of %d cents", max)
+	}
+	return nil
+}
+
 func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {
 	// A negative limit is invalid input for ALL roles: the enforcement
 	// middleware treats <= 0 as "unlimited", so persisting a negative value

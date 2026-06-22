@@ -54,6 +54,52 @@ type UpdateUserRoleRequest struct {
 	Role string `json:"role"`
 }
 
+// KeyRequestResponse is a user-submitted request for an org-wide service key.
+type KeyRequestResponse struct {
+	ID              string     `json:"id"`
+	RequesterEmail  string     `json:"requester_email"`
+	Provider        string     `json:"provider"`
+	Description     string     `json:"description"`
+	DailyCostLimit  int64      `json:"daily_cost_limit,omitempty"`
+	Status          string     `json:"status"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	ReviewedBy      string     `json:"reviewed_by,omitempty"`
+	ReviewedAt      *time.Time `json:"reviewed_at,omitempty"`
+	CreatedKey      string     `json:"created_key,omitempty"`
+	RejectionReason string     `json:"rejection_reason,omitempty"`
+}
+
+// CreateKeyRequestBody submits a new org key request.
+type CreateKeyRequestBody struct {
+	Provider       string `json:"provider"`
+	Description    string `json:"description"`
+	DailyCostLimit int64  `json:"daily_cost_limit,omitempty"`
+}
+
+// ReviewKeyRequestBody approves or rejects a pending key request.
+type ReviewKeyRequestBody struct {
+	Action          string `json:"action"`
+	RejectionReason string `json:"rejection_reason,omitempty"`
+}
+
+func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
+	return KeyRequestResponse{
+		ID:              req.ID(),
+		RequesterEmail:  req.RequesterEmail,
+		Provider:        req.Provider,
+		Description:     req.Description,
+		DailyCostLimit:  req.DailyCostLimit,
+		Status:          req.Status,
+		CreatedAt:       req.CreatedAt,
+		UpdatedAt:       req.UpdatedAt,
+		ReviewedBy:      req.ReviewedBy,
+		ReviewedAt:      req.ReviewedAt,
+		CreatedKey:      req.CreatedKey,
+		RejectionReason: req.RejectionReason,
+	}
+}
+
 // KeyResponse is a safe JSON view of an API key record.
 type KeyResponse struct {
 	Key              string            `json:"key"`

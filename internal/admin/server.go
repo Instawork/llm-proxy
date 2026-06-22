@@ -94,6 +94,11 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleUpdateUserRole)).Methods(http.MethodPatch, http.MethodOptions)
 	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleDeleteUser)).Methods(http.MethodDelete, http.MethodOptions)
 
+	api.Handle("/key-requests", roleHandler(auth, adminusers.RoleViewer, h.handleCreateKeyRequest)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/key-requests", roleHandler(auth, adminusers.RoleAdmin, h.handleListKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/key-requests/mine", roleHandler(auth, adminusers.RoleViewer, h.handleListMyKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/key-requests/{id}", roleHandler(auth, adminusers.RoleAdmin, h.handleReviewKeyRequest)).Methods(http.MethodPatch, http.MethodOptions)
+
 	mountSPA(adminRouter)
 
 	logger.Info("Admin dashboard routes registered", "prefix", "/admin")
