@@ -33,7 +33,7 @@ func TestModelStatusMiddleware_RetiredModelShortCircuits(t *testing.T) {
 		called = true
 	})
 
-	chain := ModelStatusMiddleware(pm, cfg, modelstatusstats.NewRecorder(nil), nil)(next)
+	chain := ModelStatusMiddleware(pm, cfg, modelstatusstats.NewRecorder(), nil)(next)
 
 	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"o1-mini","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -81,7 +81,7 @@ func TestModelStatusMiddleware_RetiredModelAliasShortCircuits(t *testing.T) {
 		called = true
 	})
 
-	chain := ModelStatusMiddleware(pm, cfg, modelstatusstats.NewRecorder(nil), nil)(next)
+	chain := ModelStatusMiddleware(pm, cfg, modelstatusstats.NewRecorder(), nil)(next)
 
 	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"o1-mini-2024-09-12","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")

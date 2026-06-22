@@ -1,39 +1,58 @@
 package modelstatusstats
 
 import (
-	"context"
-	"fmt"
+	"sort"
 	"sync"
 	"time"
 
-	redis "github.com/redis/go-redis/v9"
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 )
 
-const redisOpTimeout = 500 * time.Millisecond
-const redisKeyTTL = 48 * time.Hour
+var modelStatusRollupCaps = adminrollup.TopNCaps{}
 
-// Snapshot holds in-process counters for retired and deprecated model calls.
-type Snapshot struct {
-	Retired    map[string]int64 `json:"retired"`
-	Deprecated map[string]int64 `json:"deprecated"`
+type kv struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
 }
 
-// Recorder accumulates retired and deprecated model call counts in-process,
-// with optional Redis mirroring for fleet-wide visibility.
+type statusFlushed struct {
+	retiredTotal    int64
+	deprecatedTotal int64
+	unknownTotal    int64
+	retired         map[string]int64
+	deprecated      map[string]int64
+	unknown         map[string]int64
+}
+
+// Recorder accumulates retired, deprecated, and unknown model call counts
+// in-process and publishes deltas to admin rollups for fleet-wide visibility.
 type Recorder struct {
-	mu         sync.RWMutex
+	mu        sync.RWMutex
+	startedAt time.Time
+	dayKey    string
+
+	retiredTotal    int64
+	deprecatedTotal int64
+	unknownTotal    int64
+
 	retired    map[string]int64
 	deprecated map[string]int64
-	rdb        *redis.Client
+	unknown    map[string]int64
+
+	flushed statusFlushed
+
+	adminrollup.RecorderBinding
 }
 
-// NewRecorder returns a recorder. The Redis client is optional; when nil only
-// in-process counters are updated.
-func NewRecorder(rdb *redis.Client) *Recorder {
+// NewRecorder returns a ready-to-use recorder.
+func NewRecorder() *Recorder {
+	now := time.Now().UTC()
 	return &Recorder{
+		startedAt:  now,
+		dayKey:     now.Format("2006-01-02"),
 		retired:    make(map[string]int64),
 		deprecated: make(map[string]int64),
-		rdb:        rdb,
+		unknown:    make(map[string]int64),
 	}
 }
 
@@ -41,24 +60,59 @@ func composeKey(provider, model string) string {
 	return provider + ":" + model
 }
 
-func redisKey(kind, provider, model string) string {
-	day := time.Now().UTC().Format("2006-01-02")
-	return fmt.Sprintf("llm:model:%s:day:%s:%s:%s", kind, day, provider, model)
+func topN(m map[string]int64, n int) []kv {
+	out := make([]kv, 0, len(m))
+	for name, count := range m {
+		out = append(out, kv{Name: name, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	if n > 0 && len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
-func (r *Recorder) incrRedis(kind, provider, model string) {
-	if r == nil || r.rdb == nil {
+func intMapDelta(cur, prev map[string]int64) map[string]float64 {
+	out := make(map[string]float64)
+	for k, v := range cur {
+		if dv := float64(v - prev[k]); dv != 0 {
+			out[k] = dv
+		}
+	}
+	return out
+}
+
+func copyIntMap(m map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func (r *Recorder) maybeRollDay(now time.Time) {
+	day := now.UTC().Format("2006-01-02")
+	if r.dayKey == day {
 		return
 	}
+	oldDay := r.dayKey
+	r.dayKey = day
+	r.FlushRollup()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), redisOpTimeout)
-		defer cancel()
-		key := redisKey(kind, provider, model)
-		pipe := r.rdb.Pipeline()
-		pipe.Incr(ctx, key)
-		pipe.Expire(ctx, key, redisKeyTTL)
-		_, _ = pipe.Exec(ctx)
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricModelStatus, oldDay, modelStatusRollupCaps)
 	}()
+	r.flushed = statusFlushed{}
+	r.retiredTotal = 0
+	r.deprecatedTotal = 0
+	r.unknownTotal = 0
+	r.retired = make(map[string]int64)
+	r.deprecated = make(map[string]int64)
+	r.unknown = make(map[string]int64)
 }
 
 func (r *Recorder) bumpLocked(counter map[string]int64, provider, model string) {
@@ -68,48 +122,94 @@ func (r *Recorder) bumpLocked(counter map[string]int64, provider, model string) 
 	counter[composeKey(provider, model)]++
 }
 
-// RecordRetired increments the retired-model counter.
-func (r *Recorder) RecordRetired(provider, model string) {
+func (r *Recorder) statusDeltaLocked() adminrollup.Delta {
+	return adminrollup.Delta{
+		Totals: map[string]float64{
+			"retired_total":    float64(r.retiredTotal - r.flushed.retiredTotal),
+			"deprecated_total": float64(r.deprecatedTotal - r.flushed.deprecatedTotal),
+			"unknown_total":    float64(r.unknownTotal - r.flushed.unknownTotal),
+		},
+		Dimensions: map[string]map[string]float64{
+			"by_retired":    intMapDelta(r.retired, r.flushed.retired),
+			"by_deprecated": intMapDelta(r.deprecated, r.flushed.deprecated),
+			"by_unknown":    intMapDelta(r.unknown, r.flushed.unknown),
+		},
+	}
+}
+
+func (r *Recorder) advanceFlushedLocked() {
+	r.flushed.retiredTotal = r.retiredTotal
+	r.flushed.deprecatedTotal = r.deprecatedTotal
+	r.flushed.unknownTotal = r.unknownTotal
+	r.flushed.retired = copyIntMap(r.retired)
+	r.flushed.deprecated = copyIntMap(r.deprecated)
+	r.flushed.unknown = copyIntMap(r.unknown)
+}
+
+func (r *Recorder) publishLocked() {
+	dayKey := r.dayKey
+	delta := r.statusDeltaLocked()
+	r.advanceFlushedLocked()
+	r.mu.Unlock()
+	r.QueueDelta(dayKey, delta)
+	r.mu.Lock()
+}
+
+func (r *Recorder) record(total *int64, counter map[string]int64, provider, model string) {
 	if r == nil {
 		return
 	}
+	now := time.Now().UTC()
 	r.mu.Lock()
-	r.bumpLocked(r.retired, provider, model)
+	r.maybeRollDay(now)
+	*total++
+	r.bumpLocked(counter, provider, model)
+	r.publishLocked()
 	r.mu.Unlock()
-	r.incrRedis("retired", provider, model)
+}
+
+// RecordRetired increments the retired-model counter.
+func (r *Recorder) RecordRetired(provider, model string) {
+	r.record(&r.retiredTotal, r.retired, provider, model)
 }
 
 // RecordDeprecated increments the deprecated-model counter.
 func (r *Recorder) RecordDeprecated(provider, model string) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	r.bumpLocked(r.deprecated, provider, model)
-	r.mu.Unlock()
-	r.incrRedis("deprecated", provider, model)
+	r.record(&r.deprecatedTotal, r.deprecated, provider, model)
 }
 
-// Snapshot returns a copy of current in-process counters.
-func (r *Recorder) Snapshot() Snapshot {
+// RecordUnknown increments the unrecognized-model counter.
+func (r *Recorder) RecordUnknown(provider, model string) {
+	r.record(&r.unknownTotal, r.unknown, provider, model)
+}
+
+// Snapshot returns a JSON-serialisable view for the admin API.
+func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
-		return Snapshot{
-			Retired:    map[string]int64{},
-			Deprecated: map[string]int64{},
-		}
+		return map[string]interface{}{"available": false}
 	}
+
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	retired := make(map[string]int64, len(r.retired))
-	for k, v := range r.retired {
-		retired[k] = v
+	dayKey := r.dayKey
+	backend := "memory"
+	if r.RollupBound() {
+		backend = "redis"
 	}
-	deprecated := make(map[string]int64, len(r.deprecated))
-	for k, v := range r.deprecated {
-		deprecated[k] = v
+	snap := map[string]interface{}{
+		"available":        true,
+		"backend":          backend,
+		"day":              dayKey,
+		"started_at":       r.startedAt.Unix(),
+		"retired_total":    r.retiredTotal,
+		"deprecated_total": r.deprecatedTotal,
+		"unknown_total":    r.unknownTotal,
+		"by_retired":       topN(r.retired, 0),
+		"by_deprecated":    topN(r.deprecated, 0),
+		"by_unknown":       topN(r.unknown, 0),
 	}
-	return Snapshot{
-		Retired:    retired,
-		Deprecated: deprecated,
-	}
+	r.mu.RUnlock()
+
+	r.MergeToday(adminrollup.MetricModelStatus, dayKey, snap, modelStatusRollupCaps)
+	r.MergeHistory(adminrollup.MetricModelStatus, snap)
+	return snap
 }

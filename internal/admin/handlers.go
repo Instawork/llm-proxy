@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
@@ -902,6 +904,69 @@ func (h *handler) handleCircuitActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, h.deps.CircuitActivity())
+}
+
+func (h *handler) handleModelStatus(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]interface{}{
+		"registry": modelStatusRegistry(h.deps.YAMLConfig),
+	}
+	if h.deps.ModelStatusSummary != nil {
+		resp["stats"] = h.deps.ModelStatusSummary()
+	} else {
+		resp["stats"] = map[string]interface{}{"available": false}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func modelStatusRegistry(cfg *config.YAMLConfig) map[string]interface{} {
+	retired := make([]map[string]interface{}, 0)
+	deprecated := make([]map[string]interface{}, 0)
+	if cfg == nil {
+		return map[string]interface{}{
+			"retired":    retired,
+			"deprecated": deprecated,
+		}
+	}
+	for provider, models := range cfg.RetiredModels {
+		for canonical, entry := range models {
+			retired = append(retired, map[string]interface{}{
+				"provider":     provider,
+				"model":        canonical,
+				"retired_date": entry.RetiredDate,
+				"replacement":  entry.Replacement,
+				"aliases":      entry.Aliases,
+			})
+		}
+	}
+	sort.Slice(retired, func(i, j int) bool {
+		if retired[i]["provider"] != retired[j]["provider"] {
+			return retired[i]["provider"].(string) < retired[j]["provider"].(string)
+		}
+		return retired[i]["model"].(string) < retired[j]["model"].(string)
+	})
+	for provider, pcfg := range cfg.Providers {
+		for canonical, mc := range pcfg.Models {
+			if !mc.Deprecated {
+				continue
+			}
+			deprecated = append(deprecated, map[string]interface{}{
+				"provider":    provider,
+				"model":       canonical,
+				"replacement": mc.Replacement,
+				"aliases":     mc.Aliases,
+			})
+		}
+	}
+	sort.Slice(deprecated, func(i, j int) bool {
+		if deprecated[i]["provider"] != deprecated[j]["provider"] {
+			return deprecated[i]["provider"].(string) < deprecated[j]["provider"].(string)
+		}
+		return deprecated[i]["model"].(string) < deprecated[j]["model"].(string)
+	})
+	return map[string]interface{}{
+		"retired":    retired,
+		"deprecated": deprecated,
+	}
 }
 
 func (h *handler) handleRateLimits(w http.ResponseWriter, r *http.Request) {

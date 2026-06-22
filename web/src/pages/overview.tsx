@@ -11,7 +11,7 @@ import PageHeader, {
   LoadingBlock,
   StatusBadge,
 } from "../components/ui/page-header";
-import { useConfig, useHealth, useKeys, useUsage } from "../hooks/queries";
+import { useConfig, useHealth, useKeys, useModelStatus, useUsage } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import { aggScopeMap, DAILY_HISTORY_SUBTITLE, dailyHistoryChart, pickToday } from "../lib/daily-history";
 import { featureEnabled } from "../lib/features";
@@ -22,6 +22,7 @@ export default function OverviewPage() {
   const config = useConfig();
   const usage = useUsage();
   const keys = useKeys();
+  const modelStatus = useModelStatus();
 
   const cb = health.data?.circuit_breaker;
   const providers = cb?.providers ?? {};
@@ -63,19 +64,35 @@ export default function OverviewPage() {
   const modelRows = (
     usageRedis
       ? aggScopeMap(usageHistory, "today", "by_model").map((s) => ({
-          label: scopeLabel(s.scope),
-          requests: s.requests,
-        }))
+        label: scopeLabel(s.scope),
+        requests: s.requests,
+      }))
       : Object.entries(usageCounters)
-          .filter(([scope]) => scopeKind(scope) === "model")
-          .map(([scope, c]) => ({ label: scopeLabel(scope), requests: c.requests ?? 0 }))
+        .filter(([scope]) => scopeKind(scope) === "model")
+        .map(([scope, c]) => ({ label: scopeLabel(scope), requests: c.requests ?? 0 }))
   )
     .sort((a, b) => b.requests - a.requests)
     .slice(0, 6);
   const modelSource = usageRedis ? "redis" : "memory";
 
-  const isLoading = health.isLoading || config.isLoading || usage.isLoading;
-  const error = health.error || config.error || usage.error;
+  const modelStatusStats = modelStatus.data?.stats;
+  const modelStatusHistory = modelStatusStats?.daily_history;
+  const modelStatusRedis = Boolean(modelStatusStats?.daily_history_available);
+  const retiredTodayPick = pickToday(
+    modelStatusStats?.available ? modelStatusStats?.retired_total : undefined,
+    modelStatusHistory,
+    "retired_total",
+    modelStatusRedis,
+  );
+  const unknownTodayPick = pickToday(
+    modelStatusStats?.available ? modelStatusStats?.unknown_total : undefined,
+    modelStatusHistory,
+    "unknown_total",
+    modelStatusRedis,
+  );
+
+  const isLoading = health.isLoading || config.isLoading || usage.isLoading || modelStatus.isLoading;
+  const error = health.error || config.error || usage.error || modelStatus.error;
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -97,6 +114,7 @@ export default function OverviewPage() {
             onRefresh={() => {
               health.refetch();
               usage.refetch();
+              modelStatus.refetch();
             }}
           />
         }
@@ -133,6 +151,28 @@ export default function OverviewPage() {
           hint={`${providerNames.length} providers · ${enabledFeatures}/${totalFeatures} features on · ${keys.data?.length ?? "—"} keys`}
           source={circuitLive}
         />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <LiveStat
+          title="Retired calls today"
+          value={retiredTodayPick.value.toLocaleString()}
+          hint="blocked at proxy"
+          source={retiredTodayPick.source}
+        />
+        <LiveStat
+          title="Unknown models today"
+          value={unknownTodayPick.value.toLocaleString()}
+          hint="unregistered slugs"
+          source={unknownTodayPick.source}
+        />
+        <div className="card bg-base-100 shadow-sm">
+          <div className="card-body justify-center">
+            <Link to="/model-status" className="btn btn-outline btn-sm">
+              Model status details
+            </Link>
+          </div>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">

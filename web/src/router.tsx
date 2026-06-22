@@ -13,6 +13,7 @@ import CostPage from "./pages/cost";
 import KeyDetailPage from "./pages/keys/detail";
 import KeysPage from "./pages/keys";
 import LoginPage from "./pages/login";
+import ModelStatusPage from "./pages/model-status";
 import OverviewPage from "./pages/overview";
 import PIIPage from "./pages/pii";
 import RateLimitsPage from "./pages/rate-limits";
@@ -80,6 +81,14 @@ export default function Router() {
             element={shell(
               <RequireRole minRole="editor">
                 <PIIPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/model-status"
+            element={shell(
+              <RequireRole minRole="editor">
+                <ModelStatusPage />
               </RequireRole>,
             )}
           />

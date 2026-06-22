@@ -15,6 +15,7 @@ export const MONITORING_NAV: NavItem[] = [
   { to: "/rate-limits", label: "Rate Limits", minRole: "editor" },
   { to: "/cost", label: "Cost Tracking", minRole: "editor" },
   { to: "/pii", label: "PII Redaction", minRole: "editor" },
+  { to: "/model-status", label: "Model Status", minRole: "editor" },
 ];
 
 export const MANAGE_NAV: NavItem[] = [

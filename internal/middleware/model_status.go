@@ -55,6 +55,7 @@ func ModelStatusMiddleware(
 				recorder.RecordDeprecated(providerName, model)
 				emitModelMetric(metrics, "model.deprecated_call", providerName, model)
 			} else if modelCfg == nil {
+				recorder.RecordUnknown(providerName, model)
 				log.Printf("model status: unrecognized model %q for provider %q", model, providerName)
 				emitModelMetric(metrics, "model.unknown_call", providerName, model)
 			}

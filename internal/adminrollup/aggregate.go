@@ -323,6 +323,39 @@ func kvFromNameVals(vals []nameVal) []map[string]interface{} {
 	return out
 }
 
+func modelStatusDataFromAggregates(
+	totals map[string]float64,
+	byRetired, byDeprecated, byUnknown map[string]float64,
+	_ TopNCaps,
+) map[string]interface{} {
+	const limit = 100
+	return map[string]interface{}{
+		"retired_total":    int64(totals["retired_total"]),
+		"deprecated_total": int64(totals["deprecated_total"]),
+		"unknown_total":    int64(totals["unknown_total"]),
+		"by_retired":       kvFromNameVals(topNMap(byRetired, limit)),
+		"by_deprecated":    kvFromNameVals(topNMap(byDeprecated, limit)),
+		"by_unknown":       kvFromNameVals(topNMap(byUnknown, limit)),
+	}
+}
+
+func topNMap(m map[string]float64, n int) []nameVal {
+	out := make([]nameVal, 0, len(m))
+	for k, v := range m {
+		out = append(out, nameVal{Name: k, Val: v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Val != out[j].Val {
+			return out[i].Val > out[j].Val
+		}
+		return out[i].Name < out[j].Name
+	})
+	if n > 0 && len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
+
 func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64) map[string]interface{} {
 	byProvOut := make(map[string]int64, len(byProvider))
 	for k, v := range byProvider {

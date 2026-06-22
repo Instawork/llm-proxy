@@ -350,6 +350,42 @@ export interface PIIResponse {
   stats: PIIStats;
 }
 
+export interface ModelStatusNameCount {
+  name: string;
+  count: number;
+}
+
+export interface ModelStatusRegistryEntry {
+  provider: string;
+  model: string;
+  retired_date?: string;
+  replacement?: string;
+  aliases?: string[];
+}
+
+export interface ModelStatusRegistry {
+  retired: ModelStatusRegistryEntry[];
+  deprecated: ModelStatusRegistryEntry[];
+}
+
+export interface ModelStatusStats extends StatsWithDailyHistory {
+  available: boolean;
+  backend?: string;
+  day?: string;
+  started_at?: number;
+  retired_total?: number;
+  deprecated_total?: number;
+  unknown_total?: number;
+  by_retired?: ModelStatusNameCount[];
+  by_deprecated?: ModelStatusNameCount[];
+  by_unknown?: ModelStatusNameCount[];
+}
+
+export interface ModelStatusResponse {
+  stats: ModelStatusStats;
+  registry: ModelStatusRegistry;
+}
+
 export interface UsageScopeCounter {
   requests?: number;
   tokens?: number;

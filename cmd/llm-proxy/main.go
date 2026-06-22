@@ -144,6 +144,9 @@ var globalCircuitStore circuit.Store
 // In-process circuit activity (checks, probes, fast-fails) for the admin UI.
 var globalCircuitStatsRecorder *circuitstats.Recorder
 
+// In-process model status (retired, deprecated, unknown) for the admin UI.
+var globalModelStatusRecorder *modelstatusstats.Recorder
+
 // Resolved circuit-breaker config after Defaults() is applied.  Captured at
 // startup so /health can surface the effective mode / backend / thresholds
 // without re-reading YAML.
@@ -954,6 +957,13 @@ func circuitActivitySummaryFunc() func() map[string]interface{} {
 	return globalCircuitStatsRecorder.Snapshot
 }
 
+func modelStatusSummaryFunc() func() map[string]interface{} {
+	if globalModelStatusRecorder == nil {
+		return nil
+	}
+	return globalModelStatusRecorder.Snapshot
+}
+
 func initHistory(yamlConfig *config.YAMLConfig) {
 	hc := yamlConfig.Features.History
 	if hc.Backend == "" || strings.EqualFold(hc.Backend, "none") {
@@ -1018,6 +1028,9 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	}
 	if globalCircuitStatsRecorder != nil {
 		globalCircuitStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCircuitActivity))
+	}
+	if globalModelStatusRecorder != nil {
+		globalModelStatusRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricModelStatus))
 	}
 	if globalCircuitStore != nil {
 		globalAdminRollupStop = make(chan struct{})
@@ -1421,14 +1434,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
 	}
 
-	var modelStatusRecorder *modelstatusstats.Recorder
-	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
-		modelStatusRecorder = modelstatusstats.NewRecorder(rs.RedisClient())
-	} else {
-		modelStatusRecorder = modelstatusstats.NewRecorder(nil)
-	}
+	globalModelStatusRecorder = modelstatusstats.NewRecorder()
 	modelStatusMetrics := initializeCircuitMetrics(yamlConfig)
-	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, modelStatusRecorder, modelStatusMetrics))
+	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, globalModelStatusRecorder, modelStatusMetrics))
 
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
 		costLimitOpts := middleware.CostLimitOptions{
@@ -1626,21 +1634,22 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			keyStore = s
 		}
 		admin.RegisterRoutes(r, admin.Deps{
-			Logger:           logger,
-			YAMLConfig:       yamlConfig,
-			APIKeyStore:      keyStore,
-			APIKeyStoreError: globalAPIKeyStoreInitError,
-			UserStore:        globalAdminUserStore,
-			UserStoreError:   globalAdminUserStoreError,
-			RateLimiter:      globalRateLimiter,
-			HealthFunc:       healthHandler,
-			PIISummary:       piiSummaryFunc(),
-			CostSummary:      costSummaryFunc(),
-			UsageSummary:     usageSummaryFunc(),
-			RateLimitSummary: rateLimitSummaryFunc(),
-			CircuitActivity:  circuitActivitySummaryFunc(),
-			KeyProvisioner:   globalKeyProvisioner,
-			AdminRollupStore: globalAdminRollupStore,
+			Logger:             logger,
+			YAMLConfig:         yamlConfig,
+			APIKeyStore:        keyStore,
+			APIKeyStoreError:   globalAPIKeyStoreInitError,
+			UserStore:          globalAdminUserStore,
+			UserStoreError:     globalAdminUserStoreError,
+			RateLimiter:        globalRateLimiter,
+			HealthFunc:         healthHandler,
+			PIISummary:         piiSummaryFunc(),
+			CostSummary:        costSummaryFunc(),
+			UsageSummary:       usageSummaryFunc(),
+			RateLimitSummary:   rateLimitSummaryFunc(),
+			CircuitActivity:    circuitActivitySummaryFunc(),
+			ModelStatusSummary: modelStatusSummaryFunc(),
+			KeyProvisioner:     globalKeyProvisioner,
+			AdminRollupStore:   globalAdminRollupStore,
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}
@@ -1776,6 +1785,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalCircuitStatsRecorder != nil {
 		globalCircuitStatsRecorder.FlushRollup()
+	}
+	if globalModelStatusRecorder != nil {
+		globalModelStatusRecorder.FlushRollup()
 	}
 	if globalHistorySink != nil {
 		logger.Info("🔄 Flushing history sink...")

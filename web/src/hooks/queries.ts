@@ -13,6 +13,7 @@ import type {
   HealthResponse,
   KeyStatsResponse,
   CircuitActivityResponse,
+  ModelStatusResponse,
   PIIResponse,
   ProvisioningStatus,
   Provider,
@@ -37,6 +38,7 @@ export const queryKeys = {
   cost: ["admin", "cost"] as const,
   usage: ["admin", "usage"] as const,
   pii: ["admin", "pii"] as const,
+  modelStatus: ["admin", "model-status"] as const,
   provisioning: ["admin", "provisioning"] as const,
   users: ["admin", "users"] as const,
 };
@@ -176,6 +178,19 @@ export function usePII() {
   return useQuery({
     queryKey: queryKeys.pii,
     queryFn: () => apiFetch<PIIResponse>("/admin/api/pii"),
+    enabled: roleAtLeast(role, "editor"),
+    refetchInterval,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useModelStatus() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
+  const refetchInterval = usePollInterval();
+  return useQuery({
+    queryKey: queryKeys.modelStatus,
+    queryFn: () => apiFetch<ModelStatusResponse>("/admin/api/model-status"),
     enabled: roleAtLeast(role, "editor"),
     refetchInterval,
     refetchIntervalInBackground: true,
