@@ -7,11 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt main.py ./
+COPY requirements.txt main.py entrypoint.sh ./
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    chmod +x entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# entrypoint.sh launches one uvicorn worker per CPU core for parallel OCR.
+CMD ["./entrypoint.sh"]

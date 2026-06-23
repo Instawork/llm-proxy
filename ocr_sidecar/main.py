@@ -5,10 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any
 
+import onnxruntime as ort
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from onnxtr.io import DocumentFile
 from onnxtr.models import ocr_predictor
+from onnxtr.models.engine import EngineConfig
 
 logger = logging.getLogger("ocr_sidecar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -28,11 +30,39 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
-_default_workers = os.cpu_count() or 4
-OCR_MAX_WORKERS = _env_int("OCR_MAX_WORKERS", _default_workers)
-OCR_MAX_CONCURRENCY = _env_int("OCR_MAX_CONCURRENCY", OCR_MAX_WORKERS)
+# Throughput model: OnnxTR CPU inference does not scale across threads inside a
+# single Python process (GIL + a single ORT session serialize work to ~2 img/s
+# regardless of thread count). Horizontal parallelism therefore comes from
+# running ONE uvicorn worker process PER CPU core (see entrypoint.sh), each with
+# its own model and pinned to a single math thread (OMP_NUM_THREADS=1) so the
+# processes do not oversubscribe the cores.
+#
+# Consequently each process is sized to do ONE inference at a time. The
+# semaphore only adds a tiny accept-queue so a brief request overlap (HTTP read
+# while the previous inference finishes) does not 503 immediately.
+OCR_MAX_WORKERS = _env_int("OCR_MAX_WORKERS", 1)
+OCR_MAX_CONCURRENCY = _env_int("OCR_MAX_CONCURRENCY", OCR_MAX_WORKERS + 1)
 OCR_QUEUE_TIMEOUT_SEC = _env_float("OCR_QUEUE_TIMEOUT_SEC", 5.0)
 OCR_INFER_TIMEOUT_SEC = _env_float("OCR_INFER_TIMEOUT_SEC", 30.0)
+
+# ONNX Runtime keeps its OWN intra-op thread pool and ignores OMP_NUM_THREADS.
+# Left at the default it sizes that pool to the core count, so with one worker
+# process per core (see entrypoint.sh) every process would spawn N threads and
+# oversubscribe the CPU — collapsing throughput (2 concurrent requests end up
+# SLOWER than 1). Pin each process's ORT session to a single thread so
+# parallelism comes cleanly from the process fan-out instead.
+# Default 4 = sub-second latency with in-task concurrency on an 8-core task.
+# entrypoint.sh sets this explicitly and derives worker count from it.
+OCR_ORT_INTRA_THREADS = _env_int("OCR_ORT_INTRA_THREADS", 4)
+OCR_ORT_INTER_THREADS = _env_int("OCR_ORT_INTER_THREADS", 1)
+
+
+def _engine_cfg() -> EngineConfig:
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = OCR_ORT_INTRA_THREADS
+    opts.inter_op_num_threads = OCR_ORT_INTER_THREADS
+    return EngineConfig(session_options=opts)
+
 
 predictor: Any = None
 executor: ThreadPoolExecutor | None = None
@@ -53,14 +83,21 @@ async def lifespan(app: FastAPI):
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
     logger.info(
-        "initializing OCR predictor (workers=%d concurrency=%d)",
+        "initializing OCR predictor (pid=%d workers=%d concurrency=%d ort_intra=%d ort_inter=%d)",
+        os.getpid(),
         OCR_MAX_WORKERS,
         OCR_MAX_CONCURRENCY,
+        OCR_ORT_INTRA_THREADS,
+        OCR_ORT_INTER_THREADS,
     )
+    engine_cfg = _engine_cfg()
     predictor = ocr_predictor(
         det_arch="fast_base",
         reco_arch="crnn_vgg16_bn",
         assume_straight_pages=False,
+        det_engine_cfg=engine_cfg,
+        reco_engine_cfg=engine_cfg,
+        clf_engine_cfg=engine_cfg,
     )
     executor = ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS)
     gate = asyncio.Semaphore(OCR_MAX_CONCURRENCY)

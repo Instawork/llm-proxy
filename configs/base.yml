@@ -70,6 +70,10 @@ features:
     timeout_ms: 30000
     max_body_bytes: 0
     max_image_bytes: 0
+    # Images in one request are OCR'd + analyzed in parallel up to this many.
+    # 0 -> default of 4. The OCR fleet bounds its own per-process load, so this
+    # mainly cuts latency for multi-image requests.
+    image_concurrency: 0
   # ---------------------------------------------------------------------------
   # Standalone POST /redact (Presidio one-way markers for hooks/tools)
   # ---------------------------------------------------------------------------

@@ -1511,15 +1511,16 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			idGateFailClosed := idGateCfg.FailMode == "closed"
 			scoreThreshold := idGateCfg.ScoreThreshold
 			if scoreThreshold <= 0 {
-				scoreThreshold = 0.6
+				scoreThreshold = 0.4
 			}
 			r.Use(middleware.IDGateMiddleware(ocrClient, redactor, middleware.IDGateConfig{
-				FailClosed:     idGateFailClosed,
-				MaxBodyBytes:   idGateCfg.MaxBodyBytes,
-				MaxImageBytes:  idGateCfg.MaxImageBytes,
-				ScoreThreshold: scoreThreshold,
-				EntityTypes:    idGateCfg.EntityTypes,
-				Logger:         logger,
+				FailClosed:       idGateFailClosed,
+				MaxBodyBytes:     idGateCfg.MaxBodyBytes,
+				MaxImageBytes:    idGateCfg.MaxImageBytes,
+				ScoreThreshold:   scoreThreshold,
+				EntityTypes:      idGateCfg.EntityTypes,
+				ImageConcurrency: idGateCfg.ImageConcurrency,
+				Logger:           logger,
 			}))
 			logger.Info(
 				"🪪  Government ID gate middleware installed",

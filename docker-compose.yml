@@ -153,6 +153,17 @@ services:
     container_name: llm-proxy-ocr-sidecar
     ports:
       - "${OCR_SIDECAR_PORT:-8000}:8000"
+    environment:
+      # OCR_ORT_INTRA_THREADS is the latency<->concurrency knob: each inference
+      # uses up to this many cores (ONNX Runtime intra-op pool). entrypoint.sh
+      # derives worker processes = cores / intra so the cores are fully used
+      # without oversubscription (which otherwise collapses throughput). Raw
+      # images/sec scales by adding tasks, not by this knob. Each worker loads
+      # its own model (~1.5 GB) — size memory as workers × 1.5 GB.
+      #   intra=8 ~450ms/img · intra=4 ~760ms/img · intra=1 ~2.7s/img
+      - OCR_ORT_INTRA_THREADS=${OCR_ORT_INTRA_THREADS:-4}
+      - OCR_PROC_WORKERS=${OCR_PROC_WORKERS:-}
+      - OCR_MAX_WORKERS=${OCR_MAX_WORKERS:-1}
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s

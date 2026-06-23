@@ -191,6 +191,32 @@ jobs:
           paths:
             - git_sha.txt
 
+  build-and-push-ocr:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    # Target the OCR repo for both the ensure-repo step and the build script.
+    environment:
+      AWS_ECR_REPOSITORY_NAME: ocr-gate
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - setup_aws_and_docker
+      - run:
+          name: Build and push OCR sidecar image
+          command: |
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            echo "Building OCR image with SHA: ${GIT_SHA}"
+            # AWS login already done by setup_aws_and_docker; the OCR image has
+            # its own build context and no .dockerignore to stage.
+            ./scripts/build_for_ecr.sh -s ${GIT_SHA} \
+              --repo ocr-gate \
+              --dockerfile ocr_sidecar/Dockerfile \
+              --context ocr_sidecar \
+              --dockerignore "" \
+              --skip-aws-setup
+
   deploy-prod:
     docker:
       - image: cimg/python:3.11.8
@@ -224,6 +250,38 @@ jobs:
             curl $SLACK_WEBHOOK_URL \
               -X POST \
               --data-urlencode "payload={\"text\": \":red_circle: *production* deployment of *llm-proxy* has failed for SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_fail
+
+  deploy-ocr-prod:
+    docker:
+      - image: cimg/python:3.11.8
+    steps:
+      - checkout
+      - add_ssh_keys
+      - run:
+          name: Install dependencies
+          command: pip install awscli
+      - run:
+          name: Deploy OCR gate to production
+          command: |
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            echo "Deploying OCR gate SHA: ${GIT_SHA} to production"
+            ./scripts/deploy.sh production ${GIT_SHA} ocr-gate
+      - run:
+          name: Ping Slack Success
+          command: |
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":white_check_mark: *production* deployment of *ocr-gate* has successfully deployed with SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
+          when: on_success
+      - run:
+          name: Ping Slack Failure
+          command: |
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            curl $SLACK_WEBHOOK_URL \
+              -X POST \
+              --data-urlencode "payload={\"text\": \":red_circle: *production* deployment of *ocr-gate* has failed for SHA \`$GIT_SHA\` - <https://github.com/Instawork/llm-proxy/commit/$CIRCLE_SHA1|View Commit>\"}"
           when: on_fail
 
 # Define workflows
@@ -276,15 +334,41 @@ workflows:
           context:
             - AWS
 
+      - build-and-push-ocr:
+          requires:
+            - lint
+            - unit-tests
+            - integration-tests
+            - fuzz-tests
+          filters:
+            branches:
+              only:
+                - main
+            tags:
+              ignore: /.*/
+          context:
+            - AWS
+
       - deploy-prod-hold:
           type: approval
           requires:
             - build-and-push
+            - build-and-push-ocr
           filters:
             branches:
               only: main
 
       - deploy-prod:
+          requires:
+            - deploy-prod-hold
+          filters:
+            branches:
+              only: main
+          context:
+            - AWS
+            - Slack
+
+      - deploy-ocr-prod:
           requires:
             - deploy-prod-hold
           filters:

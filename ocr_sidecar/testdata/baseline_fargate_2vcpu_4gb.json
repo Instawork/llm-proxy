@@ -1,0 +1,26 @@
+{
+  "url": "http://localhost:8021",
+  "image": "ocr_sidecar/testdata/passport_us_block.png",
+  "warmup": 2,
+  "iterations": 10,
+  "concurrency": 1,
+  "errors": 0,
+  "serial": {
+    "count": 10,
+    "mean_ms": 2601.0,
+    "p50_ms": 2507.8,
+    "p95_ms": 2808.9,
+    "p99_ms": 2808.9,
+    "min_ms": 2489.9,
+    "max_ms": 2808.9
+  },
+  "concurrent": {
+    "count": 10,
+    "mean_ms": 2578.1,
+    "p50_ms": 2592.3,
+    "p95_ms": 2696.2,
+    "p99_ms": 2696.2,
+    "min_ms": 2494.2,
+    "max_ms": 2696.2
+  }
+}

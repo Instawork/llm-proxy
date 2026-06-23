@@ -10,12 +10,23 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 const idGateBlockMessage = "Security Block: Upload contains a government identity document."
+
+// imageScanResult is the outcome of OCR + analysis for one embedded image.
+type imageScanResult struct {
+	index      int
+	blocked    bool
+	entityType string
+	score      float64
+	stage      string
+	err        error
+}
 
 // OCRTextExtractor extracts text from a raw image payload.
 type OCRTextExtractor interface {
@@ -34,7 +45,12 @@ type IDGateConfig struct {
 	MaxImageBytes  int
 	ScoreThreshold float64
 	EntityTypes    []string
-	Logger         *slog.Logger
+	// ImageConcurrency caps how many embedded images in a single request are
+	// OCR'd + analyzed in parallel. <=0 defaults to 4. Throughput across the
+	// OCR fleet is what makes this safe to raise; the sidecar bounds its own
+	// per-process load.
+	ImageConcurrency int
+	Logger           *slog.Logger
 }
 
 // IDGateMiddleware OCRs embedded chat images and blocks requests when Presidio
@@ -60,6 +76,10 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 	entityTypes := cfg.EntityTypes
 	if len(entityTypes) == 0 {
 		entityTypes = redact.DefaultGovIDEntityTypes
+	}
+	imageConcurrency := cfg.ImageConcurrency
+	if imageConcurrency <= 0 {
+		imageConcurrency = 4
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -101,69 +121,111 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 			gateStart := time.Now()
 			provider := getProviderFromPath(r.URL.Path)
 
+			// Scan all embedded images concurrently (bounded). A government-ID
+			// hit is decisive and short-circuits the rest; errors are collected
+			// and only acted on if no image blocks (a block always wins over an
+			// error so a failing sibling can't mask a real positive).
+			concurrency := imageConcurrency
+			if concurrency > len(images) {
+				concurrency = len(images)
+			}
+
+			scanCtx, cancelScan := context.WithCancel(r.Context())
+			defer cancelScan()
+
+			sem := make(chan struct{}, concurrency)
+			results := make(chan imageScanResult, len(images))
+			var wg sync.WaitGroup
+
 			for i, img := range images {
-				text, ocrErr := ocrClient.ExtractText(r.Context(), img, imageFilename(i))
-				if ocrErr != nil {
-					if cfg.FailClosed {
-						logger.Error("id_gate: OCR failed; FailClosed -> 503",
-							slog.String("path", r.URL.Path),
-							slog.String("provider", provider),
-							slog.Int("image_index", i),
-							slog.String("error", ocrErr.Error()),
-							slog.Duration("duration", time.Since(gateStart)))
-						http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+				wg.Add(1)
+				go func(index int, img []byte) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					if scanCtx.Err() != nil {
 						return
 					}
-					logger.Warn("id_gate: OCR failed; passing through (fail_open)",
-						slog.String("path", r.URL.Path),
-						slog.String("provider", provider),
-						slog.Int("image_index", i),
-						slog.String("error", ocrErr.Error()))
-					next.ServeHTTP(w, r)
-					return
-				}
-				if strings.TrimSpace(text) == "" {
-					continue
-				}
 
-				spans, analyzeErr := analyzer.AnalyzeEntities(r.Context(), text, entityTypes)
-				if analyzeErr != nil {
-					if cfg.FailClosed {
-						logger.Error("id_gate: analyze failed; FailClosed -> 503",
-							slog.String("path", r.URL.Path),
-							slog.String("provider", provider),
-							slog.Int("image_index", i),
-							slog.String("error", analyzeErr.Error()),
-							slog.Duration("duration", time.Since(gateStart)))
-						http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+					text, ocrErr := ocrClient.ExtractText(scanCtx, img, imageFilename(index))
+					if ocrErr != nil {
+						results <- imageScanResult{index: index, stage: "ocr", err: ocrErr}
 						return
 					}
-					logger.Warn("id_gate: analyze failed; passing through (fail_open)",
-						slog.String("path", r.URL.Path),
-						slog.String("provider", provider),
-						slog.Int("image_index", i),
-						slog.String("error", analyzeErr.Error()))
-					next.ServeHTTP(w, r)
-					return
-				}
+					if strings.TrimSpace(text) == "" {
+						return
+					}
 
-				if blocked, entityType, score := govIDHit(spans, entityTypes, scoreThreshold); blocked {
+					spans, analyzeErr := analyzer.AnalyzeEntities(scanCtx, text, entityTypes)
+					if analyzeErr != nil {
+						results <- imageScanResult{index: index, stage: "analyze", err: analyzeErr}
+						return
+					}
+
+					if blocked, entityType, score := govIDHit(spans, entityTypes, scoreThreshold); blocked {
+						results <- imageScanResult{
+							index:      index,
+							blocked:    true,
+							entityType: entityType,
+							score:      score,
+						}
+						cancelScan()
+					}
+				}(i, img)
+			}
+
+			go func() {
+				wg.Wait()
+				close(results)
+			}()
+
+			var firstErr imageScanResult
+			var haveErr bool
+			for res := range results {
+				if res.blocked {
 					logger.Warn("id_gate: blocked government identity document",
 						slog.String("path", r.URL.Path),
 						slog.String("provider", provider),
-						slog.Int("image_index", i),
-						slog.String("entity_type", entityType),
-						slog.Float64("score", score),
+						slog.Int("image_index", res.index),
+						slog.String("entity_type", res.entityType),
+						slog.Float64("score", res.score),
 						slog.Duration("duration", time.Since(gateStart)))
 					http.Error(w, idGateBlockMessage, http.StatusForbidden)
 					return
 				}
+				if res.err != nil && !haveErr {
+					firstErr = res
+					haveErr = true
+				}
+			}
+
+			if haveErr {
+				if cfg.FailClosed {
+					logger.Error("id_gate: scan failed; FailClosed -> 503",
+						slog.String("path", r.URL.Path),
+						slog.String("provider", provider),
+						slog.Int("image_index", firstErr.index),
+						slog.String("stage", firstErr.stage),
+						slog.String("error", firstErr.err.Error()),
+						slog.Duration("duration", time.Since(gateStart)))
+					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				logger.Warn("id_gate: scan failed; passing through (fail_open)",
+					slog.String("path", r.URL.Path),
+					slog.String("provider", provider),
+					slog.Int("image_index", firstErr.index),
+					slog.String("stage", firstErr.stage),
+					slog.String("error", firstErr.err.Error()))
+				next.ServeHTTP(w, r)
+				return
 			}
 
 			logger.Info("id_gate: clear",
 				slog.String("path", r.URL.Path),
 				slog.String("provider", provider),
 				slog.Int("images_scanned", len(images)),
+				slog.Int("image_concurrency", concurrency),
 				slog.Duration("duration", time.Since(gateStart)))
 			next.ServeHTTP(w, r)
 		})

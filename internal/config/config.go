@@ -175,6 +175,11 @@ type IDGateConfig struct {
 
 	// TimeoutMs caps each OCR round trip. Default: 30000.
 	TimeoutMs int `yaml:"timeout_ms"`
+
+	// ImageConcurrency caps how many embedded images in a single request are
+	// OCR'd + analyzed in parallel. 0 -> middleware default of 4. Raise to
+	// reduce multi-image gate latency when the OCR fleet has spare capacity.
+	ImageConcurrency int `yaml:"image_concurrency,omitempty"`
 }
 
 // RedactAPIConfig gates the standalone POST /redact endpoint for generic

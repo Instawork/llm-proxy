@@ -423,6 +423,8 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 		"sidecar profile must disable PII redaction")
 	assert.False(t, cfg.Features.RedactAPI.Enabled,
 		"sidecar profile must disable POST /redact")
+	assert.False(t, cfg.Features.IDGate.Enabled,
+		"sidecar profile must disable ID gate")
 	assert.False(t, cfg.Features.AdminDashboard.Enabled,
 		"sidecar profile must disable the admin dashboard")
 	assert.Equal(t, "none", cfg.Features.History.Backend,
