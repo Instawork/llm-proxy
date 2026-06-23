@@ -434,7 +434,7 @@ providers:
           output: 80.00
       "o1-pro":
         enabled: true
-        aliases: ["o1-pro-2024-12-17"]
+        aliases: ["o1-pro-2024-12-17", "o1-pro-2025-03-19"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -460,7 +460,7 @@ providers:
           output: 15.00
       "gpt-5.4-mini":
         enabled: true
-        aliases: ["gpt-5.4-mini-2026-03-05"]
+        aliases: ["gpt-5.4-mini-2026-03-05", "gpt-5.4-mini-2026-03-17"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -473,7 +473,7 @@ providers:
           output: 4.50
       "gpt-5.4-nano":
         enabled: true
-        aliases: ["gpt-5.4-nano-2026-03-05"]
+        aliases: ["gpt-5.4-nano-2026-03-05", "gpt-5.4-nano-2026-03-17"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -577,7 +577,7 @@ providers:
           output: 168.00
       "gpt-5.1":
         enabled: true
-        aliases: ["gpt-5.1-2025-10-01"]
+        aliases: ["gpt-5.1-2025-10-01", "gpt-5.1-2025-11-13"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -590,7 +590,7 @@ providers:
           output: 10.00
       "gpt-5-pro":
         enabled: true
-        aliases: ["gpt-5-pro-2025-08-07"]
+        aliases: ["gpt-5-pro-2025-08-07", "gpt-5-pro-2025-10-06"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
