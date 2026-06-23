@@ -121,6 +121,88 @@ func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testin
 	}
 }
 
+func TestMaskProviderCredential(t *testing.T) {
+	cases := []struct {
+		raw        string
+		wantPrefix string
+		secretTail string // a chunk that must NOT appear in the masked form
+	}{
+		{"sk-ant-api03-AbCdEfGhIjKlMnOp", "sk-ant-…", "AbCdEfGhIjKlMnOp"},
+		{"sk-proj-1234567890abcdef", "sk-proj-…", "1234567890abcdef"},
+		{"sk-svcacct-zzzzz", "sk-svcacct-…", "zzzzz"},
+		{"sk-classic-secret", "sk-…", "classic-secret"},
+		{"AIzaSyD-EXAMPLE-secret-bytes", "AIza…", "SyD-EXAMPLE-secret-bytes"},
+		{"gsk_groqsecret", "gsk_…", "groqsecret"},
+		{"weirdunknowntoken", "weir…", "unknowntoken"},
+	}
+	for _, tc := range cases {
+		got := MaskProviderCredential(tc.raw)
+		if !strings.HasPrefix(got, tc.wantPrefix) {
+			t.Errorf("MaskProviderCredential(%q) = %q; want prefix %q", tc.raw, got, tc.wantPrefix)
+		}
+		if strings.Contains(got, tc.secretTail) {
+			t.Errorf("MaskProviderCredential(%q) = %q leaks secret tail %q", tc.raw, got, tc.secretTail)
+		}
+		// Distinct keys with the same family must not collapse to one identity.
+		if other := MaskProviderCredential(tc.raw + "X"); other == got {
+			t.Errorf("MaskProviderCredential collided for %q and %qX", tc.raw, tc.raw)
+		}
+	}
+	if MaskProviderCredential("") != "" {
+		t.Errorf("MaskProviderCredential(\"\") should be empty")
+	}
+}
+
+func TestAPIKeyValidationMiddleware_StashesByoCredentialID(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	store := &mockProxyKeyStore{}
+	mw := APIKeyValidationMiddleware(pm, store, false)
+
+	var byoID string
+	var proxyRecord *apikeys.APIKey
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		byoID = InboundCredentialID(r.Context())
+		proxyRecord, _ = apikeys.FromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// "valid" authenticates but is not a proxy key -> BYO path.
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if proxyRecord != nil {
+		t.Fatalf("BYO caller must not have a proxy record, got %+v", proxyRecord)
+	}
+	if want := MaskProviderCredential("valid"); byoID != want {
+		t.Fatalf("InboundCredentialID = %q, want %q", byoID, want)
+	}
+}
+
+func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	store := &mockProxyKeyStore{}
+	mw := APIKeyValidationMiddleware(pm, store, false)
+
+	var byoID = "sentinel"
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		byoID = InboundCredentialID(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer "+apikeys.KeyPrefix+"proxy")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if byoID != "" {
+		t.Fatalf("proxy-key caller should have no BYO credential id, got %q", byoID)
+	}
+}
+
 func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())

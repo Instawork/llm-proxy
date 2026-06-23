@@ -197,6 +197,11 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				return
 			}
 
+			// Display identity for the admin "Recent scans" table: the masked
+			// proxy key when present, otherwise the masked raw provider
+			// credential a BYO-key caller used (sk-ant-…, AIza…) for debugging.
+			keyID := piiDisplayKeyID(keyRecord, r.Context())
+
 			body, oversize, err := readBoundedBody(r, maxBytes)
 			if err != nil {
 				logger.Warn("pii_redact: read body failed",
@@ -217,7 +222,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.String("provider", getProviderFromPath(r.URL.Path)),
 					slog.Int("body_bytes", len(body)),
 					slog.Int("max_body_bytes", maxBytes))
-				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyRecord, nil, len(body), 0, piiOutcomeOversize)
+				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, len(body), 0, piiOutcomeOversize)
 				if cfg.FailClosed {
 					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
 					return
@@ -263,7 +268,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 						slog.Int("body_bytes", len(body)),
 						slog.String("error", redactErr.Error()),
 						slog.Duration("duration", redactDuration))
-					recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailClosed)
+					recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailClosed)
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -273,7 +278,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.Int("body_bytes", len(body)),
 					slog.String("error", redactErr.Error()),
 					slog.Duration("duration", redactDuration))
-				recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailOpen)
+				recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailOpen)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -311,7 +316,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				slog.Any("entity_counts", result.EntityCounts),
 				slog.Duration("duration", redactDuration))
 
-			recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
+			recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -324,20 +329,28 @@ func recordPII(
 	recorder PIIStatsRecorder,
 	metrics observability.MetricsSink,
 	provider string,
-	keyRecord *apikeys.APIKey,
+	keyID string,
 	entityCounts map[string]int,
 	bodyBytes int,
 	duration time.Duration,
 	outcome string,
 ) {
 	if recorder != nil {
-		keyID := ""
-		if keyRecord != nil {
-			keyID = MaskKeyID(keyRecord.PK)
-		}
 		recorder.RecordRedaction(provider, keyID, entityCounts, bodyBytes, duration, outcome)
 	}
 	emitPIIRedactionMetrics(metrics, provider, outcome, entityCounts, duration)
+}
+
+// piiDisplayKeyID resolves the masked identity shown in the admin "Recent
+// scans" table. A proxy-key caller is identified by its masked sk-iw key; a
+// bring-your-own-key caller (no proxy record) falls back to the masked raw
+// provider credential stashed by APIKeyValidationMiddleware. Both forms are
+// non-reversible. Returns "" when neither is available.
+func piiDisplayKeyID(keyRecord *apikeys.APIKey, ctx context.Context) string {
+	if keyRecord != nil && keyRecord.PK != "" {
+		return MaskKeyID(keyRecord.PK)
+	}
+	return InboundCredentialID(ctx)
 }
 
 // shouldRedactRequest filters out routes/methods that don't carry user
