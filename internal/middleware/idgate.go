@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -51,6 +52,7 @@ type IDGateConfig struct {
 	// per-process load.
 	ImageConcurrency int
 	Logger           *slog.Logger
+	Metrics          observability.MetricsSink
 }
 
 // IDGateMiddleware OCRs embedded chat images and blocks requests when Presidio
@@ -190,6 +192,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						slog.String("entity_type", res.entityType),
 						slog.Float64("score", res.score),
 						slog.Duration("duration", time.Since(gateStart)))
+					emitIDGateBlocked(cfg.Metrics, provider, res.entityType)
 					http.Error(w, idGateBlockMessage, http.StatusForbidden)
 					return
 				}
@@ -208,6 +211,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						slog.String("stage", firstErr.stage),
 						slog.String("error", firstErr.err.Error()),
 						slog.Duration("duration", time.Since(gateStart)))
+					emitIDGateScanFailed(cfg.Metrics, provider, firstErr.stage, true)
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -217,16 +221,19 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					slog.Int("image_index", firstErr.index),
 					slog.String("stage", firstErr.stage),
 					slog.String("error", firstErr.err.Error()))
+				emitIDGateScanFailed(cfg.Metrics, provider, firstErr.stage, false)
 				next.ServeHTTP(w, r)
 				return
 			}
 
+			gateDuration := time.Since(gateStart)
 			logger.Info("id_gate: clear",
 				slog.String("path", r.URL.Path),
 				slog.String("provider", provider),
 				slog.Int("images_scanned", len(images)),
 				slog.Int("image_concurrency", concurrency),
-				slog.Duration("duration", time.Since(gateStart)))
+				slog.Duration("duration", gateDuration))
+			emitIDGateScanned(cfg.Metrics, provider, len(images), gateDuration)
 			next.ServeHTTP(w, r)
 		})
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -126,6 +127,10 @@ type PIIRedactConfig struct {
 	// dashboard's PII section. nil disables stats collection.
 	Recorder PIIStatsRecorder
 
+	// Metrics, when non-nil, emits dogstatsd counters/distributions for
+	// pii.redaction / pii.entity_detected (see features.pii_redact.datadog).
+	Metrics observability.MetricsSink
+
 	// WirePlaceholders sends scrubbed placeholder text to the upstream LLM
 	// instead of observability-only redaction. When true, a per-request
 	// Registry is stashed for response restore middleware.
@@ -211,7 +216,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.String("provider", getProviderFromPath(r.URL.Path)),
 					slog.Int("body_bytes", len(body)),
 					slog.Int("max_body_bytes", maxBytes))
-				recordPII(cfg.Recorder, getProviderFromPath(r.URL.Path), keyRecord, nil, len(body), 0, piiOutcomeOversize)
+				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyRecord, nil, len(body), 0, piiOutcomeOversize)
 				if cfg.FailClosed {
 					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
 					return
@@ -248,7 +253,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 						slog.Int("body_bytes", len(body)),
 						slog.String("error", redactErr.Error()),
 						slog.Duration("duration", redactDuration))
-					recordPII(cfg.Recorder, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailClosed)
+					recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailClosed)
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -258,7 +263,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.Int("body_bytes", len(body)),
 					slog.String("error", redactErr.Error()),
 					slog.Duration("duration", redactDuration))
-				recordPII(cfg.Recorder, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailOpen)
+				recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, nil, len(body), redactDuration, piiOutcomeFailOpen)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -287,7 +292,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				slog.Any("entity_counts", result.EntityCounts),
 				slog.Duration("duration", redactDuration))
 
-			recordPII(cfg.Recorder, provider, keyRecord, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
+			recordPII(cfg.Recorder, cfg.Metrics, provider, keyRecord, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -298,6 +303,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 // configured, masking the key ID. It is a no-op when recorder is nil.
 func recordPII(
 	recorder PIIStatsRecorder,
+	metrics observability.MetricsSink,
 	provider string,
 	keyRecord *apikeys.APIKey,
 	entityCounts map[string]int,
@@ -305,14 +311,14 @@ func recordPII(
 	duration time.Duration,
 	outcome string,
 ) {
-	if recorder == nil {
-		return
+	if recorder != nil {
+		keyID := ""
+		if keyRecord != nil {
+			keyID = MaskKeyID(keyRecord.PK)
+		}
+		recorder.RecordRedaction(provider, keyID, entityCounts, bodyBytes, duration, outcome)
 	}
-	keyID := ""
-	if keyRecord != nil {
-		keyID = MaskKeyID(keyRecord.PK)
-	}
-	recorder.RecordRedaction(provider, keyID, entityCounts, bodyBytes, duration, outcome)
+	emitPIIRedactionMetrics(metrics, provider, outcome, entityCounts, duration)
 }
 
 // shouldRedactRequest filters out routes/methods that don't carry user
