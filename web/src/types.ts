@@ -369,6 +369,7 @@ export interface PIIStats extends StatsWithDailyHistory {
   by_provider?: PIINameCount[];
   top_keys?: PIINameCount[];
   recent?: PIIRecentEvent[];
+  recent_backend?: string;
 }
 
 export interface PIIResponse {

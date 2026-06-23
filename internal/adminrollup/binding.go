@@ -2,6 +2,7 @@ package adminrollup
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -251,4 +252,45 @@ func (b *RecorderBinding) FlushRollup() {
 	if _, p := b.deps(); p != nil {
 		p.FlushNow()
 	}
+}
+
+const recentEventWriteTimeout = 500 * time.Millisecond
+
+// AppendRecentEvent mirrors one event into the shared rollup store's rolling
+// recent list (fleet-wide when Redis is enabled). Fire-and-forget on the hot
+// path; no-op when unbound.
+func (b *RecorderBinding) AppendRecentEvent(metric string, event any, maxLen int) {
+	s, _ := b.deps()
+	if s == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), recentEventWriteTimeout)
+		defer cancel()
+		if err := s.AppendRecentEvent(ctx, metric, event, maxLen); err != nil {
+			s.logger.Warn("admin rollup: recent event write failed", "metric", metric, "error", err)
+		}
+	}()
+}
+
+// MergeRecentEvents overlays fleet-wide recent events from the rollup store.
+// When events exist, snap[field] is replaced and snap["recent_backend"] is set
+// to the store backend kind. No-op when unbound or the list is empty.
+func (b *RecorderBinding) MergeRecentEvents(metric, field string, maxLen int, snap map[string]interface{}, parse func([]json.RawMessage) any) {
+	s, _ := b.deps()
+	if s == nil || snap == nil || parse == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mergeHistoryTimeout)
+	defer cancel()
+	raw, err := s.LoadRecentEventPayloads(ctx, metric, maxLen)
+	if err != nil {
+		s.logger.Warn("admin rollup: recent events read failed", "metric", metric, "error", err)
+		return
+	}
+	if len(raw) == 0 {
+		return
+	}
+	snap[field] = parse(raw)
+	snap["recent_backend"] = s.Backend()
 }

@@ -1,4 +1,4 @@
-import { maskKeyId } from "./format";
+import { fnv1a32Hex, maskKeyId } from "./format";
 import { isProxyKey, matchedProxyKeyPrefix, trimProxyKeyPrefix } from "./proxy-key";
 import type { APIKey } from "../types";
 
@@ -34,12 +34,23 @@ export function findKeyByScopeSuffix(suffix: string, keys: APIKey[]): APIKey | u
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+const MASKED_ID_HASH_SUFFIX = /(?:…|\u2026)([0-9a-f]{8})$/;
+
 /** Resolve a masked dashboard key_id to a registered API key. */
 export function findKeyByMaskedId(maskedId: string, keys: APIKey[]): APIKey | undefined {
   if (!maskedId) return undefined;
   const exact = keys.find((k) => maskKeyId(k.key) === maskedId);
   if (exact) return exact;
-  const prefix = maskedId.replace(/\u2026$/, "").replace(/…$/, "");
+
+  const hashMatch = maskedId.match(MASKED_ID_HASH_SUFFIX);
+  if (hashMatch) {
+    const hash = hashMatch[1];
+    const byHash = keys.filter((k) => fnv1a32Hex(k.key) === hash);
+    if (byHash.length === 1) return byHash[0];
+  }
+
+  const ellipsisIdx = maskedId.search(/…|\u2026/);
+  const prefix = ellipsisIdx >= 0 ? maskedId.slice(0, ellipsisIdx) : maskedId;
   if (prefix.length < 4) return undefined;
   const matches = keys.filter((k) => k.key.startsWith(prefix));
   return matches.length === 1 ? matches[0] : undefined;

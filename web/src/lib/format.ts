@@ -94,7 +94,7 @@ export function maskKeyId(key: string): string {
   return `${key.slice(0, 12)}…${fnv1a32Hex(key)}`;
 }
 
-function fnv1a32Hex(s: string): string {
+export function fnv1a32Hex(s: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);

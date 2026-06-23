@@ -5,6 +5,11 @@ import KeyLink from "../ui/key-link";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { nameCountDisplayRows, type NameCountDisplayRow } from "../../lib/group-rows";
+import {
+  piiKeyPrimaryLabel,
+  piiKeySecondaryLabel,
+  piiKeyShowSecondary,
+} from "../../lib/pii-key-display";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 import type { APIKey, PIIRecentEvent } from "../../types";
 import type { NameCount } from "../../lib/daily-history";
@@ -37,7 +42,16 @@ export function TopKeysTable({ rows, keys }: { rows: NameCount[]; keys: APIKey[]
           if (data.isOthers) {
             return <span className="italic text-base-content/60">{data.name}</span>;
           }
-          return <KeyLink keys={keys} maskedId={data.name} showMasked />;
+          const showSecondary = piiKeyShowSecondary(data.name, keys);
+          return (
+            <KeyLink
+              keys={keys}
+              maskedId={data.name}
+              label={piiKeyPrimaryLabel(data.name, keys)}
+              secondaryLabel={showSecondary ? piiKeySecondaryLabel(data.name, keys) : undefined}
+              showMasked={showSecondary}
+            />
+          );
         },
       },
       {
@@ -83,12 +97,21 @@ export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; 
         id: "key",
         accessorKey: "key_id",
         header: "Key",
-        cell: ({ row }) =>
-          row.original.key_id ? (
-            <KeyLink keys={keys} maskedId={row.original.key_id} className="font-mono text-xs" />
-          ) : (
-            "—"
-          ),
+        cell: ({ row }) => {
+          const keyId = row.original.key_id;
+          if (!keyId) return "—";
+          const showSecondary = piiKeyShowSecondary(keyId, keys);
+          return (
+            <KeyLink
+              keys={keys}
+              maskedId={keyId}
+              label={piiKeyPrimaryLabel(keyId, keys)}
+              secondaryLabel={showSecondary ? piiKeySecondaryLabel(keyId, keys) : undefined}
+              showMasked={showSecondary}
+              className="font-mono text-xs"
+            />
+          );
+        },
       },
       {
         id: "entities",

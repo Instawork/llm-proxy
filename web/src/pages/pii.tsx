@@ -85,6 +85,7 @@ export default function PIIPage() {
   const scanned = scannedPick.value;
   const rate = stats?.detection_rate ?? 0;
   const recent = stats?.recent ?? [];
+  const recentSource: DataSource = stats?.recent_backend === "redis" ? "redis" : "memory";
   const failures = (stats?.fail_open ?? 0) + (stats?.fail_closed ?? 0);
 
   // Prefer fleet-wide Redis rollups whenever Redis is available — including
@@ -238,8 +239,12 @@ export default function PIIPage() {
 
       <SectionPanel
         title="Recent scans"
-        subtitle={`Last ${recent.length} redaction scans (clean, detected, and failed) — not written to Redis`}
-        source="memory"
+        subtitle={
+          recentSource === "redis"
+            ? `Last ${recent.length} redaction scans fleet-wide (clean, detected, and failed)`
+            : `Last ${recent.length} redaction scans on this pod (clean, detected, and failed)`
+        }
+        source={recentSource}
       >
         <RecentDetectionsTable rows={recent} keys={keys.data ?? []} />
       </SectionPanel>

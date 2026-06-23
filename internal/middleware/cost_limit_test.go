@@ -199,6 +199,15 @@ func TestMaskKeyID_FormatContract(t *testing.T) {
 	}
 }
 
+func TestMaskKeyID_SkPrefixFormatContract(t *testing.T) {
+	const pk = "sk-iw-0123456789abcdefghijklmnop"
+	got := MaskKeyID(pk)
+	want := pk[:12] + "…" + keyIDHashSuffix(pk)
+	if got != want {
+		t.Fatalf("MaskKeyID = %q want %q", got, want)
+	}
+}
+
 func TestCostLimitMiddleware_ZeroLimitUnlimited(t *testing.T) {
 	rec := coststats.NewRecorder()
 	rec.RecordRequest("openai", "iw:abc123456789", "", "gpt-4o-mini", 99.0, 0, 0, 10, 10)

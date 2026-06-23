@@ -3,6 +3,7 @@
 package pii
 
 import (
+	"encoding/json"
 	"sort"
 	"sync"
 	"time"
@@ -225,6 +226,9 @@ func (r *Recorder) RecordRedaction(
 	r.mu.Unlock()
 
 	r.QueueDelta(dayKey, delta)
+	if r.RollupBound() {
+		r.AppendRecentEvent(adminrollup.MetricPII, entry, MaxRecentEvents)
+	}
 }
 
 func (r *Recorder) piiDeltaLocked() adminrollup.Delta {
@@ -312,5 +316,20 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 
 	r.MergeToday(adminrollup.MetricPII, dayKey, snap, piiRollupCaps)
 	r.MergeHistory(adminrollup.MetricPII, snap)
+	r.MergeRecentEvents(adminrollup.MetricPII, "recent", MaxRecentEvents, snap, parseRecentEventPayloads)
+	if _, ok := snap["recent_backend"]; !ok {
+		snap["recent_backend"] = "memory"
+	}
 	return snap
+}
+
+func parseRecentEventPayloads(raw []json.RawMessage) any {
+	recent := make([]recentEntry, 0, len(raw))
+	for _, payload := range raw {
+		var e recentEntry
+		if json.Unmarshal(payload, &e) == nil {
+			recent = append(recent, e)
+		}
+	}
+	return recent
 }

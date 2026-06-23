@@ -2,6 +2,7 @@ package adminrollup
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -110,4 +111,35 @@ func TestRecorderBindingMergeTodayAndArchiveFromAggregates(t *testing.T) {
 		}
 	}
 	require.True(t, archived)
+}
+
+func TestRecorderBindingMergeRecentEvents(t *testing.T) {
+	store := testStore(t)
+	var b RecorderBinding
+	b.BindRollup(store, NewPersister(store, MetricPII))
+
+	ctx := context.Background()
+	require.NoError(t, store.AppendRecentEvent(ctx, MetricPII, map[string]any{
+		"time":     1,
+		"provider": "openai",
+		"outcome":  "ok",
+	}, 50))
+
+	snap := map[string]interface{}{}
+	b.MergeRecentEvents(MetricPII, "recent", 50, snap, func(raw []json.RawMessage) any {
+		out := make([]map[string]any, 0, len(raw))
+		for _, payload := range raw {
+			var row map[string]any
+			if json.Unmarshal(payload, &row) == nil {
+				out = append(out, row)
+			}
+		}
+		return out
+	})
+
+	require.Equal(t, store.Backend(), snap["recent_backend"])
+	rows, ok := snap["recent"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, rows, 1)
+	require.Equal(t, "openai", rows[0]["provider"])
 }

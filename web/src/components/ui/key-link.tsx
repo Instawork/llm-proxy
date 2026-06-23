@@ -11,6 +11,8 @@ type KeyLinkProps = {
   scope?: string;
   /** Primary label; falls back to key description or masked id. */
   label?: string;
+  /** Secondary mono line; defaults to masked id when showMasked is set. */
+  secondaryLabel?: string;
   showMasked?: boolean;
   className?: string;
 };
@@ -21,6 +23,7 @@ export default function KeyLink({
   maskedId,
   scope,
   label,
+  secondaryLabel,
   showMasked = false,
   className = "",
 }: KeyLinkProps) {
@@ -28,13 +31,14 @@ export default function KeyLink({
   const record = target && keys ? keys.find((k) => k.key === target) : undefined;
   const masked = maskedId ?? (target ? maskKeyId(target) : undefined);
   const primary = label ?? record?.description ?? masked ?? target ?? "—";
+  const secondary = secondaryLabel ?? masked;
 
   if (!target) {
     return (
       <span className={className}>
         <span>{primary}</span>
-        {showMasked && masked && primary !== masked ? (
-          <span className="mt-0.5 block font-mono text-xs text-base-content/50">{masked}</span>
+        {showMasked && secondary && primary !== secondary ? (
+          <span className="mt-0.5 block font-mono text-xs text-base-content/50">{secondary}</span>
         ) : null}
       </span>
     );
@@ -43,8 +47,8 @@ export default function KeyLink({
   return (
     <Link to={keyDetailPath(target)} className={`link link-hover link-primary no-underline ${className}`.trim()}>
       <span className="font-medium">{primary}</span>
-      {showMasked && masked ? (
-        <span className="mt-0.5 block font-mono text-xs opacity-70">{masked}</span>
+      {showMasked && secondary ? (
+        <span className="mt-0.5 block font-mono text-xs opacity-70">{secondary}</span>
       ) : null}
     </Link>
   );

@@ -188,7 +188,7 @@ func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
 	store := &mockProxyKeyStore{}
 	mw := APIKeyValidationMiddleware(pm, store, false)
 
-	var byoID = "sentinel"
+	byoID := "sentinel"
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		byoID = InboundCredentialID(r.Context())
 		w.WriteHeader(http.StatusOK)

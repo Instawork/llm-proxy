@@ -47,6 +47,8 @@ type backend interface {
 	reserveUnderLimit(ctx context.Context, spendHashKey, spendField, reservedHashKey, reservedField string, estimate float64, limitCents int64, ttl time.Duration) (bool, error)
 	// addReserved adjusts a reservation field by delta (floored at 0).
 	addReserved(ctx context.Context, reservedHashKey, reservedField string, delta float64, ttl time.Duration) error
+	appendRecentEvent(ctx context.Context, key string, payload []byte, maxLen int, ttl time.Duration) error
+	loadRecentEvents(ctx context.Context, key string, maxLen int) ([]byte, error)
 	close() error
 	kind() string
 }
@@ -172,15 +174,17 @@ type memHash map[string]float64
 // dev and tests the full rollup feature (daily_history) without a running
 // Redis; it intentionally does not survive process restarts.
 type memoryBackend struct {
-	mu   sync.Mutex
-	data map[string]memEntry
-	hash map[string]memHash
+	mu    sync.Mutex
+	data  map[string]memEntry
+	hash  map[string]memHash
+	lists map[string][]string
 }
 
 func newMemoryBackend() *memoryBackend {
 	return &memoryBackend{
-		data: make(map[string]memEntry),
-		hash: make(map[string]memHash),
+		data:  make(map[string]memEntry),
+		hash:  make(map[string]memHash),
+		lists: make(map[string][]string),
 	}
 }
 
