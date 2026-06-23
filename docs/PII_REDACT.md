@@ -17,9 +17,31 @@ extend the wire payload past the in-code allowlist — see
 
 ## Status
 
-Off by default. The middleware is gated by
-`features.pii_redact.enabled` in YAML — until you flip it, no /analyze
-calls happen and no body capture overhead is incurred.
+| Deployment | `pii_redact` | `POST /redact` | Notes |
+| ---------- | ------------ | -------------- | ----- |
+| Standalone production (`llm.instawork.com`) | **on** | on | Presidio sidecar co-located in the ECS task (`localhost:3000`) |
+| App sidecars (`LLM_PROXY_CONFIG_PROFILE=sidecar`) | off | off | Traffic still rolls up to the admin dashboard via Redis |
+| Local dev (`configs/dev.yml`) | on | on | Requires `docker compose --profile pii_redact up -d presidio` |
+| Default (`configs/base.yml`) | off | off | Opt-in per environment |
+
+First production rollout uses `fail_mode: open` — a Presidio outage logs a
+warning and passes the request through rather than returning 503. Monitor
+`fail_open` on the admin PII dashboard before tightening to `closed`.
+
+## Vendor posture
+
+Contractual safeguards for raw LLM egress (Decision gate 0 in
+[`PII_REMEDIATION_PLAN.md`](PII_REMEDIATION_PLAN.md)). Update this table
+when legal confirms status; it sets whether unredacted upstream egress is
+P0 or informational.
+
+| Vendor | BAA / DPA | Notes |
+| ------ | --------- | ----- |
+| OpenAI | pending review | |
+| Anthropic | pending review | |
+| Google Gemini | pending review | |
+| AWS Bedrock | pending review | Account BAA posture TBD |
+| Datadog (cost metric tags) | pending review | See W3 in remediation plan |
 
 ## Enabling locally
 

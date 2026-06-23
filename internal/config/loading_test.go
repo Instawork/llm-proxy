@@ -373,6 +373,31 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 	}
 }
 
+func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	if _, err := os.Stat(configsDir); err != nil {
+		t.Skipf("configs dir not found (%s) — skipping", configsDir)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "")
+	cfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Features.PIIRedact.Enabled,
+		"standalone production llm-proxy must enable PII redaction")
+	assert.True(t, cfg.Features.RedactAPI.Enabled,
+		"standalone production must expose POST /redact")
+}
+
 func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)
@@ -396,6 +421,8 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 		"production infra (circuit breaker) must survive the sidecar profile overlay")
 	assert.False(t, cfg.Features.PIIRedact.Enabled,
 		"sidecar profile must disable PII redaction")
+	assert.False(t, cfg.Features.RedactAPI.Enabled,
+		"sidecar profile must disable POST /redact")
 	assert.False(t, cfg.Features.AdminDashboard.Enabled,
 		"sidecar profile must disable the admin dashboard")
 	assert.Equal(t, "none", cfg.Features.History.Backend,

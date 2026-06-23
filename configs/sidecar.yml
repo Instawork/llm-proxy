@@ -2,7 +2,8 @@
 # Set LLM_PROXY_CONFIG_PROFILE=sidecar alongside ENVIRONMENT=production (or
 # staging) so deploy identity and infra settings stay on the env file while
 # PII redaction and the admin dashboard HTTP server stay off here — observability
-# redaction and the dashboard UI run only on the standalone llm-proxy service.
+# redaction, POST /redact, and the dashboard UI run only on the central
+# standalone llm-proxy service (not co-located app sidecars).
 #
 # This file deep-merges over the environment file (e.g. production.yml), but the
 # merge replaces whole nested blocks it names. So sidecars STILL write usage/cost/
@@ -18,6 +19,8 @@ features:
   pii_redact:
     enabled: false
     allow_per_key_override: false
+  redact_api:
+    enabled: false
   admin_dashboard:
     # HTTP dashboard server off (UI served only by the standalone service)...
     enabled: false

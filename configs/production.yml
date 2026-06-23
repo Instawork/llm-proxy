@@ -105,7 +105,7 @@ features:
       requests_per_day: 0
       tokens_per_day: 0
   pii_redact:
-    enabled: false
+    enabled: true
     analyzer_url: "http://localhost:3000"
     fail_mode: "open"
     allow_per_key_override: false
