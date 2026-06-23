@@ -206,17 +206,16 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			r.ContentLength = int64(len(body))
 
 			if oversize {
-				// Include the actual body_bytes so operators can see
-				// HOW MUCH we overshot (a 5 % overshoot suggests a
-				// trivial cap bump; a 10× overshoot suggests a
-				// runaway upload) and provider so per-provider Datadog
-				// monitors can be tuned independently.
-				logger.Warn("pii_redact: body exceeds max_body_bytes; skipping",
+				logger.Warn("pii_redact: body exceeds max_body_bytes",
 					slog.String("path", r.URL.Path),
 					slog.String("provider", getProviderFromPath(r.URL.Path)),
 					slog.Int("body_bytes", len(body)),
 					slog.Int("max_body_bytes", maxBytes))
 				recordPII(cfg.Recorder, getProviderFromPath(r.URL.Path), keyRecord, nil, len(body), 0, piiOutcomeOversize)
+				if cfg.FailClosed {
+					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -207,7 +207,7 @@ func captureLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-func TestPIIRedactMiddleware_OversizeBodySkipped(t *testing.T) {
+func TestPIIRedactMiddleware_OversizeBodyFailOpenPassthrough(t *testing.T) {
 	big := strings.Repeat("a", 5000)
 	r := &fakeRedactor{}
 	cap := &captureHandler{}
@@ -237,7 +237,7 @@ func TestPIIRedactMiddleware_OversizeBodySkipped(t *testing.T) {
 	// on. If any go missing, dashboards silently lose signal.
 	logOut := logBuf.String()
 	for _, want := range []string{
-		`"msg":"pii_redact: body exceeds max_body_bytes; skipping"`,
+		`"msg":"pii_redact: body exceeds max_body_bytes"`,
 		`"provider":"openai"`,
 		`"body_bytes":5000`,
 		`"max_body_bytes":1024`,
@@ -245,6 +245,30 @@ func TestPIIRedactMiddleware_OversizeBodySkipped(t *testing.T) {
 		if !strings.Contains(logOut, want) {
 			t.Errorf("oversize WARN missing %q\nfull log: %s", want, logOut)
 		}
+	}
+}
+
+func TestPIIRedactMiddleware_OversizeBodyFailClosed503(t *testing.T) {
+	big := strings.Repeat("a", 5000)
+	r := &fakeRedactor{}
+	cap := &captureHandler{}
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled: true,
+		MaxBodyBytes:  1024,
+		FailClosed:    true,
+	})(cap)
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", big))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if r.called != 0 {
+		t.Errorf("oversize fail-closed should skip redactor (count=%d)", r.called)
+	}
+	if cap.bodySeen != nil {
+		t.Error("oversize fail-closed must not reach upstream")
 	}
 }
 

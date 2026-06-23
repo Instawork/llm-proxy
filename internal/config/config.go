@@ -1139,6 +1139,10 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	if r.MaxBodyBytes < 0 {
 		return fmt.Errorf("max_body_bytes cannot be negative")
 	}
+	env := os.Getenv("ENVIRONMENT")
+	if env == "production" && r.WirePlaceholders != nil && !*r.WirePlaceholders {
+		return fmt.Errorf("wire_placeholders: false is not allowed when ENVIRONMENT=production")
+	}
 	return nil
 }
 
