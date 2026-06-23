@@ -40,6 +40,10 @@ func (m *fakeMetrics) Incr(name string, tags []string, rate float64) error {
 	return nil
 }
 
+func (m *fakeMetrics) Distribution(name string, value float64, tags []string, rate float64) error {
+	return m.Incr(name, tags, rate)
+}
+
 func (m *fakeMetrics) findByName(name string) []fakeMetricsCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
