@@ -396,6 +396,8 @@ func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
 		"standalone production llm-proxy must enable PII redaction")
 	assert.True(t, cfg.Features.RedactAPI.Enabled,
 		"standalone production must expose POST /redact")
+	assert.False(t, cfg.Features.BYOKeys.Enabled,
+		"standalone production must reject BYO provider keys")
 }
 
 func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
@@ -429,4 +431,6 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 		"sidecar profile must disable the admin dashboard")
 	assert.Equal(t, "none", cfg.Features.History.Backend,
 		"sidecar profile must disable row-history writes")
+	assert.True(t, cfg.Features.BYOKeys.Enabled,
+		"sidecar profile must allow BYO provider keys")
 }

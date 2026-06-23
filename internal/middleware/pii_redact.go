@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
@@ -88,9 +87,7 @@ func MaskKeyID(key string) string {
 
 // keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key.
 func keyIDHashSuffix(key string) string {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(key))
-	return fmt.Sprintf("%08x", h.Sum32())
+	return apikeys.CredentialHashSuffix(key)
 }
 
 // PIIRedactConfig controls the middleware behaviour. See

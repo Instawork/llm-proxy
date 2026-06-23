@@ -3,7 +3,8 @@
 # staging) so deploy identity and infra settings stay on the env file while
 # PII redaction and the admin dashboard HTTP server stay off here — observability
 # redaction, POST /redact, and the dashboard UI run only on the central
-# standalone llm-proxy service (not co-located app sidecars).
+# standalone llm-proxy service (not co-located app sidecars). BYO provider keys
+# stay allowed here even though the standalone service rejects them.
 #
 # This file deep-merges over the environment file (e.g. production.yml), but the
 # merge replaces whole nested blocks it names. So sidecars STILL write usage/cost/
@@ -16,6 +17,8 @@
 enabled: true
 
 features:
+  byo_keys:
+    enabled: true
   pii_redact:
     enabled: false
     allow_per_key_override: false

@@ -22,6 +22,11 @@ features:
   rate_limiting:
     enabled: false
   # ---------------------------------------------------------------------------
+  # Bring-your-own provider keys (raw sk-ant-/AIza/... passthrough)
+  # ---------------------------------------------------------------------------
+  byo_keys:
+    enabled: true
+  # ---------------------------------------------------------------------------
   # PII redaction (Presidio analyzer sidecar)
   # ---------------------------------------------------------------------------
 # Off by default. When enabled, the proxy scrubs request bodies with

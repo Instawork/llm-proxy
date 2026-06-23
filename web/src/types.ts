@@ -518,3 +518,32 @@ export interface KeyStatsResponse {
   recent_cost: KeyCostRecentEvent[];
   recent_pii: KeyPIIRecentEvent[];
 }
+
+export interface BYOBanRecord {
+  provider: Provider;
+  masked_id: string;
+  hash: string;
+  banned_by?: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface BYOKeyRecord {
+  provider: Provider;
+  masked_id: string;
+  hash: string;
+  banned: boolean;
+  banned_by?: string;
+  reason?: string;
+  banned_at?: string;
+  pii_scans: number;
+  cost_requests: number;
+  spend_usd: number;
+  sources: string[];
+}
+
+export interface CreateBYOBanRequest {
+  provider: Provider;
+  masked_id: string;
+  reason?: string;
+}

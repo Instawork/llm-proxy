@@ -14,6 +14,7 @@ import {
 } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useCost, useKeys } from "../hooks/queries";
+import { useByoBanActions } from "../hooks/use-byo-ban-actions";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   type CostKeyAgg,
@@ -62,6 +63,7 @@ function spendByMaskedKey(byKey: CostKeySpend[] | undefined, key: string): numbe
 export default function CostPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useCost();
   const keys = useKeys();
+  const byoBanActions = useByoBanActions();
   const [range, setRange] = useState<RangeKey>("today");
 
   const stats = data?.stats;
@@ -242,7 +244,7 @@ export default function CostPage() {
               }
               source={breakdownSource}
             >
-              <SpendByKeyTable rows={withSpend} keys={keyList} />
+              <SpendByKeyTable rows={withSpend} keys={keyList} byoBanActions={byoBanActions} />
             </SectionPanel>
           ) : null}
           {withProviderSpend.length > 0 ? (

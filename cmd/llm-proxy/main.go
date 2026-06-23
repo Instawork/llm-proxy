@@ -1388,7 +1388,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// API key validation runs before PII redaction so per-key redact_pii
 	// overrides can be resolved from the DynamoDB record stashed in context.
 	if globalAPIKeyStore != nil {
-		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore, yamlConfig.Features.PIIRedact.Enabled))
+		r.Use(middleware.APIKeyValidationMiddleware(
+			globalProviderManager,
+			globalAPIKeyStore,
+			yamlConfig.Features.PIIRedact.Enabled,
+			yamlConfig.Features.BYOKeys.Enabled,
+		))
 	}
 
 	globalModelStatusRecorder = modelstatusstats.NewRecorder()

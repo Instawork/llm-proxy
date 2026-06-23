@@ -64,11 +64,19 @@ type FeaturesConfig struct {
 	RateLimiting     RateLimitingConfig     `yaml:"rate_limiting"`
 	CircuitBreaker   CircuitBreakerConfig   `yaml:"circuit_breaker"`
 	PIIRedact        PIIRedactConfig        `yaml:"pii_redact"`
+	BYOKeys          BYOKeysConfig          `yaml:"byo_keys"`
 	IDGate           IDGateConfig           `yaml:"id_gate"`
 	RedactAPI        RedactAPIConfig        `yaml:"redact_api"`
 	FakeUpstream     FakeUpstreamConfig     `yaml:"fake_upstream"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 	History          HistoryConfig          `yaml:"history"`
+}
+
+// BYOKeysConfig gates whether callers may authenticate with raw provider
+// credentials (sk-ant-/AIza/...) instead of proxy iw-* keys. Disabled on
+// the standalone production service; co-located app sidecars keep it on.
+type BYOKeysConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // PIIRedactConfig configures the proxy-side PII redactor that calls the

@@ -99,6 +99,8 @@ features:
       namespace: "llm"
       tags: ["env:prod", "service:llm-proxy", "team:platform"]
       sample_rate: 1.0
+  byo_keys:
+    enabled: false
   rate_limiting:
     enabled: false
     backend: "redis"

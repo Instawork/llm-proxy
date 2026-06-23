@@ -15,9 +15,15 @@ type proxyKeyLookup interface {
 	LookupProxyKey(ctx context.Context, bearer string) (*apikeys.APIKey, error)
 }
 
+type byoBanChecker interface {
+	IsBYOCredentialBanned(ctx context.Context, provider, hash string) (bool, error)
+}
+
 // APIKeyValidationMiddleware validates and potentially replaces API keys for
 // all providers. globalPIIEnabled is features.pii_redact.enabled from YAML.
-func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, globalPIIEnabled bool) func(http.Handler) http.Handler {
+// byoKeysEnabled is features.byo_keys.enabled — when false, raw provider
+// credentials are rejected and callers must use proxy iw-* keys.
+func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, globalPIIEnabled, byoKeysEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" || r.URL.Path == "/redact" || strings.HasPrefix(r.URL.Path, "/admin/") {
@@ -42,6 +48,40 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 				// Capture the inbound iw: key before ValidateAPIKey may swap it
 				// for the upstream provider credential.
 				inboundKey := extractInboundProxyKey(r)
+
+				if inboundKey != "" && !apikeys.HasKeyPrefix(inboundKey) {
+					if !byoKeysEnabled {
+						log.Printf("❌ BYO keys disabled for provider %s", provider.GetName())
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						fmt.Fprintf(w, `{"error": "Bring-your-own provider keys are not accepted; use a proxy key"}`)
+						return
+					}
+					checker, ok := keyStore.(byoBanChecker)
+					if !ok {
+						log.Printf("❌ BYO ban lookup unavailable: key store does not implement ban checker")
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, `{"error": "Internal server error"}`)
+						return
+					}
+					hash := apikeys.CredentialHashSuffix(inboundKey)
+					banned, err := checker.IsBYOCredentialBanned(r.Context(), provider.GetName(), hash)
+					if err != nil {
+						log.Printf("❌ BYO ban lookup failed for %s: %v", provider.GetName(), err)
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, `{"error": "Internal server error"}`)
+						return
+					}
+					if banned {
+						log.Printf("❌ BYO credential banned for provider %s", provider.GetName())
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						fmt.Fprintf(w, `{"error": "API key is banned"}`)
+						return
+					}
+				}
 
 				if err := provider.ValidateAPIKey(r, keyStore); err != nil {
 					log.Printf("❌ API key validation failed for %s: %v", provider.GetName(), err)

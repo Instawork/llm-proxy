@@ -12,6 +12,7 @@ import {
 } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
 import { useKeys, usePII } from "../hooks/queries";
+import { useByoBanActions } from "../hooks/use-byo-ban-actions";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   DAILY_HISTORY_SUBTITLE,
@@ -43,6 +44,7 @@ function toNameCount(rows: PIINameCount[]): NameCount[] {
 export default function PIIPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = usePII();
   const keys = useKeys();
+  const byoBanActions = useByoBanActions();
   const [range, setRange] = useState<RangeKey>("today");
 
   const stats = data?.stats;
@@ -233,7 +235,7 @@ export default function PIIPage() {
           }
           source={breakdownSource}
         >
-          <TopKeysTable rows={topKeys} keys={keys.data ?? []} />
+          <TopKeysTable rows={topKeys} keys={keys.data ?? []} byoBanActions={byoBanActions} />
         </SectionPanel>
       ) : null}
 
@@ -246,7 +248,7 @@ export default function PIIPage() {
         }
         source={recentSource}
       >
-        <RecentDetectionsTable rows={recent} keys={keys.data ?? []} />
+        <RecentDetectionsTable rows={recent} keys={keys.data ?? []} byoBanActions={byoBanActions} />
       </SectionPanel>
     </div>
   );

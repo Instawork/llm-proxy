@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
-import { roleAtLeast } from "../lib/rbac";
+import { canManageByoBans, roleAtLeast } from "../lib/rbac";
 import type {
   AdminUser,
   AdminUserRecord,
@@ -25,6 +25,9 @@ import type {
   UpdateAdminUserRoleRequest,
   UpdateAPIKeyRequest,
   ReviewKeyRequestBody,
+  BYOBanRecord,
+  BYOKeyRecord,
+  CreateBYOBanRequest,
   UsageResponse,
 } from "../types";
 import { usePollInterval } from "./use-poll-interval";
@@ -46,6 +49,8 @@ export const queryKeys = {
   users: ["admin", "users"] as const,
   keyRequests: (status?: string) => ["admin", "key-requests", status ?? "all"] as const,
   myKeyRequests: ["admin", "key-requests", "mine"] as const,
+  byoBans: (provider?: string) => ["admin", "byo-bans", provider ?? "all"] as const,
+  byoKeys: (provider?: string) => ["admin", "byo-keys", provider ?? "all"] as const,
 };
 
 export function useMe() {
@@ -365,6 +370,65 @@ export function useReviewKeyRequest() {
       qc.invalidateQueries({ queryKey: queryKeys.keyRequests() });
       qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
       qc.invalidateQueries({ queryKey: queryKeys.keys() });
+    },
+  });
+}
+
+export function useBYOKeys(provider?: Provider) {
+  const { data: me } = useMe();
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return useQuery({
+    queryKey: queryKeys.byoKeys(provider),
+    queryFn: () => apiFetch<BYOKeyRecord[]>(`/admin/api/byo-keys${qs}`),
+    enabled: canManageByoBans(me?.role),
+  });
+}
+
+export function useBYOBans(provider?: Provider) {
+  const { data: me } = useMe();
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return useQuery({
+    queryKey: queryKeys.byoBans(provider),
+    queryFn: () => apiFetch<BYOBanRecord[]>(`/admin/api/byo-bans${qs}`),
+    enabled: canManageByoBans(me?.role),
+  });
+}
+
+export function useBanBYOKey() {
+  const qc = useQueryClient();
+  const { data: me } = useMe();
+  return useMutation({
+    mutationFn: (body: CreateBYOBanRequest) => {
+      if (!canManageByoBans(me?.role)) {
+        return Promise.reject(new Error("Admin role required"));
+      }
+      return apiFetch<BYOBanRecord>("/admin/api/byo-bans", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "byo-bans"] });
+      qc.invalidateQueries({ queryKey: ["admin", "byo-keys"] });
+    },
+  });
+}
+
+export function useUnbanBYOKey() {
+  const qc = useQueryClient();
+  const { data: me } = useMe();
+  return useMutation({
+    mutationFn: ({ provider, hash }: { provider: Provider; hash: string }) => {
+      if (!canManageByoBans(me?.role)) {
+        return Promise.reject(new Error("Admin role required"));
+      }
+      return apiFetch<void>(`/admin/api/byo-bans/${encodeURIComponent(provider)}/${encodeURIComponent(hash)}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "byo-bans"] });
+      qc.invalidateQueries({ queryKey: ["admin", "byo-keys"] });
     },
   });
 }

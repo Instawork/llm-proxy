@@ -88,6 +88,11 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/share", roleHandler(auth, adminusers.RoleViewer, h.handleCreateShare)).Methods(http.MethodPost, http.MethodOptions)
 	api.Handle("/share/{id}", roleHandler(auth, adminusers.RoleViewer, h.handleDeleteShare)).Methods(http.MethodDelete, http.MethodOptions)
 
+	api.Handle("/byo-keys", roleHandler(auth, adminusers.RoleAdmin, h.handleListBYOKeys)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/byo-bans", roleHandler(auth, adminusers.RoleAdmin, h.handleListBYOBans)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/byo-bans", roleHandler(auth, adminusers.RoleAdmin, h.handleCreateBYOBan)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/byo-bans/{provider}/{hash}", roleHandler(auth, adminusers.RoleAdmin, h.handleDeleteBYOBan)).Methods(http.MethodDelete, http.MethodOptions)
+
 	api.Handle("/users", roleHandler(auth, adminusers.RoleAdmin, h.handleListUsers)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/users", roleHandler(auth, adminusers.RoleAdmin, h.handleCreateUser)).Methods(http.MethodPost, http.MethodOptions)
 	api.Handle("/users/{email:.+}", roleHandler(auth, adminusers.RoleAdmin, h.handleGetUser)).Methods(http.MethodGet, http.MethodOptions)

@@ -2,14 +2,17 @@ import { useMemo } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import KeyLink from "../ui/key-link";
+import ByoBanButton from "../byo/ban-by-key-button";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
+import type { ByoBanActions } from "../../hooks/use-byo-ban-actions";
 import { nameCountDisplayRows, type NameCountDisplayRow } from "../../lib/group-rows";
 import {
   piiKeyPrimaryLabel,
   piiKeySecondaryLabel,
   piiKeyShowSecondary,
 } from "../../lib/pii-key-display";
+import { inferProviderFromMaskedId } from "../../lib/byo-ban";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 import type { APIKey, PIIRecentEvent } from "../../types";
 import type { NameCount } from "../../lib/daily-history";
@@ -24,7 +27,15 @@ function outcomeBadge(outcome: PIIRecentEvent["outcome"]) {
   return <span className={`badge badge-sm ${map[outcome]}`}>{outcome}</span>;
 }
 
-export function TopKeysTable({ rows, keys }: { rows: NameCount[]; keys: APIKey[] }) {
+export function TopKeysTable({
+  rows,
+  keys,
+  byoBanActions,
+}: {
+  rows: NameCount[];
+  keys: APIKey[];
+  byoBanActions: ByoBanActions;
+}) {
   const { displayData, onSearchActiveChange, footer } = useCollapsedRows(
     rows,
     nameCountDisplayRows,
@@ -43,14 +54,24 @@ export function TopKeysTable({ rows, keys }: { rows: NameCount[]; keys: APIKey[]
             return <span className="italic text-base-content/60">{data.name}</span>;
           }
           const showSecondary = piiKeyShowSecondary(data.name, keys);
+          const inferredProvider = inferProviderFromMaskedId(data.name);
           return (
-            <KeyLink
-              keys={keys}
-              maskedId={data.name}
-              label={piiKeyPrimaryLabel(data.name, keys)}
-              secondaryLabel={showSecondary ? piiKeySecondaryLabel(data.name, keys) : undefined}
-              showMasked={showSecondary}
-            />
+            <div className="flex items-center gap-2">
+              <KeyLink
+                keys={keys}
+                maskedId={data.name}
+                label={piiKeyPrimaryLabel(data.name, keys)}
+                secondaryLabel={showSecondary ? piiKeySecondaryLabel(data.name, keys) : undefined}
+                showMasked={showSecondary}
+              />
+              {inferredProvider ? (
+                <ByoBanButton
+                  maskedId={data.name}
+                  provider={inferredProvider}
+                  actions={byoBanActions}
+                />
+              ) : null}
+            </div>
           );
         },
       },
@@ -62,7 +83,7 @@ export function TopKeysTable({ rows, keys }: { rows: NameCount[]; keys: APIKey[]
         cell: ({ getValue }) => getValue<number>().toLocaleString(),
       },
     ],
-    [keys],
+    [keys, byoBanActions],
   );
 
   return (
@@ -78,7 +99,15 @@ export function TopKeysTable({ rows, keys }: { rows: NameCount[]; keys: APIKey[]
   );
 }
 
-export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; keys: APIKey[] }) {
+export function RecentDetectionsTable({
+  rows,
+  keys,
+  byoBanActions,
+}: {
+  rows: PIIRecentEvent[];
+  keys: APIKey[];
+  byoBanActions: ByoBanActions;
+}) {
   const columns = useMemo<ColumnDef<PIIRecentEvent, unknown>[]>(
     () => [
       {
@@ -102,14 +131,21 @@ export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; 
           if (!keyId) return "—";
           const showSecondary = piiKeyShowSecondary(keyId, keys);
           return (
-            <KeyLink
-              keys={keys}
-              maskedId={keyId}
-              label={piiKeyPrimaryLabel(keyId, keys)}
-              secondaryLabel={showSecondary ? piiKeySecondaryLabel(keyId, keys) : undefined}
-              showMasked={showSecondary}
-              className="font-mono text-xs"
-            />
+            <div className="flex items-center gap-2">
+              <KeyLink
+                keys={keys}
+                maskedId={keyId}
+                label={piiKeyPrimaryLabel(keyId, keys)}
+                secondaryLabel={showSecondary ? piiKeySecondaryLabel(keyId, keys) : undefined}
+                showMasked={showSecondary}
+                className="font-mono text-xs"
+              />
+              <ByoBanButton
+                maskedId={keyId}
+                provider={row.original.provider}
+                actions={byoBanActions}
+              />
+            </div>
           );
         },
       },
@@ -148,7 +184,7 @@ export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; 
         cell: ({ getValue }) => <span className="text-base-content/70">{getValue<number>().toFixed(1)} ms</span>,
       },
     ],
-    [keys],
+    [keys, byoBanActions],
   );
 
   return (

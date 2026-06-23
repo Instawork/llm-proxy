@@ -21,6 +21,10 @@ func (m *mockAPIKeyStore) ValidateAndGetActualKey(ctx context.Context, key strin
 	return "", "", errors.New("invalid key")
 }
 
+func (m *mockAPIKeyStore) IsBYOCredentialBanned(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
 type mockProxyKeyStore struct {
 	mockAPIKeyStore
 }
@@ -47,7 +51,7 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	pm.RegisterProvider(op)
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -93,7 +97,7 @@ func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testin
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
 
 	iwKey := apikeys.KeyPrefix + "proxy"
 	if !strings.HasPrefix(iwKey, "sk-") {
@@ -158,7 +162,7 @@ func TestAPIKeyValidationMiddleware_StashesByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
 
 	var byoID string
 	var proxyRecord *apikeys.APIKey
@@ -186,7 +190,7 @@ func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
 
 	byoID := "sentinel"
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,12 +207,65 @@ func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
 	}
 }
 
+func TestAPIKeyValidationMiddleware_RejectsBYOKeyWhenDisabled(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	store := &mockAPIKeyStore{}
+	mw := APIKeyValidationMiddleware(pm, store, false, false)
+
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when BYO keys disabled, got %d", rec.Code)
+	}
+}
+
+func TestAPIKeyValidationMiddleware_RejectsBannedBYOKey(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	store := &mockBanCheckingStore{
+		banned: map[string]bool{
+			"openai:" + apikeys.CredentialHashSuffix("valid"): true,
+		},
+	}
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
+
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for banned BYO key, got %d", rec.Code)
+	}
+}
+
+type mockBanCheckingStore struct {
+	mockAPIKeyStore
+	banned map[string]bool
+}
+
+func (m *mockBanCheckingStore) IsBYOCredentialBanned(_ context.Context, provider, hash string) (bool, error) {
+	return m.banned[provider+":"+hash], nil
+}
+
 func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

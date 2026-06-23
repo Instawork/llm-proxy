@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import KeyRequestsPanel from "../../components/keys/key-requests-panel";
+import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
 import {
@@ -22,6 +23,7 @@ import { useToast } from "../../components/ui/toast";
 import { formatShareExpiry } from "../../lib/share-expiry";
 import { dailyCostLimitFormDollars } from "../../lib/format";
 import {
+  useBYOKeys,
   useConfig,
   useCost,
   useCreateKey,
@@ -45,10 +47,11 @@ import type {
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
 
-type KeysTab = "keys" | "requests";
+type KeysTab = "keys" | "requests" | "byo-keys";
 
 function parseKeysTab(value: string | null, isAdmin: boolean): KeysTab {
   if (value === "requests" && isAdmin) return "requests";
+  if ((value === "byo-keys" || value === "byo-bans") && isAdmin) return "byo-keys";
   return "keys";
 }
 
@@ -174,6 +177,8 @@ export default function KeysPage() {
   const canRequestServiceKey = isViewer || isEditor;
   const tab = parseKeysTab(searchParams.get("tab"), isAdmin);
   const { data: pendingRequests = [] } = useKeyRequests("pending");
+  const { data: byoKeys = [] } = useBYOKeys();
+  const bannedByoCount = byoKeys.filter((row) => row.banned).length;
   const pendingRequestCount = isAdmin ? pendingRequests.length : 0;
   const [requestKeyModalOpen, setRequestKeyModalOpen] = useState(false);
   const handledRequestDeepLink = useRef(false);
@@ -689,6 +694,21 @@ export default function KeysPage() {
             <button
               type="button"
               role="tab"
+              aria-selected={tab === "byo-keys"}
+              className={keysTabClass(tab === "byo-keys")}
+              onClick={() => setTab("byo-keys")}
+            >
+              BYO keys
+              {byoKeys.length > 0 ? (
+                <span className="badge badge-ghost badge-sm border-0">{byoKeys.length}</span>
+              ) : null}
+              {bannedByoCount > 0 ? (
+                <span className="badge badge-error badge-sm border-0">{bannedByoCount} banned</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={tab === "requests"}
               className={keysTabClass(tab === "requests")}
               onClick={() => setTab("requests")}
@@ -753,6 +773,7 @@ export default function KeysPage() {
       ) : null}
 
       {tab === "requests" && isAdmin ? <KeyRequestsPanel /> : null}
+      {tab === "byo-keys" && isAdmin ? <ByoKeysPanel /> : null}
 
       <RequestKeyModal
         open={requestKeyModalOpen}
