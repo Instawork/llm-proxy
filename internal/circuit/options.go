@@ -59,7 +59,8 @@ type CallerFromRequestFunc func(*http.Request) string
 type Option func(*Transport)
 
 // WithMetrics installs a dogstatsd-style sink so the circuit transport
-// can emit counters (e.g. circuit.terminal_failure, circuit.fast_fail)
+// can emit counters (e.g. circuit.terminal_failure, circuit.fast_fail,
+// circuit.opened, circuit.closed)
 // alongside its log lines.  Pass a nil sink to keep the no-op default.
 func WithMetrics(m MetricsSink) Option {
 	return func(t *Transport) {

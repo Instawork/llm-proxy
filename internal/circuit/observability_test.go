@@ -637,6 +637,120 @@ func TestProbeFailed_Metric_TagsModelFromCachedBody(t *testing.T) {
 	if got, _ := entry["model"].(string); got != "gpt-4o" {
 		t.Fatalf("probe_failed log: want model=gpt-4o, got %q", got)
 	}
+
+	opened := metrics.findByName("circuit.opened")
+	if len(opened) != 1 {
+		t.Fatalf("expected exactly 1 circuit.opened metric, got %d (%+v)", len(opened), metrics.calls)
+	}
+	openedTags := tagSet(opened[0].Tags)
+	if _, ok := openedTags["reason:probe_failed"]; !ok {
+		t.Fatalf("circuit.opened must tag reason:probe_failed (tags=%v)", opened[0].Tags)
+	}
+}
+
+func TestThresholdOpen_EmitsOpenedMetric(t *testing.T) {
+	buf := &bytes.Buffer{}
+	log := captureLogs(buf)
+	metrics := &fakeMetrics{}
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return makeResp(503), nil
+	})
+	cfg := Config{
+		Enabled:          true,
+		Mode:             ModeEnforce,
+		FailureThreshold: 1,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(
+		inner, store, cfg, "openai", log,
+		WithMetrics(metrics),
+		WithModelExtractor(fakeModelFn("gpt-4o")),
+	)
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gpt-4o"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want synthetic 503 after threshold open, got %d", resp.StatusCode)
+	}
+
+	opened := metrics.findByName("circuit.opened")
+	if len(opened) != 1 {
+		t.Fatalf("expected exactly 1 circuit.opened metric, got %d (%+v)", len(opened), metrics.calls)
+	}
+	openedTags := tagSet(opened[0].Tags)
+	for _, want := range []string{
+		"provider:openai",
+		"model:gpt-4o",
+		"reason:threshold",
+	} {
+		if _, ok := openedTags[want]; !ok {
+			t.Fatalf("missing tag %q on circuit.opened (tags=%v)", want, opened[0].Tags)
+		}
+	}
+}
+
+func TestProbeSuccess_EmitsClosedMetric(t *testing.T) {
+	buf := &bytes.Buffer{}
+	log := captureLogs(buf)
+	metrics := &fakeMetrics{}
+
+	cfg := Config{
+		Enabled:          true,
+		Mode:             ModeEnforce,
+		FailureThreshold: 1,
+		WindowSeconds:    60,
+		CooldownSeconds:  300,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+
+	e := store.entry("openai:gpt-4o")
+	e.mu.Lock()
+	e.state = StateHalfOpen
+	e.mu.Unlock()
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return makeResp(200), nil
+	})
+	tr := NewTransport(
+		inner, store, cfg, "openai", log,
+		WithMetrics(metrics),
+		WithModelExtractor(fakeModelFn("gpt-4o")),
+	)
+
+	req, err := http.NewRequest(http.MethodPost, "/openai/v1/chat/completions",
+		struct{ io.Reader }{Reader: bytes.NewReader([]byte(`{"model":"gpt-4o"}`))})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("want 200 after successful probe, got %d", resp.StatusCode)
+	}
+
+	closed := metrics.findByName("circuit.closed")
+	if len(closed) != 1 {
+		t.Fatalf("expected exactly 1 circuit.closed metric, got %d (%+v)", len(closed), metrics.calls)
+	}
+	closedTags := tagSet(closed[0].Tags)
+	for _, want := range []string{
+		"provider:openai",
+		"model:gpt-4o",
+		"reason:probe_success",
+	} {
+		if _, ok := closedTags[want]; !ok {
+			t.Fatalf("missing tag %q on circuit.closed (tags=%v)", want, closed[0].Tags)
+		}
+	}
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

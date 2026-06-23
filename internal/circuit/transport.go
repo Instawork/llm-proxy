@@ -329,6 +329,24 @@ func (t *Transport) emit(event string, fc failureContext) {
 	_ = t.metrics.Incr("circuit."+event, fc.metricTags(), 1.0)
 }
 
+// emitOpened records a Closed → Open (or HalfOpen → Open) state transition.
+func (t *Transport) emitOpened(fc failureContext, reason string) {
+	if t.metrics == nil {
+		return
+	}
+	tags := append(fc.metricTags(), "reason:"+normalizeTagValue(reason))
+	_ = t.metrics.Incr("circuit.opened", tags, 1.0)
+}
+
+// emitClosed records an Open/HalfOpen → Closed state transition.
+func (t *Transport) emitClosed(fc failureContext, reason string) {
+	if t.metrics == nil {
+		return
+	}
+	tags := append(fc.metricTags(), "reason:"+normalizeTagValue(reason))
+	_ = t.metrics.Incr("circuit.closed", tags, 1.0)
+}
+
 // drainResponseBody reads the body to EOF and closes it so the
 // HTTP/1.x connection is returned to the keep-alive pool cleanly
 // when the caller is about to retry or replace the response.  Errors
@@ -739,6 +757,9 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		}
 		t.maybeRecordRollup(ctx, key, openedNow)
 		fc := t.enrichedFailureContext(req, resp, err, "")
+		if openedNow {
+			t.emitOpened(fc, "threshold")
+		}
 		t.log.Info("circuit: log-mode terminal_failure_observed (no synthetic response, passing through)",
 			append(
 				fc.attrs(),
@@ -877,6 +898,9 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 		if recErr != nil {
 			t.log.Error("circuit: bypass RecordTerminalFailure error",
 				"key", key, "error", recErr)
+		}
+		if openedNow {
+			t.emitOpened(fc, "threshold")
 		}
 		t.maybeRecordRollup(ctx, key, openedNow)
 	}
@@ -1058,8 +1082,11 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			if fErr := t.store.ForceOpen(ctx, t.provider, t.cfg.CooldownSeconds); fErr != nil {
 				t.log.Warn("circuit: ForceOpen (insufficient_quota) error",
 					"provider", t.provider, "error", fErr)
-			} else if t.activity != nil {
-				t.activity.RecordOpened(t.provider, t.provider, "insufficient_quota", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
+			} else {
+				if t.activity != nil {
+					t.activity.RecordOpened(t.provider, t.provider, "insufficient_quota", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
+				}
+				t.emitOpened(evt, "insufficient_quota")
 			}
 			t.log.Warn("circuit: insufficient_quota — forcing provider open, passing upstream response through",
 				append(evt.attrs(),
@@ -1234,6 +1261,12 @@ func (t *Transport) handleDegradedFailure(
 			append(t.enrichedFailureContext(req, resp, err, st.lastUpstreamError).attrs(),
 				"attempt", st.transientAttempts)...)
 		_, openedNow, _ := t.store.RecordTerminalFailure(ctx, key)
+		if openedNow {
+			t.emitOpened(
+				t.enrichedFailureContext(req, resp, err, st.lastUpstreamError),
+				"threshold",
+			)
+		}
 		t.maybeRecordRollup(ctx, key, openedNow)
 	case "log":
 		t.log.Info("circuit: retried failure would_have_contributed_to_degradation",
@@ -1456,6 +1489,8 @@ func (t *Transport) recordProbeSuccess(ctx context.Context, req *http.Request, r
 	if t.activity != nil {
 		t.activity.RecordProbeClosed(t.provider, key, probeStatus)
 	}
+	evt := t.enrichedFailureContext(req, resp, err, "")
+	t.emitClosed(evt, "probe_success")
 	_ = t.store.RecordSuccess(ctx, key)
 	if t.cfg.PerProviderRollupThreshold > 0 {
 		if rec, ok := t.store.(RollupRecorder); ok {
@@ -1478,6 +1513,7 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 	t.log.Warn("circuit: probe failed, re-opening circuit",
 		append(evt.attrs(), "new_state", StateOpen.String())...)
 	t.emit("probe_failed", evt)
+	t.emitOpened(evt, "probe_failed")
 	if t.activity != nil {
 		status := 0
 		if resp != nil {
@@ -1506,8 +1542,11 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 	if err != nil {
 		t.log.Error("circuit: RecordTerminalFailure error", "key", key, "error", err)
 	}
-	if openedNow && t.activity != nil {
-		t.activity.RecordOpened(t.provider, key, "threshold", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
+	if openedNow {
+		if t.activity != nil {
+			t.activity.RecordOpened(t.provider, key, "threshold", string(evt.Kind), evt.UpstreamError, evt.StatusCode)
+		}
+		t.emitOpened(evt, "threshold")
 	}
 	t.maybeRecordRollup(ctx, key, openedNow)
 
