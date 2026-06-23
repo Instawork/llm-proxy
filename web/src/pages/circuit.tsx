@@ -32,7 +32,7 @@ import {
   circuitProviderSeries,
   scalarSeries,
 } from "../lib/daily-history";
-import { parseBreakerKey, scopeKind } from "../lib/format";
+import { isBreakerKeyCurrentlyOpen, parseBreakerKey, scopeKind } from "../lib/format";
 
 const PROVIDER_SERIES_COLORS = [
   chartPalette.error,
@@ -208,6 +208,18 @@ export default function CircuitPage() {
     return allRecentEvents.filter((e) => e.time >= cutoff);
   }, [allRecentEvents, range]);
 
+  const openModelKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const name of names) {
+      for (const key of providers[name]?.rollup?.open_keys ?? []) {
+        keys.add(key);
+      }
+    }
+    return [...keys].sort();
+  }, [names, providers]);
+
+  const openKeySet = useMemo(() => new Set(openModelKeys), [openModelKeys]);
+
   // Break the "Blocked (open)" volume down by breaker key (provider:model)
   // rather than rolling it up under the bare provider. A per-model breaker
   // (e.g. gemini:gemini-2.5-flash-lite) tripping should not read as "all of
@@ -222,11 +234,21 @@ export default function CircuitPage() {
           )
           : activity?.by_key;
 
-    if (fromAggregates && Object.keys(fromAggregates).length > 0) {
-      return Object.entries(fromAggregates)
-        .map(([label, count]) => ({ label, count }))
-        .sort((a, b) => b.count - a.count)
+    const enrich = (entries: [string, number][]) =>
+      entries
+        .map(([label, count]) => ({
+          label,
+          count,
+          currentlyOpen: isBreakerKeyCurrentlyOpen(label, providers, openKeySet),
+        }))
+        .sort((a, b) => {
+          if (a.currentlyOpen !== b.currentlyOpen) return a.currentlyOpen ? -1 : 1;
+          return b.count - a.count;
+        })
         .slice(0, 10);
+
+    if (fromAggregates && Object.keys(fromAggregates).length > 0) {
+      return enrich(Object.entries(fromAggregates));
     }
 
     // Fallback for deployments that predate by_key aggregation.
@@ -236,21 +258,8 @@ export default function CircuitPage() {
       const key = e.key ?? e.provider;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    return [...counts.entries()]
-      .map(([label, count]) => ({ label, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }, [range, activity?.by_key, hasActivityRedis, activityHistory, recentEvents]);
-
-  const openModelKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const name of names) {
-      for (const key of providers[name]?.rollup?.open_keys ?? []) {
-        keys.add(key);
-      }
-    }
-    return [...keys].sort();
-  }, [names, providers]);
+    return enrich([...counts.entries()]);
+  }, [range, activity?.by_key, hasActivityRedis, activityHistory, recentEvents, providers, openKeySet]);
 
   const refetchAll = () => {
     refetch();
@@ -426,7 +435,7 @@ export default function CircuitPage() {
       {activity?.available ? (
         <SectionPanel
           title="Blocked by model"
-          subtitle={`Fleet-wide blocked (open) totals per breaker key (provider:model) · ${rangeLabel(range)}`}
+          subtitle={`Daily blocked totals per breaker key · ${rangeLabel(range)} · recovered keys are closed and no longer blocking`}
           source={activitySource}
         >
           <BlockedByKeyTable rows={blockedByKey} />

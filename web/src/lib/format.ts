@@ -142,6 +142,23 @@ export function scopeKind(scope: string): string {
   return idx >= 0 ? scope.slice(0, idx) : scope;
 }
 
+/** Whether a breaker key is still tripping traffic (vs historical blocks today). */
+export function isBreakerKeyCurrentlyOpen(
+  key: string,
+  providers: Record<string, { state?: string }>,
+  openKeys: ReadonlySet<string>,
+): boolean {
+  if (openKeys.has(key)) return true;
+
+  const colonIdx = key.indexOf(":");
+  if (colonIdx < 0) {
+    const state = providers[key]?.state;
+    return state === "open" || state === "half-open" || state === "half_open";
+  }
+
+  return false;
+}
+
 /** Splits a circuit breaker store key into provider scope vs per-model scope. */
 export function parseBreakerKey(
   key: string | undefined,

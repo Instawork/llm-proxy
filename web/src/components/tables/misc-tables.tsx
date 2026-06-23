@@ -162,21 +162,52 @@ export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; 
   );
 }
 
-export function BlockedByKeyTable({ rows }: { rows: { label: string; count: number }[] }) {
-  const columns = useMemo<ColumnDef<(typeof rows)[number], unknown>[]>(
+export type BlockedByKeyRow = {
+  label: string;
+  count: number;
+  currentlyOpen: boolean;
+};
+
+export function BlockedByKeyTable({ rows }: { rows: BlockedByKeyRow[] }) {
+  const columns = useMemo<ColumnDef<BlockedByKeyRow, unknown>[]>(
     () => [
+      {
+        id: "status",
+        accessorKey: "currentlyOpen",
+        header: "Now",
+        cell: ({ getValue }) => {
+          const open = getValue<boolean>();
+          return (
+            <span
+              className={`badge badge-sm badge-outline ${open ? "badge-error" : "badge-success"}`}
+            >
+              {open ? "open" : "recovered"}
+            </span>
+          );
+        },
+      },
       {
         id: "label",
         accessorKey: "label",
         header: "Breaker key",
-        cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string>()}</span>,
+        cell: ({ row, getValue }) => (
+          <span
+            className={`font-mono text-xs ${row.original.currentlyOpen ? "" : "text-base-content/45"}`}
+          >
+            {getValue<string>()}
+          </span>
+        ),
       },
       {
         id: "count",
         accessorKey: "count",
-        header: "Blocked (open)",
+        header: "Blocked today",
         meta: { alignRight: true },
-        cell: ({ getValue }) => getValue<number>().toLocaleString(),
+        cell: ({ row, getValue }) => (
+          <span className={row.original.currentlyOpen ? "" : "text-base-content/45"}>
+            {getValue<number>().toLocaleString()}
+          </span>
+        ),
       },
     ],
     [],
