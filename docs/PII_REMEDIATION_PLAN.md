@@ -19,7 +19,6 @@ Resolve this first; it sets whether W1 is "P0, must fix before GA" or
 
 - ☐ Confirm BAA/DPA status for **OpenAI, Anthropic, Google Gemini**.
 - ☐ Confirm whether **AWS Bedrock** is invoked in an account under an AWS BAA.
-- ☐ Confirm **Datadog** DPA covers the metric tags we send (see W3).
 - ☐ Record the answers in `docs/PII_REDACT.md` as the canonical posture.
 
 **Outcome:** if a vendor is covered, its raw-egress findings drop from P0 to
@@ -61,28 +60,6 @@ default path, sidecar-error path, oversize path, and `wire_placeholders` path.
 
 ---
 
-## W2 — Don't log raw model output / PII (P1/P2: LOG-01/02/03)
-
-- ☑ **LOG-01 — Responses-API chunk dump.** `internal/providers/openai.go:540,550,555`
-  now route through `redact.LogPreview`. Regression guard added
-  (`make lint-pii-logs`, wired into CI lint job).
-- ⊘ **LOG-02 — token-parsing logs.** **Out of scope** — keep full user_id / IP /
-  token-prefix debug lines for internal operability.
-- ⊘ **LOG-03 — access-log client IP.** **Out of scope** — log full `remote_addr`.
-
----
-
-## W3 — Cost-path data minimization (P2: EXT-01, DB-01)
-
-**Out of scope** — retain raw `user_id` and `ip_address` in cost transports and
-Datadog tags for debugging and spend attribution.
-
-- ⊘ **DB-01 — DynamoDB.** Not planned.
-- ⊘ **EXT-01 — Datadog tag.** Not planned.
-- ⊘ **DB-02 — live admin feed.** Not planned.
-
----
-
 ## W4 — Session / key hardening (P3: API-01, AUTH-01/02)
 
 - ☐ **AUTH-01 — cookie.** Add an encryption (block) key to the
@@ -103,5 +80,3 @@ Datadog tags for debugging and spend attribution.
 1. **Decision gate 0** (unblocks everything; no code).
 2. **W1** — egress redaction default-on, fail-closed, escape-hatch removal.
 3. **W4** — session/key hardening, can land anytime.
-
-(W2 log-line minimization and W3 cost-path hashing are out of scope.)
