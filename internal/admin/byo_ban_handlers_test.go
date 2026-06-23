@@ -65,11 +65,11 @@ func TestHandleBYOBan_NonAdminForbidden(t *testing.T) {
 	})
 
 	cases := []struct {
-		name   string
-		email  string
-		method string
-		path   string
-		body   []byte
+		name    string
+		email   string
+		method  string
+		path    string
+		body    []byte
 		handler http.HandlerFunc
 	}{
 		{

@@ -12,17 +12,17 @@ import (
 )
 
 type BYOKeyResponse struct {
-	Provider      string   `json:"provider"`
-	MaskedID      string   `json:"masked_id"`
-	Hash          string   `json:"hash"`
-	Banned        bool     `json:"banned"`
-	BannedBy      string   `json:"banned_by,omitempty"`
-	Reason        string   `json:"reason,omitempty"`
-	BannedAt      string   `json:"banned_at,omitempty"`
-	PIIScans      int64    `json:"pii_scans"`
-	CostRequests  int64    `json:"cost_requests"`
-	SpendUSD      float64  `json:"spend_usd"`
-	Sources       []string `json:"sources"`
+	Provider     string   `json:"provider"`
+	MaskedID     string   `json:"masked_id"`
+	Hash         string   `json:"hash"`
+	Banned       bool     `json:"banned"`
+	BannedBy     string   `json:"banned_by,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	BannedAt     string   `json:"banned_at,omitempty"`
+	PIIScans     int64    `json:"pii_scans"`
+	CostRequests int64    `json:"cost_requests"`
+	SpendUSD     float64  `json:"spend_usd"`
+	Sources      []string `json:"sources"`
 }
 
 type byoKeyAgg struct {
