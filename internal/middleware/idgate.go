@@ -193,7 +193,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						slog.Float64("score", res.score),
 						slog.Duration("duration", time.Since(gateStart)))
 					emitIDGateBlocked(cfg.Metrics, provider, res.entityType)
-					http.Error(w, idGateBlockMessage, http.StatusForbidden)
+					http.Error(w, idGateBlockMessage, http.StatusUnprocessableEntity)
 					return
 				}
 				if res.err != nil && !haveErr {

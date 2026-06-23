@@ -149,8 +149,8 @@ func TestIntegration_IDGate_TestdataManifest(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if tc.ExpectBlock {
-				if rec.Code != http.StatusForbidden {
-					t.Fatalf("status=%d want 403 body=%q", rec.Code, rec.Body.String())
+				if rec.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("status=%d want 422 body=%q", rec.Code, rec.Body.String())
 				}
 				return
 			}

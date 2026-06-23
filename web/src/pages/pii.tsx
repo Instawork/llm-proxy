@@ -237,8 +237,8 @@ export default function PIIPage() {
       ) : null}
 
       <SectionPanel
-        title="Recent detections"
-        subtitle={`Last ${recent.length} redaction events — not written to Redis`}
+        title="Recent scans"
+        subtitle={`Last ${recent.length} redaction scans (clean, detected, and failed) — not written to Redis`}
         source="memory"
       >
         <RecentDetectionsTable rows={recent} keys={keys.data ?? []} />

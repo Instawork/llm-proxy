@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -229,6 +230,15 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				return
 			}
 
+			// The deployed Presidio analyzer is text-only; handing it
+			// hundreds of KB of base64 image data makes /analyze time out
+			// (the 503 fail_closed incident). Embedded-image PII is covered
+			// by the ID gate (OCR), so strip large image payloads to short
+			// sentinels for the analyze call and restore them afterward.
+			// Text-only bodies are returned unchanged, so their behaviour
+			// is byte-for-byte identical to before.
+			analysisBody, imageRestores := stripImageDataForAnalysis(body)
+
 			redactStart := time.Now()
 			var (
 				result    redact.Result
@@ -237,9 +247,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			)
 			if cfg.WirePlaceholders {
 				registry = redact.NewRegistry()
-				result, redactErr = redactor.Scrub(r.Context(), string(body), registry)
+				result, redactErr = redactor.Scrub(r.Context(), string(analysisBody), registry)
 			} else {
-				result, redactErr = redactor.Redact(r.Context(), string(body))
+				result, redactErr = redactor.Redact(r.Context(), string(analysisBody))
 			}
 			redactDuration := time.Since(redactStart)
 
@@ -268,6 +278,14 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				return
 			}
 
+			// Swap the original image payloads back in. Sentinels are
+			// plain ASCII tokens that carry no PII spans and are never
+			// registered for response restore, so this is a clean reverse
+			// of the pre-analyze strip.
+			if len(imageRestores) > 0 {
+				result.Text = restoreImageData(result.Text, imageRestores)
+			}
+
 			// Stash the redacted/scrubbed bytes; collect entity-type tags
 			// for the audit log without leaking raw values.
 			redactedBytes := []byte(result.Text)
@@ -288,6 +306,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				slog.String("path", r.URL.Path),
 				slog.String("provider", provider),
 				slog.Int("body_bytes", len(body)),
+				slog.Int("images_stripped", len(imageRestores)),
 				slog.Int("entity_types_detected", len(result.EntityCounts)),
 				slog.Any("entity_counts", result.EntityCounts),
 				slog.Duration("duration", redactDuration))
@@ -343,6 +362,132 @@ func shouldRedactRequest(r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// piiImageMinStrippedBytes is the smallest base64 image payload worth
+// replacing before /analyze. Small inline icons cost Presidio nothing;
+// the timeouts come from 100 KB–500 KB photo/scan uploads. Anything
+// under this stays in the analyzed text untouched.
+const piiImageMinStrippedBytes = 1024
+
+const (
+	piiImageSentinelPrefix = "__LLMPROXY_IMG_REDACTED_"
+	piiImageSentinelSuffix = "__"
+)
+
+// imageRestore maps a sentinel placed in the analyze payload back to the
+// original base64 image bytes it replaced.
+type imageRestore struct {
+	sentinel string
+	original string
+}
+
+// stripImageDataForAnalysis returns a copy of body with large embedded
+// image payloads replaced by short sentinels, plus the restores needed
+// to swap the originals back after redaction.
+//
+// The deployed Presidio analyzer (presidio-analyzer) is text-only: it has
+// no OCR and treats a base64 image as one enormous string, which blows the
+// /analyze deadline on vision requests. Embedded-image PII is already
+// handled by the ID gate, so the analyzer only needs the real text.
+//
+// Returns (body, nil) unchanged when the body is not JSON or carries no
+// large image payloads, keeping text-only requests byte-for-byte identical.
+func stripImageDataForAnalysis(body []byte) ([]byte, []imageRestore) {
+	var root any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, nil
+	}
+	var values []string
+	collectImageDataStrings(root, &values)
+	if len(values) == 0 {
+		return body, nil
+	}
+
+	s := string(body)
+	var restores []imageRestore
+	for _, v := range values {
+		if len(v) < piiImageMinStrippedBytes {
+			continue
+		}
+		sentinel := fmt.Sprintf("%s%d%s", piiImageSentinelPrefix, len(restores), piiImageSentinelSuffix)
+		// Single replace: an image repeated verbatim gets one sentinel per
+		// occurrence, each mapped back to the same bytes on restore.
+		replaced := strings.Replace(s, v, sentinel, 1)
+		if replaced == s {
+			// Value not present verbatim (e.g. JSON-escaped); leave it be.
+			continue
+		}
+		s = replaced
+		restores = append(restores, imageRestore{sentinel: sentinel, original: v})
+	}
+	if len(restores) == 0 {
+		return body, nil
+	}
+	return []byte(s), restores
+}
+
+// restoreImageData reverses stripImageDataForAnalysis, swapping each
+// sentinel back to its original base64 payload.
+func restoreImageData(text string, restores []imageRestore) string {
+	for _, r := range restores {
+		text = strings.Replace(text, r.sentinel, r.original, 1)
+	}
+	return text
+}
+
+// collectImageDataStrings walks an OpenAI / Anthropic / Gemini chat body
+// and collects the raw base64 payload substrings worth stripping before
+// /analyze. It mirrors the image surfaces understood by the ID gate
+// (collectImages) but keeps the raw strings instead of decoding them.
+func collectImageDataStrings(v any, out *[]string) {
+	switch val := v.(type) {
+	case map[string]any:
+		if imageURL, ok := val["image_url"].(map[string]any); ok {
+			if u, ok := imageURL["url"].(string); ok {
+				if data := dataURLBase64(u); data != "" {
+					*out = append(*out, data)
+				}
+			}
+		}
+		if source, ok := val["source"].(map[string]any); ok {
+			if typ, _ := source["type"].(string); typ == "base64" {
+				if data, ok := source["data"].(string); ok {
+					*out = append(*out, data)
+				}
+			}
+		}
+		if inline, ok := val["inlineData"].(map[string]any); ok {
+			if data, ok := inline["data"].(string); ok {
+				*out = append(*out, data)
+			}
+		}
+		for _, child := range val {
+			collectImageDataStrings(child, out)
+		}
+	case []any:
+		for _, item := range val {
+			collectImageDataStrings(item, out)
+		}
+	}
+}
+
+// dataURLBase64 returns the base64 payload of a "data:...;base64,<payload>"
+// URL, or "" if raw is not such a data URL. Only the payload is returned so
+// the "data:image/png;base64," prefix stays in the body for the upstream LLM.
+func dataURLBase64(raw string) string {
+	const prefix = "data:"
+	if !strings.HasPrefix(raw, prefix) {
+		return ""
+	}
+	comma := strings.Index(raw, ",")
+	if comma < 0 {
+		return ""
+	}
+	if !strings.Contains(raw[len(prefix):comma], ";base64") {
+		return ""
+	}
+	return raw[comma+1:]
 }
 
 // readBoundedBody reads up to maxBytes+1 bytes; if the body has more,

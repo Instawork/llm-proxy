@@ -97,7 +97,7 @@ docker compose --profile pii_redact up -d ocr-sidecar presidio llm-proxy
 # Send a multimodal chat request with a base64 image_url to the proxy on :9002
 ```
 
-With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embedded images and returns **403** when Presidio detects `US_PASSPORT` or `US_DRIVER_LICENSE` at or above the score threshold (default **0.4** — see `testdata/README.md`).
+With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embedded images and returns **422** when Presidio detects `US_PASSPORT` or `US_DRIVER_LICENSE` at or above the score threshold (default **0.4** — see `testdata/README.md`).
 
 ## Tuning
 

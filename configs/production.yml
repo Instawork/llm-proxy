@@ -114,6 +114,12 @@ features:
     enabled: true
     analyzer_url: "http://localhost:3000"
     fail_mode: "closed"
+    # Large vision bodies (the proxy strips embedded base64 before /analyze,
+    # but big multi-part text + cold starts still take a while). 8s leaves
+    # headroom over the warm-sidecar p99 so fail_mode: closed doesn't 503 on
+    # the occasional slow scan. Tune down once images are reliably stripped
+    # and the warm p99 is baselined.
+    timeout_ms: 8000
     allow_per_key_override: false
     datadog:
       host: "localhost"
@@ -123,11 +129,16 @@ features:
       sample_rate: 1.0
   id_gate:
     enabled: true
-    # OCR runs as its OWN ECS service (8 vCPU / 16 GB tasks behind an internal
-    # ALB) so it can hit the ~500 ms/image SLA and scale independently of the
-    # proxy. See infrastructure live/production/services/ocr-gate. Presidio
-    # stays a sidecar at localhost:3000 (analyzer_url under pii_redact).
-    ocr_sidecar_url: "http://ocr-gate.production.internal"
+    # OCR runs as its OWN service (large CPU/memory tasks behind an internal
+    # load balancer) so it can hit the ~500 ms/image SLA and scale
+    # independently of the proxy. Presidio stays a sidecar at localhost:3000
+    # (analyzer_url under pii_redact).
+    #
+    # The real internal OCR endpoint is injected at deploy time via the
+    # OCR_SIDECAR_URL env var (it takes precedence over this value in main.go).
+    # Keep a neutral placeholder here so no private endpoint ships in the repo;
+    # it must stay non-empty to satisfy id_gate config validation.
+    ocr_sidecar_url: "http://ocr-sidecar:8000"
     fail_mode: "open"
     score_threshold: 0.4
     # Tight enough to shed load fast (OCR p95 ~0.6 s + sidecar queue), loose

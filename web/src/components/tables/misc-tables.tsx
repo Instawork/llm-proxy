@@ -104,8 +104,12 @@ export function RecentDetectionsTable({ rows, keys }: { rows: PIIRecentEvent[]; 
                 </span>
               ))}
             </div>
-          ) : (
+          ) : row.original.outcome === "ok" ? (
             <span className="text-base-content/40">clean</span>
+          ) : (
+            // fail_open / fail_closed / oversize never reached the analyzer,
+            // so "clean" would be misleading — the body was not scanned.
+            <span className="text-base-content/40">not scanned</span>
           ),
       },
       {

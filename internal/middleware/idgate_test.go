@@ -55,8 +55,8 @@ func TestIDGateMiddleware_BlocksGovID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rec.Code)
 	}
 	if rec.Body.String() != idGateBlockMessage+"\n" {
 		t.Fatalf("body = %q", rec.Body.String())

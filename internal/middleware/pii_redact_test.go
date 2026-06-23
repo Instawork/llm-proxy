@@ -437,3 +437,117 @@ func TestPIIRedactMiddleware_PerKeyOverrideMatrix(t *testing.T) {
 		})
 	}
 }
+
+// bigB64 returns a base64-ish string of n chars — well past the
+// piiImageMinStrippedBytes strip threshold, so it stands in for a real
+// vision payload without pulling in an actual image.
+func bigB64(n int) string {
+	return strings.Repeat("A", n)
+}
+
+func TestStripImageDataForAnalysis_StripsAndRestores(t *testing.T) {
+	img := bigB64(4096)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "openai data url",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + img + `"}}]}]}`,
+		},
+		{
+			name: "anthropic source",
+			body: `{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + img + `"}}]}]}`,
+		},
+		{
+			name: "gemini inlineData",
+			body: `{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"` + img + `"}}]}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, restores := stripImageDataForAnalysis([]byte(tc.body))
+			if len(restores) != 1 {
+				t.Fatalf("expected 1 restore, got %d", len(restores))
+			}
+			if strings.Contains(string(prepared), img) {
+				t.Fatalf("analyze payload still contains the image blob")
+			}
+			if len(prepared) >= len(tc.body) {
+				t.Fatalf("analyze payload (%d) not smaller than original (%d)", len(prepared), len(tc.body))
+			}
+			// Whatever the analyzer returns (unchanged text here) must round-trip.
+			restored := restoreImageData(string(prepared), restores)
+			if restored != tc.body {
+				t.Fatalf("restore did not reproduce original body\n got %q\nwant %q", restored, tc.body)
+			}
+		})
+	}
+}
+
+func TestStripImageDataForAnalysis_NoImagesUnchanged(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"just text, no images here"}]}`)
+	prepared, restores := stripImageDataForAnalysis(body)
+	if restores != nil {
+		t.Fatalf("expected no restores for text-only body, got %d", len(restores))
+	}
+	if string(prepared) != string(body) {
+		t.Fatalf("text-only body must be byte-for-byte unchanged")
+	}
+}
+
+func TestStripImageDataForAnalysis_SmallImageNotStripped(t *testing.T) {
+	// A tiny inline icon under the threshold costs the analyzer nothing and
+	// stays in the analyzed text.
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + bigB64(64) + `"}}]}]}`)
+	_, restores := stripImageDataForAnalysis(body)
+	if restores != nil {
+		t.Fatalf("small image should not be stripped, got %d restores", len(restores))
+	}
+}
+
+func TestStripImageDataForAnalysis_NonJSONUnchanged(t *testing.T) {
+	body := []byte("not json at all " + bigB64(4096))
+	prepared, restores := stripImageDataForAnalysis(body)
+	if restores != nil || string(prepared) != string(body) {
+		t.Fatalf("non-JSON body must pass through untouched")
+	}
+}
+
+// TestPIIRedactMiddleware_StripsImageBeforeAnalyzeAndRestores proves the
+// end-to-end contract: the analyzer never sees the base64 blob, text PII is
+// still redacted, and the image is restored in the wire body.
+func TestPIIRedactMiddleware_StripsImageBeforeAnalyzeAndRestores(t *testing.T) {
+	img := bigB64(8192)
+	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"ssn 222-33-4444"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + img + `"}}]}]}`
+
+	var sawByAnalyzer string
+	r := &fakeRedactor{
+		mutate: func(in string) (redact.Result, error) {
+			sawByAnalyzer = in
+			out := strings.Replace(in, "222-33-4444", "[REDACTED:US_SSN]", 1)
+			return redact.Result{Text: out, EntityCounts: map[string]int{"US_SSN": 1}}, nil
+		},
+	}
+
+	cap := &captureHandler{}
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: true, WirePlaceholders: true})(cap)
+	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+
+	if strings.Contains(sawByAnalyzer, img) {
+		t.Fatalf("analyzer received the raw image blob")
+	}
+	if !strings.Contains(sawByAnalyzer, "222-33-4444") {
+		t.Fatalf("analyzer should still see the real text; got %q", sawByAnalyzer)
+	}
+	wire := string(cap.bodySeen)
+	if !strings.Contains(wire, img) {
+		t.Fatalf("wire body lost the image — upstream vision would break")
+	}
+	if strings.Contains(wire, "222-33-4444") {
+		t.Fatalf("ssn leaked to upstream wire body: %s", wire)
+	}
+	if !strings.Contains(wire, "[REDACTED:US_SSN]") {
+		t.Fatalf("wire body missing redaction marker: %s", wire)
+	}
+}
