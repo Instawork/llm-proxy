@@ -249,3 +249,18 @@ func TestValidate_IDGate(t *testing.T) {
 	c.Features.IDGate.FailMode = "panic"
 	require.Error(t, c.Validate())
 }
+
+func TestValidatePIIRedactConfig_ProductionDisallowsLegacyWireMode(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	falseVal := false
+	c := &YAMLConfig{
+		Features: FeaturesConfig{
+			PIIRedact: PIIRedactConfig{
+				Enabled:          true,
+				AnalyzerURL:      "http://localhost:3000",
+				WirePlaceholders: &falseVal,
+			},
+		},
+	}
+	require.Error(t, c.validatePIIRedactConfig())
+}

@@ -24,9 +24,9 @@ extend the wire payload past the in-code allowlist — see
 | Local dev (`configs/dev.yml`) | on | on | Requires `docker compose --profile pii_redact up -d presidio` |
 | Default (`configs/base.yml`) | off | off | Opt-in per environment |
 
-First production rollout uses `fail_mode: open` — a Presidio outage logs a
-warning and passes the request through rather than returning 503. Monitor
-`fail_open` on the admin PII dashboard before tightening to `closed`.
+First production rollout uses `fail_mode: closed` on standalone production —
+Presidio or oversize failures return 503 rather than passing raw bodies upstream.
+Sidecars keep PII redaction off entirely.
 
 ## Vendor posture
 

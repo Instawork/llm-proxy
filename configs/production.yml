@@ -107,7 +107,7 @@ features:
   pii_redact:
     enabled: true
     analyzer_url: "http://localhost:3000"
-    fail_mode: "open"
+    fail_mode: "closed"
     allow_per_key_override: false
   id_gate:
     enabled: true
