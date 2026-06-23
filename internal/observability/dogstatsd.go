@@ -18,7 +18,7 @@ type MetricsSink interface {
 
 type noopMetrics struct{}
 
-func (noopMetrics) Incr(string, []string, float64) error           { return nil }
+func (noopMetrics) Incr(string, []string, float64) error                  { return nil }
 func (noopMetrics) Distribution(string, float64, []string, float64) error { return nil }
 
 // NoopSink is a metrics sink that drops all events.
@@ -52,14 +52,16 @@ func NewMetricsSink(cfg *configPkg.DatadogTransportConfig, logger *slog.Logger, 
 		statsd.WithTags(cfg.Tags),
 	)
 	if err != nil {
-		logger.Warn("dogstatsd metrics disabled: client construction failed",
+		logger.Warn(
+			"dogstatsd metrics disabled: client construction failed",
 			"feature", feature,
 			"error", err,
 			"addr", addr,
 		)
 		return noopMetrics{}
 	}
-	logger.Info("dogstatsd metrics enabled",
+	logger.Info(
+		"dogstatsd metrics enabled",
 		"feature", feature,
 		"addr", addr,
 		"namespace", namespace,

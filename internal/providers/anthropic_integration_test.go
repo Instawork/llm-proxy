@@ -15,32 +15,75 @@ import (
 	"time"
 )
 
+type anthropicErrorEnvelope struct {
+	Type  string `json:"type"`
+	Error struct {
+		Type string `json:"type"`
+	} `json:"error"`
+}
+
+func parseAnthropicErrorEnvelope(body []byte) (anthropicErrorEnvelope, bool) {
+	var envelope anthropicErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return envelope, false
+	}
+	if envelope.Type != "error" {
+		return envelope, false
+	}
+	return envelope, true
+}
+
+func anthropicTransientErrorSkipReason(errorType string, status int) (reason string, ok bool) {
+	switch errorType {
+	case "overloaded_error":
+		if status == 529 {
+			return "Anthropic upstream overloaded (529)", true
+		}
+		return "Anthropic upstream overloaded", true
+	case "api_error":
+		if status == http.StatusOK {
+			return "Anthropic upstream api_error (stream)", true
+		}
+		if status >= 500 && status <= 504 {
+			return fmt.Sprintf("Anthropic upstream api_error (%d)", status), true
+		}
+	}
+	return "", false
+}
+
 // anthropicUpstreamSkipReason reports whether an Anthropic response indicates a
 // transient upstream failure that should not fail CI integration tests.
 func anthropicUpstreamSkipReason(status int, body []byte) (reason string, ok bool) {
 	if status == http.StatusOK {
 		return "", false
 	}
-	var envelope struct {
-		Type  string `json:"type"`
-		Error struct {
-			Type string `json:"type"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	envelope, parsed := parseAnthropicErrorEnvelope(body)
+	if !parsed {
 		return "", false
 	}
-	if envelope.Type != "error" {
-		return "", false
+	return anthropicTransientErrorSkipReason(envelope.Error.Type, status)
+}
+
+// anthropicStreamUpstreamSkipReason reports whether an Anthropic SSE stream
+// contains a transient upstream error event. Anthropic may return HTTP 200 with
+// an error payload in the event stream during capacity or availability issues.
+func anthropicStreamUpstreamSkipReason(streamData []byte) (reason string, ok bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(streamData))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonData := strings.TrimPrefix(line, "data: ")
+		envelope, parsed := parseAnthropicErrorEnvelope([]byte(jsonData))
+		if !parsed {
+			continue
+		}
+		if reason, ok := anthropicTransientErrorSkipReason(envelope.Error.Type, http.StatusOK); ok {
+			return reason, true
+		}
 	}
-	switch {
-	case status == 529:
-		return "Anthropic upstream overloaded (529)", true
-	case status >= 500 && status <= 504 && envelope.Error.Type == "api_error":
-		return fmt.Sprintf("Anthropic upstream api_error (%d)", status), true
-	default:
-		return "", false
-	}
+	return "", false
 }
 
 // skipOnAnthropicUpstreamError skips integration tests when Anthropic returns a
@@ -50,6 +93,13 @@ func skipOnAnthropicUpstreamError(t *testing.T, status int, body []byte) {
 	t.Helper()
 	if reason, ok := anthropicUpstreamSkipReason(status, body); ok {
 		t.Skipf("skipping: %s; not a proxy regression. Response: %s", reason, string(body))
+	}
+}
+
+func skipOnAnthropicStreamUpstreamError(t *testing.T, streamData []byte) {
+	t.Helper()
+	if reason, ok := anthropicStreamUpstreamSkipReason(streamData); ok {
+		t.Skipf("skipping: %s; not a proxy regression. Stream: %s", reason, string(streamData))
 	}
 }
 
@@ -422,6 +472,8 @@ func testAnthropicStreaming(t *testing.T, server *httptest.Server, providerManag
 		t.Error("No streaming chunks received")
 	}
 
+	skipOnAnthropicStreamUpstreamError(t, streamData.Bytes())
+
 	// Test metadata parsing on the streaming response
 	anthropicProvider := providerManager.GetProvider("anthropic")
 	if anthropicProvider == nil {
@@ -430,6 +482,7 @@ func testAnthropicStreaming(t *testing.T, server *httptest.Server, providerManag
 
 	metadata, err := anthropicProvider.ParseResponseMetadata(bytes.NewReader(streamData.Bytes()), true)
 	if err != nil {
+		skipOnAnthropicStreamUpstreamError(t, streamData.Bytes())
 		t.Fatalf("Failed to parse streaming metadata: %v", err)
 	}
 
