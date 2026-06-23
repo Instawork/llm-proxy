@@ -143,40 +143,42 @@ func TestCircuitModelExtractor_NilBedrockSafe(t *testing.T) {
 	}
 }
 
-// TestCircuitDatadogConfig_PrefersFirstDatadogTransport ensures the
-// circuit-metrics initialiser picks up the same Datadog block the
-// cost tracker uses, so circuit metrics inherit env / service / team
-// tags without operators having to declare them twice.  Also
-// confirms it returns nil when no Datadog transport is present so
-// circuit.NewTransport falls back to its noop sink.
-func TestCircuitDatadogConfig_PrefersFirstDatadogTransport(t *testing.T) {
+// TestCircuitDatadogConfig_ReadsCircuitBreakerBlock ensures circuit metrics
+// use features.circuit_breaker.datadog and do not depend on cost_tracking.
+func TestCircuitDatadogConfig_ReadsCircuitBreakerBlock(t *testing.T) {
 	yamlCfg := &config.YAMLConfig{
 		Features: config.FeaturesConfig{
 			CostTracking: config.CostTrackingConfig{
 				Enabled: true,
 				Transports: []config.TransportConfig{
-					{Type: "dynamodb", DynamoDB: &config.DynamoDBTransportConfig{TableName: "x"}},
 					{Type: "datadog", Datadog: &config.DatadogTransportConfig{
-						Host: "127.0.0.1", Port: "9999",
-						Namespace: "llm",
-						Tags:      []string{"env:test"},
+						Host: "cost-only", Port: "1111",
 					}},
-					{Type: "file", File: &config.FileTransportConfig{Path: "/tmp/x"}},
+				},
+			},
+			CircuitBreaker: config.CircuitBreakerConfig{
+				Enabled: true,
+				Datadog: &config.DatadogTransportConfig{
+					Host: "127.0.0.1", Port: "9999",
+					Namespace: "llm",
+					Tags:      []string{"env:test"},
 				},
 			},
 		},
 	}
 	got := circuitDatadogConfig(yamlCfg)
 	if got == nil {
-		t.Fatal("expected non-nil DatadogTransportConfig from cost-tracking section")
+		t.Fatal("expected non-nil DatadogTransportConfig from circuit_breaker section")
 	}
 	if got.Host != "127.0.0.1" || got.Port != "9999" || got.Namespace != "llm" {
 		t.Fatalf("circuitDatadogConfig returned %+v, want host=127.0.0.1 port=9999 namespace=llm", got)
 	}
+	if got.Host == "cost-only" {
+		t.Fatal("circuitDatadogConfig must not read cost_tracking.datadog")
+	}
 
-	// Empty config → nil → "metrics disabled".
 	emptyCfg := &config.YAMLConfig{}
 	if circuitDatadogConfig(emptyCfg) != nil {
-		t.Fatal("circuitDatadogConfig must return nil when no datadog transport is configured")
+		t.Fatal("circuitDatadogConfig must return nil when circuit_breaker.datadog is unset")
 	}
 }

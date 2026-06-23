@@ -93,6 +93,12 @@ features:
     # that a real Gemini/OpenAI/Anthropic outage does.
     per_provider_rollup_threshold: 3
     per_provider_rollup_window_seconds: 300
+    datadog:
+      host: "localhost"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:prod", "service:llm-proxy", "team:platform"]
+      sample_rate: 1.0
   rate_limiting:
     enabled: false
     backend: "redis"
@@ -109,6 +115,12 @@ features:
     analyzer_url: "http://localhost:3000"
     fail_mode: "closed"
     allow_per_key_override: false
+    datadog:
+      host: "localhost"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:prod", "service:llm-proxy", "team:platform"]
+      sample_rate: 1.0
   id_gate:
     enabled: true
     # OCR runs as its OWN ECS service (8 vCPU / 16 GB tasks behind an internal
@@ -122,6 +134,12 @@ features:
     # enough to ride out a brief burst before failing open.
     timeout_ms: 5000
     image_concurrency: 4
+    datadog:
+      host: "localhost"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:prod", "service:llm-proxy", "team:platform"]
+      sample_rate: 1.0
   redact_api:
     enabled: true
     fail_mode: closed

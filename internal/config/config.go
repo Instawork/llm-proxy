@@ -145,6 +145,10 @@ type PIIRedactConfig struct {
 	// DefaultAllowStreaming controls whether wire-mode requests may keep
 	// stream:true. Per-key allow_streaming overrides this. Default: true.
 	DefaultAllowStreaming *bool `yaml:"default_allow_streaming,omitempty"`
+
+	// Datadog configures the dogstatsd sink for PII redaction metrics
+	// (llm.pii.*). Independent of cost_tracking and circuit_breaker.
+	Datadog *DatadogTransportConfig `yaml:"datadog,omitempty"`
 }
 
 // IDGateConfig configures OCR + Presidio scanning of embedded chat images to
@@ -180,6 +184,9 @@ type IDGateConfig struct {
 	// OCR'd + analyzed in parallel. 0 -> middleware default of 4. Raise to
 	// reduce multi-image gate latency when the OCR fleet has spare capacity.
 	ImageConcurrency int `yaml:"image_concurrency,omitempty"`
+
+	// Datadog configures the dogstatsd sink for ID gate metrics (llm.id_gate.*).
+	Datadog *DatadogTransportConfig `yaml:"datadog,omitempty"`
 }
 
 // RedactAPIConfig gates the standalone POST /redact endpoint for generic
@@ -424,6 +431,12 @@ type CircuitBreakerConfig struct {
 	// bounded; empty (the default) accepts any well-formed reason.
 	// See circuit.Config.BypassReasonAllowlist for the full rationale.
 	BypassReasonAllowlist []string `yaml:"bypass_reason_allowlist,omitempty"`
+
+	// Datadog configures the dogstatsd sink for circuit-breaker metrics
+	// (llm.circuit.*).  Independent of cost_tracking transports — disabling
+	// cost tracking or its Datadog transport must not affect circuit
+	// observability, and vice versa.
+	Datadog *DatadogTransportConfig `yaml:"datadog,omitempty"`
 }
 
 // CostTrackingConfig represents cost tracking feature configuration

@@ -2,25 +2,19 @@ package circuit
 
 import (
 	"net/http"
+
+	"github.com/Instawork/llm-proxy/internal/observability"
 )
 
 // MetricsSink is the minimal dogstatsd-shaped surface the circuit transport
 // uses to emit counters when failure / state events are observed.
 //
-// The signature deliberately matches *github.com/DataDog/datadog-go/v5/statsd.Client.Incr
+// The signature deliberately matches *github.com/DataDog/datadog-go/v5/statsd.Client
 // so callers can pass a real statsd client directly without writing an
 // adapter.  Nil-safe: NewTransport installs a no-op sink if none is
 // supplied via WithMetrics, so transports built in tests or in deployments
 // without a Datadog Agent stay completely silent.
-type MetricsSink interface {
-	Incr(name string, tags []string, rate float64) error
-}
-
-// noopMetrics drops every event; used when the caller has not wired a
-// real sink so call sites can emit metrics unconditionally.
-type noopMetrics struct{}
-
-func (noopMetrics) Incr(string, []string, float64) error { return nil }
+type MetricsSink = observability.MetricsSink
 
 // ModelFromRequestFunc returns the model name parsed out of an HTTP
 // request, or "" if the model cannot be determined.

@@ -48,6 +48,12 @@ features:
     global_rate_limit_escalation_window: 300
     retry_contribution_mode: "log"
     test_mode_enabled: true
+    datadog:
+      host: "datadog-agent"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:dev", "service:llm-proxy"]
+      sample_rate: 1.0
   admin_dashboard:
     enabled: true
     dev_bypass_login: true
@@ -70,12 +76,24 @@ features:
     analyzer_url: "http://presidio:3000"
     fail_mode: "open"
     allow_per_key_override: true
+    datadog:
+      host: "datadog-agent"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:dev", "service:llm-proxy"]
+      sample_rate: 1.0
   id_gate:
     enabled: true
     ocr_sidecar_url: "http://ocr-sidecar:8000"
     fail_mode: "open"
     score_threshold: 0.4
     timeout_ms: 30000
+    datadog:
+      host: "datadog-agent"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:dev", "service:llm-proxy"]
+      sample_rate: 1.0
   redact_api:
     enabled: true
     fail_mode: closed

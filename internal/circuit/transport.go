@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/observability"
 )
 
 // errRetryBodyTooLarge is an internal sentinel returned by cacheBody when
@@ -78,7 +80,7 @@ func NewTransport(inner http.RoundTripper, store Store, cfg Config, provider str
 		cfg:      cfg.Defaults(),
 		provider: provider,
 		log:      log,
-		metrics:  noopMetrics{},
+		metrics:  observability.NoopSink,
 	}
 	for _, opt := range opts {
 		opt(t)

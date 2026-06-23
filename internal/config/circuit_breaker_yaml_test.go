@@ -102,5 +102,8 @@ func TestCircuitBreaker_ProdAndStaging_RedisPinnedToDedicatedDB(t *testing.T) {
 		if cb.Redis.URL == "" {
 			t.Errorf("%s: cb.redis.url must be set (expected `${REDIS_URL}` from a deployment-managed secret)", file)
 		}
+		if cb.Datadog == nil {
+			t.Errorf("%s: cb.datadog must be configured for circuit-breaker dogstatsd metrics", file)
+		}
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
@@ -29,6 +28,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
+	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/ocr"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
@@ -648,73 +648,31 @@ func wrapProviderWithCircuitBreaker(
 	})
 }
 
-// circuitDatadogConfig returns the Datadog transport config from the
-// cost-tracking section if one is configured, or nil otherwise.  We
-// reuse the cost-tracking Datadog config (host / port / namespace /
-// tags) for circuit metrics so all llm_proxy.* metrics share the same
-// agent address and base tags without operators having to declare
-// them twice.
+// circuitDatadogConfig returns the circuit-breaker Datadog transport config
+// when one is declared under features.circuit_breaker.datadog.
 func circuitDatadogConfig(yamlConfig *config.YAMLConfig) *config.DatadogTransportConfig {
-	for i := range yamlConfig.Features.CostTracking.Transports {
-		tc := &yamlConfig.Features.CostTracking.Transports[i]
-		if tc.Type == "datadog" && tc.Datadog != nil {
-			return tc.Datadog
-		}
+	cb := yamlConfig.Features.CircuitBreaker
+	if cb.Datadog == nil {
+		return nil
 	}
-	return nil
+	return cb.Datadog
 }
 
-// initializeCircuitMetrics builds a dogstatsd-style sink for circuit
-// breaker metrics.  Returns nil when no Datadog transport is configured
-// or when the statsd client cannot be constructed; callers must treat
-// nil as "metrics disabled" (circuit.NewTransport substitutes a no-op
-// sink in that case so emit sites stay branchless).
-//
-// The returned client always carries the same namespace and global
-// tags as the cost-tracking transport, which means circuit metrics
-// land at e.g. "llm.circuit.terminal_failure" alongside
-// "llm.tokens.input" and inherit env / service / team tags from the
-// existing YAML.  No additional config knobs are introduced.
+// initializeCircuitMetrics builds a dogstatsd sink for circuit-breaker metrics.
 func initializeCircuitMetrics(yamlConfig *config.YAMLConfig) circuit.MetricsSink {
 	ddCfg := circuitDatadogConfig(yamlConfig)
 	if ddCfg == nil {
-		logger.Info("⚡ Circuit Breaker: dogstatsd metrics disabled (no datadog transport in cost_tracking)")
-		return nil
+		logger.Info("⚡ Circuit Breaker: dogstatsd metrics disabled (no circuit_breaker.datadog config)")
 	}
-	host := ddCfg.Host
-	if host == "" {
-		host = "localhost"
-	}
-	port := ddCfg.Port
-	if port == "" {
-		port = "8125"
-	}
-	namespace := ddCfg.Namespace
-	if namespace == "" {
-		namespace = "llm"
-	}
-	addr := fmt.Sprintf("%s:%s", host, port)
-	client, err := statsd.New(
-		addr,
-		statsd.WithNamespace(namespace),
-		statsd.WithTags(ddCfg.Tags),
-	)
-	if err != nil {
-		// UDP send failures are best-effort by design (the cost
-		// tracker uses the same convention); a startup error means
-		// the address itself is malformed, which we surface but do
-		// not treat as fatal — the proxy must still serve traffic.
-		logger.Warn("⚡ Circuit Breaker: failed to create dogstatsd client; metrics disabled",
-			"error", err, "addr", addr)
-		return nil
-	}
-	logger.Info(
-		"⚡ Circuit Breaker: dogstatsd metrics enabled",
-		"addr", addr,
-		"namespace", namespace,
-		"tags", ddCfg.Tags,
-	)
-	return client
+	return observability.NewMetricsSink(ddCfg, logger, "circuit_breaker")
+}
+
+func initializePIIMetrics(yamlConfig *config.YAMLConfig) observability.MetricsSink {
+	return observability.NewMetricsSink(yamlConfig.Features.PIIRedact.Datadog, logger, "pii_redact")
+}
+
+func initializeIDGateMetrics(yamlConfig *config.YAMLConfig) observability.MetricsSink {
+	return observability.NewMetricsSink(yamlConfig.Features.IDGate.Datadog, logger, "id_gate")
 }
 
 // circuitModelExtractor returns a ModelFromRequestFunc that dispatches to
@@ -1408,9 +1366,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
-		}
-		if circuitMetrics != nil {
-			opts = append(opts, circuit.WithMetrics(circuitMetrics))
+			circuit.WithMetrics(circuitMetrics),
 		}
 		if globalCircuitStatsRecorder != nil {
 			opts = append(opts, circuit.WithActivityRecorder(globalCircuitStatsRecorder))
@@ -1422,7 +1378,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		logger.Info(
 			"⚡ Circuit Breaker: transports wrapped for all providers",
 			"providers", circuitBreakerProviders,
-			"metrics_enabled", circuitMetrics != nil,
+			"metrics_enabled", circuitDatadogConfig(yamlConfig) != nil,
 		)
 	}
 
@@ -1521,6 +1477,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				EntityTypes:      idGateCfg.EntityTypes,
 				ImageConcurrency: idGateCfg.ImageConcurrency,
 				Logger:           logger,
+				Metrics:          initializeIDGateMetrics(yamlConfig),
 			}))
 			logger.Info(
 				"🪪  Government ID gate middleware installed",
@@ -1548,6 +1505,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			MaxBodyBytes:          piiCfg.MaxBodyBytes,
 			Logger:                logger,
 			Recorder:              globalPIIRecorder,
+			Metrics:               initializePIIMetrics(yamlConfig),
 			WirePlaceholders:      wirePlaceholders,
 			DefaultAllowStreaming: defaultAllowStreaming,
 		}))

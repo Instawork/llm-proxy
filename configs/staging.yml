@@ -51,6 +51,12 @@ features:
       - force_real_upstream
     per_provider_rollup_threshold: 3
     per_provider_rollup_window_seconds: 300
+    datadog:
+      host: "localhost"
+      port: "8125"
+      namespace: "llm"
+      tags: ["env:staging", "service:llm-proxy", "team:platform"]
+      sample_rate: 1.0
   rate_limiting:
     enabled: false
 
