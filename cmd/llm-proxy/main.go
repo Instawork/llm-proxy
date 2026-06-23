@@ -29,6 +29,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
+	"github.com/Instawork/llm-proxy/internal/ocr"
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/provision"
@@ -1467,7 +1468,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	piiCfg := yamlConfig.Features.PIIRedact
 	redactAPICfg := yamlConfig.Features.RedactAPI
-	needsRedactor := piiCfg.Enabled || piiCfg.AllowPerKeyOverride || redactAPICfg.Enabled
+	idGateCfg := yamlConfig.Features.IDGate
+	needsRedactor := piiCfg.Enabled || piiCfg.AllowPerKeyOverride || redactAPICfg.Enabled || idGateCfg.Enabled
 	var redactor *redact.Redactor
 	if needsRedactor {
 		analyzerURL := piiCfg.AnalyzerURL
@@ -1490,6 +1492,42 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			redactor = nil
 		} else {
 			redact.SetGlobal(redactor)
+		}
+	}
+
+	if idGateCfg.Enabled {
+		if redactor == nil {
+			logger.Error("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
+		} else {
+			ocrURL := idGateCfg.OCRSidecarURL
+			if envURL := os.Getenv("OCR_SIDECAR_URL"); envURL != "" {
+				ocrURL = envURL
+			}
+			ocrTimeout := time.Duration(idGateCfg.TimeoutMs) * time.Millisecond
+			if ocrTimeout <= 0 {
+				ocrTimeout = 30 * time.Second
+			}
+			ocrClient := ocr.New(ocrURL, ocrTimeout)
+			idGateFailClosed := idGateCfg.FailMode == "closed"
+			scoreThreshold := idGateCfg.ScoreThreshold
+			if scoreThreshold <= 0 {
+				scoreThreshold = 0.4
+			}
+			r.Use(middleware.IDGateMiddleware(ocrClient, redactor, middleware.IDGateConfig{
+				FailClosed:       idGateFailClosed,
+				MaxBodyBytes:     idGateCfg.MaxBodyBytes,
+				MaxImageBytes:    idGateCfg.MaxImageBytes,
+				ScoreThreshold:   scoreThreshold,
+				EntityTypes:      idGateCfg.EntityTypes,
+				ImageConcurrency: idGateCfg.ImageConcurrency,
+				Logger:           logger,
+			}))
+			logger.Info(
+				"🪪  Government ID gate middleware installed",
+				"ocr_sidecar_url", ocrURL,
+				"fail_mode", idGateCfg.FailMode,
+				"score_threshold", scoreThreshold,
+			)
 		}
 	}
 

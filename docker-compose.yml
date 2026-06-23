@@ -45,6 +45,7 @@ services:
       # over this network; production ECS task definitions point at
       # localhost in the same task instead.
       - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
+      - OCR_SIDECAR_URL=${OCR_SIDECAR_URL:-http://ocr-sidecar:8000}
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health" ]
@@ -138,6 +139,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    networks:
+      - llm-proxy-network
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # OnnxTR OCR sidecar — government ID gate (image text extraction)
+  # ---------------------------------------------------------------------------
+  ocr-sidecar:
+    build:
+      context: ./ocr_sidecar
+      dockerfile: Dockerfile
+    container_name: llm-proxy-ocr-sidecar
+    ports:
+      - "${OCR_SIDECAR_PORT:-8000}:8000"
+    environment:
+      # OCR_ORT_INTRA_THREADS is the latency<->concurrency knob: each inference
+      # uses up to this many cores (ONNX Runtime intra-op pool). entrypoint.sh
+      # derives worker processes = cores / intra so the cores are fully used
+      # without oversubscription (which otherwise collapses throughput). Raw
+      # images/sec scales by adding tasks, not by this knob. Each worker loads
+      # its own model (~1.5 GB) — size memory as workers × 1.5 GB.
+      #   intra=8 ~450ms/img · intra=4 ~760ms/img · intra=1 ~2.7s/img
+      - OCR_ORT_INTRA_THREADS=${OCR_ORT_INTRA_THREADS:-4}
+      - OCR_PROC_WORKERS=${OCR_PROC_WORKERS:-}
+      - OCR_MAX_WORKERS=${OCR_MAX_WORKERS:-1}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - llm-proxy-network
     restart: unless-stopped

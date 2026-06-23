@@ -60,6 +60,21 @@ features:
     # wire_placeholders: true   # default when enabled — send <PERSON_1> upstream
     # default_allow_streaming: true  # per-key allow_streaming can force stream:false
   # ---------------------------------------------------------------------------
+  # Government ID gate (OCR sidecar + Presidio on embedded chat images)
+  # ---------------------------------------------------------------------------
+  id_gate:
+    enabled: false
+    ocr_sidecar_url: ""
+    fail_mode: "open"
+    score_threshold: 0.4
+    timeout_ms: 30000
+    max_body_bytes: 0
+    max_image_bytes: 0
+    # Images in one request are OCR'd + analyzed in parallel up to this many.
+    # 0 -> default of 4. The OCR fleet bounds its own per-process load, so this
+    # mainly cuts latency for multi-image requests.
+    image_concurrency: 0
+  # ---------------------------------------------------------------------------
   # Standalone POST /redact (Presidio one-way markers for hooks/tools)
   # ---------------------------------------------------------------------------
   redact_api:

@@ -306,6 +306,49 @@ test-pii:
 		-timeout 120s
 	@echo "$(GREEN)✓ --pii integration tests completed$(NC)"
 
+.PHONY: test-ocr-up
+test-ocr-up:
+	@echo "$(BLUE)Bringing up OCR sidecar...$(NC)"
+	@docker compose up -d ocr-sidecar
+	@echo "$(YELLOW)Waiting for /health on port $${OCR_SIDECAR_PORT:-8000}...$(NC)"
+	@for i in $$(seq 1 60); do \
+		if curl -fs -m 2 "http://localhost:$${OCR_SIDECAR_PORT:-8000}/health" > /dev/null 2>&1; then \
+			echo "$(GREEN)✓ OCR sidecar healthy on http://localhost:$${OCR_SIDECAR_PORT:-8000}$(NC)"; \
+			exit 0; \
+		fi; \
+		if [ $$i -eq 60 ]; then \
+			echo "$(RED)✗ OCR sidecar did not become healthy; check docker compose logs ocr-sidecar$(NC)"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+
+.PHONY: validate-id-gate-pipeline
+validate-id-gate-pipeline: test-ocr-up test-pii-up
+	@echo "$(BLUE)Validating OCR + Presidio against committed testdata...$(NC)"
+	@OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
+		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
+		python3 ocr_sidecar/scripts/validate_pipeline.py
+	@echo "$(GREEN)✓ Pipeline validation passed$(NC)"
+
+.PHONY: test-id-gate
+test-id-gate: test-ocr-up test-pii-up
+	@echo "$(BLUE)Running ID gate integration tests (live OCR + Presidio)...$(NC)"
+	@LLM_PROXY_ID_GATE_INTEGRATION=1 \
+		LLM_PROXY_PII_INTEGRATION=1 \
+		OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
+		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
+		go test -race -v ./internal/middleware/... \
+		-run 'TestIntegration_IDGate|TestIntegration_OCR' \
+		-timeout 180s
+	@echo "$(GREEN)✓ ID gate integration tests completed$(NC)"
+
+.PHONY: benchmark-id-gate-fargate
+benchmark-id-gate-fargate:
+	@echo "$(BLUE)Running Fargate-like OCR baseline (1 vCPU, 2 GiB)...$(NC)"
+	@bash ocr_sidecar/scripts/run_fargate_baseline.sh
+	@echo "$(GREEN)✓ Baseline written to ocr_sidecar/testdata/baseline_fargate_1vcpu_2gb.json$(NC)"
+
 LIVE_INTEGRATION_DIR=./integration
 LIVE_BINARY=$(LIVE_INTEGRATION_DIR)/bin/llm-proxy-live
 

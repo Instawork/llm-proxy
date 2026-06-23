@@ -74,6 +74,13 @@ var DefaultEntityTypes = []string{
 	"US_STREET_ADDRESS",
 }
 
+// DefaultGovIDEntityTypes are the Presidio entity types the ID gate scans
+// for in OCR'd image text. Both are on the DefaultEntityTypes allowlist.
+var DefaultGovIDEntityTypes = []string{
+	"US_PASSPORT",
+	"US_DRIVER_LICENSE",
+}
+
 // defaultEntityTypesSet is the allowlist as a map for O(1) lookup.
 // Built once from DefaultEntityTypes so the two stay in sync.
 var defaultEntityTypesSet = func() map[string]struct{} {
@@ -247,24 +254,60 @@ func (r *Redactor) scrub(ctx context.Context, text string, reg *Registry, forceR
 	if text == "" {
 		return Result{Text: text, EntityCounts: map[string]int{}}, nil
 	}
-	spans, err := r.analyze(ctx, text)
+	spans, err := r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
 	if err != nil {
 		return Result{}, err
 	}
 	return spliceSpans(text, spans, r.cfg.ScoreThreshold, reg, forceRedactMarkers), nil
 }
 
+// Analyze posts text to Presidio /analyze using the redactor's configured
+// entity scope and returns raw spans without redacting the input. The
+// redactor's ScoreThreshold is applied server-side.
+func (r *Redactor) Analyze(ctx context.Context, text string) ([]Span, error) {
+	return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+}
+
+// AnalyzeEntities posts text to Presidio /analyze scoped to entityTypes
+// (filtered to DefaultEntityTypes) and returns ALL matching spans.
+//
+// Unlike Scrub/Analyze, this deliberately sends a wire score_threshold of 0
+// so Presidio does NOT filter spans server-side. Callers (the ID gate) apply
+// their own threshold in Go. This decouples the gate's blocking sensitivity
+// from pii_redact.score_threshold: stock Presidio scores US_PASSPORT at only
+// ~0.40, so reusing the 0.5 redaction threshold here would drop real passport
+// hits before the gate ever evaluated them.
+func (r *Redactor) AnalyzeEntities(ctx context.Context, text string, entityTypes []string) ([]Span, error) {
+	return r.analyze(ctx, text, entityTypes, 0)
+}
+
 // analyze posts to the sidecar's /analyze endpoint and decodes the span
-// list. Errors carry enough context for the caller to log a useful
-// reason (timeout vs. 5xx vs. parse error) without dumping the raw body.
-func (r *Redactor) analyze(ctx context.Context, text string) ([]Span, error) {
+// list. When entityTypesOverride is non-nil it replaces the configured
+// EntityTypes for this call (after allowlist filtering). wireThreshold is
+// forwarded to Presidio as score_threshold (server-side span filtering).
+func (r *Redactor) analyze(ctx context.Context, text string, entityTypesOverride []string, wireThreshold float64) ([]Span, error) {
+	entityTypes := r.cfg.EntityTypes
+	if entityTypesOverride != nil {
+		kept, dropped := filterToAllowlist(entityTypesOverride)
+		if len(dropped) > 0 {
+			slog.Warn(
+				"redact: dropped entity types not in DefaultEntityTypes allowlist",
+				slog.Any("dropped", dropped),
+				slog.Any("kept", kept),
+			)
+		}
+		if len(kept) > 0 {
+			entityTypes = kept
+		}
+	}
+
 	payload := map[string]any{
 		"text":            text,
 		"language":        r.cfg.Language,
-		"score_threshold": r.cfg.ScoreThreshold,
+		"score_threshold": wireThreshold,
 	}
-	if len(r.cfg.EntityTypes) > 0 {
-		payload["entities"] = r.cfg.EntityTypes
+	if len(entityTypes) > 0 {
+		payload["entities"] = entityTypes
 	}
 
 	body, err := json.Marshal(payload)

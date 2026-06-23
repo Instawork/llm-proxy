@@ -109,6 +109,19 @@ features:
     analyzer_url: "http://localhost:3000"
     fail_mode: "open"
     allow_per_key_override: false
+  id_gate:
+    enabled: true
+    # OCR runs as its OWN ECS service (8 vCPU / 16 GB tasks behind an internal
+    # ALB) so it can hit the ~500 ms/image SLA and scale independently of the
+    # proxy. See infrastructure live/production/services/ocr-gate. Presidio
+    # stays a sidecar at localhost:3000 (analyzer_url under pii_redact).
+    ocr_sidecar_url: "http://ocr-gate.production.internal"
+    fail_mode: "open"
+    score_threshold: 0.4
+    # Tight enough to shed load fast (OCR p95 ~0.6 s + sidecar queue), loose
+    # enough to ride out a brief burst before failing open.
+    timeout_ms: 5000
+    image_concurrency: 4
   redact_api:
     enabled: true
     fail_mode: closed

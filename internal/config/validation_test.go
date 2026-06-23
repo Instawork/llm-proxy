@@ -226,3 +226,26 @@ func TestValidate_RedactAPI(t *testing.T) {
 	c.Features.AdminDashboard.DevBypassLogin = false
 	require.Error(t, c.Validate())
 }
+
+func TestValidate_IDGate(t *testing.T) {
+	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
+	c.Features.IDGate = IDGateConfig{
+		Enabled:        true,
+		OCRSidecarURL:  "http://ocr-sidecar:8000",
+		FailMode:       "open",
+		ScoreThreshold: 0.6,
+	}
+	require.NoError(t, c.Validate())
+
+	c.Features.IDGate.OCRSidecarURL = ""
+	require.Error(t, c.Validate())
+
+	c.Features.IDGate.OCRSidecarURL = "http://ocr-sidecar:8000"
+	c.Features.PIIRedact.AnalyzerURL = ""
+	require.Error(t, c.Validate())
+
+	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
+	c.Features.IDGate.FailMode = "panic"
+	require.Error(t, c.Validate())
+}

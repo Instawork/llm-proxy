@@ -206,6 +206,38 @@ func TestRedact_PayloadIncludesEntityScopeAndContext(t *testing.T) {
 	}
 }
 
+func TestAnalyzeEntities_SendsZeroWireThresholdAndScopedEntities(t *testing.T) {
+	var captured map[string]any
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
+		_ = json.NewDecoder(req.Body).Decode(&captured)
+		_ = json.NewEncoder(w).Encode([]Span{})
+	})
+	// pii_redact-style threshold of 0.5 must NOT leak onto the gate's
+	// analyze call — the gate applies its own threshold in Go, so the wire
+	// threshold has to be 0 or low-confidence passport hits get dropped.
+	r, _ := New(Config{
+		AnalyzerURL:    srv.URL,
+		ScoreThreshold: 0.5,
+		Language:       "en",
+	})
+
+	if _, err := r.AnalyzeEntities(
+		context.Background(),
+		"passport 123456789",
+		[]string{"US_PASSPORT", "US_DRIVER_LICENSE"},
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if captured["score_threshold"] != float64(0) {
+		t.Errorf("AnalyzeEntities must send wire score_threshold=0; got %v", captured["score_threshold"])
+	}
+	gotEnts, _ := captured["entities"].([]any)
+	if len(gotEnts) != 2 || gotEnts[0] != "US_PASSPORT" || gotEnts[1] != "US_DRIVER_LICENSE" {
+		t.Errorf("entities scope not forwarded; got %v", captured["entities"])
+	}
+}
+
 func TestRedact_TimeoutPropagates(t *testing.T) {
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, _ *http.Request) {
 		// Stall longer than the configured timeout so the request must

@@ -12,9 +12,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default values
+# Default values (the Go proxy image). Override via flags to build a sibling
+# image such as the OCR sidecar from the same repo.
 DOCKERFILE="build/Dockerfile.prod"
 DOCKERIGNORE=".dockerignore.prod"
+BUILD_CONTEXT="."
 
 # Function to print colored output
 print_info() {
@@ -48,13 +50,20 @@ REQUIRED ENVIRONMENT VARIABLES:
 OPTIONS:
     -v, --version VERSION    Application version (default: dev-{git-sha})
     -s, --sha SHA           Git SHA for tagging (default: current commit)
+    -f, --dockerfile PATH   Dockerfile to build (default: build/Dockerfile.prod)
+    -c, --context PATH      Docker build context (default: .)
+    -r, --repo NAME         ECR repository name (overrides AWS_ECR_REPOSITORY_NAME)
+    --dockerignore PATH     .dockerignore to stage at repo root, or "" to skip
+                            (default: .dockerignore.prod)
     --skip-aws-setup        Skip AWS CLI installation and ECR login
     -h, --help              Show this help message
 
 EXAMPLES:
-    $0                                    # Build and push with defaults (to llm-proxy repo)
+    $0                                    # Build and push the proxy (llm-proxy repo)
     $0 -v v1.0.0                         # Build and push with specific version
     $0 --skip-aws-setup                  # Skip AWS setup (assume already configured)
+    # Build and push the OCR sidecar image to the ocr-gate repo:
+    $0 -r ocr-gate -f ocr_sidecar/Dockerfile -c ocr_sidecar --dockerignore ""
 
 EOF
 }
@@ -63,6 +72,8 @@ EOF
 SKIP_AWS_SETUP=false
 VERSION=""
 SHA=""
+REPO_OVERRIDE=""
+DOCKERIGNORE_SET=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -72,6 +83,23 @@ while [[ $# -gt 0 ]]; do
             ;;
         -s|--sha)
             SHA="$2"
+            shift 2
+            ;;
+        -f|--dockerfile)
+            DOCKERFILE="$2"
+            shift 2
+            ;;
+        -c|--context)
+            BUILD_CONTEXT="$2"
+            shift 2
+            ;;
+        -r|--repo)
+            REPO_OVERRIDE="$2"
+            shift 2
+            ;;
+        --dockerignore)
+            DOCKERIGNORE="$2"
+            DOCKERIGNORE_SET=true
             shift 2
             ;;
         --skip-aws-setup)
@@ -102,7 +130,12 @@ fi
 # which is the only field with no safe default.
 AWS_ECR_REGISTRY_ID="${AWS_ECR_REGISTRY_ID:?AWS_ECR_REGISTRY_ID must be set (12-digit AWS account ID that owns the ECR registry)}"
 AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-west-2}"
-AWS_ECR_REPOSITORY_NAME="${AWS_ECR_REPOSITORY_NAME:-llm-proxy}"
+# --repo flag wins over the env default so one CI context can push several repos.
+if [[ -n "$REPO_OVERRIDE" ]]; then
+    AWS_ECR_REPOSITORY_NAME="$REPO_OVERRIDE"
+else
+    AWS_ECR_REPOSITORY_NAME="${AWS_ECR_REPOSITORY_NAME:-llm-proxy}"
+fi
 ECR_URL_PREFIX="${AWS_ECR_REGISTRY_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
 # Generate build metadata
@@ -130,6 +163,7 @@ echo "  Version: ${VERSION}"
 echo "  SHA Tag: ${SHA}"
 echo "  Build Date: ${BUILD_DATE}"
 echo "  Dockerfile: ${DOCKERFILE}"
+echo "  Context: ${BUILD_CONTEXT}"
 echo "  Region: ${AWS_DEFAULT_REGION}"
 echo
 
@@ -170,12 +204,14 @@ if [[ ! -f "$DOCKERFILE" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$DOCKERIGNORE" ]]; then
+# An empty --dockerignore "" disables staging entirely (e.g. the OCR image,
+# whose context already carries its own ignore rules).
+if [[ -n "$DOCKERIGNORE" && ! -f "$DOCKERIGNORE" ]]; then
     print_warning "Dockerignore not found: $DOCKERIGNORE"
 fi
 
 # Copy dockerignore file temporarily
-if [[ -f "$DOCKERIGNORE" ]]; then
+if [[ -n "$DOCKERIGNORE" && -f "$DOCKERIGNORE" ]]; then
     cp "$DOCKERIGNORE" .dockerignore
     CLEANUP_DOCKERIGNORE=true
 else
@@ -198,7 +234,7 @@ docker build --progress=plain \
     --build-arg BUILD_DATE="${BUILD_DATE}" \
     --build-arg VCS_REF="${SHA}" \
     --build-arg VERSION="${VERSION}" \
-    -f "${DOCKERFILE}" . \
+    -f "${DOCKERFILE}" "${BUILD_CONTEXT}" \
     -t "${IMAGE_URL}:${SHA}" \
     -t "${IMAGE_URL}:latest"
 

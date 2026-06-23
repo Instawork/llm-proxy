@@ -1,0 +1,26 @@
+{
+  "url": "http://localhost:8020",
+  "image": "/Users/eric/go/src/github.com/Instawork/llm-proxy-id-gate/ocr_sidecar/testdata/passport_us_block.png",
+  "warmup": 3,
+  "iterations": 15,
+  "concurrency": 1,
+  "errors": 0,
+  "serial": {
+    "count": 15,
+    "mean_ms": 8186.5,
+    "p50_ms": 8208.0,
+    "p95_ms": 8704.8,
+    "p99_ms": 8892.9,
+    "min_ms": 7213.3,
+    "max_ms": 8892.9
+  },
+  "concurrent": {
+    "count": 15,
+    "mean_ms": 8446.2,
+    "p50_ms": 8501.5,
+    "p95_ms": 9099.3,
+    "p99_ms": 9294.7,
+    "min_ms": 7311.2,
+    "max_ms": 9294.7
+  }
+}
