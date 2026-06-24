@@ -312,47 +312,82 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
 		return map[string]interface{}{"available": false}
 	}
+
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	dayKey := r.dayKey
-	snap := r.snapshotMemoryLocked()
-	r.mu.RUnlock()
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
 
-	r.MergeToday(adminrollup.MetricCircuitActivity, dayKey, snap, adminrollup.TopNCaps{})
-	r.MergeHistory(adminrollup.MetricCircuitActivity, snap)
-	r.mergeRedisRecentEvents(snap)
-	return snap
-}
+	var recent []activityEvent
+	if localActive {
+		recent = make([]activityEvent, len(r.recent))
+		for i, e := range r.recent {
+			recent[len(r.recent)-1-i] = e
+		}
+	}
 
-func (r *Recorder) snapshotMemoryLocked() map[string]interface{} {
-	recent := make([]activityEvent, len(r.recent))
-	for i, e := range r.recent {
-		recent[len(r.recent)-1-i] = e
+	var checksTotal, blockedOpen, probesStarted, probesSucceeded, probesFailed, circuitsOpened int64
+	byProvider := make(map[string]int64)
+	byKey := make(map[string]int64)
+	if localActive {
+		checksTotal = r.checksTotal
+		blockedOpen = r.blockedOpen
+		probesStarted = r.probesStarted
+		probesSucceeded = r.probesSucceeded
+		probesFailed = r.probesFailed
+		circuitsOpened = r.circuitsOpened
+		for k, v := range r.byProvider {
+			byProvider[k] = v
+		}
+		for k, v := range r.byKey {
+			byKey[k] = v
+		}
 	}
-	byProvider := make(map[string]int64, len(r.byProvider))
-	for k, v := range r.byProvider {
-		byProvider[k] = v
-	}
-	byKey := make(map[string]int64, len(r.byKey))
-	for k, v := range r.byKey {
-		byKey[k] = v
-	}
+
 	backend := "memory"
 	if r.redisEnabled() {
 		backend = "redis"
 	}
-	return map[string]interface{}{
+	snap := map[string]interface{}{
 		"available":        true,
 		"backend":          backend,
-		"day":              r.dayKey,
-		"started_at":       r.startedAt.Unix(),
-		"checks_total":     r.checksTotal,
-		"blocked_open":     r.blockedOpen,
-		"probes_started":   r.probesStarted,
-		"probes_succeeded": r.probesSucceeded,
-		"probes_failed":    r.probesFailed,
-		"circuits_opened":  r.circuitsOpened,
+		"day":              today,
+		"started_at":       startedAt.Unix(),
+		"checks_total":     checksTotal,
+		"blocked_open":     blockedOpen,
+		"probes_started":   probesStarted,
+		"probes_succeeded": probesSucceeded,
+		"probes_failed":    probesFailed,
+		"circuits_opened":  circuitsOpened,
 		"by_provider":      byProvider,
 		"by_key":           byKey,
 		"recent_events":    recent,
 	}
+	r.mu.RUnlock()
+
+	r.MergeToday(adminrollup.MetricCircuitActivity, today, snap, adminrollup.TopNCaps{})
+	if localActive {
+		mergeLocalCircuitIntoSnap(snap, checksTotal, blockedOpen, probesStarted, probesSucceeded, probesFailed, circuitsOpened, byProvider, byKey)
+	}
+	r.MergeHistory(adminrollup.MetricCircuitActivity, snap)
+	r.MergeHourly(adminrollup.MetricCircuitActivity, snap)
+	r.mergeRedisRecentEvents(snap)
+	return snap
+}
+
+func mergeLocalCircuitIntoSnap(
+	snap map[string]interface{},
+	checksTotal, blockedOpen, probesStarted, probesSucceeded, probesFailed, circuitsOpened int64,
+	byProvider, byKey map[string]int64,
+) {
+	adminrollup.MergeSnapInt64Max(snap, "checks_total", checksTotal)
+	adminrollup.MergeSnapInt64Max(snap, "blocked_open", blockedOpen)
+	adminrollup.MergeSnapInt64Max(snap, "probes_started", probesStarted)
+	adminrollup.MergeSnapInt64Max(snap, "probes_succeeded", probesSucceeded)
+	adminrollup.MergeSnapInt64Max(snap, "probes_failed", probesFailed)
+	adminrollup.MergeSnapInt64Max(snap, "circuits_opened", circuitsOpened)
+	adminrollup.MergeSnapInt64Map(snap, "by_provider", byProvider)
+	adminrollup.MergeSnapInt64Map(snap, "by_key", byKey)
 }

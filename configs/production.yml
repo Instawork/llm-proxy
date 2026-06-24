@@ -178,7 +178,7 @@ features:
   history:
     backend: s3
     role: global
-    streams: [cost, pii, usage, ratelimit]
+    streams: [cost, pii, id_gate, usage, ratelimit]
     max_records: 1000
     max_bytes: 8388608
     max_age_seconds: 300

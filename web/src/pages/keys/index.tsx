@@ -1257,7 +1257,7 @@ export default function KeysPage() {
                   <a
                     href={shareResult.url}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="btn btn-ghost"
                   >
                     Open

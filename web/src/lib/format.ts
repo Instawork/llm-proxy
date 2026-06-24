@@ -37,6 +37,18 @@ export function formatMonthlyCostLimit(cents: number | undefined | null): string
   return `$${(cents / 100).toFixed(2)}/month`;
 }
 
+/** Formats API month keys like `2026-06` for display. */
+export function formatMonthYear(month: string | undefined | null): string {
+  if (!month) return "This month";
+  const [year, mon] = month.split("-").map(Number);
+  if (!year || !mon) return "This month";
+  return new Date(Date.UTC(year, mon - 1, 1)).toLocaleString("en-US", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export function isPersonalKey(
   key: Pick<APIKey, "tags" | "owner_email">,
 ): boolean {
@@ -70,6 +82,30 @@ export function keySpendCapCents(
   return key.daily_cost_limit ?? 0;
 }
 
+/** Effective monthly spend cap in cents (explicit key cap or personal default). */
+export function effectiveMonthlyLimitCents(
+  key: Pick<APIKey, "tags" | "owner_email" | "monthly_cost_limit">,
+  viewerMonthlyCents = 0,
+): number {
+  if (key.monthly_cost_limit && key.monthly_cost_limit > 0) {
+    return key.monthly_cost_limit;
+  }
+  if (isPersonalKey(key) && viewerMonthlyCents > 0) {
+    return viewerMonthlyCents;
+  }
+  return 0;
+}
+
+/** Effective daily spend cap in cents (org keys only). */
+export function effectiveDailyLimitCents(
+  key: Pick<APIKey, "tags" | "owner_email" | "daily_cost_limit">,
+): number {
+  if (isPersonalKey(key)) {
+    return 0;
+  }
+  return key.daily_cost_limit ?? 0;
+}
+
 /** Dollars string for the key edit form. Empty when unlimited (0 cents). */
 export function dailyCostLimitFormDollars(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents <= 0) return "";
@@ -82,6 +118,26 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   if (amount === 0) return "$0.00";
   if (Math.abs(amount) < 0.01) return `$${amount.toFixed(digits)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+const MASKED_CREDENTIAL_SPLIT = /…|\u2026|\.\.\./;
+
+export const MASKED_CREDENTIAL_HASH_TITLE =
+  "FNV-1a/32 hash of the full credential — not the secret suffix";
+
+/** Parses `prefix…hash` masked credential ids (proxy keys and BYO credentials). */
+export function parseMaskedCredentialId(
+  maskedId: string,
+): { prefix: string; hash: string } | null {
+  const trimmed = maskedId.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(MASKED_CREDENTIAL_SPLIT);
+  if (!match || match.index === undefined) return null;
+  const hash = trimmed.slice(match.index + match[0].length);
+  if (!/^[0-9a-f]{8}$/.test(hash)) return null;
+  const prefix = trimmed.slice(0, match.index);
+  if (!prefix) return null;
+  return { prefix, hash };
 }
 
 /** Masked proxy key identity matching middleware.MaskKeyID for joining spend stats.

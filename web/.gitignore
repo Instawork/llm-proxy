@@ -1,2 +1,4 @@
 node_modules
 dist/assets
+scripts/.statslint-build
+scripts/.seclint-build

@@ -189,8 +189,24 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		return map[string]interface{}{"available": false}
 	}
 
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	dayKey := r.dayKey
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
+
+	var retiredTotal, deprecatedTotal, unknownTotal int64
+	var localRetired, localDeprecated, localUnknown map[string]int64
+	if localActive {
+		retiredTotal = r.retiredTotal
+		deprecatedTotal = r.deprecatedTotal
+		unknownTotal = r.unknownTotal
+		localRetired = copyIntMap(r.retired)
+		localDeprecated = copyIntMap(r.deprecated)
+		localUnknown = copyIntMap(r.unknown)
+	}
+
 	backend := "memory"
 	if r.RollupBound() {
 		backend = "redis"
@@ -198,18 +214,46 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	snap := map[string]interface{}{
 		"available":        true,
 		"backend":          backend,
-		"day":              dayKey,
-		"started_at":       r.startedAt.Unix(),
-		"retired_total":    r.retiredTotal,
-		"deprecated_total": r.deprecatedTotal,
-		"unknown_total":    r.unknownTotal,
-		"by_retired":       topN(r.retired, 0),
-		"by_deprecated":    topN(r.deprecated, 0),
-		"by_unknown":       topN(r.unknown, 0),
+		"day":              today,
+		"started_at":       startedAt.Unix(),
+		"retired_total":    retiredTotal,
+		"deprecated_total": deprecatedTotal,
+		"unknown_total":    unknownTotal,
+		"by_retired":       topN(localRetired, 0),
+		"by_deprecated":    topN(localDeprecated, 0),
+		"by_unknown":       topN(localUnknown, 0),
 	}
 	r.mu.RUnlock()
 
-	r.MergeToday(adminrollup.MetricModelStatus, dayKey, snap, modelStatusRollupCaps)
+	r.MergeToday(adminrollup.MetricModelStatus, today, snap, modelStatusRollupCaps)
+	if localActive {
+		mergeLocalModelStatusIntoSnap(snap, retiredTotal, deprecatedTotal, unknownTotal, localRetired, localDeprecated, localUnknown)
+	}
 	r.MergeHistory(adminrollup.MetricModelStatus, snap)
+	r.MergeHourly(adminrollup.MetricModelStatus, snap)
 	return snap
+}
+
+func mergeLocalModelStatusIntoSnap(
+	snap map[string]interface{},
+	retiredTotal, deprecatedTotal, unknownTotal int64,
+	localRetired, localDeprecated, localUnknown map[string]int64,
+) {
+	adminrollup.MergeSnapInt64Max(snap, "retired_total", retiredTotal)
+	adminrollup.MergeSnapInt64Max(snap, "deprecated_total", deprecatedTotal)
+	adminrollup.MergeSnapInt64Max(snap, "unknown_total", unknownTotal)
+	mergeModelStatusNameCounts(snap, "by_retired", localRetired, 0)
+	mergeModelStatusNameCounts(snap, "by_deprecated", localDeprecated, 0)
+	mergeModelStatusNameCounts(snap, "by_unknown", localUnknown, 0)
+}
+
+func mergeModelStatusNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+	if snap == nil || len(local) == 0 {
+		return
+	}
+	merged := adminrollup.MergeInt64Maps(adminrollup.NameCountMapFromSnap(snap[field]), local)
+	if len(merged) == 0 {
+		return
+	}
+	snap[field] = topN(merged, limit)
 }

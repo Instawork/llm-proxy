@@ -19,10 +19,13 @@ import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   type CostKeyAgg,
   DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
   type RangeKey,
   RANGE_OPTIONS,
   aggCostByKey,
   aggCostByProvider,
+  hourlySeries,
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
@@ -54,12 +57,6 @@ const SPEND_COLORS = [
   chartPalette.error,
 ];
 
-function spendByMaskedKey(byKey: CostKeySpend[] | undefined, key: string): number {
-  const masked = maskKeyId(key);
-  const entry = byKey?.find((row) => row.key_id === masked);
-  return entry?.spend_usd ?? 0;
-}
-
 export default function CostPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useCost();
   const keys = useKeys();
@@ -82,9 +79,36 @@ export default function CostPage() {
     "requests_today",
     hasRedis,
   );
-  const tokensSource: DataSource = hasRedis ? "redislive" : "memory";
-  const inputSpendToday = stats?.input_spend_today_usd ?? 0;
-  const outputSpendToday = stats?.output_spend_today_usd ?? 0;
+  const inputSpendToday = pickToday(
+    stats?.available ? stats?.input_spend_today_usd : undefined,
+    history,
+    "input_spend_today_usd",
+    hasRedis,
+  );
+  const outputSpendToday = pickToday(
+    stats?.available ? stats?.output_spend_today_usd : undefined,
+    history,
+    "output_spend_today_usd",
+    hasRedis,
+  );
+  const inputTokensToday = pickToday(
+    stats?.available ? stats?.input_tokens_today : undefined,
+    history,
+    "input_tokens_today",
+    hasRedis,
+  );
+  const outputTokensToday = pickToday(
+    stats?.available ? stats?.output_tokens_today : undefined,
+    history,
+    "output_tokens_today",
+    hasRedis,
+  );
+  const tokensSource: DataSource =
+    inputTokensToday.source === "memory" && outputTokensToday.source === "memory"
+      ? "memory"
+      : hasRedis
+        ? "redislive"
+        : "memory";
 
   const spendHistory = useHistory(stats?.available ? spendToday.value : undefined);
   const dailySpend = useMemo(
@@ -92,6 +116,11 @@ export default function CostPage() {
     [history, range],
   );
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailySpend.available);
+  const hourlySpend = useMemo(
+    () => hourlySeries(stats?.hourly_history, "spend_today_usd"),
+    [stats?.hourly_history],
+  );
+  const useHourlyChart = Boolean(stats?.hourly_history_available && range === "today" && hourlySpend.available);
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -128,15 +157,21 @@ export default function CostPage() {
     : memProviders.map((p) => ({ name: p.name, spend_usd: p.spend_usd, requests: p.requests }));
   const withProviderSpend = rangeByProvider.filter((row) => row.spend_usd > 0);
 
+  const todayByKey = hasRedis ? aggCostByKey(history, "today") : memKeyAgg(byKey);
+
   const limitRows = keyList
-    .map((key) => ({
-      id: key.key,
-      label: key.description || maskKeyId(key.key),
-      key,
-      spendUsd: spendByMaskedKey(byKey, key.key),
-      limitUsd: keySpendCapCents(key) / 100,
-      requests: byKey.find((entry) => entry.key_id === maskKeyId(key.key))?.requests ?? 0,
-    }))
+    .map((key) => {
+      const masked = maskKeyId(key.key);
+      const entry = todayByKey.find((row) => row.key_id === masked);
+      return {
+        id: key.key,
+        label: key.description || masked,
+        key,
+        spendUsd: entry?.spend_usd ?? 0,
+        limitUsd: keySpendCapCents(key) / 100,
+        requests: entry?.requests ?? 0,
+      };
+    })
     .filter((row) => row.limitUsd > 0 || row.spendUsd > 0)
     .sort((a, b) => b.spendUsd - a.spendUsd || b.limitUsd - a.limitUsd);
 
@@ -174,7 +209,7 @@ export default function CostPage() {
         <LiveStat
           title="Spend today"
           value={formatUsd(spendToday.value)}
-          hint={`${formatUsd(inputSpendToday)} in · ${formatUsd(outputSpendToday)} out`}
+          hint={`${formatUsd(inputSpendToday.value)} in · ${formatUsd(outputSpendToday.value)} out`}
           source={spendToday.source}
         />
         <LiveStat
@@ -185,8 +220,8 @@ export default function CostPage() {
         />
         <LiveStat
           title="Tokens"
-          value={compact((stats?.input_tokens_today ?? 0) + (stats?.output_tokens_today ?? 0))}
-          hint={`${compact(stats?.input_tokens_today)} in · ${compact(stats?.output_tokens_today)} out`}
+          value={compact(inputTokensToday.value + outputTokensToday.value)}
+          hint={`${compact(inputTokensToday.value)} in · ${compact(outputTokensToday.value)} out`}
           source={tokensSource}
         />
         <LiveStat
@@ -202,8 +237,16 @@ export default function CostPage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="Spend over time"
-            subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-            source={trendChartSource(useDailyChart)}
+            subtitle={
+              useDailyChart
+                ? DAILY_HISTORY_SUBTITLE
+                : useHourlyChart
+                  ? HOURLY_HISTORY_SUBTITLE
+                  : range === "today" && hasRedis
+                    ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                    : LIVE_TREND_CHART_SUBTITLE
+            }
+            source={trendChartSource(useDailyChart || useHourlyChart)}
           >
             {useDailyChart ? (
               <BarChart
@@ -211,6 +254,13 @@ export default function CostPage() {
                 values={dailySpend.values}
                 label="Daily spend (USD)"
                 colors={dailySpend.labels.map(() => chartPalette.primary())}
+              />
+            ) : useHourlyChart ? (
+              <BarChart
+                labels={hourlySpend.labels}
+                values={hourlySpend.values}
+                label="Hourly spend (USD)"
+                colors={hourlySpend.labels.map(() => chartPalette.primary())}
               />
             ) : (
               <TrendChart points={spendHistory} label="Spend today (USD)" color={chartPalette.primary()} />

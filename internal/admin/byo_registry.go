@@ -48,11 +48,13 @@ type costKeyRow struct {
 }
 
 type piiRecentRow struct {
+	Time     int64  `json:"time"`
 	Provider string `json:"provider"`
 	KeyID    string `json:"key_id"`
 }
 
 type costRecentRow struct {
+	Time  int64  `json:"time"`
 	KeyID string `json:"key_id"`
 }
 
@@ -73,6 +75,8 @@ func (h *handler) handleListBYOKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) collectBYOKeys(ctx context.Context, providerFilter string) ([]BYOKeyResponse, error) {
 	providerFilter = strings.TrimSpace(providerFilter)
+	today := time.Now().UTC().Format("2006-01-02")
+	dayStart, dayEnd := utcDayBounds(today)
 
 	aggs := make(map[string]*byoKeyAgg)
 
@@ -111,6 +115,9 @@ func (h *handler) collectBYOKeys(ctx context.Context, providerFilter string) ([]
 			addSeen("", row.Name, "pii", row.Count, 0, 0)
 		}
 		for _, row := range decodeRows[piiRecentRow](stats["recent"]) {
+			if row.Time > 0 && dayStart > 0 && (row.Time < dayStart || row.Time >= dayEnd) {
+				continue
+			}
 			addSeen(row.Provider, row.KeyID, "pii", 1, 0, 0)
 		}
 	}
@@ -121,6 +128,9 @@ func (h *handler) collectBYOKeys(ctx context.Context, providerFilter string) ([]
 			addSeen("", row.KeyID, "cost", 0, row.Requests, row.SpendUSD)
 		}
 		for _, row := range decodeRows[costRecentRow](stats["recent"]) {
+			if row.Time > 0 && dayStart > 0 && (row.Time < dayStart || row.Time >= dayEnd) {
+				continue
+			}
 			addSeen("", row.KeyID, "cost", 0, 1, 0)
 		}
 	}

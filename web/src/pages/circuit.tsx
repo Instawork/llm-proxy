@@ -24,6 +24,9 @@ import {
   aggCircuitBlockedByKey,
   aggCircuitProviders,
   DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
+  hourlySeries,
   maxScalarField,
   pickToday,
   type RangeKey,
@@ -144,6 +147,11 @@ export default function CircuitPage() {
     [failureHistory, range],
   );
   const useDailyFailureChart = Boolean(hasFailureRedis && range !== "today" && dailyFailures.available);
+  const hourlyFailures = useMemo(
+    () => hourlySeries(cb?.hourly_history, "total_failures"),
+    [cb?.hourly_history],
+  );
+  const useHourlyFailureChart = Boolean(cb?.hourly_history_available && range === "today" && hourlyFailures.available);
 
   const providerSeries = useMemo(() => circuitProviderSeries(failureHistory, range), [failureHistory, range]);
   const showProviderHistory = hasFailureRedis && range !== "today" && providerSeries.providers.length > 0;
@@ -347,8 +355,16 @@ export default function CircuitPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard
           title="Failure trend"
-          subtitle={useDailyFailureChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-          source={trendChartSource(useDailyFailureChart)}
+          subtitle={
+            useDailyFailureChart
+              ? DAILY_HISTORY_SUBTITLE
+              : useHourlyFailureChart
+                ? HOURLY_HISTORY_SUBTITLE
+                : range === "today" && (hasFailureRedis || cb?.backend === "redis")
+                  ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                  : LIVE_TREND_CHART_SUBTITLE
+          }
+          source={trendChartSource(useDailyFailureChart || useHourlyFailureChart)}
         >
           {useDailyFailureChart ? (
             <BarChart
@@ -356,6 +372,13 @@ export default function CircuitPage() {
               values={dailyFailures.values}
               label="Daily peak failures"
               colors={dailyFailures.labels.map(() => chartPalette.error())}
+            />
+          ) : useHourlyFailureChart ? (
+            <BarChart
+              labels={hourlyFailures.labels}
+              values={hourlyFailures.values}
+              label="Hourly peak failures"
+              colors={hourlyFailures.labels.map(() => chartPalette.error())}
             />
           ) : (
             <TrendChart points={failureHistoryTrend} label="Failures" color={chartPalette.error()} />

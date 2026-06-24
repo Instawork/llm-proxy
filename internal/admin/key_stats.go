@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/middleware"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
 )
 
@@ -21,6 +23,12 @@ type keyCostStatsResponse struct {
 	Requests       int64   `json:"requests"`
 	InputTokens    int64   `json:"input_tokens"`
 	OutputTokens   int64   `json:"output_tokens"`
+}
+
+type keyCostMonthResponse struct {
+	Month    string  `json:"month"`
+	SpendUSD float64 `json:"spend_usd"`
+	Source   string  `json:"source"`
 }
 
 type keyPIIStatsResponse struct {
@@ -55,13 +63,22 @@ type keyPIIRecentResponse struct {
 	Outcome      string         `json:"outcome"`
 }
 
+type keyRateUsageResponse struct {
+	Window   string `json:"window"`
+	Requests int64  `json:"requests"`
+	Tokens   int64  `json:"tokens"`
+}
+
 type keyStatsResponse struct {
 	MaskedKeyID     string                  `json:"masked_key_id"`
 	Day             string                  `json:"day"`
 	RollupAvailable bool                    `json:"rollup_available"`
 	RollupBackend   string                  `json:"rollup_backend,omitempty"`
 	CostToday       keyCostStatsResponse    `json:"cost_today"`
+	CostMonth       keyCostMonthResponse    `json:"cost_month"`
 	PIIToday        keyPIIStatsResponse     `json:"pii_today"`
+	RateUsage       []keyRateUsageResponse  `json:"rate_usage,omitempty"`
+	RateBackend     string                  `json:"rate_backend,omitempty"`
 	CostHistory     []keyDayPointResponse   `json:"cost_history"`
 	PIIHistory      []keyDayPointResponse   `json:"pii_history"`
 	RecentCost      []keyCostRecentResponse `json:"recent_cost"`
@@ -116,9 +133,15 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	memCost := memoryCostForKey(h.deps.CostSummary, masked, keyID)
-	memPII := memoryPIIForKey(h.deps.PIISummary, masked)
 	resp.RecentCost = sanitizeRecentCost(memoryRecentCostForKey(h.deps.CostSummary, masked, keyID))
 	resp.RecentPII = sanitizeRecentPII(memoryRecentPIIForKey(h.deps.PIISummary, masked))
+	if len(resp.RecentCost) > 0 {
+		memCost = mergeMemoryKeyCosts(memCost, memoryCostFromRecent(recentCostOnUTCDay(resp.RecentCost, today)))
+	}
+	memPII := memoryPIIForKey(h.deps.PIISummary, masked)
+	if len(resp.RecentPII) > 0 {
+		memPII = maxInt64(memPII, memoryPIIFromRecent(recentPIIOnUTCDay(resp.RecentPII, today)))
+	}
 
 	var redisCost adminrollup.KeyCostDayStats
 	var redisCostOK bool
@@ -155,7 +178,19 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp.CostToday = mergeKeyCostStats(memCost, redisCost, redisCostOK, costRollupOK)
+	resp.CostMonth = keyCostMonthForKey(ctx, h.deps.AdminRollupStore, today, masked, resp.CostToday.SpendUSD, costRollupOK)
 	resp.PIIToday = mergeKeyPIIStats(memPII, redisPII, redisPIIOK, piiRollupOK)
+	if h.deps.RateLimiter != nil {
+		if snapshotter, ok := h.deps.RateLimiter.(ratelimit.Snapshotter); ok {
+			snap := snapshotter.Snapshot(time.Now())
+			sanitizeLimitsSnapshot(&snap)
+			resp.RateUsage = rateUsageForKeyFromSnapshot(snap, keyID)
+			resp.RateBackend = snap.Backend
+			if resp.RateBackend == "" {
+				resp.RateBackend = "memory"
+			}
+		}
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -221,6 +256,53 @@ func memoryPIIForKey(summary func() map[string]interface{}, masked string) int64
 		}
 	}
 	return count
+}
+
+func memoryPIIFromRecent(events []keyPIIRecentResponse) int64 {
+	var count int64
+	for _, e := range events {
+		if e.EntityTotal > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func utcDayBounds(day string) (start, end int64) {
+	t, err := time.ParseInLocation("2006-01-02", day, time.UTC)
+	if err != nil {
+		return 0, 0
+	}
+	start = t.Unix()
+	return start, start + 86400
+}
+
+func recentCostOnUTCDay(events []keyCostRecentResponse, day string) []keyCostRecentResponse {
+	start, end := utcDayBounds(day)
+	if start == 0 {
+		return events
+	}
+	out := make([]keyCostRecentResponse, 0, len(events))
+	for _, e := range events {
+		if e.Time >= start && e.Time < end {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func recentPIIOnUTCDay(events []keyPIIRecentResponse, day string) []keyPIIRecentResponse {
+	start, end := utcDayBounds(day)
+	if start == 0 {
+		return events
+	}
+	out := make([]keyPIIRecentResponse, 0, len(events))
+	for _, e := range events {
+		if e.Time >= start && e.Time < end {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func memoryRecentCostForKey(summary func() map[string]interface{}, masked, rawKey string) []map[string]interface{} {
@@ -321,9 +403,8 @@ func asFloat(v interface{}) float64 {
 }
 
 func mergeKeyCostStats(mem memoryKeyCost, redis adminrollup.KeyCostDayStats, redisOK, rollupBound bool) keyCostStatsResponse {
-	source := "memory"
 	out := keyCostStatsResponse{
-		Source:         source,
+		Source:         "memory",
 		SpendUSD:       mem.SpendUSD,
 		InputSpendUSD:  mem.InputSpendUSD,
 		OutputSpendUSD: mem.OutputSpendUSD,
@@ -334,22 +415,132 @@ func mergeKeyCostStats(mem memoryKeyCost, redis adminrollup.KeyCostDayStats, red
 	if !rollupBound {
 		return out
 	}
-	if mem.SpendUSD > 0 {
-		out.Source = "redislive"
-		return out
-	}
 	if redisOK {
+		out.SpendUSD = maxFloat(mem.SpendUSD, redis.SpendUSD)
+		out.InputSpendUSD = maxFloat(mem.InputSpendUSD, redis.InputSpendUSD)
+		out.OutputSpendUSD = maxFloat(mem.OutputSpendUSD, redis.OutputSpendUSD)
+		out.Requests = maxInt64(mem.Requests, redis.Requests)
+		out.InputTokens = maxInt64(mem.InputTokens, redis.InputTokens)
+		out.OutputTokens = maxInt64(mem.OutputTokens, redis.OutputTokens)
+	}
+	switch {
+	case mem.SpendUSD > 0:
+		out.Source = "redislive"
+	case redisOK && redis.SpendUSD > 0:
 		out.Source = "redis"
-		out.SpendUSD = redis.SpendUSD
-		out.InputSpendUSD = redis.InputSpendUSD
-		out.OutputSpendUSD = redis.OutputSpendUSD
-		out.Requests = redis.Requests
-		out.InputTokens = redis.InputTokens
-		out.OutputTokens = redis.OutputTokens
+	default:
+		out.Source = "redislive"
+	}
+	return out
+}
+
+func memoryCostFromRecent(events []keyCostRecentResponse) memoryKeyCost {
+	var out memoryKeyCost
+	for _, e := range events {
+		out.SpendUSD += e.SpendUSD
+		out.InputSpendUSD += e.InputSpendUSD
+		out.OutputSpendUSD += e.OutputSpendUSD
+		out.Requests++
+		out.InputTokens += int64(e.InputTokens)
+		out.OutputTokens += int64(e.OutputTokens)
+	}
+	return out
+}
+
+func mergeMemoryKeyCosts(a, b memoryKeyCost) memoryKeyCost {
+	return memoryKeyCost{
+		SpendUSD:       maxFloat(a.SpendUSD, b.SpendUSD),
+		InputSpendUSD:  maxFloat(a.InputSpendUSD, b.InputSpendUSD),
+		OutputSpendUSD: maxFloat(a.OutputSpendUSD, b.OutputSpendUSD),
+		Requests:       maxInt64(a.Requests, b.Requests),
+		InputTokens:    maxInt64(a.InputTokens, b.InputTokens),
+		OutputTokens:   maxInt64(a.OutputTokens, b.OutputTokens),
+	}
+}
+
+func rateUsageForKeyFromSnapshot(snap ratelimit.LimitsSnapshot, rawKey string) []keyRateUsageResponse {
+	scopes := []string{RedactScopeKey("key:" + rawKey), "key:" + rawKey}
+	out := make([]keyRateUsageResponse, 0, 2)
+	for _, spec := range []struct {
+		window string
+		ws     *ratelimit.WindowSnapshot
+	}{
+		{"minute", snap.Minute},
+		{"day", snap.Day},
+	} {
+		if spec.ws == nil {
+			continue
+		}
+		counter := counterForScopes(spec.ws.Counters, scopes...)
+		if counter.Requests == 0 && counter.Tokens == 0 {
+			continue
+		}
+		out = append(out, keyRateUsageResponse{
+			Window:   spec.window,
+			Requests: int64(counter.Requests),
+			Tokens:   int64(counter.Tokens),
+		})
+	}
+	return out
+}
+
+func counterForScopes(counters map[string]ratelimit.CounterSnapshot, scopes ...string) ratelimit.CounterSnapshot {
+	var out ratelimit.CounterSnapshot
+	for _, scope := range scopes {
+		c, ok := counters[scope]
+		if !ok {
+			continue
+		}
+		if c.Requests > out.Requests {
+			out.Requests = c.Requests
+		}
+		if c.Tokens > out.Tokens {
+			out.Tokens = c.Tokens
+		}
+	}
+	return out
+}
+
+func keyCostMonthForKey(
+	ctx context.Context,
+	store *adminrollup.Store,
+	day, masked string,
+	todaySpend float64,
+	rollupBound bool,
+) keyCostMonthResponse {
+	month := day[:7]
+	out := keyCostMonthResponse{Month: month, Source: "memory"}
+	if !rollupBound || store == nil {
+		out.SpendUSD = todaySpend
 		return out
 	}
-	out.Source = "redislive"
+	spend, err := store.KeyMonthlySpendUSD(ctx, adminrollup.MetricCost, month, masked)
+	if err != nil {
+		out.Source = "redislive"
+		out.SpendUSD = todaySpend
+		return out
+	}
+	out.Source = "redis"
+	out.SpendUSD = spend
+	if todaySpend > out.SpendUSD {
+		out.SpendUSD = todaySpend
+		out.Source = "redislive"
+	}
 	return out
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func mergeKeyPIIStats(mem int64, redis int64, redisOK, rollupBound bool) keyPIIStatsResponse {
@@ -357,16 +548,17 @@ func mergeKeyPIIStats(mem int64, redis int64, redisOK, rollupBound bool) keyPIIS
 	if !rollupBound {
 		return out
 	}
-	if mem > redis {
-		out.Source = "redislive"
-		return out
-	}
 	if redisOK {
-		out.Source = "redis"
-		out.Detections = redis
-		return out
+		out.Detections = maxInt64(mem, redis)
 	}
-	out.Source = "redislive"
+	switch {
+	case mem > 0:
+		out.Source = "redislive"
+	case redisOK && redis > 0:
+		out.Source = "redis"
+	default:
+		out.Source = "redislive"
+	}
 	return out
 }
 

@@ -2,6 +2,7 @@ package circuitstats
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,4 +57,18 @@ func TestRecorder_SnapshotNil(t *testing.T) {
 	var r *Recorder
 	snap := r.Snapshot()
 	assert.Equal(t, false, snap["available"])
+}
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	r := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	r.dayKey = yesterday
+	r.checksTotal = 99
+	r.blockedOpen = 42
+
+	snap := r.Snapshot()
+	assert.Equal(t, today, snap["day"])
+	assert.Equal(t, int64(0), snap["checks_total"])
+	assert.Equal(t, int64(0), snap["blocked_open"])
 }

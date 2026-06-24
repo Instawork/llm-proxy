@@ -27,6 +27,11 @@ type blockEvent struct {
 	Remaining int    `json:"remaining,omitempty"`
 }
 
+type rateLimitFlushed struct {
+	requestsTotal, requestsAllowed, requestsBlocked int64
+	byProvider, byReason                            map[string]int64
+}
+
 // Recorder accumulates rolling rate-limit stats in-process.
 type Recorder struct {
 	mu        sync.RWMutex
@@ -41,6 +46,7 @@ type Recorder struct {
 	byReason   map[string]int64
 
 	recentBlocks []blockEvent
+	flushed      rateLimitFlushed
 
 	adminrollup.RecorderBinding
 	history.Binding
@@ -62,8 +68,13 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	if r.dayKey == day {
 		return
 	}
-	r.ArchiveDay(r.dayKey, r.rollupDataLocked())
+	oldDay := r.dayKey
 	r.dayKey = day
+	r.FlushRollup()
+	go func() {
+		r.ArchiveDayFromAggregatesElected(adminrollup.MetricRateLimit, oldDay, adminrollup.TopNCaps{})
+	}()
+	r.flushed = rateLimitFlushed{}
 	r.requestsTotal = 0
 	r.requestsAllowed = 0
 	r.requestsBlocked = 0
@@ -72,13 +83,54 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.recentBlocks = nil
 }
 
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
-	return map[string]interface{}{
-		"requests_total":   r.requestsTotal,
-		"requests_allowed": r.requestsAllowed,
-		"requests_blocked": r.requestsBlocked,
-		"by_provider":      r.byProvider,
-		"by_reason":        r.byReason,
+func int64MapDelta(cur, prev map[string]int64) map[string]float64 {
+	out := make(map[string]float64)
+	for k, v := range cur {
+		if dr := float64(v - prev[k]); dr != 0 {
+			out[k] = dr
+		}
+	}
+	return out
+}
+
+func (r *Recorder) deltaLocked() adminrollup.Delta {
+	d := adminrollup.Delta{
+		Totals: map[string]float64{
+			"requests_total":   float64(r.requestsTotal - r.flushed.requestsTotal),
+			"requests_allowed": float64(r.requestsAllowed - r.flushed.requestsAllowed),
+			"requests_blocked": float64(r.requestsBlocked - r.flushed.requestsBlocked),
+		},
+	}
+	if provDelta := int64MapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
+		if d.Dimensions == nil {
+			d.Dimensions = make(map[string]map[string]float64)
+		}
+		d.Dimensions["by_provider"] = provDelta
+	}
+	if reasonDelta := int64MapDelta(r.byReason, r.flushed.byReason); len(reasonDelta) > 0 {
+		if d.Dimensions == nil {
+			d.Dimensions = make(map[string]map[string]float64)
+		}
+		d.Dimensions["by_reason"] = reasonDelta
+	}
+	return d
+}
+
+func (r *Recorder) advanceFlushedLocked() {
+	if r.flushed.byProvider == nil {
+		r.flushed.byProvider = make(map[string]int64)
+	}
+	if r.flushed.byReason == nil {
+		r.flushed.byReason = make(map[string]int64)
+	}
+	r.flushed.requestsTotal = r.requestsTotal
+	r.flushed.requestsAllowed = r.requestsAllowed
+	r.flushed.requestsBlocked = r.requestsBlocked
+	for k, v := range r.byProvider {
+		r.flushed.byProvider[k] = v
+	}
+	for k, v := range r.byReason {
+		r.flushed.byReason[k] = v
 	}
 }
 
@@ -127,10 +179,11 @@ func (r *Recorder) RecordDecision(
 		r.EmitHistory(entry)
 	}
 	dayKey := r.dayKey
-	rollup := r.rollupDataLocked()
+	delta := r.deltaLocked()
+	r.advanceFlushedLocked()
 	r.mu.Unlock()
 
-	r.QueueToday(dayKey, rollup)
+	r.QueueDelta(dayKey, delta)
 }
 
 // Snapshot returns JSON for the admin API.
@@ -138,24 +191,67 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
 		return map[string]interface{}{"available": false}
 	}
+
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	recent := make([]blockEvent, len(r.recentBlocks))
-	for i, e := range r.recentBlocks {
-		recent[len(r.recentBlocks)-1-i] = e
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
+
+	var recent []blockEvent
+	if localActive {
+		recent = make([]blockEvent, len(r.recentBlocks))
+		for i, e := range r.recentBlocks {
+			recent[len(r.recentBlocks)-1-i] = e
+		}
 	}
+
+	var requestsTotal, requestsAllowed, requestsBlocked int64
+	byProvider := make(map[string]int64)
+	byReason := make(map[string]int64)
+	if localActive {
+		requestsTotal = r.requestsTotal
+		requestsAllowed = r.requestsAllowed
+		requestsBlocked = r.requestsBlocked
+		for k, v := range r.byProvider {
+			byProvider[k] = v
+		}
+		for k, v := range r.byReason {
+			byReason[k] = v
+		}
+	}
+
 	snap := map[string]interface{}{
 		"available":        true,
-		"day":              r.dayKey,
-		"started_at":       r.startedAt.Unix(),
-		"requests_total":   r.requestsTotal,
-		"requests_allowed": r.requestsAllowed,
-		"requests_blocked": r.requestsBlocked,
-		"by_provider":      r.byProvider,
-		"by_reason":        r.byReason,
+		"day":              today,
+		"started_at":       startedAt.Unix(),
+		"requests_total":   requestsTotal,
+		"requests_allowed": requestsAllowed,
+		"requests_blocked": requestsBlocked,
+		"by_provider":      byProvider,
+		"by_reason":        byReason,
 		"recent_blocks":    recent,
 	}
 	r.mu.RUnlock()
 
+	r.MergeToday(adminrollup.MetricRateLimit, today, snap, adminrollup.TopNCaps{})
+	if localActive {
+		mergeLocalRateLimitIntoSnap(snap, requestsTotal, requestsAllowed, requestsBlocked, byProvider, byReason)
+	}
 	r.MergeHistory(adminrollup.MetricRateLimit, snap)
+	r.MergeHourly(adminrollup.MetricRateLimit, snap)
 	return snap
+}
+
+func mergeLocalRateLimitIntoSnap(
+	snap map[string]interface{},
+	requestsTotal, requestsAllowed, requestsBlocked int64,
+	byProvider, byReason map[string]int64,
+) {
+	adminrollup.MergeSnapInt64Max(snap, "requests_total", requestsTotal)
+	adminrollup.MergeSnapInt64Max(snap, "requests_allowed", requestsAllowed)
+	adminrollup.MergeSnapInt64Max(snap, "requests_blocked", requestsBlocked)
+	adminrollup.MergeSnapInt64Map(snap, "by_provider", byProvider)
+	adminrollup.MergeSnapInt64Map(snap, "by_reason", byReason)
 }

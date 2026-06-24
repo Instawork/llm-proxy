@@ -2,6 +2,7 @@ package modelstatusstats
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,4 +32,16 @@ func TestRecorder_NilSnapshot(t *testing.T) {
 	var rec *Recorder
 	snap := rec.Snapshot()
 	assert.Equal(t, false, snap["available"])
+}
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	rec := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	rec.dayKey = yesterday
+	rec.retiredTotal = 99
+
+	snap := rec.Snapshot()
+	assert.Equal(t, today, snap["day"])
+	assert.Equal(t, int64(0), snap["retired_total"])
 }

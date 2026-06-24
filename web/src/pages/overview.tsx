@@ -13,7 +13,15 @@ import PageHeader, {
 } from "../components/ui/page-header";
 import { useConfig, useHealth, useKeys, useModelStatus, useUsage } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
-import { aggScopeMap, DAILY_HISTORY_SUBTITLE, dailyHistoryChart, pickToday } from "../lib/daily-history";
+import {
+  aggScopeMap,
+  DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
+  dailyHistoryChart,
+  hourlySeries,
+  pickToday,
+} from "../lib/daily-history";
 import { featureEnabled } from "../lib/features";
 import { compact, scopeKind, scopeLabel } from "../lib/format";
 
@@ -34,6 +42,11 @@ export default function OverviewPage() {
     [cb?.daily_history],
   );
   const useDailyChart = Boolean(cb?.daily_history_available && dailyFailures.available);
+  const hourlyFailures = useMemo(
+    () => hourlySeries(cb?.hourly_history, "total_failures"),
+    [cb?.hourly_history],
+  );
+  const useHourlyChart = Boolean(cb?.hourly_history_available && hourlyFailures.available);
   const circuitLive = circuitLiveSource(cb?.backend);
 
   const enabledFeatures = config.data?.features
@@ -46,17 +59,16 @@ export default function OverviewPage() {
   const usageRedis = Boolean(usageStats?.daily_history_available);
   const usageCounters = usageStats?.counters ?? {};
   const globalUsage = usageCounters["global"];
-  // Prefer the fleet-wide today totals the backend merges from Redis over this
-  // process's in-memory counters, so the card matches the Usage page (and isn't
-  // just whatever traffic this one pod has served since its last restart).
+  const memoryRequests = Math.max(usageStats?.requests_today ?? 0, globalUsage?.requests ?? 0);
+  const memoryTokens = Math.max(usageStats?.tokens_today ?? 0, globalUsage?.tokens ?? 0);
   const requestsTodayPick = pickToday(
-    usageStats?.available ? (usageStats?.requests_today ?? globalUsage?.requests) : undefined,
+    usageStats?.available ? memoryRequests : undefined,
     usageHistory,
     "requests_today",
     usageRedis,
   );
   const tokensTodayPick = pickToday(
-    usageStats?.available ? (usageStats?.tokens_today ?? globalUsage?.tokens) : undefined,
+    usageStats?.available ? memoryTokens : undefined,
     usageHistory,
     "tokens_today",
     usageRedis,
@@ -179,8 +191,16 @@ export default function OverviewPage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="Circuit breaker failures"
-            subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-            source={trendChartSource(useDailyChart)}
+            subtitle={
+              useDailyChart
+                ? DAILY_HISTORY_SUBTITLE
+                : useHourlyChart
+                  ? HOURLY_HISTORY_SUBTITLE
+                  : cb?.backend === "redis" || cb?.daily_history_available
+                    ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                    : LIVE_TREND_CHART_SUBTITLE
+            }
+            source={trendChartSource(useDailyChart || useHourlyChart)}
           >
             {useDailyChart ? (
               <BarChart
@@ -188,6 +208,13 @@ export default function OverviewPage() {
                 values={dailyFailures.values}
                 label="Daily failures"
                 colors={dailyFailures.labels.map(() => chartPalette.error())}
+              />
+            ) : useHourlyChart ? (
+              <BarChart
+                labels={hourlyFailures.labels}
+                values={hourlyFailures.values}
+                label="Hourly failures"
+                colors={hourlyFailures.labels.map(() => chartPalette.error())}
               />
             ) : (
               <TrendChart points={failureHistory} label="Failures" color={chartPalette.error()} />

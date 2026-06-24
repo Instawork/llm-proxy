@@ -1,7 +1,33 @@
-import type { DailyHistoryRow } from "../types";
+import type { DailyHistoryRow, HourlyHistoryRow } from "../types";
 
 export const DAILY_HISTORY_SUBTITLE =
   "Daily UTC totals from Redis — survives proxy restarts (today updates live)";
+
+export const HOURLY_HISTORY_SUBTITLE =
+  "Hourly UTC totals from Redis — fleet-wide, survives proxy restarts";
+
+export const HOURLY_HISTORY_FALLBACK_SUBTITLE =
+  "This tab fallback — Redis hourly data is not available yet, so this sparkline is browser-only";
+
+/**
+ * Builds a chart series from hourly Redis data for the current UTC day.
+ * Returns labels like "09:00", "10:00" … and a value per hour.
+ */
+export function hourlySeries(
+  rows: HourlyHistoryRow[] | undefined,
+  field: string,
+): { labels: string[]; values: number[]; available: boolean } {
+  if (!rows?.length) return { labels: [], values: [], available: false };
+  const sorted = [...rows].sort((a, b) => (a.hour ?? 0) - (b.hour ?? 0));
+  return {
+    labels: sorted.map((r) => `${String(r.hour ?? 0).padStart(2, "0")}:00`),
+    values: sorted.map((r) => {
+      const v = r[field];
+      return typeof v === "number" && Number.isFinite(v) ? v : 0;
+    }),
+    available: true,
+  };
+}
 
 export type RangeKey = "today" | "7d" | "30d";
 
@@ -63,8 +89,7 @@ export function sliceRange(
   if (!rows?.length) return [];
   const sorted = sortRows(rows);
   if (range === "today") {
-    const t = sorted.filter((r) => r.day === todayUTC());
-    return t.length ? t : sorted.slice(-1);
+    return sorted.filter((r) => r.day === todayUTC());
   }
   return sorted.slice(-rangeDays(range));
 }
@@ -118,10 +143,18 @@ export function pickToday(
   if (!redisAvailable) {
     return { value: mem, source: "memory" };
   }
-  if (mem > 0) return { value: mem, source: "redislive" };
-  if (redisVal > 0) return { value: redisVal, source: "redis" };
-  // Wired to Redis, just no data for today yet — still durable.
-  return { value: mem, source: "redislive" };
+
+  const value = Math.max(mem, redisVal);
+  if (value === 0) {
+    return { value: 0, source: "redislive" };
+  }
+  if (mem > 0 && mem >= redisVal) {
+    return { value: mem, source: "redislive" };
+  }
+  if (redisVal > mem) {
+    return { value: redisVal, source: mem > 0 ? "redislive" : "redis" };
+  }
+  return { value, source: "redislive" };
 }
 
 // --- Cost breakdowns (arrays of objects) ------------------------------------

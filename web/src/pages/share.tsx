@@ -1,23 +1,13 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { ProxyKeyUsagePanel } from "../components/keys/proxy-key-usage-panel";
 import LLMProxyLogo from "../components/llm-proxy-logo";
 import { CopyButton } from "../components/ui/copy-button";
 import { maskKey } from "../components/ui/masked-key";
 import { ProviderBadge } from "../components/ui/page-header";
 import { useShare } from "../hooks/queries";
-import { assistantPrompt, codeExamples, scrubProxyKeyFromText } from "../lib/code-examples";
 import { formatShareExpiry } from "../lib/share-expiry";
-
-const CodeBlock = lazy(() =>
-  import("../components/ui/code-block").then((m) => ({ default: m.CodeBlock })),
-);
-
-function CodeBlockFallback({ code }: { code: string }) {
-  return (
-    <pre className="overflow-x-auto whitespace-pre px-5 py-4 font-mono text-sm text-[#abb2bf]">{code}</pre>
-  );
-}
 
 function Field({
   label,
@@ -48,18 +38,6 @@ export default function SharePage() {
   const { id } = useParams<{ id: string }>();
   const { data, isLoading, error } = useShare(id);
   const [revealed, setRevealed] = useState(false);
-  const [activeTab, setActiveTab] = useState(0);
-
-  const examples = useMemo(
-    () =>
-      data ? codeExamples({ provider: data.provider, baseUrl: data.base_url, key: data.key }) : [],
-    [data],
-  );
-  const prompt = useMemo(() => {
-    if (!data) return "";
-    const raw = assistantPrompt({ provider: data.provider, baseUrl: data.base_url });
-    return scrubProxyKeyFromText(raw, data.key);
-  }, [data]);
 
   if (isLoading) {
     return (
@@ -84,7 +62,6 @@ export default function SharePage() {
     );
   }
 
-  const active = examples[activeTab] ?? examples[0];
   const expiry = data.expires_at ? formatShareExpiry(data.expires_at) : null;
 
   return (
@@ -147,57 +124,7 @@ export default function SharePage() {
           </div>
         </section>
 
-        <section className="glass-panel overflow-hidden">
-          <div className="border-b border-base-300/70 px-6 py-4">
-            <h2 className="font-semibold">Drop-in usage</h2>
-            <p className="text-sm text-base-content/60">
-              Point your existing {data.provider} SDK at the proxy — same models, same request shape.
-            </p>
-          </div>
-
-          <div role="tablist" className="tabs tabs-bordered px-4 pt-3">
-            {examples.map((ex, i) => (
-              <button
-                key={ex.id}
-                role="tab"
-                type="button"
-                className={`tab ${i === activeTab ? "tab-active font-medium" : ""}`}
-                onClick={() => setActiveTab(i)}
-              >
-                {ex.label}
-              </button>
-            ))}
-          </div>
-
-          {active ? (
-            <div className="relative p-4">
-              <div className="absolute right-6 top-6 z-10">
-                <CopyButton value={active.code} label="Copy" className="btn btn-xs btn-neutral gap-1.5" />
-              </div>
-              <div className="overflow-x-auto rounded-xl bg-[#282c34] px-1 py-1 text-sm">
-                <Suspense fallback={<CodeBlockFallback code={active.code} />}>
-                  <CodeBlock code={active.code} language={active.language} />
-                </Suspense>
-              </div>
-            </div>
-          ) : null}
-        </section>
-
-        <section className="glass-panel overflow-hidden">
-          <div className="flex items-center justify-between border-b border-base-300/70 px-6 py-4">
-            <div>
-              <h2 className="font-semibold">Prompt for Cursor / Replit</h2>
-              <p className="text-sm text-base-content/60">
-                Safe to paste into an AI assistant — uses a placeholder for the key, not your real secret.
-                Copy the key from the field above separately when the assistant asks.
-              </p>
-            </div>
-            <CopyButton value={prompt} label="Copy prompt" />
-          </div>
-          <pre className="overflow-x-auto whitespace-pre-wrap px-6 py-4 text-sm text-base-content/80">
-            {prompt}
-          </pre>
-        </section>
+        <ProxyKeyUsagePanel provider={data.provider} baseUrl={data.base_url} proxyKey={data.key} />
 
         <footer className="pb-6 text-center text-xs text-base-content/40">
           Shared via the LLM Proxy admin dashboard

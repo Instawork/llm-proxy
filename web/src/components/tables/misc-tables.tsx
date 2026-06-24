@@ -13,19 +13,11 @@ import {
   piiKeyShowSecondary,
 } from "../../lib/pii-key-display";
 import { inferProviderFromMaskedId } from "../../lib/byo-ban";
+import { PiiEntityBadges } from "../pii/pii-entity-badges";
+import { PiiRequestActionBadge } from "../pii/pii-request-action";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 import type { APIKey, PIIRecentEvent } from "../../types";
 import type { NameCount } from "../../lib/daily-history";
-
-function outcomeBadge(outcome: PIIRecentEvent["outcome"]) {
-  const map: Record<PIIRecentEvent["outcome"], string> = {
-    ok: "badge-success",
-    fail_open: "badge-warning",
-    fail_closed: "badge-error",
-    oversize: "badge-ghost",
-  };
-  return <span className={`badge badge-sm ${map[outcome]}`}>{outcome}</span>;
-}
 
 export function TopKeysTable({
   rows,
@@ -103,10 +95,12 @@ export function RecentDetectionsTable({
   rows,
   keys,
   byoBanActions,
+  wirePlaceholders,
 }: {
   rows: PIIRecentEvent[];
   keys: APIKey[];
   byoBanActions: ByoBanActions;
+  wirePlaceholders: boolean;
 }) {
   const columns = useMemo<ColumnDef<PIIRecentEvent, unknown>[]>(
     () => [
@@ -154,28 +148,21 @@ export function RecentDetectionsTable({
         accessorKey: "entity_total",
         header: "Entities",
         enableSorting: false,
-        cell: ({ row }) =>
-          row.original.entity_total > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(row.original.entity_counts).map(([name, n]) => (
-                <span key={name} className="badge badge-sm badge-outline">
-                  {name.replaceAll("_", " ")} ×{n}
-                </span>
-              ))}
-            </div>
-          ) : row.original.outcome === "ok" ? (
-            <span className="text-base-content/40">clean</span>
-          ) : (
-            // fail_open / fail_closed / oversize never reached the analyzer,
-            // so "clean" would be misleading — the body was not scanned.
-            <span className="text-base-content/40">not scanned</span>
-          ),
+        cell: ({ row }) => (
+          <PiiEntityBadges entityCounts={row.original.entity_counts} outcome={row.original.outcome} />
+        ),
       },
       {
         id: "outcome",
         accessorKey: "outcome",
-        header: "Outcome",
-        cell: ({ getValue }) => outcomeBadge(getValue<PIIRecentEvent["outcome"]>()),
+        header: "Request",
+        cell: ({ row }) => (
+          <PiiRequestActionBadge
+            outcome={row.original.outcome}
+            entityTotal={row.original.entity_total}
+            wirePlaceholders={wirePlaceholders}
+          />
+        ),
       },
       {
         id: "latency",
@@ -184,7 +171,7 @@ export function RecentDetectionsTable({
         cell: ({ getValue }) => <span className="text-base-content/70">{getValue<number>().toFixed(1)} ms</span>,
       },
     ],
-    [keys, byoBanActions],
+    [keys, byoBanActions, wirePlaceholders],
   );
 
   return (

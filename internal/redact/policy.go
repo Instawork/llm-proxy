@@ -22,7 +22,6 @@ var defaultPolicy = map[string]Policy{
 	// SEAL — identity verification
 	"US_SSN":            PolicySeal,
 	"US_ITIN":           PolicySeal,
-	"US_DRIVER_LICENSE": PolicySeal,
 	"US_PASSPORT":       PolicySeal,
 	"DATE_OF_BIRTH":     PolicySeal,
 	"US_STREET_ADDRESS": PolicySeal,
@@ -33,11 +32,12 @@ var defaultPolicy = map[string]Policy{
 	"IBAN_CODE":      PolicyRedact,
 
 	// MASK — quasi-identifiers
-	"PERSON":        PolicyMask,
-	"EMAIL_ADDRESS": PolicyMask,
-	"PHONE_NUMBER":  PolicyMask,
-	"LOCATION":      PolicyMask,
-	"IP_ADDRESS":    PolicyMask,
+	"US_DRIVER_LICENSE": PolicyMask,
+	"PERSON":            PolicyMask,
+	"EMAIL_ADDRESS":     PolicyMask,
+	"PHONE_NUMBER":      PolicyMask,
+	"LOCATION":          PolicyMask,
+	"IP_ADDRESS":        PolicyMask,
 }
 
 // PolicyFor returns the scrub policy for an entity type. Unknown types

@@ -338,32 +338,343 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		return map[string]interface{}{"available": false}
 	}
 
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	recent := make([]recentEntry, len(r.recent))
-	for i, e := range r.recent {
-		recent[len(r.recent)-1-i] = e
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
+
+	var recent []recentEntry
+	if localActive {
+		recent = make([]recentEntry, len(r.recent))
+		for i, e := range r.recent {
+			recent[len(r.recent)-1-i] = e
+		}
 	}
 
-	dayKey := r.dayKey
+	var spendToday, inputSpendToday, outputSpendToday float64
+	var requestsToday, inputTokensToday, outputTokensToday int64
+	var localByKey []keySpend
+	var localByProvider []providerSpend
+	if localActive {
+		spendToday = r.spendTodayUSD
+		inputSpendToday = r.inputSpendTodayUSD
+		outputSpendToday = r.outputSpendTodayUSD
+		requestsToday = r.requestsToday
+		inputTokensToday = r.inputTokensToday
+		outputTokensToday = r.outputTokensToday
+		localByKey = spendList(r.byKey)
+		localByProvider = providerList(r.byProvider)
+	}
+
 	snap := map[string]interface{}{
 		"available":              true,
-		"day":                    dayKey,
-		"started_at":             r.startedAt.Unix(),
-		"spend_today_usd":        r.spendTodayUSD,
-		"input_spend_today_usd":  r.inputSpendTodayUSD,
-		"output_spend_today_usd": r.outputSpendTodayUSD,
-		"requests_today":         r.requestsToday,
-		"input_tokens_today":     r.inputTokensToday,
-		"output_tokens_today":    r.outputTokensToday,
-		"by_key":                 spendList(r.byKey),
-		"by_provider":            providerList(r.byProvider),
+		"day":                    today,
+		"started_at":             startedAt.Unix(),
+		"spend_today_usd":        spendToday,
+		"input_spend_today_usd":  inputSpendToday,
+		"output_spend_today_usd": outputSpendToday,
+		"requests_today":         requestsToday,
+		"input_tokens_today":     inputTokensToday,
+		"output_tokens_today":    outputTokensToday,
+		"by_key":                 localByKey,
+		"by_provider":            localByProvider,
 		"recent":                 recent,
 	}
 	r.mu.RUnlock()
 
-	r.MergeToday(adminrollup.MetricCost, dayKey, snap, costRollupCaps)
+	r.MergeToday(adminrollup.MetricCost, today, snap, costRollupCaps)
+	if localActive {
+		mergeLocalCostTotalsIntoSnap(snap, spendToday, inputSpendToday, outputSpendToday, requestsToday, inputTokensToday, outputTokensToday)
+		mergeLocalByKeyIntoSnap(snap, localByKey)
+		mergeLocalByProviderIntoSnap(snap, localByProvider)
+	}
 	r.MergeHistory(adminrollup.MetricCost, snap)
+	r.MergeHourly(adminrollup.MetricCost, snap)
 	return snap
+}
+
+func mergeLocalCostTotalsIntoSnap(
+	snap map[string]interface{},
+	spend, inputSpend, outputSpend float64,
+	requests, inputTokens, outputTokens int64,
+) {
+	if snap == nil {
+		return
+	}
+	mergeSnapFloatMax(snap, "spend_today_usd", spend)
+	mergeSnapFloatMax(snap, "input_spend_today_usd", inputSpend)
+	mergeSnapFloatMax(snap, "output_spend_today_usd", outputSpend)
+	mergeSnapInt64MaxCost(snap, "requests_today", requests)
+	mergeSnapInt64MaxCost(snap, "input_tokens_today", inputTokens)
+	mergeSnapInt64MaxCost(snap, "output_tokens_today", outputTokens)
+}
+
+func mergeSnapFloatMax(snap map[string]interface{}, key string, local float64) {
+	if local <= 0 {
+		return
+	}
+	if snapFloat(snap[key]) < local {
+		snap[key] = local
+	}
+}
+
+func mergeSnapInt64MaxCost(snap map[string]interface{}, key string, local int64) {
+	if local <= 0 {
+		return
+	}
+	if snapInt64Cost(snap[key]) < local {
+		snap[key] = local
+	}
+}
+
+func snapInt64Cost(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+// mergeLocalByKeyIntoSnap re-applies in-process per-key totals after MergeToday.
+// MergeToday overlays Redis fleet rollups and can replace by_key with an empty
+// or top-N-capped view before this instance's debounced delta lands in Redis.
+func mergeLocalByKeyIntoSnap(snap map[string]interface{}, local []keySpend) {
+	if snap == nil || len(local) == 0 {
+		return
+	}
+	rows := byKeyRowsFromSnap(snap["by_key"])
+	byID := make(map[string]map[string]interface{}, len(rows)+len(local))
+	for _, row := range rows {
+		id, _ := row["key_id"].(string)
+		if id != "" {
+			byID[id] = row
+		}
+	}
+	for _, loc := range local {
+		id := loc.KeyID
+		if id == "" {
+			continue
+		}
+		existing, ok := byID[id]
+		if !ok {
+			byID[id] = keySpendToRow(loc)
+			continue
+		}
+		byID[id] = mergeKeySpendRowMax(existing, loc)
+	}
+	out := make([]map[string]interface{}, 0, len(byID))
+	for _, row := range byID {
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a := snapFloat(out[i]["spend_usd"])
+		b := snapFloat(out[j]["spend_usd"])
+		if a != b {
+			return a > b
+		}
+		ai, _ := out[i]["key_id"].(string)
+		bi, _ := out[j]["key_id"].(string)
+		return ai < bi
+	})
+	typed := make([]keySpend, len(out))
+	for i, row := range out {
+		typed[i] = keySpend{
+			KeyID:          asString(row["key_id"]),
+			SpendUSD:       snapFloat(row["spend_usd"]),
+			InputSpendUSD:  snapFloat(row["input_spend_usd"]),
+			OutputSpendUSD: snapFloat(row["output_spend_usd"]),
+			Requests:       int64(snapFloat(row["requests"])),
+			InputTokens:    int64(snapFloat(row["input_tokens"])),
+			OutputTokens:   int64(snapFloat(row["output_tokens"])),
+		}
+	}
+	snap["by_key"] = typed
+}
+
+func mergeKeySpendRowMax(existing map[string]interface{}, loc keySpend) map[string]interface{} {
+	id := loc.KeyID
+	if id == "" {
+		if s, ok := existing["key_id"].(string); ok {
+			id = s
+		}
+	}
+	return map[string]interface{}{
+		"key_id":           id,
+		"spend_usd":        maxFloat(snapFloat(existing["spend_usd"]), loc.SpendUSD),
+		"input_spend_usd":  maxFloat(snapFloat(existing["input_spend_usd"]), loc.InputSpendUSD),
+		"output_spend_usd": maxFloat(snapFloat(existing["output_spend_usd"]), loc.OutputSpendUSD),
+		"requests":         maxInt64(int64(snapFloat(existing["requests"])), loc.Requests),
+		"input_tokens":     maxInt64(int64(snapFloat(existing["input_tokens"])), loc.InputTokens),
+		"output_tokens":    maxInt64(int64(snapFloat(existing["output_tokens"])), loc.OutputTokens),
+	}
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// mergeLocalByProviderIntoSnap re-applies in-process per-provider totals after MergeToday.
+func mergeLocalByProviderIntoSnap(snap map[string]interface{}, local []providerSpend) {
+	if snap == nil || len(local) == 0 {
+		return
+	}
+	rows := byProviderRowsFromSnap(snap["by_provider"])
+	byName := make(map[string]map[string]interface{}, len(rows)+len(local))
+	for _, row := range rows {
+		name, _ := row["name"].(string)
+		if name != "" {
+			byName[name] = row
+		}
+	}
+	for _, loc := range local {
+		if loc.Name == "" {
+			continue
+		}
+		existing, ok := byName[loc.Name]
+		if !ok {
+			byName[loc.Name] = providerSpendToRow(loc)
+			continue
+		}
+		byName[loc.Name] = mergeProviderSpendRowMax(existing, loc)
+	}
+	out := make([]map[string]interface{}, 0, len(byName))
+	for _, row := range byName {
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a := snapFloat(out[i]["spend_usd"])
+		b := snapFloat(out[j]["spend_usd"])
+		if a != b {
+			return a > b
+		}
+		ai, _ := out[i]["name"].(string)
+		bi, _ := out[j]["name"].(string)
+		return ai < bi
+	})
+	typed := make([]providerSpend, len(out))
+	for i, row := range out {
+		typed[i] = providerSpend{
+			Name:           asString(row["name"]),
+			SpendUSD:       snapFloat(row["spend_usd"]),
+			InputSpendUSD:  snapFloat(row["input_spend_usd"]),
+			OutputSpendUSD: snapFloat(row["output_spend_usd"]),
+			Requests:       int64(snapFloat(row["requests"])),
+			InputTokens:    int64(snapFloat(row["input_tokens"])),
+			OutputTokens:   int64(snapFloat(row["output_tokens"])),
+		}
+	}
+	snap["by_provider"] = typed
+}
+
+func asString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func byProviderRowsFromSnap(raw interface{}) []map[string]interface{} {
+	switch rows := raw.(type) {
+	case []map[string]interface{}:
+		return rows
+	case []providerSpend:
+		out := make([]map[string]interface{}, len(rows))
+		for i, row := range rows {
+			out[i] = providerSpendToRow(row)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mergeProviderSpendRowMax(existing map[string]interface{}, loc providerSpend) map[string]interface{} {
+	name := loc.Name
+	if name == "" {
+		if s, ok := existing["name"].(string); ok {
+			name = s
+		}
+	}
+	return map[string]interface{}{
+		"name":             name,
+		"spend_usd":        maxFloat(snapFloat(existing["spend_usd"]), loc.SpendUSD),
+		"input_spend_usd":  maxFloat(snapFloat(existing["input_spend_usd"]), loc.InputSpendUSD),
+		"output_spend_usd": maxFloat(snapFloat(existing["output_spend_usd"]), loc.OutputSpendUSD),
+		"requests":         maxInt64(int64(snapFloat(existing["requests"])), loc.Requests),
+		"input_tokens":     maxInt64(int64(snapFloat(existing["input_tokens"])), loc.InputTokens),
+		"output_tokens":    maxInt64(int64(snapFloat(existing["output_tokens"])), loc.OutputTokens),
+	}
+}
+
+func providerSpendToRow(ps providerSpend) map[string]interface{} {
+	return map[string]interface{}{
+		"name":             ps.Name,
+		"spend_usd":        ps.SpendUSD,
+		"input_spend_usd":  ps.InputSpendUSD,
+		"output_spend_usd": ps.OutputSpendUSD,
+		"requests":         ps.Requests,
+		"input_tokens":     ps.InputTokens,
+		"output_tokens":    ps.OutputTokens,
+	}
+}
+
+func byKeyRowsFromSnap(raw interface{}) []map[string]interface{} {
+	switch rows := raw.(type) {
+	case []map[string]interface{}:
+		return rows
+	case []keySpend:
+		out := make([]map[string]interface{}, len(rows))
+		for i, row := range rows {
+			out[i] = keySpendToRow(row)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func keySpendToRow(ks keySpend) map[string]interface{} {
+	return map[string]interface{}{
+		"key_id":           ks.KeyID,
+		"spend_usd":        ks.SpendUSD,
+		"input_spend_usd":  ks.InputSpendUSD,
+		"output_spend_usd": ks.OutputSpendUSD,
+		"requests":         ks.Requests,
+		"input_tokens":     ks.InputTokens,
+		"output_tokens":    ks.OutputTokens,
+	}
+}
+
+func snapFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
 }
 
 // KeySpendUSD returns recorded spend for a masked iw: key in the current UTC day.

@@ -3,11 +3,12 @@ import type { ColumnDef } from "@tanstack/react-table";
 
 import ByoBanButton from "./ban-by-key-button";
 import DataTable from "../ui/data-table";
+import { MaskedCredentialId } from "../ui/masked-credential-id";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { useBYOKeys } from "../../hooks/queries";
 import { useByoBanActions } from "../../hooks/use-byo-ban-actions";
 import { canManageByoBans } from "../../lib/rbac";
-import { formatUsd } from "../../lib/format";
+import { formatUsd, MASKED_CREDENTIAL_HASH_TITLE } from "../../lib/format";
 import type { BYOKeyRecord } from "../../types";
 
 function sourceLabel(source: string): string {
@@ -38,10 +39,13 @@ export default function ByoKeysPanel() {
       {
         id: "masked_id",
         accessorKey: "masked_id",
-        header: "Masked key",
-        cell: ({ getValue }) => (
-          <span className="font-mono text-xs">{getValue<string>()}</span>
+        header: () => (
+          <span className="inline-flex items-center gap-1" title={MASKED_CREDENTIAL_HASH_TITLE}>
+            Hashed ID
+            <span className="badge badge-ghost badge-xs font-normal normal-case">FNV-1a</span>
+          </span>
         ),
+        cell: ({ getValue }) => <MaskedCredentialId value={getValue<string>()} />,
       },
       {
         id: "status",
@@ -120,12 +124,15 @@ export default function ByoKeysPanel() {
   }
 
   return (
-    <DataTable
-      data={rows}
-      columns={columns}
-      searchPlaceholder="Filter BYO keys…"
-      emptyMessage="No bring-your-own keys observed yet"
-      getRowId={(row) => `${row.provider}:${row.hash}`}
-    />
+    <div className="space-y-2">
+      <p className="text-xs text-base-content/55">{MASKED_CREDENTIAL_HASH_TITLE}</p>
+      <DataTable
+        data={rows}
+        columns={columns}
+        searchPlaceholder="Filter BYO keys…"
+        emptyMessage="No bring-your-own keys observed yet"
+        getRowId={(row) => `${row.provider}:${row.hash}`}
+      />
+    </div>
   );
 }

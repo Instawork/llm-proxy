@@ -65,14 +65,6 @@ recognizers:
     supported_entity: US_ITIN
     type: predefined
 
-  - name: UsLicenseRecognizer
-    # Presidio's predefined class is named UsLicenseRecognizer (not
-    # UsDriversLicenseRecognizer); the supported_entity it emits is
-    # US_DRIVER_LICENSE.  Names matter for the loader.
-    supported_language: en
-    supported_entity: US_DRIVER_LICENSE
-    type: predefined
-
   - name: UsPassportRecognizer
     supported_language: en
     supported_entity: US_PASSPORT
@@ -95,6 +87,14 @@ recognizers:
     type: predefined
 
   # --- MASK-tier: quasi-identifiers ------------------------------------
+  - name: UsLicenseRecognizer
+    # Presidio's predefined class is named UsLicenseRecognizer (not
+    # UsDriversLicenseRecognizer); the supported_entity it emits is
+    # US_DRIVER_LICENSE.  Names matter for the loader.
+    supported_language: en
+    supported_entity: US_DRIVER_LICENSE
+    type: predefined
+
   - name: EmailRecognizer
     supported_language: en
     supported_entity: EMAIL_ADDRESS

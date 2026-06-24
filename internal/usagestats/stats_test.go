@@ -3,6 +3,10 @@ package usagestats
 import (
 	"testing"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/alicebob/miniredis/v2"
 )
 
 func TestRecorderAggregatesByScope(t *testing.T) {
@@ -121,6 +125,58 @@ func TestTopScopesTieBreaksByName(t *testing.T) {
 	top := topScopes(m, 0)
 	if top[0].Name != "model:a" || top[1].Name != "model:b" {
 		t.Fatalf("equal tokens should tie-break by name asc: %+v", top)
+	}
+}
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	r := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	r.dayKey = yesterday
+	r.global = scopeUsage{Requests: 99, Tokens: 9999}
+	r.byModel["model:old"] = &scopeUsage{Requests: 99, Tokens: 9999}
+
+	snap := r.Snapshot()
+	if got, _ := snap["day"].(string); got != today {
+		t.Fatalf("day = %q want %q", got, today)
+	}
+	if got := snap["requests_today"].(int64); got != 0 {
+		t.Fatalf("requests_today = %d want 0 for stale bucket", got)
+	}
+	if got := snap["tokens_today"].(int64); got != 0 {
+		t.Fatalf("tokens_today = %d want 0 for stale bucket", got)
+	}
+	counters := snap["counters"].(map[string]scopeUsage)
+	if g := counters["global"]; g.Requests != 0 || g.Tokens != 0 {
+		t.Fatalf("global counter = %+v want zeroed", g)
+	}
+}
+
+func TestRecorderSnapshotPreservesLocalBeforeRedisFlush(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	defer mr.Close()
+	store, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis:   &config.RedisConfig{Address: mr.Addr(), DB: 6, DBSet: true},
+	})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	r := NewRecorder()
+	r.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUsage))
+	r.RecordRequest("openai", "gpt-4o-mini", "iw:abcdefgh999", "user-1", 100, 50)
+
+	snap := r.Snapshot()
+	if got := snap["requests_today"].(int64); got != 1 {
+		t.Fatalf("requests_today = %d want 1", got)
+	}
+	if got := snap["tokens_today"].(int64); got != 150 {
+		t.Fatalf("tokens_today = %d want 150", got)
 	}
 }
 

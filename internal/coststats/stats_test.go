@@ -104,7 +104,25 @@ func TestRecorderAggregatesByKeyAndProvider(t *testing.T) {
 		t.Fatalf("requests_today = %d, want 3", got)
 	}
 
-	byKey := snap["by_key"].([]keySpend)
+	byKeyRaw := snap["by_key"]
+	var byKey []keySpend
+	switch rows := byKeyRaw.(type) {
+	case []keySpend:
+		byKey = rows
+	case []map[string]interface{}:
+		byKey = make([]keySpend, len(rows))
+		for i, row := range rows {
+			byKey[i] = keySpend{
+				KeyID:          row["key_id"].(string),
+				SpendUSD:       snapFloat(row["spend_usd"]),
+				InputSpendUSD:  snapFloat(row["input_spend_usd"]),
+				OutputSpendUSD: snapFloat(row["output_spend_usd"]),
+				Requests:       int64(snapFloat(row["requests"])),
+			}
+		}
+	default:
+		t.Fatalf("by_key type = %T", byKeyRaw)
+	}
 	if len(byKey) != 2 {
 		t.Fatalf("by_key len = %d, want 2", len(byKey))
 	}
@@ -140,6 +158,55 @@ func TestRecorderRollsDayBucket(t *testing.T) {
 	}
 	if got := snap["requests_today"].(int64); got != 1 {
 		t.Fatalf("requests after roll = %d, want 1", got)
+	}
+}
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	r := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	r.dayKey = yesterday
+	r.spendTodayUSD = 9.99
+	r.requestsToday = 42
+
+	snap := r.Snapshot()
+	if got, _ := snap["day"].(string); got != today {
+		t.Fatalf("day = %q want %q", got, today)
+	}
+	if got := snap["spend_today_usd"].(float64); got != 0 {
+		t.Fatalf("spend_today_usd = %v want 0 for stale bucket", got)
+	}
+	if got := snap["requests_today"].(int64); got != 0 {
+		t.Fatalf("requests_today = %d want 0 for stale bucket", got)
+	}
+}
+
+func TestRecorderSnapshotPreservesLocalByKeyBeforeRedisFlush(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	defer mr.Close()
+	store, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis:   &config.RedisConfig{Address: mr.Addr(), DB: 6, DBSet: true},
+	})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	r := NewRecorder()
+	r.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCost))
+	r.RecordRequest("gemini", "iw:abcdefgh999", "", "gemini-3-flash-preview", 0.0013, 0.0009, 0.0004, 100, 50)
+
+	snap := r.Snapshot()
+	rows := byKeyRowsFromSnap(snap["by_key"])
+	if len(rows) != 1 {
+		t.Fatalf("by_key len = %d, want 1", len(rows))
+	}
+	if got := snapFloat(rows[0]["spend_usd"]); got != 0.0013 {
+		t.Fatalf("by_key spend = %v want 0.0013", got)
 	}
 }
 

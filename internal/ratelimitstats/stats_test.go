@@ -61,3 +61,15 @@ func TestRecordDecision_MemoryAggregatesAllDecisions(t *testing.T) {
 	require.Equal(t, int64(1), snap["requests_allowed"])
 	require.Equal(t, int64(1), snap["requests_blocked"])
 }
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	r := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	r.dayKey = yesterday
+	r.requestsTotal = 99
+
+	snap := r.Snapshot()
+	require.Equal(t, today, snap["day"])
+	require.Equal(t, int64(0), snap["requests_total"])
+}

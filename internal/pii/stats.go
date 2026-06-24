@@ -287,40 +287,104 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		return map[string]interface{}{"available": false}
 	}
 
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	recent := make([]recentEntry, len(r.recent))
-	for i, e := range r.recent {
-		recent[len(r.recent)-1-i] = e
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
+
+	var recent []recentEntry
+	if localActive {
+		recent = make([]recentEntry, len(r.recent))
+		for i, e := range r.recent {
+			recent[len(r.recent)-1-i] = e
+		}
 	}
 
-	_, detectionRate := r.detectionRateLocked()
+	var requestsScanned, requestsWithPII, entitiesTotal int64
+	var failOpen, failClosed, oversize int64
+	var localByEntity, localByProvider, localByKey map[string]int64
+	var detectionRate float64
+	if localActive {
+		requestsScanned = r.requestsScanned
+		requestsWithPII = r.requestsWithPII
+		entitiesTotal = r.entitiesTotal
+		failOpen = r.failOpen
+		failClosed = r.failClosed
+		oversize = r.oversize
+		localByEntity = copyIntMap(r.byEntity)
+		localByProvider = copyIntMap(r.byProvider)
+		localByKey = copyIntMap(r.byKey)
+		_, detectionRate = r.detectionRateLocked()
+	}
 
-	dayKey := r.dayKey
 	snap := map[string]interface{}{
 		"available":         true,
-		"day":               dayKey,
-		"started_at":        r.startedAt.Unix(),
-		"requests_scanned":  r.requestsScanned,
-		"requests_with_pii": r.requestsWithPII,
-		"entities_total":    r.entitiesTotal,
+		"day":               today,
+		"started_at":        startedAt.Unix(),
+		"requests_scanned":  requestsScanned,
+		"requests_with_pii": requestsWithPII,
+		"entities_total":    entitiesTotal,
 		"detection_rate":    detectionRate,
-		"fail_open":         r.failOpen,
-		"fail_closed":       r.failClosed,
-		"oversize":          r.oversize,
-		"by_entity":         topN(r.byEntity, 0),
-		"by_provider":       topN(r.byProvider, 0),
-		"top_keys":          topN(r.byKey, 10),
+		"fail_open":         failOpen,
+		"fail_closed":       failClosed,
+		"oversize":          oversize,
+		"by_entity":         topN(localByEntity, 0),
+		"by_provider":       topN(localByProvider, 0),
+		"top_keys":          topN(localByKey, 10),
 		"recent":            recent,
 	}
 	r.mu.RUnlock()
 
-	r.MergeToday(adminrollup.MetricPII, dayKey, snap, piiRollupCaps)
+	r.MergeToday(adminrollup.MetricPII, today, snap, piiRollupCaps)
+	if localActive {
+		mergeLocalPIIIntoSnap(snap, requestsScanned, requestsWithPII, entitiesTotal, failOpen, failClosed, oversize, localByEntity, localByProvider, localByKey)
+	}
 	r.MergeHistory(adminrollup.MetricPII, snap)
+	r.MergeHourly(adminrollup.MetricPII, snap)
 	r.MergeRecentEvents(adminrollup.MetricPII, "recent", MaxRecentEvents, snap, parseRecentEventPayloads)
 	if _, ok := snap["recent_backend"]; !ok {
 		snap["recent_backend"] = "memory"
 	}
 	return snap
+}
+
+func mergeLocalPIIIntoSnap(
+	snap map[string]interface{},
+	requestsScanned, requestsWithPII, entitiesTotal int64,
+	failOpen, failClosed, oversize int64,
+	localByEntity, localByProvider, localByKey map[string]int64,
+) {
+	adminrollup.MergeSnapInt64Max(snap, "requests_scanned", requestsScanned)
+	adminrollup.MergeSnapInt64Max(snap, "requests_with_pii", requestsWithPII)
+	adminrollup.MergeSnapInt64Max(snap, "entities_total", entitiesTotal)
+	adminrollup.MergeSnapInt64Max(snap, "fail_open", failOpen)
+	adminrollup.MergeSnapInt64Max(snap, "fail_closed", failClosed)
+	adminrollup.MergeSnapInt64Max(snap, "oversize", oversize)
+	mergePIINameCounts(snap, "by_entity", localByEntity, 0)
+	mergePIINameCounts(snap, "by_provider", localByProvider, 0)
+	mergePIINameCounts(snap, "top_keys", localByKey, 10)
+	scanned := adminrollup.SnapInt64(snap["requests_scanned"])
+	withPII := adminrollup.SnapInt64(snap["requests_with_pii"])
+	snap["detection_rate"] = adminrollup.PIIDetectionRate(
+		scanned,
+		withPII,
+		adminrollup.SnapInt64(snap["fail_open"]),
+		adminrollup.SnapInt64(snap["fail_closed"]),
+		adminrollup.SnapInt64(snap["oversize"]),
+	)
+}
+
+func mergePIINameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+	if snap == nil || len(local) == 0 {
+		return
+	}
+	merged := adminrollup.MergeInt64Maps(adminrollup.NameCountMapFromSnap(snap[field]), local)
+	if len(merged) == 0 {
+		return
+	}
+	snap[field] = topN(merged, limit)
 }
 
 func parseRecentEventPayloads(raw []json.RawMessage) any {

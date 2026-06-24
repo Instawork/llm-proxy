@@ -279,21 +279,112 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
 		return map[string]interface{}{"available": false}
 	}
+
+	today := time.Now().UTC().Format("2006-01-02")
+
 	r.mu.RLock()
-	dayKey := r.dayKey
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
+	startedAt := r.startedAt
+
+	var global scopeUsage
+	var byModel map[string]*scopeUsage
+	var byProv map[string]*scopeUsage
+	var counters map[string]scopeUsage
+	if localActive {
+		global = r.global
+		byModel = r.byModel
+		byProv = r.byProv
+		counters = r.allCountersLocked()
+	} else {
+		counters = map[string]scopeUsage{"global": {}}
+	}
+
 	snap := map[string]interface{}{
 		"available":      true,
-		"day":            dayKey,
-		"started_at":     r.startedAt.Unix(),
-		"requests_today": r.global.Requests,
-		"tokens_today":   r.global.Tokens,
-		"top_models":     topScopes(r.byModel, 10),
-		"top_providers":  topScopes(r.byProv, 10),
-		"counters":       r.allCountersLocked(),
+		"day":            today,
+		"started_at":     startedAt.Unix(),
+		"requests_today": global.Requests,
+		"tokens_today":   global.Tokens,
+		"top_models":     topScopes(byModel, 10),
+		"top_providers":  topScopes(byProv, 10),
+		"counters":       counters,
 	}
 	r.mu.RUnlock()
 
-	r.MergeToday(adminrollup.MetricUsage, dayKey, snap, usageRollupCaps)
+	r.MergeToday(adminrollup.MetricUsage, today, snap, usageRollupCaps)
+	if localActive {
+		mergeLocalUsageIntoSnap(snap, global, counters)
+	}
 	r.MergeHistory(adminrollup.MetricUsage, snap)
+	r.MergeHourly(adminrollup.MetricUsage, snap)
 	return snap
+}
+
+func mergeLocalUsageIntoSnap(snap map[string]interface{}, global scopeUsage, counters map[string]scopeUsage) {
+	if snap == nil {
+		return
+	}
+	mergeSnapInt64Max(snap, "requests_today", global.Requests)
+	mergeSnapInt64Max(snap, "tokens_today", global.Tokens)
+
+	existing, _ := snap["counters"].(map[string]scopeUsage)
+	snap["counters"] = mergeScopeUsageMaps(existing, counters)
+
+	if merged, ok := snap["counters"].(map[string]scopeUsage); ok {
+		snap["top_models"] = topScopesFromCounters(merged, "model:", 10)
+		snap["top_providers"] = topScopesFromCounters(merged, "provider:", 10)
+	}
+}
+
+func mergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
+	if local <= 0 {
+		return
+	}
+	cur := snapInt64(snap[key])
+	if local > cur {
+		snap[key] = local
+	}
+}
+
+func snapInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
+	out := make(map[string]scopeUsage, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		existing := out[k]
+		if v.Requests > existing.Requests {
+			existing.Requests = v.Requests
+		}
+		if v.Tokens > existing.Tokens {
+			existing.Tokens = v.Tokens
+		}
+		out[k] = existing
+	}
+	return out
+}
+
+func topScopesFromCounters(counters map[string]scopeUsage, prefix string, n int) []nameCount {
+	ptrMap := make(map[string]*scopeUsage)
+	for k, v := range counters {
+		if len(prefix) > 0 && len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			vv := v
+			ptrMap[k] = &vv
+		}
+	}
+	return topScopes(ptrMap, n)
 }

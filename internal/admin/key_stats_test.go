@@ -15,6 +15,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/pii"
+	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -115,7 +116,55 @@ func TestHandleKeyStats_ViewerOwnKey(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, masked, body.MaskedKeyID)
 	require.InDelta(t, 0.02, body.CostToday.SpendUSD, 1e-9)
+	require.Equal(t, int64(1), body.CostToday.Requests)
 	require.Len(t, body.RecentCost, 1)
+}
+
+func TestHandleKeyStats_RecentCostBackfillsRequests(t *testing.T) {
+	h, store := testAdminHandler(t)
+	created, err := store.CreateKey(context.Background(), "openai", "upstream", "stats key", 0, nil, nil, apikeys.KeyRateLimits{})
+	require.NoError(t, err)
+
+	rollup := testAdminRollupStore(t)
+	masked := middleware.MaskKeyID(created.PK)
+	costRec := coststats.NewRecorder()
+	costRec.BindRollup(rollup, adminrollup.NewPersister(rollup, adminrollup.MetricCost))
+	costRec.RecordRequest("openai", masked, "user", "gpt-4o", 0.01, 0.005, 0.005, 10, 5)
+	h.deps.AdminRollupStore = rollup
+	h.deps.CostSummary = costRec.Snapshot
+	h.deps.PIISummary = pii.NewRecorder().Snapshot
+
+	rec, body := keyStatsRequest(t, h, "admin@example.com", created.PK)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.InDelta(t, 0.01, body.CostToday.SpendUSD, 1e-9)
+	require.Equal(t, int64(1), body.CostToday.Requests)
+}
+
+func TestHandleKeyStats_RateUsageFromLimiter(t *testing.T) {
+	h, store := testAdminHandler(t)
+	created, err := store.CreateKey(context.Background(), "openai", "upstream", "stats key", 0, nil, nil, apikeys.KeyRateLimits{})
+	require.NoError(t, err)
+
+	limiter := ratelimit.NewMemoryLimiter(h.deps.YAMLConfig)
+	h.deps.RateLimiter = limiter
+	_, err = limiter.CheckAndReserve(
+		context.Background(),
+		"res-1",
+		ratelimit.ScopeKeys{APIKey: created.PK},
+		120,
+		time.Now(),
+	)
+	require.NoError(t, err)
+
+	rec, body := keyStatsRequest(t, h, "admin@example.com", created.PK)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotEmpty(t, body.RateUsage)
+	require.Equal(t, "memory", body.RateBackend)
+	var totalRequests int64
+	for _, row := range body.RateUsage {
+		totalRequests += row.Requests
+	}
+	require.GreaterOrEqual(t, totalRequests, int64(1))
 }
 
 func TestHandleKeyStats_NotFoundForMissingKey(t *testing.T) {
@@ -222,6 +271,10 @@ func TestMergeKeyStatsRollupBoundIndependent(t *testing.T) {
 	gotCost := mergeKeyCostStats(memoryKeyCost{}, redisCost, true, true)
 	require.Equal(t, "redis", gotCost.Source)
 	require.InDelta(t, 1.0, gotCost.SpendUSD, 1e-9)
+
+	gotCostMax := mergeKeyCostStats(memoryKeyCost{SpendUSD: 2.0}, redisCost, true, true)
+	require.Equal(t, "redislive", gotCostMax.Source)
+	require.InDelta(t, 2.0, gotCostMax.SpendUSD, 1e-9)
 
 	gotCostBound := mergeKeyCostStats(memoryKeyCost{}, redisCost, true, false)
 	require.Equal(t, "memory", gotCostBound.Source)

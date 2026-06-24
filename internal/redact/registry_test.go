@@ -15,6 +15,9 @@ func TestPolicyFor_KnownTiers(t *testing.T) {
 	if PolicyFor("PERSON") != PolicyMask {
 		t.Fatal("PERSON should be MASK")
 	}
+	if PolicyFor("US_DRIVER_LICENSE") != PolicyMask {
+		t.Fatal("US_DRIVER_LICENSE should be MASK")
+	}
 	if PolicyFor("UNKNOWN_THING") != PolicyRedact {
 		t.Fatal("unknown entity should default to REDACT")
 	}

@@ -1,8 +1,16 @@
 import { Link } from "react-router-dom";
 
 import { keyDetailPath, resolveKeyLinkTarget } from "../../lib/key-routes";
-import { maskKeyId } from "../../lib/format";
+import { maskKeyId, parseMaskedCredentialId } from "../../lib/format";
+import { MaskedCredentialId } from "./masked-credential-id";
 import type { APIKey } from "../../types";
+
+function renderCredentialId(value: string, className: string) {
+  if (parseMaskedCredentialId(value)) {
+    return <MaskedCredentialId value={value} className={className} />;
+  }
+  return <span className={`font-mono text-xs ${className}`.trim()}>{value}</span>;
+}
 
 type KeyLinkProps = {
   keys?: APIKey[];
@@ -33,12 +41,17 @@ export default function KeyLink({
   const primary = label ?? record?.description ?? masked ?? target ?? "—";
   const secondary = secondaryLabel ?? masked;
 
+  const primaryIsMaskedId = Boolean(masked && primary === masked);
+  const primaryNode = primaryIsMaskedId ? renderCredentialId(primary, "") : <span>{primary}</span>;
+
   if (!target) {
     return (
       <span className={className}>
-        <span>{primary}</span>
+        {primaryNode}
         {showMasked && secondary && primary !== secondary ? (
-          <span className="mt-0.5 block font-mono text-xs text-base-content/50">{secondary}</span>
+          <span className="mt-0.5 block text-base-content/50">
+            {renderCredentialId(secondary, "")}
+          </span>
         ) : null}
       </span>
     );
@@ -46,9 +59,13 @@ export default function KeyLink({
 
   return (
     <Link to={keyDetailPath(target)} className={`link link-hover link-primary no-underline ${className}`.trim()}>
-      <span className="font-medium">{primary}</span>
+      {primaryIsMaskedId ? (
+        renderCredentialId(primary, "")
+      ) : (
+        <span className="font-medium">{primary}</span>
+      )}
       {showMasked && secondary ? (
-        <span className="mt-0.5 block font-mono text-xs opacity-70">{secondary}</span>
+        <span className="mt-0.5 block opacity-70">{renderCredentialId(secondary, "")}</span>
       ) : null}
     </Link>
   );

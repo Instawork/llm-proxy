@@ -14,9 +14,12 @@ import { useKeys, useUsage } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
   type RangeKey,
   RANGE_OPTIONS,
   aggScopeMap,
+  hourlySeries,
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
@@ -73,15 +76,17 @@ export default function UsagePage() {
   const hasRedis = Boolean(stats?.daily_history_available);
   const counters = stats?.counters;
   const global = counters?.["global"];
+  const memoryRequests = Math.max(stats?.requests_today ?? 0, global?.requests ?? 0);
+  const memoryTokens = Math.max(stats?.tokens_today ?? 0, global?.tokens ?? 0);
 
   const totalTokensPick = pickToday(
-    stats?.available ? (stats?.tokens_today ?? global?.tokens) : undefined,
+    stats?.available ? memoryTokens : undefined,
     history,
     "tokens_today",
     hasRedis,
   );
   const totalReqPick = pickToday(
-    stats?.available ? (stats?.requests_today ?? global?.requests) : undefined,
+    stats?.available ? memoryRequests : undefined,
     history,
     "requests_today",
     hasRedis,
@@ -92,6 +97,11 @@ export default function UsagePage() {
   const tokenHistory = useHistory(stats?.available ? totalTokens : undefined);
   const dailyTokens = useMemo(() => scalarSeries(history, "tokens_today", range), [history, range]);
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailyTokens.available);
+  const hourlyTokens = useMemo(
+    () => hourlySeries(stats?.hourly_history, "tokens_today"),
+    [stats?.hourly_history],
+  );
+  const useHourlyChart = Boolean(stats?.hourly_history_available && range === "today" && hourlyTokens.available);
 
   const memByModel = useMemo(() => rowsForKind(counters, "model"), [counters]);
   const useRedisBreakdown = hasRedis || range !== "today";
@@ -155,7 +165,7 @@ export default function UsagePage() {
         <LiveStat
           title="Requests"
           value={compact(totalRequests)}
-          hint={stats?.day ?? "today"}
+          hint={stats?.day === new Date().toISOString().slice(0, 10) ? "UTC today" : `UTC · ${stats?.day ?? "today"}`}
           source={totalReqPick.source}
         />
         <LiveStat title="Tokens" value={compact(totalTokens)} hint="UTC day" source={totalTokensPick.source} />
@@ -172,8 +182,16 @@ export default function UsagePage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="Token volume"
-            subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-            source={trendChartSource(useDailyChart)}
+            subtitle={
+              useDailyChart
+                ? DAILY_HISTORY_SUBTITLE
+                : useHourlyChart
+                  ? HOURLY_HISTORY_SUBTITLE
+                  : range === "today" && hasRedis
+                    ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                    : LIVE_TREND_CHART_SUBTITLE
+            }
+            source={trendChartSource(useDailyChart || useHourlyChart)}
           >
             {useDailyChart ? (
               <BarChart
@@ -181,6 +199,13 @@ export default function UsagePage() {
                 values={dailyTokens.values}
                 label="Daily tokens"
                 colors={dailyTokens.labels.map(() => chartPalette.primary())}
+              />
+            ) : useHourlyChart ? (
+              <BarChart
+                labels={hourlyTokens.labels}
+                values={hourlyTokens.values}
+                label="Hourly tokens"
+                colors={hourlyTokens.labels.map(() => chartPalette.primary())}
               />
             ) : (
               <TrendChart points={tokenHistory} label="Tokens" color={chartPalette.primary()} />

@@ -139,12 +139,13 @@ func RunCircuitArchiver(
 	if store == nil || persister == nil || cbStore == nil {
 		return
 	}
-	lastDay := time.Now().UTC().Format("2006-01-02")
-	// peak holds the running per-provider peak for the current UTC day. On a
-	// mid-day process restart it starts fresh (today's already-persisted peak
-	// is not reloaded), so today's value can briefly dip until the gauge
-	// climbs again — acceptable for best-effort observability.
+	now0 := time.Now().UTC()
+	lastDay := now0.Format("2006-01-02")
+	lastHour := now0.Hour()
+	// peak holds the running per-provider peak for the current UTC day.
+	// hourlyPeak holds the peak for the current UTC hour (reset each hour).
 	peak := newCircuitDayPeak()
+	hourlyPeak := newCircuitDayPeak()
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -155,24 +156,33 @@ func RunCircuitArchiver(
 		case <-ticker.C:
 			now := time.Now().UTC()
 			day := now.Format("2006-01-02")
+			hour := now.Hour()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if !store.TryElectArchiver(ctx, MetricCircuit, day, archiverHolderID()) {
 				cancel()
 				continue
 			}
 			snap := SnapshotCircuit(ctx, cbStore, providers, rollupThreshold, rollupWindowSec)
-			cancel()
 
 			if day != lastDay {
-				// Archive the completed day's accumulated peak, then reset for
-				// the new day so per-day values never carry over.
 				persister.ArchiveImmediately(lastDay, peak.payload())
 				peak = newCircuitDayPeak()
+				hourlyPeak = newCircuitDayPeak()
 				lastDay = day
+				lastHour = hour
+			} else if hour != lastHour {
+				hourlyPeak = newCircuitDayPeak()
+				lastHour = hour
 			}
 
 			peak.merge(snap)
+			hourlyPeak.merge(snap)
 			persister.QueueToday(day, peak.payload())
+
+			if err := store.SaveHourlySnapshot(ctx, MetricCircuit, day, hour, hourlyPeak.payload()); err != nil {
+				store.logger.Warn("admin rollup: save circuit hourly snapshot failed", "day", day, "hour", hour, "error", err)
+			}
+			cancel()
 		}
 	}
 }

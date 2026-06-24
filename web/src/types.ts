@@ -87,6 +87,9 @@ export interface APIKey {
   updated_at: string;
   expires_at?: string | null;
   provisioned?: boolean;
+  proxy_base?: string;
+  base_url?: string;
+  first_request_at?: string | null;
 }
 
 export interface ProvisioningProviderStatus {
@@ -163,9 +166,16 @@ export interface DailyHistoryRow {
   | Record<string, unknown>;
 }
 
+export interface HourlyHistoryRow {
+  hour: number;
+  [key: string]: number | undefined;
+}
+
 export interface StatsWithDailyHistory {
   daily_history?: DailyHistoryRow[];
   daily_history_available?: boolean;
+  hourly_history?: HourlyHistoryRow[];
+  hourly_history_available?: boolean;
 }
 
 export interface CircuitBreakerProviderHealth {
@@ -201,6 +211,8 @@ export interface HealthResponse {
     total_failures?: number;
     daily_history?: DailyHistoryRow[];
     daily_history_available?: boolean;
+    hourly_history?: HourlyHistoryRow[];
+    hourly_history_available?: boolean;
   };
 }
 
@@ -348,11 +360,45 @@ export interface PIIRecentEvent {
   time: number;
   provider: string;
   key_id?: string;
-  entity_counts: Record<string, number>;
+  entity_counts?: Record<string, number> | null;
   entity_total: number;
   body_bytes: number;
   duration_ms: number;
   outcome: "ok" | "fail_open" | "fail_closed" | "oversize";
+  pipeline?: string;
+}
+
+export interface IDGateRecentEvent {
+  time: number;
+  provider: string;
+  key_id?: string;
+  outcome: "clear" | "blocked" | "fail_open" | "fail_closed";
+  entity_type?: string;
+  score?: number;
+  image_count?: number;
+  image_index?: number;
+  stage?: string;
+  duration_ms: number;
+  pipeline: string;
+}
+
+export interface IDGateStats {
+  available: boolean;
+  day?: string;
+  started_at?: number;
+  requests_with_images?: number;
+  requests_blocked?: number;
+  requests_cleared?: number;
+  fail_open?: number;
+  fail_closed?: number;
+  images_scanned?: number;
+  by_entity?: PIINameCount[];
+  by_provider?: PIINameCount[];
+  top_keys?: PIINameCount[];
+  recent?: IDGateRecentEvent[];
+  recent_backend?: string;
+  daily_history?: DailyHistoryRow[];
+  daily_history_available?: boolean;
 }
 
 export interface PIIStats extends StatsWithDailyHistory {
@@ -376,7 +422,11 @@ export interface PIIResponse {
   enabled: boolean;
   allow_per_key_override: boolean;
   fail_mode: string;
+  wire_placeholders: boolean;
+  id_gate_enabled: boolean;
+  id_gate_fail_mode: string;
   stats: PIIStats;
+  id_gate_stats: IDGateStats;
 }
 
 export interface ModelStatusNameCount {
@@ -474,6 +524,18 @@ export interface KeyCostStats {
   output_tokens: number;
 }
 
+export interface KeyCostMonthStats {
+  month: string;
+  spend_usd: number;
+  source: KeyStatsSource;
+}
+
+export interface KeyRateUsageStats {
+  window: "day" | "minute";
+  requests: number;
+  tokens: number;
+}
+
 export interface KeyPIIStats {
   source: KeyStatsSource;
   detections: number;
@@ -512,7 +574,10 @@ export interface KeyStatsResponse {
   rollup_available: boolean;
   rollup_backend?: string;
   cost_today: KeyCostStats;
+  cost_month: KeyCostMonthStats;
   pii_today: KeyPIIStats;
+  rate_usage?: KeyRateUsageStats[];
+  rate_backend?: string;
   cost_history: KeyDayPoint[];
   pii_history: KeyDayPoint[];
   recent_cost: KeyCostRecentEvent[];

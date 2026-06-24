@@ -16,10 +16,13 @@ import { useModelStatus } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
   type NameCount,
   type RangeKey,
   RANGE_OPTIONS,
   aggNameCount,
+  hourlySeries,
   pickToday,
   scalarSeries,
   sumScalarField,
@@ -185,6 +188,11 @@ export default function ModelStatusPage() {
     [history, range],
   );
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailyRetired.available);
+  const hourlyRetired = useMemo(
+    () => hourlySeries(stats?.hourly_history, "retired_total"),
+    [stats?.hourly_history],
+  );
+  const useHourlyChart = Boolean(stats?.hourly_history_available && range === "today" && hourlyRetired.available);
 
   const breakdownSource: DataSource = hasRedis || range !== "today" ? "redis" : "memory";
   const byRetired = hasRedis || range !== "today"
@@ -266,8 +274,16 @@ export default function ModelStatusPage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="Retired calls over time"
-            subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-            source={trendChartSource(useDailyChart)}
+            subtitle={
+              useDailyChart
+                ? DAILY_HISTORY_SUBTITLE
+                : useHourlyChart
+                  ? HOURLY_HISTORY_SUBTITLE
+                  : range === "today" && hasRedis
+                    ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                    : LIVE_TREND_CHART_SUBTITLE
+            }
+            source={trendChartSource(useDailyChart || useHourlyChart)}
           >
             {useDailyChart ? (
               <BarChart
@@ -275,6 +291,13 @@ export default function ModelStatusPage() {
                 values={dailyRetired.values}
                 label="Retired calls"
                 colors={dailyRetired.labels.map(() => chartPalette.error())}
+              />
+            ) : useHourlyChart ? (
+              <BarChart
+                labels={hourlyRetired.labels}
+                values={hourlyRetired.values}
+                label="Hourly retired calls"
+                colors={hourlyRetired.labels.map(() => chartPalette.error())}
               />
             ) : (
               <TrendChart points={retiredHistory} label="Retired calls" color={chartPalette.error()} />

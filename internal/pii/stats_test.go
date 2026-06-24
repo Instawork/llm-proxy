@@ -71,3 +71,25 @@ func TestNilRecorderSafe(t *testing.T) {
 		t.Fatal("nil recorder should report available=false")
 	}
 }
+
+func TestRecorderSnapshotStaleDayWithoutTraffic(t *testing.T) {
+	r := NewRecorder()
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	r.dayKey = yesterday
+	r.requestsScanned = 99
+	r.requestsWithPII = 42
+	r.recent = []recentEntry{{Time: time.Now().Unix(), Provider: "openai", Outcome: OutcomeOK}}
+
+	snap := r.Snapshot()
+	if got, _ := snap["day"].(string); got != today {
+		t.Fatalf("day = %q want %q", got, today)
+	}
+	if got := snap["requests_scanned"].(int64); got != 0 {
+		t.Fatalf("requests_scanned = %d want 0 for stale bucket", got)
+	}
+	recent := snap["recent"].([]recentEntry)
+	if len(recent) != 0 {
+		t.Fatalf("recent len = %d want 0 for stale bucket", len(recent))
+	}
+}

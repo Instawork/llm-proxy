@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "statslint": "cd .. && go run ./cmd/statslint --root . --web web",
+    "seclint": "cd .. && go run ./cmd/seclint --root . --web web"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.9",
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.8",
+    "@types/node": "^26.0.0",
     "@types/react": "^18.0.17",
     "@types/react-dom": "^18.0.6",
     "@types/react-syntax-highlighter": "^15.5.13",

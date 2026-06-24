@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { BarChart, ChartCard, DonutChart, TrendChart } from "../components/charts";
 import { chartPalette } from "../components/charts/chart-setup";
 import { TopKeysTable, RecentDetectionsTable } from "../components/tables/misc-tables";
+import { IdGateRecentTable, PiiPipelineCallout } from "../components/pii/pii-pipeline-callout";
 import {
   type DataSource,
   LiveStat,
@@ -16,10 +17,13 @@ import { useByoBanActions } from "../hooks/use-byo-ban-actions";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   DAILY_HISTORY_SUBTITLE,
+  HOURLY_HISTORY_FALLBACK_SUBTITLE,
+  HOURLY_HISTORY_SUBTITLE,
   type NameCount,
   type RangeKey,
   RANGE_OPTIONS,
   aggNameCount,
+  hourlySeries,
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
@@ -69,6 +73,24 @@ export default function PIIPage() {
     "entities_total",
     hasRedis,
   );
+  const failOpenPick = pickToday(
+    stats?.available ? stats?.fail_open : undefined,
+    history,
+    "fail_open",
+    hasRedis,
+  );
+  const failClosedPick = pickToday(
+    stats?.available ? stats?.fail_closed : undefined,
+    history,
+    "fail_closed",
+    hasRedis,
+  );
+  const oversizePick = pickToday(
+    stats?.available ? stats?.oversize : undefined,
+    history,
+    "oversize",
+    hasRedis,
+  );
   const detected = detectedPick.value;
 
   const detectionHistory = useHistory(stats?.available ? detected : undefined);
@@ -77,6 +99,11 @@ export default function PIIPage() {
     [history, range],
   );
   const useDailyChart = Boolean(hasRedis && range !== "today" && dailyDetections.available);
+  const hourlyDetections = useMemo(
+    () => hourlySeries(stats?.hourly_history, "requests_with_pii"),
+    [stats?.hourly_history],
+  );
+  const useHourlyChart = Boolean(stats?.hourly_history_available && range === "today" && hourlyDetections.available);
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -85,10 +112,14 @@ export default function PIIPage() {
   if (!data) return null;
 
   const scanned = scannedPick.value;
-  const rate = stats?.detection_rate ?? 0;
+  const cleanScanned = scanned - failOpenPick.value - failClosedPick.value - oversizePick.value;
+  const rate = cleanScanned > 0 ? detected / cleanScanned : 0;
   const recent = stats?.recent ?? [];
+  const idGateStats = data.id_gate_stats;
+  const idGateRecent = idGateStats?.recent ?? [];
+  const idGateRecentSource: DataSource = idGateStats?.recent_backend === "redis" ? "redis" : "memory";
   const recentSource: DataSource = stats?.recent_backend === "redis" ? "redis" : "memory";
-  const failures = (stats?.fail_open ?? 0) + (stats?.fail_closed ?? 0);
+  const failures = failOpenPick.value + failClosedPick.value;
 
   // Prefer fleet-wide Redis rollups whenever Redis is available — including
   // "today" — since in-process memory only reflects this one pod and undercounts
@@ -136,6 +167,14 @@ export default function PIIPage() {
         </div>
       ) : null}
 
+      <PiiPipelineCallout
+        piiEnabled={data.enabled}
+        wirePlaceholders={data.wire_placeholders}
+        piiFailMode={data.fail_mode}
+        idGateEnabled={data.id_gate_enabled}
+        idGateFailMode={data.id_gate_fail_mode}
+      />
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <LiveStat
           title="Fail mode"
@@ -158,7 +197,7 @@ export default function PIIPage() {
         <LiveStat
           title="Entities redacted"
           value={entitiesPick.value.toLocaleString()}
-          hint={`${failures} failures · ${stats?.oversize ?? 0} oversize`}
+          hint={`${failures} failures · ${oversizePick.value} oversize`}
           source={entitiesPick.source}
         />
       </div>
@@ -167,8 +206,16 @@ export default function PIIPage() {
         <div className="lg:col-span-2">
           <ChartCard
             title="PII detections over time"
-            subtitle={useDailyChart ? DAILY_HISTORY_SUBTITLE : LIVE_TREND_CHART_SUBTITLE}
-            source={trendChartSource(useDailyChart)}
+            subtitle={
+              useDailyChart
+                ? DAILY_HISTORY_SUBTITLE
+                : useHourlyChart
+                  ? HOURLY_HISTORY_SUBTITLE
+                  : range === "today" && hasRedis
+                    ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                    : LIVE_TREND_CHART_SUBTITLE
+            }
+            source={trendChartSource(useDailyChart || useHourlyChart)}
           >
             {useDailyChart ? (
               <BarChart
@@ -176,6 +223,13 @@ export default function PIIPage() {
                 values={dailyDetections.values}
                 label="Requests with PII"
                 colors={dailyDetections.labels.map(() => chartPalette.warning())}
+              />
+            ) : useHourlyChart ? (
+              <BarChart
+                labels={hourlyDetections.labels}
+                values={hourlyDetections.values}
+                label="Hourly PII detections"
+                colors={hourlyDetections.labels.map(() => chartPalette.warning())}
               />
             ) : (
               <TrendChart points={detectionHistory} label="Requests with PII" color={chartPalette.warning()} />
@@ -240,16 +294,35 @@ export default function PIIPage() {
       ) : null}
 
       <SectionPanel
-        title="Recent scans"
+        title="Recent text scans"
         subtitle={
           recentSource === "redis"
-            ? `Last ${recent.length} redaction scans fleet-wide (clean, detected, and failed)`
-            : `Last ${recent.length} redaction scans on this pod (clean, detected, and failed)`
+            ? `Last ${recent.length} Presidio body scans fleet-wide`
+            : `Last ${recent.length} Presidio body scans on this pod`
         }
         source={recentSource}
       >
-        <RecentDetectionsTable rows={recent} keys={keys.data ?? []} byoBanActions={byoBanActions} />
+        <RecentDetectionsTable
+          rows={recent}
+          keys={keys.data ?? []}
+          byoBanActions={byoBanActions}
+          wirePlaceholders={data.wire_placeholders}
+        />
       </SectionPanel>
+
+      {data.id_gate_enabled ? (
+        <SectionPanel
+          title="Recent ID gate (images)"
+          subtitle={
+            idGateRecentSource === "redis"
+              ? `Last ${idGateRecent.length} embedded-image OCR scans fleet-wide`
+              : `Last ${idGateRecent.length} embedded-image OCR scans on this pod`
+          }
+          source={idGateRecentSource}
+        >
+          <IdGateRecentTable rows={idGateRecent} keys={keys.data ?? []} byoBanActions={byoBanActions} />
+        </SectionPanel>
+      ) : null}
     </div>
   );
 }
