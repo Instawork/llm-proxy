@@ -24,9 +24,12 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 					"x-api-key, anthropic-version, x-goog-api-key, "+
 					"X-LLM-Proxy-Test-Mode, X-Amz-Date, X-Amz-Security-Token, "+
 					"X-Amz-Content-Sha256")
-			if providerManager.IsStreamingRequest(r) {
-				w.Header().Set("Access-Control-Expose-Headers", "Content-Type, Cache-Control")
-			}
+			w.Header().Set("Access-Control-Expose-Headers",
+				"Content-Type, Cache-Control, "+
+					"X-LLM-Input-Tokens, X-LLM-Output-Tokens, X-LLM-Total-Tokens, "+
+					"X-LLM-Provider, X-LLM-Model, "+
+					"X-LLM-PII-Outcome, X-LLM-PII-Detected, X-LLM-PII-Masked, "+
+					"X-LLM-PII-Sealed, X-LLM-PII-Redacted, X-LLM-PII-Restored, X-LLM-PII-Entities")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return

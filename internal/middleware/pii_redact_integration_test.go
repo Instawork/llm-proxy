@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -200,6 +201,89 @@ func TestIntegration_PIIWireMode_ScrubAndRestore_EndToEnd(t *testing.T) {
 	if strings.Contains(respBody, "<EMAIL_ADDRESS_") || strings.Contains(respBody, `\u003cEMAIL_ADDRESS_`) {
 		t.Errorf("client response should not contain MASK placeholder after restore: %q", respBody)
 	}
+}
+
+// TestIntegration_PIIWireMode_AnthropicScrubAndRestore verifies MASK-tier
+// wire restore through the production middleware stack on /anthropic/v1/messages.
+func TestIntegration_PIIWireMode_AnthropicScrubAndRestore_EndToEnd(t *testing.T) {
+	analyzerURL := requirePresidioForMiddleware(t)
+	redactor := newLiveRedactor(t, analyzerURL, []string{"EMAIL_ADDRESS"})
+
+	const email = "alice@example.com"
+	originalBody := fmt.Sprintf(
+		`{"model":"claude-haiku-4-5","max_tokens":40,"messages":[{"role":"user","content":"My email is %s. Reply with ONLY that email."}]}`,
+		email,
+	)
+
+	var upstreamBody []byte
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamBody, _ = io.ReadAll(r.Body)
+		echo := anthropicUserTextFromWireBody(upstreamBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"content":[{"type":"text","text":"%s"}]}`, echo)
+	})
+
+	pm := wireTestProviderManagerForIntegration(t)
+	stack := PIIRedactMiddleware(redactor, PIIRedactConfig{
+		GlobalEnabled:    true,
+		WirePlaceholders: true,
+	})(productionPIIWireStackForIntegration(pm, next))
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/anthropic/v1/messages",
+		bytes.NewBufferString(originalBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	stack.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stack returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	up := string(upstreamBody)
+	if strings.Contains(up, email) {
+		t.Errorf("upstream saw raw email: %q", up)
+	}
+	if !strings.Contains(up, "<EMAIL_ADDRESS_") {
+		t.Errorf("upstream missing email placeholder: %q", up)
+	}
+
+	respBody := rec.Body.String()
+	if !strings.Contains(respBody, email) {
+		t.Errorf("client response missing restored MASK email: %q", respBody)
+	}
+	if strings.Contains(respBody, "<EMAIL_ADDRESS_") || strings.Contains(respBody, `\u003cEMAIL_ADDRESS_`) {
+		t.Errorf("client response should not contain MASK placeholder after restore: %q", respBody)
+	}
+}
+
+func wireTestProviderManagerForIntegration(t *testing.T) *providers.ProviderManager {
+	t.Helper()
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	pm.RegisterProvider(providers.NewAnthropicProxy())
+	return pm
+}
+
+func productionPIIWireStackForIntegration(pm *providers.ProviderManager, handler http.Handler) http.Handler {
+	return TokenParsingMiddleware(pm)(
+		PIIResponseRestoreMiddleware(pm)(
+			StreamingMiddleware(pm)(handler),
+		),
+	)
+}
+
+func anthropicUserTextFromWireBody(body []byte) string {
+	var root struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil || len(root.Messages) == 0 {
+		return ""
+	}
+	return root.Messages[0].Content
 }
 
 // TestIntegration_PIIRedactMiddleware_FailOpenAgainstUnreachable pretends the sidecar is unreachable by pointing the redactor at a

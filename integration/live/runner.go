@@ -491,6 +491,18 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 
 	out = append(out, r.runPIIRedaction(ctx, piiCfg)...)
 	out = append(out, r.runPIIWireRestore(ctx)...)
+	if r.cfg.AnthropicKey != "" {
+		out = append(out, r.runPIIWireRestoreAnthropic(ctx)...)
+	} else {
+		out = append(out, skipResult("pii", "wire-restore-anthropic", "ANTHROPIC_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-anthropic-stream", "ANTHROPIC_API_KEY not set"))
+	}
+	if r.cfg.GeminiKey != "" {
+		out = append(out, r.runPIIWireRestoreGemini(ctx)...)
+	} else {
+		out = append(out, skipResult("pii", "wire-restore-gemini", "GEMINI_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-gemini-stream", "GEMINI_API_KEY not set"))
+	}
 	return out
 }
 
@@ -638,6 +650,134 @@ func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 	} else {
 		out = append(out, passResult("pii", "wire-seal",
 			fmt.Sprintf("SEAL SSN stayed opaque (%s)", truncate(ssnReply, 80)), elapsed(start)))
+	}
+	return out
+}
+
+func (r *Runner) runPIIWireRestoreAnthropic(ctx context.Context) []Result {
+	start := time.Now()
+	redact := true
+	key, err := r.admin.CreateKey(ctx, createKeyRequest{
+		Provider:    "anthropic",
+		ActualKey:   r.cfg.AnthropicKey,
+		Description: "live-pii-wire-anthropic",
+		RedactPII:   &redact,
+	})
+	if err != nil {
+		return []Result{
+			failResult("pii", "wire-restore-anthropic", "create key: "+err.Error()),
+			failResult("pii", "wire-restore-anthropic-stream", "create key: "+err.Error()),
+		}
+	}
+	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
+
+	email := fmt.Sprintf("pii-restore-anthropic-%d@example.com", time.Now().UnixNano())
+	pr, content, err := r.proxy.AnthropicChatRepeatEmail(ctx, key.Key, email, false)
+	if err != nil {
+		return []Result{failResult("pii", "wire-restore-anthropic", err.Error())}
+	}
+	if err := proxyOK(pr); err != nil {
+		return []Result{failResult("pii", "wire-restore-anthropic", err.Error())}
+	}
+	content = normalizeEcho(content)
+
+	var out []Result
+	if !strings.Contains(content, email) {
+		out = append(out, failResult("pii", "wire-restore-anthropic",
+			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
+	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
+		out = append(out, failResult("pii", "wire-restore-anthropic",
+			"MASK placeholder leaked to client on Anthropic non-streaming path"))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-anthropic",
+			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
+	}
+
+	start = time.Now()
+	streamEmail := fmt.Sprintf("pii-restore-anthropic-stream-%d@example.com", time.Now().UnixNano())
+	pr, streamBody, err := r.proxy.AnthropicChatRepeatEmail(ctx, key.Key, streamEmail, true)
+	if err != nil {
+		out = append(out, failResult("pii", "wire-restore-anthropic-stream", err.Error()))
+		return out
+	}
+	if err := proxyOK(pr); err != nil {
+		out = append(out, failResult("pii", "wire-restore-anthropic-stream", err.Error()))
+		return out
+	}
+	streamBody = normalizeEcho(streamBody)
+	if !strings.Contains(streamBody, streamEmail) {
+		out = append(out, failResult("pii", "wire-restore-anthropic-stream",
+			fmt.Sprintf("expected restored email %q in stream body %q", streamEmail, truncate(streamBody, 120))))
+	} else if strings.Contains(streamBody, "<EMAIL_ADDRESS") {
+		out = append(out, failResult("pii", "wire-restore-anthropic-stream",
+			"MASK placeholder leaked to client on Anthropic streaming path"))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-anthropic-stream",
+			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))
+	}
+	return out
+}
+
+func (r *Runner) runPIIWireRestoreGemini(ctx context.Context) []Result {
+	start := time.Now()
+	redact := true
+	key, err := r.admin.CreateKey(ctx, createKeyRequest{
+		Provider:    "gemini",
+		ActualKey:   r.cfg.GeminiKey,
+		Description: "live-pii-wire-gemini",
+		RedactPII:   &redact,
+	})
+	if err != nil {
+		return []Result{
+			failResult("pii", "wire-restore-gemini", "create key: "+err.Error()),
+			failResult("pii", "wire-restore-gemini-stream", "create key: "+err.Error()),
+		}
+	}
+	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
+
+	email := fmt.Sprintf("pii-restore-gemini-%d@example.com", time.Now().UnixNano())
+	pr, content, err := r.proxy.GeminiChatRepeatEmail(ctx, key.Key, email, false)
+	if err != nil {
+		return []Result{failResult("pii", "wire-restore-gemini", err.Error())}
+	}
+	if err := proxyOK(pr); err != nil {
+		return []Result{failResult("pii", "wire-restore-gemini", err.Error())}
+	}
+	content = normalizeEcho(content)
+
+	var out []Result
+	if !strings.Contains(content, email) {
+		out = append(out, failResult("pii", "wire-restore-gemini",
+			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
+	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
+		out = append(out, failResult("pii", "wire-restore-gemini",
+			"MASK placeholder leaked to client on Gemini non-streaming path"))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-gemini",
+			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
+	}
+
+	start = time.Now()
+	streamEmail := fmt.Sprintf("pii-restore-gemini-stream-%d@example.com", time.Now().UnixNano())
+	pr, streamBody, err := r.proxy.GeminiChatRepeatEmail(ctx, key.Key, streamEmail, true)
+	if err != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-stream", err.Error()))
+		return out
+	}
+	if err := proxyOK(pr); err != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-stream", err.Error()))
+		return out
+	}
+	streamBody = normalizeEcho(streamBody)
+	if !strings.Contains(streamBody, streamEmail) {
+		out = append(out, failResult("pii", "wire-restore-gemini-stream",
+			fmt.Sprintf("expected restored email %q in stream body %q", streamEmail, truncate(streamBody, 120))))
+	} else if strings.Contains(streamBody, "<EMAIL_ADDRESS") {
+		out = append(out, failResult("pii", "wire-restore-gemini-stream",
+			"MASK placeholder leaked to client on Gemini streaming path"))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-gemini-stream",
+			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))
 	}
 	return out
 }

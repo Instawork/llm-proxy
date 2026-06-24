@@ -190,8 +190,28 @@ func TestCORSMiddleware_StreamingRequest_ExposesContentTypeAndCacheControl(t *te
 	rr := httptest.NewRecorder()
 	chain.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Expose-Headers"); got != "Content-Type, Cache-Control" {
-		t.Fatalf("streaming request must set Access-Control-Expose-Headers; got %q", got)
+	exposed := rr.Header().Get("Access-Control-Expose-Headers")
+	if !strings.Contains(exposed, "Content-Type") || !strings.Contains(exposed, "Cache-Control") {
+		t.Fatalf("streaming request must expose Content-Type and Cache-Control; got %q", exposed)
+	}
+	if !strings.Contains(exposed, "X-LLM-PII-Outcome") {
+		t.Fatalf("must expose PII headers; got %q", exposed)
+	}
+}
+
+func TestCORSMiddleware_NonStreamingRequest_ExposesPIIHeaders(t *testing.T) {
+	pm := providers.NewProviderManager()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	chain := CORSMiddleware(pm)(handler)
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, "X-LLM-PII-Outcome") {
+		t.Fatalf("non-streaming request must expose PII headers; got %q", got)
 	}
 }
 

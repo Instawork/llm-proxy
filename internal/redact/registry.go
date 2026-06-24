@@ -24,6 +24,7 @@ type Registry struct {
 	counters      map[string]int
 	byPlaceholder map[string]registryEntry
 	restoreOrder  []string // MASK placeholders longest-first for ReplaceAll
+	restoredCount int
 }
 
 // NewRegistry constructs an empty per-request registry.
@@ -95,10 +96,25 @@ func (r *Registry) RestoreUserFacing(text string) string {
 		if !ok || entry.policy != PolicyMask {
 			continue
 		}
+		before := out
 		out = strings.ReplaceAll(out, ph, entry.original)
 		out = strings.ReplaceAll(out, jsonEscapedPlaceholder(ph), entry.original)
+		r.mu.Lock()
+		r.restoredCount += strings.Count(before, ph) + strings.Count(before, jsonEscapedPlaceholder(ph))
+		r.mu.Unlock()
 	}
 	return out
+}
+
+// RestoredCount returns how many MASK placeholder occurrences were replaced
+// in responses during this request.
+func (r *Registry) RestoredCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.restoredCount
 }
 
 // RestoreStreamChunk restores MASK placeholders in a streaming chunk,

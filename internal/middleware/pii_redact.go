@@ -220,11 +220,13 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.Int("body_bytes", len(body)),
 					slog.Int("max_body_bytes", maxBytes))
 				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, len(body), 0, piiOutcomeOversize)
+				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeOversize, nil))
 				if cfg.FailClosed {
+					writePIIResponseHeaders(w, ctx)
 					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
 					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			if len(body) == 0 {
@@ -266,6 +268,8 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 						slog.String("error", redactErr.Error()),
 						slog.Duration("duration", redactDuration))
 					recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailClosed)
+					ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailClosed, nil))
+					writePIIResponseHeaders(w, ctx)
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -276,7 +280,8 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.String("error", redactErr.Error()),
 					slog.Duration("duration", redactDuration))
 				recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailOpen)
-				next.ServeHTTP(w, r)
+				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailOpen, nil))
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -291,7 +296,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			// Stash the redacted/scrubbed bytes; collect entity-type tags
 			// for the audit log without leaking raw values.
 			redactedBytes := []byte(result.Text)
-			ctx := context.WithValue(r.Context(), piiRedactCtxKey{}, redactedBytes)
+			summary := newPIISummary(PIIOutcomeOK, result.EntityCounts)
+			ctx := attachPIISummary(r.Context(), summary)
+			ctx = context.WithValue(ctx, piiRedactCtxKey{}, redactedBytes)
 			if cfg.WirePlaceholders {
 				if registry != nil && registry.Len() > 0 {
 					ctx = context.WithValue(ctx, piiRegistryCtxKey{}, registry)

@@ -20,8 +20,9 @@ import (
 // the middleware tests focused on body capture, context plumbing, and
 // fail-mode branching.
 type fakeRedactor struct {
-	called int
-	mutate func(in string) (redact.Result, error)
+	called  int
+	mutate  func(in string) (redact.Result, error)
+	scrubFn func(in string, reg *redact.Registry) (redact.Result, error)
 }
 
 func (f *fakeRedactor) Redact(ctx context.Context, text string) (redact.Result, error) {
@@ -34,6 +35,9 @@ func (f *fakeRedactor) Redact(ctx context.Context, text string) (redact.Result, 
 
 func (f *fakeRedactor) Scrub(ctx context.Context, text string, reg *redact.Registry) (redact.Result, error) {
 	f.called++
+	if f.scrubFn != nil {
+		return f.scrubFn(text, reg)
+	}
 	if f.mutate != nil {
 		return f.mutate(text)
 	}

@@ -39,9 +39,10 @@ func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) fu
 
 			if isStreaming {
 				if tail := reg.FlushCarry(restoreWriter.carry); len(tail) > 0 {
-					_, _ = w.Write(tail)
+					_, _ = restoreWriter.Write(tail)
 				}
 			}
+			finalizePIIRestored(r.Context(), reg)
 		})
 	}
 }
@@ -51,6 +52,12 @@ type piiRestoreResponseWriter struct {
 	registry  *redact.Registry
 	streaming bool
 	carry     []byte
+}
+
+func (pw *piiRestoreResponseWriter) Flush() {
+	if f, ok := pw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
