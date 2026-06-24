@@ -120,6 +120,9 @@ type KeyResponse struct {
 	ExpiresAt        *time.Time        `json:"expires_at,omitempty"`
 	ActualKey        string            `json:"actual_key,omitempty"`
 	Provisioned      bool              `json:"provisioned,omitempty"`
+	ProxyBase        string            `json:"proxy_base,omitempty"`
+	BaseURL          string            `json:"base_url,omitempty"`
+	FirstRequestAt   *time.Time        `json:"first_request_at,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
@@ -228,10 +231,20 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 		CreatedAt:        k.CreatedAt,
 		UpdatedAt:        k.UpdatedAt,
 		ExpiresAt:        k.ExpiresAt,
+		FirstRequestAt:   k.FirstRequestAt,
 	}
 	if includeActualKey {
 		resp.ActualKey = maskedActualKey
 	}
 	resp.Provisioned = k.Provisioned
+	return resp
+}
+
+func keyDetailResponse(k *apikeys.APIKey, proxyBase string) KeyResponse {
+	resp := keyToResponse(k, true)
+	if proxyBase != "" {
+		resp.ProxyBase = proxyBase
+		resp.BaseURL = proxyBase + providerBasePath(k.Provider)
+	}
 	return resp
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/fake"
 	"github.com/Instawork/llm-proxy/internal/history"
+	"github.com/Instawork/llm-proxy/internal/idgatestats"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/observability"
@@ -129,6 +130,9 @@ var globalHistorySink *history.Sink
 // redaction middleware is installed; surfaced via /admin/api/pii. Stores
 // metadata only (entity types/counts, masked key IDs) — never raw PII.
 var globalPIIRecorder *pii.Recorder
+
+// Global in-process government-ID gate stats (OCR on embedded images).
+var globalIDGateRecorder *idgatestats.Recorder
 
 // Global usage stats for the admin Usage page (fed from cost tracking).
 var globalUsageStatsRecorder *usagestats.Recorder
@@ -887,6 +891,13 @@ func piiSummaryFunc() func() map[string]interface{} {
 	return globalPIIRecorder.Snapshot
 }
 
+func idGateSummaryFunc() func() map[string]interface{} {
+	if globalIDGateRecorder == nil {
+		return nil
+	}
+	return globalIDGateRecorder.Snapshot
+}
+
 // nil when cost tracking (and thus its stats recorder) was never installed.
 func costSummaryFunc() func() map[string]interface{} {
 	if globalCostStatsRecorder == nil {
@@ -945,6 +956,9 @@ func initHistory(yamlConfig *config.YAMLConfig) {
 	if globalPIIRecorder != nil && history.StreamEnabled(streams, history.StreamPII) {
 		globalPIIRecorder.BindHistory(sink, history.StreamPII)
 	}
+	if globalIDGateRecorder != nil && history.StreamEnabled(streams, history.StreamIDGate) {
+		globalIDGateRecorder.BindHistory(sink, history.StreamIDGate)
+	}
 	if globalUsageStatsRecorder != nil && history.StreamEnabled(streams, history.StreamUsage) {
 		globalUsageStatsRecorder.BindHistory(sink, history.StreamUsage)
 	}
@@ -978,6 +992,9 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	}
 	if globalPIIRecorder != nil {
 		globalPIIRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricPII))
+	}
+	if globalIDGateRecorder != nil {
+		globalIDGateRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricIDGate))
 	}
 	if globalUsageStatsRecorder != nil {
 		globalUsageStatsRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUsage))
@@ -1119,9 +1136,12 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			)
 			hctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			globalAdminRollupStore.MergeHistory(hctx, adminrollup.MetricCircuit, cbSnap)
+			globalAdminRollupStore.MergeHourlySnapshots(hctx, adminrollup.MetricCircuit, cbSnap)
 			cancel()
 			circuitBlock["daily_history"] = cbSnap["daily_history"]
 			circuitBlock["daily_history_available"] = cbSnap["daily_history_available"]
+			circuitBlock["hourly_history"] = cbSnap["hourly_history"]
+			circuitBlock["hourly_history_available"] = cbSnap["hourly_history_available"]
 		}
 	}
 
@@ -1460,6 +1480,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		if redactor == nil {
 			logger.Error("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
 		} else {
+			globalIDGateRecorder = idgatestats.NewRecorder()
 			ocrURL := idGateCfg.OCRSidecarURL
 			if envURL := os.Getenv("OCR_SIDECAR_URL"); envURL != "" {
 				ocrURL = envURL
@@ -1483,6 +1504,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				ImageConcurrency: idGateCfg.ImageConcurrency,
 				Logger:           logger,
 				Metrics:          initializeIDGateMetrics(yamlConfig),
+				Recorder:         globalIDGateRecorder,
 			}))
 			logger.Info(
 				"🪪  Government ID gate middleware installed",
@@ -1576,6 +1598,11 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				keyID := ""
 				if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
 					keyID = middleware.MaskKeyID(keyRecord.PK)
+					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
+						if err := store.MarkFirstRequest(r.Context(), keyRecord.PK, time.Now()); err != nil {
+							logger.Warn("Failed to mark first request", "error", err, "key", keyID)
+						}
+					}
 				}
 				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {
 					logger.Warn("Failed to track request cost", "error", err)
@@ -1644,6 +1671,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			RateLimiter:        globalRateLimiter,
 			HealthFunc:         healthHandler,
 			PIISummary:         piiSummaryFunc(),
+			IDGateSummary:      idGateSummaryFunc(),
 			CostSummary:        costSummaryFunc(),
 			UsageSummary:       usageSummaryFunc(),
 			RateLimitSummary:   rateLimitSummaryFunc(),
@@ -1777,6 +1805,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalPIIRecorder != nil {
 		globalPIIRecorder.FlushRollup()
+	}
+	if globalIDGateRecorder != nil {
+		globalIDGateRecorder.FlushRollup()
 	}
 	if globalUsageStatsRecorder != nil {
 		globalUsageStatsRecorder.FlushRollup()

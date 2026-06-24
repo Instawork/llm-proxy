@@ -315,6 +315,43 @@ func piiDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKe
 	}
 }
 
+func idGateDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKey map[string]float64, caps TopNCaps) map[string]interface{} {
+	byEntityOut := make([]nameVal, 0, len(byEntity))
+	for k, v := range byEntity {
+		byEntityOut = append(byEntityOut, nameVal{Name: k, Val: v})
+	}
+	sort.Slice(byEntityOut, func(i, j int) bool {
+		return byEntityOut[i].Val > byEntityOut[j].Val
+	})
+
+	byProvOut := make([]nameVal, 0, len(byProvider))
+	for k, v := range byProvider {
+		byProvOut = append(byProvOut, nameVal{Name: k, Val: v})
+	}
+	sort.Slice(byProvOut, func(i, j int) bool {
+		return byProvOut[i].Val > byProvOut[j].Val
+	})
+
+	topKeys, otherKeys := topNWithOther(byKey, caps.ByKey)
+	topKeysOut := make([]nameVal, len(topKeys))
+	copy(topKeysOut, topKeys)
+	if otherKeys > 0 {
+		topKeysOut = append(topKeysOut, nameVal{Name: "other_key", Val: otherKeys})
+	}
+
+	return map[string]interface{}{
+		"requests_with_images": int64(totals["requests_with_images"]),
+		"requests_blocked":     int64(totals["requests_blocked"]),
+		"requests_cleared":     int64(totals["requests_cleared"]),
+		"fail_open":            int64(totals["fail_open"]),
+		"fail_closed":          int64(totals["fail_closed"]),
+		"images_scanned":       int64(totals["images_scanned"]),
+		"by_entity":            kvFromNameVals(byEntityOut),
+		"by_provider":          kvFromNameVals(byProvOut),
+		"top_keys":             kvFromNameVals(topKeysOut),
+	}
+}
+
 func kvFromNameVals(vals []nameVal) []map[string]interface{} {
 	out := make([]map[string]interface{}, len(vals))
 	for i, v := range vals {
@@ -374,5 +411,23 @@ func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, by
 		"circuits_opened":  int64(totals["circuits_opened"]),
 		"by_provider":      byProvOut,
 		"by_key":           byKeyOut,
+	}
+}
+
+func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason map[string]float64) map[string]interface{} {
+	byProvOut := make(map[string]int64, len(byProvider))
+	for k, v := range byProvider {
+		byProvOut[k] = int64(v)
+	}
+	byReasonOut := make(map[string]int64, len(byReason))
+	for k, v := range byReason {
+		byReasonOut[k] = int64(v)
+	}
+	return map[string]interface{}{
+		"requests_total":   int64(totals["requests_total"]),
+		"requests_allowed": int64(totals["requests_allowed"]),
+		"requests_blocked": int64(totals["requests_blocked"]),
+		"by_provider":      byProvOut,
+		"by_reason":        byReasonOut,
 	}
 }

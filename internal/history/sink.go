@@ -25,6 +25,7 @@ const (
 const (
 	StreamCost      = "cost"
 	StreamPII       = "pii"
+	StreamIDGate    = "id_gate"
 	StreamUsage     = "usage"
 	StreamRateLimit = "ratelimit"
 )

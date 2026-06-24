@@ -295,6 +295,9 @@ func TestHandleGetKey(t *testing.T) {
 	key, err := store.CreateKey(context.Background(), "anthropic", "sk-ant", "k1", 0, nil, nil)
 	require.NoError(t, err)
 
+	at := time.Date(2026, 6, 24, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, store.MarkFirstRequest(context.Background(), key.PK, at))
+
 	rec := httptest.NewRecorder()
 	req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/keys/"+key.PK, nil)
 	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
@@ -304,6 +307,9 @@ func TestHandleGetKey(t *testing.T) {
 	body := decodeJSONBody(t, rec)
 	assert.Equal(t, key.PK, body["key"])
 	assert.Equal(t, maskedActualKey, body["actual_key"])
+	assert.Equal(t, "http://localhost:9002/anthropic", body["base_url"])
+	assert.Equal(t, "http://localhost:9002", body["proxy_base"])
+	assert.Equal(t, at.Format(time.RFC3339), body["first_request_at"])
 }
 
 func TestHandleGetKey_NotFound(t *testing.T) {

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/idgatestats"
 	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
@@ -53,6 +55,7 @@ type IDGateConfig struct {
 	ImageConcurrency int
 	Logger           *slog.Logger
 	Metrics          observability.MetricsSink
+	Recorder         *idgatestats.Recorder
 }
 
 // IDGateMiddleware OCRs embedded chat images and blocks requests when Presidio
@@ -122,6 +125,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 
 			gateStart := time.Now()
 			provider := getProviderFromPath(r.URL.Path)
+			keyID := idGateDisplayKeyID(r)
 
 			// Scan all embedded images concurrently (bounded). A government-ID
 			// hit is decisive and short-circuits the rest; errors are collected
@@ -193,6 +197,11 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						slog.Float64("score", res.score),
 						slog.Duration("duration", time.Since(gateStart)))
 					emitIDGateBlocked(cfg.Metrics, provider, res.entityType)
+					if cfg.Recorder != nil {
+						cfg.Recorder.RecordBlocked(
+							provider, keyID, res.entityType, res.score, res.index, len(images), time.Since(gateStart),
+						)
+					}
 					http.Error(w, idGateBlockMessage, http.StatusUnprocessableEntity)
 					return
 				}
@@ -212,6 +221,9 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						slog.String("error", firstErr.err.Error()),
 						slog.Duration("duration", time.Since(gateStart)))
 					emitIDGateScanFailed(cfg.Metrics, provider, firstErr.stage, true)
+					if cfg.Recorder != nil {
+						cfg.Recorder.RecordScanFailed(provider, keyID, firstErr.stage, true, len(images), time.Since(gateStart))
+					}
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -222,6 +234,9 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					slog.String("stage", firstErr.stage),
 					slog.String("error", firstErr.err.Error()))
 				emitIDGateScanFailed(cfg.Metrics, provider, firstErr.stage, false)
+				if cfg.Recorder != nil {
+					cfg.Recorder.RecordScanFailed(provider, keyID, firstErr.stage, false, len(images), time.Since(gateStart))
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -234,9 +249,21 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				slog.Int("image_concurrency", concurrency),
 				slog.Duration("duration", gateDuration))
 			emitIDGateScanned(cfg.Metrics, provider, len(images), gateDuration)
+			if cfg.Recorder != nil {
+				cfg.Recorder.RecordClear(provider, keyID, len(images), gateDuration)
+			}
 			next.ServeHTTP(w, r)
+			return
 		})
 	}
+}
+
+func idGateDisplayKeyID(r *http.Request) string {
+	keyRecord, _ := apikeys.FromContext(r.Context())
+	if keyRecord != nil && keyRecord.PK != "" {
+		return MaskKeyID(keyRecord.PK)
+	}
+	return InboundCredentialID(r.Context())
 }
 
 func govIDHit(spans []redact.Span, entityTypes []string, threshold float64) (bool, string, float64) {

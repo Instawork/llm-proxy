@@ -78,6 +78,28 @@ func TestNewStore_TableAlreadyExists(t *testing.T) {
 // CreateKey -> GetKey round-trip
 // ----------------------------------------------------------------------------
 
+func TestStore_MarkFirstRequest(t *testing.T) {
+	store, _ := newFakeStore(t)
+
+	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "fresh", 0, nil, nil)
+	require.NoError(t, err)
+
+	at := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, store.MarkFirstRequest(context.Background(), created.PK, at))
+
+	record, err := store.GetKeyRecord(context.Background(), created.PK)
+	require.NoError(t, err)
+	require.NotNil(t, record.FirstRequestAt)
+	assert.True(t, at.Equal(record.FirstRequestAt.UTC()))
+
+	later := at.Add(time.Hour)
+	require.NoError(t, store.MarkFirstRequest(context.Background(), created.PK, later))
+
+	record, err = store.GetKeyRecord(context.Background(), created.PK)
+	require.NoError(t, err)
+	assert.True(t, at.Equal(record.FirstRequestAt.UTC()), "second call must not overwrite first_request_at")
+}
+
 func TestStore_CreateAndGetKey(t *testing.T) {
 	store, _ := newFakeStore(t)
 

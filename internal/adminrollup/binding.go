@@ -130,6 +130,19 @@ func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{
 	s.MergeHistory(ctx, metric, snap)
 }
 
+// MergeHourly folds today's per-hour Redis totals into a live snapshot so the
+// "Today" trend chart uses fleet-wide Redis data instead of a browser sparkline.
+// No-op when unbound.
+func (b *RecorderBinding) MergeHourly(metric string, snap map[string]interface{}) {
+	s, _ := b.deps()
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mergeHistoryTimeout)
+	defer cancel()
+	s.MergeHourly(ctx, metric, snap)
+}
+
 // RollupBound reports whether a rollup store is attached (i.e. fleet-wide
 // reads via Redis are available rather than only the in-process view).
 func (b *RecorderBinding) RollupBound() bool {

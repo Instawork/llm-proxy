@@ -273,7 +273,7 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyToResponse(record, true))
+	writeJSON(w, http.StatusOK, keyDetailResponse(record, h.publicBaseURL(r)))
 }
 
 func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
@@ -539,11 +539,21 @@ func (h *handler) handlePII(w http.ResponseWriter, r *http.Request) {
 	enabled := false
 	allowPerKey := false
 	failMode := "open"
+	wirePlaceholders := true
+	idGateEnabled := false
+	idGateFailMode := "open"
 	if cfg != nil {
 		enabled = cfg.Features.PIIRedact.Enabled
 		allowPerKey = cfg.Features.PIIRedact.AllowPerKeyOverride
 		if cfg.Features.PIIRedact.FailMode != "" {
 			failMode = cfg.Features.PIIRedact.FailMode
+		}
+		if cfg.Features.PIIRedact.WirePlaceholders != nil {
+			wirePlaceholders = *cfg.Features.PIIRedact.WirePlaceholders
+		}
+		idGateEnabled = cfg.Features.IDGate.Enabled
+		if cfg.Features.IDGate.FailMode != "" {
+			idGateFailMode = cfg.Features.IDGate.FailMode
 		}
 	}
 
@@ -551,12 +561,20 @@ func (h *handler) handlePII(w http.ResponseWriter, r *http.Request) {
 		"enabled":                enabled,
 		"allow_per_key_override": allowPerKey,
 		"fail_mode":              failMode,
+		"wire_placeholders":      wirePlaceholders,
+		"id_gate_enabled":        idGateEnabled,
+		"id_gate_fail_mode":      idGateFailMode,
 	}
 
 	if h.deps.PIISummary != nil {
 		resp["stats"] = h.deps.PIISummary()
 	} else {
 		resp["stats"] = map[string]interface{}{"available": false}
+	}
+	if h.deps.IDGateSummary != nil {
+		resp["id_gate_stats"] = h.deps.IDGateSummary()
+	} else {
+		resp["id_gate_stats"] = map[string]interface{}{"available": false}
 	}
 
 	writeJSON(w, http.StatusOK, resp)

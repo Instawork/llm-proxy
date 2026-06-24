@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -192,6 +193,10 @@ type APIKey struct {
 	OwnerEmail string `dynamodbav:"owner_email,omitempty"`
 	// MonthlyCostLimit is the calendar-month cost cap in cents (0 = unlimited).
 	MonthlyCostLimit int64 `dynamodbav:"monthly_cost_limit,omitempty"`
+	// FirstRequestAt is set once when the proxy observes the first tracked LLM
+	// request for this key (cost/usage path). Used by the admin UI to detect
+	// keys that have never been wired up.
+	FirstRequestAt *time.Time `dynamodbav:"first_request_at,omitempty"`
 }
 
 // ErrOwnerKeyExists is returned when an owner already has a key for a provider.
@@ -211,6 +216,8 @@ type Store struct {
 	client    *dynamodb.Client
 	tableName string
 	logger    *slog.Logger
+	// firstMarked dedupes MarkFirstRequest DynamoDB writes within a process.
+	firstMarked sync.Map
 }
 
 // StoreConfig holds configuration for the API key store
@@ -700,6 +707,39 @@ func (s *Store) GetKeyRecord(ctx context.Context, key string) (*APIKey, error) {
 		return nil, fmt.Errorf("failed to unmarshal API key: %w", err)
 	}
 	return &apiKey, nil
+}
+
+// MarkFirstRequest records the first tracked LLM request time for a proxy key.
+// Idempotent: no-op when first_request_at is already set. Uses an in-process
+// dedupe map so hot keys do not hammer DynamoDB on every request.
+func (s *Store) MarkFirstRequest(ctx context.Context, key string, at time.Time) error {
+	if !HasKeyPrefix(key) {
+		return nil
+	}
+	if _, loaded := s.firstMarked.LoadOrStore(key, struct{}{}); loaded {
+		return nil
+	}
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.tableName),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: key},
+		},
+		UpdateExpression:    aws.String("SET first_request_at = :t, updated_at = :u"),
+		ConditionExpression: aws.String("attribute_not_exists(first_request_at)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":t": &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339)},
+			":u": &types.AttributeValueMemberS{Value: at.UTC().Format(time.RFC3339)},
+		},
+	})
+	if err != nil {
+		var cond *types.ConditionalCheckFailedException
+		if errors.As(err, &cond) {
+			return nil
+		}
+		s.firstMarked.Delete(key)
+		return fmt.Errorf("mark first request: %w", err)
+	}
+	return nil
 }
 
 // GetKey retrieves an API key by its iw: prefixed key

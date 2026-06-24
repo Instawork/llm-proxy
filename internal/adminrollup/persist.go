@@ -127,6 +127,12 @@ func (p *Persister) flushDeltaDay(day string) {
 	if err := p.store.ApplyDelta(ctx, p.metric, day, d); err != nil {
 		p.store.logger.Warn("admin rollup: apply delta failed", "metric", p.metric, "day", day, "error", err)
 	}
+	now := time.Now().UTC()
+	if len(d.Totals) > 0 && day == now.Format("2006-01-02") {
+		if err := p.store.ApplyHourlyTotals(ctx, p.metric, day, now.Hour(), d.Totals); err != nil {
+			p.store.logger.Warn("admin rollup: apply hourly totals failed", "metric", p.metric, "day", day, "error", err)
+		}
+	}
 }
 
 func (p *Persister) flushDay(day string) {

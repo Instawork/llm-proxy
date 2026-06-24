@@ -25,6 +25,7 @@ type Deps struct {
 	HealthFunc         http.HandlerFunc
 	CostSummary        func() map[string]interface{}
 	PIISummary         func() map[string]interface{}
+	IDGateSummary      func() map[string]interface{}
 	UsageSummary       func() map[string]interface{}
 	RateLimitSummary   func() map[string]interface{}
 	CircuitActivity    func() map[string]interface{}
