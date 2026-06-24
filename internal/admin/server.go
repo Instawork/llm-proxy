@@ -32,6 +32,8 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 
 	h := newHandler(deps, auth)
 
+	mountShareSPA(r)
+
 	// Redirect the bare "/admin" (no trailing slash) to "/admin/". The SPA is
 	// mounted on the "/admin" prefix subrouter, whose effective matcher is
 	// "/admin/…", so bare "/admin" would otherwise fall through to mux's

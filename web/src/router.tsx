@@ -20,6 +20,7 @@ import RateLimitsPage from "./pages/rate-limits";
 import SharePage from "./pages/share";
 import UsersPage from "./pages/users";
 import UsagePage from "./pages/usage";
+import { ADMIN_BASENAME } from "./lib/admin-path";
 
 function shell(page: ReactNode) {
   return (
@@ -30,9 +31,11 @@ function shell(page: ReactNode) {
 }
 
 export default function Router() {
+  const basename = window.location.pathname.startsWith(`${ADMIN_BASENAME}/`) ? ADMIN_BASENAME : undefined;
+
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename="/admin" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <BrowserRouter basename={basename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/share/:id" element={<SharePage />} />

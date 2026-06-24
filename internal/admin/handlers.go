@@ -728,7 +728,7 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]interface{}{
 		"id":         link.ID(),
-		"url":        h.publicAdminUIBaseURL(r) + "/admin/share/" + link.ID(),
+		"url":        h.publicAdminUIBaseURL(r) + "/share/" + link.ID(),
 		"provider":   link.Provider,
 		"created_at": link.CreatedAt,
 	}

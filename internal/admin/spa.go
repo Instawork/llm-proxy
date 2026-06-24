@@ -58,6 +58,16 @@ func mountSPA(adminRouter *mux.Router) {
 	}))
 }
 
+func mountShareSPA(rootRouter *mux.Router) {
+	dist := adminDistFS()
+	if dist == nil {
+		return
+	}
+	rootRouter.HandleFunc("/share/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		serveSPAIndex(w, dist)
+	}).Methods(http.MethodGet)
+}
+
 func serveSPAIndex(w http.ResponseWriter, dist fs.FS) {
 	f, err := dist.Open("index.html")
 	if err != nil {

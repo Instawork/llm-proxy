@@ -117,7 +117,7 @@ func TestHandleCreateShare(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["url"], "http://localhost:5173/admin/share/")
+	assert.Contains(t, resp["url"], "http://localhost:5173/share/")
 	assert.Equal(t, "openai", resp["provider"])
 	assert.NotEmpty(t, resp["id"])
 	assert.NotNil(t, resp["expires_at"])

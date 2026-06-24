@@ -1232,9 +1232,8 @@ export default function KeysPage() {
               <div className="modal-box max-w-lg">
                 <h3 className="text-lg font-semibold">Shareable link created</h3>
                 <p className="py-3 text-sm text-base-content/70">
-                  Send this link to whoever needs the key. They must sign in with an
-                  account on your configured allowed domain to view it. The URL
-                  contains no key material.
+                  Send this link to whoever needs the key. Anyone with the link can
+                  view it until it expires. The URL contains no key material.
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 truncate rounded-lg bg-base-200/70 px-3 py-2 font-mono text-sm">

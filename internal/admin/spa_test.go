@@ -46,6 +46,32 @@ func TestMountSPA_ServesIndexForClientRoutes(t *testing.T) {
 	assert.Equal(t, "no-cache, no-store, must-revalidate", rec.Header().Get("Cache-Control"))
 }
 
+func TestMountShareSPA_ServesIndexForPublicShareRoute(t *testing.T) {
+	root := moduleRoot(t)
+	distIndex := filepath.Join(root, "web", "dist", "index.html")
+	if _, err := os.Stat(distIndex); err != nil {
+		t.Skip("web/dist/index.html missing; run `(cd web && npm run build)` for SPA coverage")
+	}
+
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	rootRouter := mux.NewRouter()
+	mountShareSPA(rootRouter)
+
+	req := httptest.NewRequest(http.MethodGet, "/share/test-uuid", nil)
+	rec := httptest.NewRecorder()
+	rootRouter.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "<!doctype html>")
+	assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "no-cache, no-store, must-revalidate", rec.Header().Get("Cache-Control"))
+}
+
 func TestMountSPA_MissingAssetReturns404(t *testing.T) {
 	root := moduleRoot(t)
 	distIndex := filepath.Join(root, "web", "dist", "index.html")
