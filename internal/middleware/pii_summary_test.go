@@ -43,7 +43,7 @@ func TestWritePIIResponseHeaders_OK(t *testing.T) {
 }
 
 func TestWritePIIResponseHeaders_FailOpen(t *testing.T) {
-	ctx := attachPIISummary(context.Background(), &piiSummaryHolder{Outcome: PIIOutcomeFailOpen})
+	ctx := attachPIISummary(context.Background(), newPIISummary(PIIOutcomeFailOpen, nil))
 	rec := httptest.NewRecorder()
 	writePIIResponseHeaders(rec, ctx)
 
@@ -72,8 +72,6 @@ func TestProductionPIIWireStack_EmitsPIIHeaders(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	productionPIIWireStack(pm, handler).ServeHTTP(rec, req)
-	finalizePIIRestored(req.Context(), reg)
-	writePIIResponseHeaders(rec, req.Context())
 
 	if got := rec.Header().Get("X-LLM-PII-Outcome"); got != "ok" {
 		t.Fatalf("outcome = %q, want ok", got)
@@ -83,17 +81,5 @@ func TestProductionPIIWireStack_EmitsPIIHeaders(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), email) {
 		t.Fatalf("body missing restored email")
-	}
-}
-
-func TestRegistry_RestoredCount(t *testing.T) {
-	reg := redact.NewRegistry()
-	ph := reg.Placeholder("EMAIL_ADDRESS", "a@b.com")
-	out := reg.RestoreUserFacing(`reply: ` + ph)
-	if out != "reply: a@b.com" {
-		t.Fatalf("restore failed: %q", out)
-	}
-	if got := reg.RestoredCount(); got != 1 {
-		t.Fatalf("RestoredCount = %d, want 1", got)
 	}
 }

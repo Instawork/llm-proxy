@@ -99,15 +99,35 @@ func (p *ProxyClient) AnthropicChatWithPIIScrub(ctx context.Context, apiKey, use
 	return &pr, data, nil
 }
 
+const repeatEmailPrompt = "My email is %s. Reply with ONLY that email address and nothing else."
+
+func repeatEmailPromptFor(email string) string {
+	return fmt.Sprintf(repeatEmailPrompt, email)
+}
+
+type streamScrubFunc func(ctx context.Context, apiKey, userMessage string, maxTokens int64, stream bool) (*ProxyResponse, []byte, error)
+type bodyParseFunc func(body []byte) (string, error)
+
+func (p *ProxyClient) chatRepeatEmail(ctx context.Context, apiKey, email string, stream bool, scrub streamScrubFunc, parse bodyParseFunc) (*ProxyResponse, string, error) {
+	pr, body, err := scrub(ctx, apiKey, repeatEmailPromptFor(email), 40, stream)
+	if err != nil {
+		return pr, "", err
+	}
+	if stream {
+		return pr, string(body), nil
+	}
+	content, parseErr := parse(body)
+	if parseErr != nil {
+		return pr, "", parseErr
+	}
+	return pr, content, nil
+}
+
 // OpenAIChatRepeatEmail asks the model to echo a unique email address from
 // the user message. When wire-mode restore works, the client sees the raw
 // email even though the upstream model only saw a MASK placeholder.
 func (p *ProxyClient) OpenAIChatRepeatEmail(ctx context.Context, apiKey, email string) (*ProxyResponse, string, error) {
-	prompt := fmt.Sprintf(
-		"My email is %s. Reply with ONLY that email address and nothing else.",
-		email,
-	)
-	pr, body, err := p.OpenAIChatWithPIIScrub(ctx, apiKey, prompt, 40)
+	pr, body, err := p.OpenAIChatWithPIIScrub(ctx, apiKey, repeatEmailPromptFor(email), 40)
 	if err != nil {
 		return pr, "", err
 	}
@@ -120,22 +140,7 @@ func (p *ProxyClient) OpenAIChatRepeatEmail(ctx context.Context, apiKey, email s
 
 // AnthropicChatRepeatEmail is the Anthropic counterpart to OpenAIChatRepeatEmail.
 func (p *ProxyClient) AnthropicChatRepeatEmail(ctx context.Context, apiKey, email string, stream bool) (*ProxyResponse, string, error) {
-	prompt := fmt.Sprintf(
-		"My email is %s. Reply with ONLY that email address and nothing else.",
-		email,
-	)
-	pr, body, err := p.AnthropicChatWithPIIScrub(ctx, apiKey, prompt, 40, stream)
-	if err != nil {
-		return pr, "", err
-	}
-	if stream {
-		return pr, string(body), nil
-	}
-	content, parseErr := anthropicAssistantContent(body)
-	if parseErr != nil {
-		return pr, "", parseErr
-	}
-	return pr, content, nil
+	return p.chatRepeatEmail(ctx, apiKey, email, stream, p.AnthropicChatWithPIIScrub, anthropicAssistantContent)
 }
 
 // OpenAIChatRepeatSSN asks the model to echo an SSN from the user message.
@@ -212,20 +217,7 @@ func (p *ProxyClient) GeminiChatWithPIIScrub(ctx context.Context, apiKey, userMe
 
 // GeminiChatRepeatEmail is the Gemini counterpart to OpenAIChatRepeatEmail.
 func (p *ProxyClient) GeminiChatRepeatEmail(ctx context.Context, apiKey, email string, stream bool) (*ProxyResponse, string, error) {
-	prompt := fmt.Sprintf(
-		"My email is %s. Reply with ONLY that email address and nothing else.",
-		email,
-	)
-	pr, body, err := p.GeminiChatWithPIIScrub(ctx, apiKey, prompt, stream)
-	if err != nil {
-		return pr, "", err
-	}
-	if stream {
-		return pr, string(body), nil
-	}
-	content, parseErr := geminiAssistantContent(body)
-	if parseErr != nil {
-		return pr, "", parseErr
-	}
-	return pr, content, nil
+	return p.chatRepeatEmail(ctx, apiKey, email, stream, func(ctx context.Context, apiKey, userMessage string, _ int64, stream bool) (*ProxyResponse, []byte, error) {
+		return p.GeminiChatWithPIIScrub(ctx, apiKey, userMessage, stream)
+	}, geminiAssistantContent)
 }

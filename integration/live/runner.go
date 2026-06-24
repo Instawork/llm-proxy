@@ -655,128 +655,92 @@ func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 }
 
 func (r *Runner) runPIIWireRestoreAnthropic(ctx context.Context) []Result {
-	start := time.Now()
-	redact := true
-	key, err := r.admin.CreateKey(ctx, createKeyRequest{
-		Provider:    "anthropic",
-		ActualKey:   r.cfg.AnthropicKey,
-		Description: "live-pii-wire-anthropic",
-		RedactPII:   &redact,
+	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
+		provider:    "anthropic",
+		actualKey:   r.cfg.AnthropicKey,
+		keyDesc:     "live-pii-wire-anthropic",
+		suitePrefix: "wire-restore-anthropic",
+		repeatEmail: r.proxy.AnthropicChatRepeatEmail,
 	})
-	if err != nil {
-		return []Result{
-			failResult("pii", "wire-restore-anthropic", "create key: "+err.Error()),
-			failResult("pii", "wire-restore-anthropic-stream", "create key: "+err.Error()),
-		}
-	}
-	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
-
-	email := fmt.Sprintf("pii-restore-anthropic-%d@example.com", time.Now().UnixNano())
-	pr, content, err := r.proxy.AnthropicChatRepeatEmail(ctx, key.Key, email, false)
-	if err != nil {
-		return []Result{failResult("pii", "wire-restore-anthropic", err.Error())}
-	}
-	if err := proxyOK(pr); err != nil {
-		return []Result{failResult("pii", "wire-restore-anthropic", err.Error())}
-	}
-	content = normalizeEcho(content)
-
-	var out []Result
-	if !strings.Contains(content, email) {
-		out = append(out, failResult("pii", "wire-restore-anthropic",
-			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
-	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
-		out = append(out, failResult("pii", "wire-restore-anthropic",
-			"MASK placeholder leaked to client on Anthropic non-streaming path"))
-	} else {
-		out = append(out, passResult("pii", "wire-restore-anthropic",
-			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
-	}
-
-	start = time.Now()
-	streamEmail := fmt.Sprintf("pii-restore-anthropic-stream-%d@example.com", time.Now().UnixNano())
-	pr, streamBody, err := r.proxy.AnthropicChatRepeatEmail(ctx, key.Key, streamEmail, true)
-	if err != nil {
-		out = append(out, failResult("pii", "wire-restore-anthropic-stream", err.Error()))
-		return out
-	}
-	if err := proxyOK(pr); err != nil {
-		out = append(out, failResult("pii", "wire-restore-anthropic-stream", err.Error()))
-		return out
-	}
-	streamBody = normalizeEcho(streamBody)
-	if !strings.Contains(streamBody, streamEmail) {
-		out = append(out, failResult("pii", "wire-restore-anthropic-stream",
-			fmt.Sprintf("expected restored email %q in stream body %q", streamEmail, truncate(streamBody, 120))))
-	} else if strings.Contains(streamBody, "<EMAIL_ADDRESS") {
-		out = append(out, failResult("pii", "wire-restore-anthropic-stream",
-			"MASK placeholder leaked to client on Anthropic streaming path"))
-	} else {
-		out = append(out, passResult("pii", "wire-restore-anthropic-stream",
-			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))
-	}
-	return out
 }
 
 func (r *Runner) runPIIWireRestoreGemini(ctx context.Context) []Result {
+	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
+		provider:    "gemini",
+		actualKey:   r.cfg.GeminiKey,
+		keyDesc:     "live-pii-wire-gemini",
+		suitePrefix: "wire-restore-gemini",
+		repeatEmail: r.proxy.GeminiChatRepeatEmail,
+	})
+}
+
+type piiWireRestoreProviderSpec struct {
+	provider    string
+	actualKey   string
+	keyDesc     string
+	suitePrefix string
+	repeatEmail func(context.Context, string, string, bool) (*ProxyResponse, string, error)
+}
+
+func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRestoreProviderSpec) []Result {
 	start := time.Now()
 	redact := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
-		Provider:    "gemini",
-		ActualKey:   r.cfg.GeminiKey,
-		Description: "live-pii-wire-gemini",
+		Provider:    spec.provider,
+		ActualKey:   spec.actualKey,
+		Description: spec.keyDesc,
 		RedactPII:   &redact,
 	})
 	if err != nil {
 		return []Result{
-			failResult("pii", "wire-restore-gemini", "create key: "+err.Error()),
-			failResult("pii", "wire-restore-gemini-stream", "create key: "+err.Error()),
+			failResult("pii", spec.suitePrefix, "create key: "+err.Error()),
+			failResult("pii", spec.suitePrefix+"-stream", "create key: "+err.Error()),
 		}
 	}
 	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
 
-	email := fmt.Sprintf("pii-restore-gemini-%d@example.com", time.Now().UnixNano())
-	pr, content, err := r.proxy.GeminiChatRepeatEmail(ctx, key.Key, email, false)
+	email := fmt.Sprintf("%s-%d@example.com", spec.suitePrefix, time.Now().UnixNano())
+	pr, content, err := spec.repeatEmail(ctx, key.Key, email, false)
 	if err != nil {
-		return []Result{failResult("pii", "wire-restore-gemini", err.Error())}
+		return []Result{failResult("pii", spec.suitePrefix, err.Error())}
 	}
 	if err := proxyOK(pr); err != nil {
-		return []Result{failResult("pii", "wire-restore-gemini", err.Error())}
+		return []Result{failResult("pii", spec.suitePrefix, err.Error())}
 	}
 	content = normalizeEcho(content)
 
 	var out []Result
 	if !strings.Contains(content, email) {
-		out = append(out, failResult("pii", "wire-restore-gemini",
+		out = append(out, failResult("pii", spec.suitePrefix,
 			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
 	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
-		out = append(out, failResult("pii", "wire-restore-gemini",
-			"MASK placeholder leaked to client on Gemini non-streaming path"))
+		out = append(out, failResult("pii", spec.suitePrefix,
+			fmt.Sprintf("MASK placeholder leaked to client on %s non-streaming path", spec.provider)))
 	} else {
-		out = append(out, passResult("pii", "wire-restore-gemini",
+		out = append(out, passResult("pii", spec.suitePrefix,
 			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
 	}
 
 	start = time.Now()
-	streamEmail := fmt.Sprintf("pii-restore-gemini-stream-%d@example.com", time.Now().UnixNano())
-	pr, streamBody, err := r.proxy.GeminiChatRepeatEmail(ctx, key.Key, streamEmail, true)
+	streamEmail := fmt.Sprintf("%s-stream-%d@example.com", spec.suitePrefix, time.Now().UnixNano())
+	pr, streamBody, err := spec.repeatEmail(ctx, key.Key, streamEmail, true)
 	if err != nil {
-		out = append(out, failResult("pii", "wire-restore-gemini-stream", err.Error()))
+		out = append(out, failResult("pii", spec.suitePrefix+"-stream", err.Error()))
 		return out
 	}
 	if err := proxyOK(pr); err != nil {
-		out = append(out, failResult("pii", "wire-restore-gemini-stream", err.Error()))
+		out = append(out, failResult("pii", spec.suitePrefix+"-stream", err.Error()))
 		return out
 	}
 	streamBody = normalizeEcho(streamBody)
 	if !strings.Contains(streamBody, streamEmail) {
-		out = append(out, failResult("pii", "wire-restore-gemini-stream",
+		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("expected restored email %q in stream body %q", streamEmail, truncate(streamBody, 120))))
 	} else if strings.Contains(streamBody, "<EMAIL_ADDRESS") {
-		out = append(out, failResult("pii", "wire-restore-gemini-stream",
-			"MASK placeholder leaked to client on Gemini streaming path"))
+		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
+			fmt.Sprintf("MASK placeholder leaked to client on %s streaming path", spec.provider)))
 	} else {
-		out = append(out, passResult("pii", "wire-restore-gemini-stream",
+		out = append(out, passResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))
 	}
 	return out

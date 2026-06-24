@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,8 +116,4 @@ func TestPIIResponseRestoreMiddleware_SealStaysOpaque(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), ph) {
 		t.Fatalf("SEAL placeholder leaked restore: %q", rec.Body.String())
 	}
-}
-
-func withPIIRegistry(ctx context.Context, reg *redact.Registry) context.Context {
-	return context.WithValue(ctx, piiRegistryCtxKey{}, reg)
 }

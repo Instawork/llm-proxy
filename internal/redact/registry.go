@@ -89,18 +89,20 @@ func (r *Registry) RestoreUserFacing(text string) string {
 		return len(order[i]) > len(order[j])
 	})
 	out := text
+	var restoredDelta int
 	for _, ph := range order {
-		r.mu.Lock()
 		entry, ok := r.byPlaceholder[ph]
-		r.mu.Unlock()
 		if !ok || entry.policy != PolicyMask {
 			continue
 		}
 		before := out
 		out = strings.ReplaceAll(out, ph, entry.original)
 		out = strings.ReplaceAll(out, jsonEscapedPlaceholder(ph), entry.original)
+		restoredDelta += strings.Count(before, ph) + strings.Count(before, jsonEscapedPlaceholder(ph))
+	}
+	if restoredDelta > 0 {
 		r.mu.Lock()
-		r.restoredCount += strings.Count(before, ph) + strings.Count(before, jsonEscapedPlaceholder(ph))
+		r.restoredCount += restoredDelta
 		r.mu.Unlock()
 	}
 	return out

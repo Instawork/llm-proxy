@@ -66,6 +66,18 @@ func TestRegistry_SealDoesNotRestore(t *testing.T) {
 	}
 }
 
+func TestRegistry_RestoredCount(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("EMAIL_ADDRESS", "a@b.com")
+	out := reg.RestoreUserFacing("reply: " + ph)
+	if out != "reply: a@b.com" {
+		t.Fatalf("restore failed: %q", out)
+	}
+	if got := reg.RestoredCount(); got != 1 {
+		t.Fatalf("RestoredCount = %d, want 1", got)
+	}
+}
+
 func TestRegistry_RedactMarker(t *testing.T) {
 	reg := NewRegistry()
 	m := reg.Placeholder("CREDIT_CARD", "4111-1111-1111-1111")
