@@ -382,7 +382,7 @@ export interface IDGateRecentEvent {
   pipeline: string;
 }
 
-export interface IDGateStats {
+export interface IDGateStats extends StatsWithDailyHistory {
   available: boolean;
   day?: string;
   started_at?: number;
@@ -397,8 +397,6 @@ export interface IDGateStats {
   top_keys?: PIINameCount[];
   recent?: IDGateRecentEvent[];
   recent_backend?: string;
-  daily_history?: DailyHistoryRow[];
-  daily_history_available?: boolean;
 }
 
 export interface PIIStats extends StatsWithDailyHistory {

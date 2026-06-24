@@ -6,6 +6,8 @@
 enabled: true
 
 features:
+  byo_keys:
+    enabled: true
   cost_tracking:
     enabled: true
     # Enable async processing for better performance in development

@@ -373,6 +373,22 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 	}
 }
 
+func TestRealEnvConfigs_DevAllowsBYOKeys(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	if _, err := os.Stat(configsDir); err != nil {
+		t.Skipf("configs dir not found (%s) — skipping", configsDir)
+	}
+
+	basePath := filepath.Join(configsDir, "base.yml")
+	devPath := filepath.Join(configsDir, "dev.yml")
+	cfg, err := LoadAndMergeConfigs([]string{basePath, devPath})
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Features.BYOKeys.Enabled,
+		"dev llm-proxy must allow BYO provider keys")
+}
+
 func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)

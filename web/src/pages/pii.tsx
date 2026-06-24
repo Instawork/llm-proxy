@@ -92,6 +92,15 @@ export default function PIIPage() {
     hasRedis,
   );
   const detected = detectedPick.value;
+  const idGateStats = data?.id_gate_stats;
+  const idGateHistory = idGateStats?.daily_history;
+  const idGateHasRedis = Boolean(idGateStats?.daily_history_available);
+  const idGateBlockedPick = pickToday(
+    idGateStats?.available ? idGateStats.requests_blocked : undefined,
+    idGateHistory,
+    "requests_blocked",
+    idGateHasRedis,
+  );
 
   const detectionHistory = useHistory(stats?.available ? detected : undefined);
   const dailyDetections = useMemo(
@@ -104,6 +113,19 @@ export default function PIIPage() {
     [stats?.hourly_history],
   );
   const useHourlyChart = Boolean(stats?.hourly_history_available && range === "today" && hourlyDetections.available);
+  const idGateBlockHistory = useHistory(idGateStats?.available ? idGateBlockedPick.value : undefined);
+  const idGateDailyBlocked = useMemo(
+    () => scalarSeries(idGateHistory, "requests_blocked", range),
+    [idGateHistory, range],
+  );
+  const useIDGateDailyChart = Boolean(idGateHasRedis && range !== "today" && idGateDailyBlocked.available);
+  const idGateHourlyBlocked = useMemo(
+    () => hourlySeries(idGateStats?.hourly_history, "requests_blocked"),
+    [idGateStats?.hourly_history],
+  );
+  const useIDGateHourlyChart = Boolean(
+    idGateStats?.hourly_history_available && range === "today" && idGateHourlyBlocked.available,
+  );
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -115,7 +137,6 @@ export default function PIIPage() {
   const cleanScanned = scanned - failOpenPick.value - failClosedPick.value - oversizePick.value;
   const rate = cleanScanned > 0 ? detected / cleanScanned : 0;
   const recent = stats?.recent ?? [];
-  const idGateStats = data.id_gate_stats;
   const idGateRecent = idGateStats?.recent ?? [];
   const idGateRecentSource: DataSource = idGateStats?.recent_backend === "redis" ? "redis" : "memory";
   const recentSource: DataSource = stats?.recent_backend === "redis" ? "redis" : "memory";
@@ -135,6 +156,15 @@ export default function PIIPage() {
     ? aggNameCount(history, range, "top_keys")
     : toNameCount(stats?.top_keys ?? []);
   const entitiesRangeTotal = byEntity.reduce((sum, e) => sum + e.count, 0);
+  const idGateUseRedisBreakdown = idGateHasRedis || range !== "today";
+  const idGateBreakdownSource: DataSource = idGateUseRedisBreakdown ? "redis" : "memory";
+  const idGateByEntity = idGateUseRedisBreakdown
+    ? aggNameCount(idGateHistory, range, "by_entity")
+    : toNameCount(idGateStats?.by_entity ?? []);
+  const idGateByProvider = idGateUseRedisBreakdown
+    ? aggNameCount(idGateHistory, range, "by_provider")
+    : toNameCount(idGateStats?.by_provider ?? []);
+  const idGateEntitiesRangeTotal = idGateByEntity.reduce((sum, e) => sum + e.count, 0);
 
   return (
     <div className="space-y-6">
@@ -175,7 +205,7 @@ export default function PIIPage() {
         idGateFailMode={data.id_gate_fail_mode}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <LiveStat
           title="Fail mode"
           value={<span className="capitalize">{data.fail_mode}</span>}
@@ -199,6 +229,12 @@ export default function PIIPage() {
           value={entitiesPick.value.toLocaleString()}
           hint={`${failures} failures · ${oversizePick.value} oversize`}
           source={entitiesPick.source}
+        />
+        <LiveStat
+          title="ID gate 422s"
+          value={idGateBlockedPick.value.toLocaleString()}
+          hint="image ID blocks today UTC"
+          source={idGateBlockedPick.source}
         />
       </div>
 
@@ -279,6 +315,72 @@ export default function PIIPage() {
         </ChartCard>
       </div>
 
+      {data.id_gate_enabled ? (
+        <>
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <ChartCard
+                title="ID gate 422s over time"
+                subtitle={
+                  useIDGateDailyChart
+                    ? DAILY_HISTORY_SUBTITLE
+                    : useIDGateHourlyChart
+                      ? HOURLY_HISTORY_SUBTITLE
+                      : range === "today" && idGateHasRedis
+                        ? HOURLY_HISTORY_FALLBACK_SUBTITLE
+                        : LIVE_TREND_CHART_SUBTITLE
+                }
+                source={trendChartSource(useIDGateDailyChart || useIDGateHourlyChart)}
+              >
+                {useIDGateDailyChart ? (
+                  <BarChart
+                    labels={idGateDailyBlocked.labels}
+                    values={idGateDailyBlocked.values}
+                    label="ID gate 422s"
+                    colors={idGateDailyBlocked.labels.map(() => chartPalette.error())}
+                  />
+                ) : useIDGateHourlyChart ? (
+                  <BarChart
+                    labels={idGateHourlyBlocked.labels}
+                    values={idGateHourlyBlocked.values}
+                    label="Hourly ID gate 422s"
+                    colors={idGateHourlyBlocked.labels.map(() => chartPalette.error())}
+                  />
+                ) : (
+                  <TrendChart points={idGateBlockHistory} label="ID gate 422s" color={chartPalette.error()} />
+                )}
+              </ChartCard>
+            </div>
+            <ChartCard
+              title="ID gate document types"
+              subtitle={`Share of blocked image IDs · ${rangeLabel(range)}`}
+              source={idGateBreakdownSource}
+            >
+              <DonutChart
+                labels={idGateByEntity.map((e) => e.name.replaceAll("_", " "))}
+                values={idGateByEntity.map((e) => e.count)}
+                colors={idGateByEntity.map((_, i) => ENTITY_COLORS[i % ENTITY_COLORS.length]())}
+                centerValue={idGateEntitiesRangeTotal.toLocaleString()}
+                centerLabel="blocks"
+              />
+            </ChartCard>
+          </div>
+
+          <ChartCard
+            title="ID gate by provider"
+            subtitle={`Blocked image-ID requests per provider · ${rangeLabel(range)}`}
+            source={idGateBreakdownSource}
+          >
+            <BarChart
+              labels={idGateByProvider.map((p) => p.name)}
+              values={idGateByProvider.map((p) => p.count)}
+              label="ID gate 422s"
+              colors={idGateByProvider.map(() => chartPalette.error())}
+            />
+          </ChartCard>
+        </>
+      ) : null}
+
       {topKeys.length > 0 ? (
         <SectionPanel
           title="Top keys"
@@ -294,11 +396,11 @@ export default function PIIPage() {
       ) : null}
 
       <SectionPanel
-        title="Recent text scans"
+        title="Recent text redaction scans"
         subtitle={
           recentSource === "redis"
-            ? `Last ${recent.length} Presidio body scans fleet-wide`
-            : `Last ${recent.length} Presidio body scans on this pod`
+            ? `Last ${recent.length} Presidio body scans fleet-wide. ID-gate image blocks appear below.`
+            : `Last ${recent.length} Presidio body scans on this pod. ID-gate image blocks appear below.`
         }
         source={recentSource}
       >
