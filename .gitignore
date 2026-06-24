@@ -1,7 +1,12 @@
 # Compiled binaries
 bin/
-# Locally-built proxy binary (`go build -o llm-proxy ./cmd/llm-proxy`)
+# Locally-built binaries (`go build -o <name> ./cmd/<name>`)
 /llm-proxy
+/llm-proxy-keys
+/llm-proxy-users
+/config-validator
+/seclint
+/statslint
 
 # Python bytecode caches (e.g. integration snippet runs)
 __pycache__/
