@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeAnalyzer spins up an httptest.Server that mimics the Presidio
@@ -139,6 +140,186 @@ func TestRedact_MultipleSpansSpliceInReverse(t *testing.T) {
 	if got := res.EntityCounts["PERSON"]; got != 1 {
 		t.Errorf("PERSON count = %d, want 1", got)
 	}
+}
+
+func TestScrub_PresidioCharacterOffsetsDoNotCorruptUTF8JSON(t *testing.T) {
+	body := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"José needs a shift in São Paulo. Email josé@example.com."}]}`
+	spans := []Span{
+		spanForValue(t, body, "José", "PERSON"),
+		spanForValue(t, body, "São Paulo", "LOCATION"),
+		spanForValue(t, body, "josé@example.com", "EMAIL_ADDRESS"),
+	}
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(spans)
+	})
+	r, _ := New(Config{AnalyzerURL: srv.URL})
+
+	res, err := r.Scrub(context.Background(), body, NewRegistry())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !utf8.ValidString(res.Text) {
+		t.Fatalf("scrubbed body is invalid UTF-8: %q", res.Text)
+	}
+	if !json.Valid([]byte(res.Text)) {
+		t.Fatalf("scrubbed body is invalid JSON: %q", res.Text)
+	}
+	for _, raw := range []string{"José", "São Paulo", "josé@example.com"} {
+		if strings.Contains(res.Text, raw) {
+			t.Fatalf("raw PII %q leaked into scrubbed body %q", raw, res.Text)
+		}
+	}
+}
+
+func TestScrub_PresidioCharacterOffsetsAtEndOfMultibyteString(t *testing.T) {
+	text := "déjà Alice"
+	spans := []Span{spanForValue(t, text, "Alice", "PERSON")}
+	res := spliceSpans(text, spans, 0.5, NewRegistry(), false)
+
+	if !utf8.ValidString(res.Text) {
+		t.Fatalf("scrubbed text is invalid UTF-8: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "Alice") {
+		t.Fatalf("raw PERSON leaked into scrubbed text: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "<PERSON_1>") {
+		t.Fatalf("expected PERSON placeholder in %q", res.Text)
+	}
+}
+
+func TestScrub_InvalidCharacterOffsetsSkippedEvenWhenByteOffsetsLookValid(t *testing.T) {
+	text := "éé hi"
+	// The string is 5 runes but 7 bytes. This span would have passed the old
+	// byte-length bounds check even though it is outside Presidio's character
+	// offset space.
+	spans := []Span{{Start: 5, End: 6, EntityType: "PERSON", Score: 0.95}}
+	res := spliceSpans(text, spans, 0.5, NewRegistry(), false)
+
+	if res.Text != text {
+		t.Fatalf("invalid character offset corrupted output: got %q want %q", res.Text, text)
+	}
+	if len(res.EntityCounts) != 0 {
+		t.Fatalf("invalid character offset should not be counted: %v", res.EntityCounts)
+	}
+}
+
+func TestScrub_OverlappingCharacterOffsetsKeepFirstSpan(t *testing.T) {
+	text := "José São Paulo"
+	spans := []Span{
+		{Start: 0, End: utf8.RuneCountInString(text), EntityType: "LOCATION", Score: 0.95},
+		spanForValue(t, text, "José", "PERSON"),
+	}
+	res := spliceSpans(text, spans, 0.5, NewRegistry(), false)
+
+	if !utf8.ValidString(res.Text) {
+		t.Fatalf("scrubbed text is invalid UTF-8: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "José") || strings.Contains(res.Text, "São Paulo") {
+		t.Fatalf("raw overlapping PII leaked into scrubbed text: %q", res.Text)
+	}
+	if got := res.EntityCounts["LOCATION"]; got != 1 {
+		t.Fatalf("LOCATION count = %d, want 1", got)
+	}
+	if got := res.EntityCounts["PERSON"]; got != 0 {
+		t.Fatalf("overlapping PERSON should be skipped, got count %d", got)
+	}
+}
+
+func TestScrub_OverlappingCharacterOffsetsPreferStricterPolicy(t *testing.T) {
+	text := "Contact Alice at 222-33-4444"
+	spans := []Span{
+		{Start: utf8.RuneCountInString("Contact "), End: utf8.RuneCountInString(text), EntityType: "PERSON", Score: 0.99},
+		spanForValue(t, text, "222-33-4444", "US_SSN"),
+	}
+	res := spliceSpans(text, spans, 0.5, NewRegistry(), false)
+
+	if strings.Contains(res.Text, "222-33-4444") {
+		t.Fatalf("raw SSN leaked into scrubbed text: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "<US_SSN_1>") {
+		t.Fatalf("expected stricter US_SSN placeholder in %q", res.Text)
+	}
+	if strings.Contains(res.Text, "<PERSON_") {
+		t.Fatalf("broader MASK span should not swallow SEAL span: %q", res.Text)
+	}
+	if got := res.EntityCounts["US_SSN"]; got != 1 {
+		t.Fatalf("US_SSN count = %d, want 1", got)
+	}
+}
+
+func TestScrub_AdjacentCharacterOffsetsBothReplaced(t *testing.T) {
+	text := "José São"
+	spans := []Span{
+		spanForValue(t, text, "José", "PERSON"),
+		spanForValue(t, text, "São", "LOCATION"),
+	}
+	res := spliceSpans(text, spans, 0.5, NewRegistry(), false)
+
+	if !utf8.ValidString(res.Text) {
+		t.Fatalf("scrubbed text is invalid UTF-8: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "José") || strings.Contains(res.Text, "São") {
+		t.Fatalf("raw adjacent PII leaked into scrubbed text: %q", res.Text)
+	}
+	if got := res.EntityCounts["PERSON"]; got != 1 {
+		t.Fatalf("PERSON count = %d, want 1", got)
+	}
+	if got := res.EntityCounts["LOCATION"]; got != 1 {
+		t.Fatalf("LOCATION count = %d, want 1", got)
+	}
+}
+
+func TestSpanCharacterOffsetsToBytes(t *testing.T) {
+	text := "José works in São Paulo"
+	cases := []struct {
+		name      string
+		value     string
+		wantStart int
+		wantEnd   int
+	}{
+		{
+			name:      "multibyte-inside-span",
+			value:     "José",
+			wantStart: strings.Index(text, "José"),
+			wantEnd:   strings.Index(text, "José") + len("José"),
+		},
+		{
+			name:      "multibyte-before-span",
+			value:     "works",
+			wantStart: strings.Index(text, "works"),
+			wantEnd:   strings.Index(text, "works") + len("works"),
+		},
+		{
+			name:      "span-at-end-after-multibyte",
+			value:     "São Paulo",
+			wantStart: strings.Index(text, "São Paulo"),
+			wantEnd:   len(text),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			span := spanForValue(t, text, tc.value, "PERSON")
+			gotStart, gotEnd, ok := spanCharacterOffsetsToBytes(text, span.Start, span.End)
+			if !ok {
+				t.Fatalf("offset conversion unexpectedly failed")
+			}
+			if gotStart != tc.wantStart || gotEnd != tc.wantEnd {
+				t.Fatalf("bytes = (%d, %d), want (%d, %d)", gotStart, gotEnd, tc.wantStart, tc.wantEnd)
+			}
+		})
+	}
+}
+
+func spanForValue(t *testing.T, text, value, entityType string) Span {
+	t.Helper()
+	byteStart := strings.Index(text, value)
+	if byteStart < 0 {
+		t.Fatalf("value %q not found", value)
+	}
+	start := utf8.RuneCountInString(text[:byteStart])
+	end := start + utf8.RuneCountInString(value)
+	return Span{Start: start, End: end, EntityType: entityType, Score: 0.95}
 }
 
 func TestRedact_LowScoreSpansSkipped(t *testing.T) {

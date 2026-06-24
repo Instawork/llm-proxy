@@ -3,6 +3,8 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/observability"
@@ -243,6 +246,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			// Text-only bodies are returned unchanged, so their behaviour
 			// is byte-for-byte identical to before.
 			analysisBody, imageRestores := stripImageDataForAnalysis(body)
+			provider := getProviderFromPath(r.URL.Path)
 
 			redactStart := time.Now()
 			var (
@@ -252,13 +256,15 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			)
 			if cfg.WirePlaceholders {
 				registry = redact.NewRegistry()
+				if logger.Enabled(r.Context(), slog.LevelDebug) {
+					logger.Debug("pii_redact: wire request before scrub",
+						piiWireBodyLogAttrs(r.Context(), r.URL.Path, provider, body)...)
+				}
 				result, redactErr = redactor.Scrub(r.Context(), string(analysisBody), registry)
 			} else {
 				result, redactErr = redactor.Redact(r.Context(), string(analysisBody))
 			}
 			redactDuration := time.Since(redactStart)
-
-			provider := getProviderFromPath(r.URL.Path)
 
 			if redactErr != nil {
 				if cfg.FailClosed {
@@ -310,6 +316,10 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				if !apikeys.EffectiveAllowStreaming(cfg.DefaultAllowStreaming, keyRecord) {
 					upstreamBody = forceStreamingOff(upstreamBody)
 				}
+				if logger.Enabled(ctx, slog.LevelDebug) {
+					logger.Debug("pii_redact: wire request after scrub",
+						piiWireBodyLogAttrs(ctx, r.URL.Path, provider, upstreamBody)...)
+				}
 				r.Body = io.NopCloser(bytes.NewReader(upstreamBody))
 				r.ContentLength = int64(len(upstreamBody))
 			}
@@ -327,6 +337,19 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+func piiWireBodyLogAttrs(ctx context.Context, path, provider string, body []byte) []any {
+	sum := sha256.Sum256(body)
+	return []any{
+		slog.String("path", path),
+		slog.String("provider", provider),
+		slog.Int("body_bytes", len(body)),
+		slog.Bool("utf8_valid", utf8.Valid(body)),
+		slog.Bool("json_valid", json.Valid(body)),
+		slog.String("sha256_prefix", hex.EncodeToString(sum[:8])),
+		slog.String("preview", redact.LogPreview(ctx, string(body), 600)),
 	}
 }
 

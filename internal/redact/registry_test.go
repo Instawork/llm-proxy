@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestPolicyFor_KnownTiers(t *testing.T) {
@@ -38,6 +39,18 @@ func TestRegistry_MaskRoundTrip(t *testing.T) {
 	out := reg.RestoreUserFacing(in)
 	if out != "hello Jane Doe!" {
 		t.Fatalf("restore = %q", out)
+	}
+}
+
+func TestRegistry_MaskRoundTripNonASCII(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("PERSON", "José")
+	out := reg.RestoreUserFacing("hello " + ph + "!")
+	if out != "hello José!" {
+		t.Fatalf("restore = %q", out)
+	}
+	if !utf8.ValidString(out) {
+		t.Fatalf("restore produced invalid UTF-8: %q", out)
 	}
 }
 

@@ -351,38 +351,48 @@ func (r *Redactor) analyze(ctx context.Context, text string, entityTypesOverride
 	return spans, nil
 }
 
+type byteSpan struct {
+	Span
+	byteStart int
+	byteEnd   int
+}
+
 // spliceSpans walks the spans in reverse-start order and replaces each
-// in-place. Reverse order keeps the byte indices valid because earlier
-// spans aren't shifted by later replacements. We also drop spans below
-// the score threshold and silently skip ranges that fall outside the
-// input — defensive, since a buggy sidecar could return a stale offset.
+// in-place. Presidio reports character offsets, so spans are translated
+// to byte offsets before slicing the Go string. Reverse order keeps the
+// byte indices valid because earlier spans aren't shifted by later
+// replacements. We also drop spans below the score threshold and
+// silently skip ranges that fall outside the input — defensive, since a
+// buggy sidecar could return a stale offset.
 func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, forceRedactMarkers bool) Result {
 	counts := map[string]int{}
 	if len(spans) == 0 {
 		return Result{Text: text, EntityCounts: counts}
 	}
 
-	filtered := make([]Span, 0, len(spans))
+	filtered := make([]byteSpan, 0, len(spans))
 	for _, s := range spans {
 		if s.Score < threshold {
 			continue
 		}
-		if s.Start < 0 || s.End > len(text) || s.Start >= s.End {
+		byteStart, byteEnd, ok := spanCharacterOffsetsToBytes(text, s.Start, s.End)
+		if !ok {
 			continue
 		}
-		filtered = append(filtered, s)
+		filtered = append(filtered, byteSpan{Span: s, byteStart: byteStart, byteEnd: byteEnd})
 	}
+	filtered = nonOverlappingByteSpans(filtered)
 	if len(filtered) == 0 {
 		return Result{Text: text, EntityCounts: counts}
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Start > filtered[j].Start
+		return filtered[i].byteStart > filtered[j].byteStart
 	})
 
 	out := []byte(text)
 	for _, s := range filtered {
-		original := text[s.Start:s.End]
+		original := text[s.byteStart:s.byteEnd]
 		var marker string
 		switch {
 		case forceRedactMarkers:
@@ -392,8 +402,88 @@ func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, fo
 		default:
 			marker = fmt.Sprintf("[REDACTED:%s]", s.EntityType)
 		}
-		out = append(out[:s.Start], append([]byte(marker), out[s.End:]...)...)
+		out = append(out[:s.byteStart], append([]byte(marker), out[s.byteEnd:]...)...)
 		counts[s.EntityType]++
 	}
 	return Result{Text: string(out), EntityCounts: counts}
+}
+
+func nonOverlappingByteSpans(spans []byteSpan) []byteSpan {
+	sort.SliceStable(spans, func(i, j int) bool {
+		if spanPolicyPriority(spans[i]) != spanPolicyPriority(spans[j]) {
+			return spanPolicyPriority(spans[i]) > spanPolicyPriority(spans[j])
+		}
+		if spans[i].Score != spans[j].Score {
+			return spans[i].Score > spans[j].Score
+		}
+		if spanByteLen(spans[i]) != spanByteLen(spans[j]) {
+			return spanByteLen(spans[i]) > spanByteLen(spans[j])
+		}
+		return spans[i].byteStart < spans[j].byteStart
+	})
+
+	out := make([]byteSpan, 0, len(spans))
+	for _, s := range spans {
+		if overlapsAnyByteSpan(s, out) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func spanPolicyPriority(s byteSpan) int {
+	switch PolicyFor(s.EntityType) {
+	case PolicyRedact:
+		return 3
+	case PolicySeal:
+		return 2
+	case PolicyMask:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func spanByteLen(s byteSpan) int {
+	return s.byteEnd - s.byteStart
+}
+
+func overlapsAnyByteSpan(s byteSpan, spans []byteSpan) bool {
+	for _, existing := range spans {
+		if s.byteStart < existing.byteEnd && existing.byteStart < s.byteEnd {
+			return true
+		}
+	}
+	return false
+}
+
+func spanCharacterOffsetsToBytes(text string, start, end int) (int, int, bool) {
+	if start < 0 || start >= end {
+		return 0, 0, false
+	}
+
+	runeIndex := 0
+	byteStart := -1
+	byteEnd := -1
+	for byteIndex := range text {
+		if runeIndex == start {
+			byteStart = byteIndex
+		}
+		if runeIndex == end {
+			byteEnd = byteIndex
+			break
+		}
+		runeIndex++
+	}
+	if byteStart < 0 && start == runeIndex {
+		byteStart = len(text)
+	}
+	if byteEnd < 0 && end == runeIndex {
+		byteEnd = len(text)
+	}
+	if byteStart < 0 || byteEnd < 0 || byteStart >= byteEnd {
+		return 0, 0, false
+	}
+	return byteStart, byteEnd, true
 }
