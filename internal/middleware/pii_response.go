@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
@@ -30,8 +32,12 @@ func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) fu
 			}
 
 			isStreaming := providerManager.IsStreamingRequest(r)
-			restoreWriter := &piiRestoreResponseWriter{
+			deferWriter := &piiDeferHeadersResponseWriter{
 				ResponseWriter: w,
+				ctx:            r.Context(),
+			}
+			restoreWriter := &piiRestoreResponseWriter{
+				ResponseWriter: deferWriter,
 				registry:       reg,
 				streaming:      isStreaming,
 			}
@@ -43,6 +49,19 @@ func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) fu
 				}
 			}
 			finalizePIIRestored(r.Context(), reg)
+			finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
+			if err := writePIIResponseTrailers(deferWriter, r.Context()); err != nil {
+				slog.Warn("pii_restore: failed to set PII trailers",
+					slog.String("error", err.Error()),
+					slog.String("path", r.URL.Path))
+			}
+			if h := piiSummaryHolderFromContext(r.Context()); h != nil && h.Leaked > 0 {
+				slog.Warn("pii_restore: MASK placeholders leaked in response",
+					slog.Int("leaked", h.Leaked),
+					slog.Int("restored", h.Restored),
+					slog.Bool("streaming", isStreaming),
+					slog.String("path", r.URL.Path))
+			}
 		})
 	}
 }
@@ -52,6 +71,7 @@ type piiRestoreResponseWriter struct {
 	registry  *redact.Registry
 	streaming bool
 	carry     []byte
+	emitted   bytes.Buffer
 }
 
 func (pw *piiRestoreResponseWriter) Flush() {
@@ -60,9 +80,31 @@ func (pw *piiRestoreResponseWriter) Flush() {
 	}
 }
 
+func (pw *piiRestoreResponseWriter) writeRestored(restored []byte) (int, error) {
+	if len(restored) == 0 {
+		return 0, nil
+	}
+	pw.emitted.Write(restored)
+	n, err := pw.ResponseWriter.Write(restored)
+	if err != nil {
+		return n, err
+	}
+	return len(restored), nil
+}
+
 func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
 	if pw.registry == nil || len(b) == 0 {
 		return pw.ResponseWriter.Write(b)
+	}
+	if !pw.streaming {
+		plain, _, err := decompressPIIResponseIfGzip(b)
+		if err != nil {
+			slog.Warn("pii_restore: gzip decompress failed; passing through without placeholder restore",
+				slog.String("error", err.Error()))
+			return pw.writeRestored(b)
+		}
+		restored := pw.registry.RestoreUserFacing(string(plain))
+		return pw.writeRestored([]byte(restored))
 	}
 	if pw.streaming {
 		emit, newCarry := pw.registry.RestoreStreamChunk(b, pw.carry)
@@ -70,15 +112,10 @@ func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
 		if len(emit) == 0 {
 			return len(b), nil
 		}
-		if _, err := pw.ResponseWriter.Write(emit); err != nil {
+		if _, err := pw.writeRestored(emit); err != nil {
 			return 0, err
 		}
 		return len(b), nil
-	}
-	restored := pw.registry.RestoreUserFacing(string(b))
-	n, err := pw.ResponseWriter.Write([]byte(restored))
-	if err != nil {
-		return n, err
 	}
 	return len(b), nil
 }

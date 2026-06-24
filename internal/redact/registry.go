@@ -73,6 +73,24 @@ func jsonEscapedPlaceholder(ph string) string {
 	return strings.ReplaceAll(s, ">", `\u003e`)
 }
 
+// htmlEscapedPlaceholder returns common HTML-entity escaping for angle brackets.
+func htmlEscapedPlaceholder(ph string) string {
+	s := strings.ReplaceAll(ph, "<", "&lt;")
+	return strings.ReplaceAll(s, ">", "&gt;")
+}
+
+func placeholderWireForms(ph string) []string {
+	return []string{ph, jsonEscapedPlaceholder(ph), htmlEscapedPlaceholder(ph)}
+}
+
+func countPlaceholderForms(text, ph string) int {
+	n := 0
+	for _, form := range placeholderWireForms(ph) {
+		n += strings.Count(text, form)
+	}
+	return n
+}
+
 // RestoreUserFacing replaces MASK-tier placeholders with their original
 // values. SEAL placeholders and REDACT markers are left unchanged.
 func (r *Registry) RestoreUserFacing(text string) string {
@@ -96,9 +114,10 @@ func (r *Registry) RestoreUserFacing(text string) string {
 			continue
 		}
 		before := out
-		out = strings.ReplaceAll(out, ph, entry.original)
-		out = strings.ReplaceAll(out, jsonEscapedPlaceholder(ph), entry.original)
-		restoredDelta += strings.Count(before, ph) + strings.Count(before, jsonEscapedPlaceholder(ph))
+		for _, form := range placeholderWireForms(ph) {
+			out = strings.ReplaceAll(out, form, entry.original)
+		}
+		restoredDelta += countPlaceholderForms(before, ph)
 	}
 	if restoredDelta > 0 {
 		r.mu.Lock()
@@ -119,6 +138,29 @@ func (r *Registry) RestoredCount() int {
 	return r.restoredCount
 }
 
+// MaskPlaceholdersRemaining counts MASK-tier placeholder tokens still present
+// in text after restore (any wire form: literal, JSON-escaped, HTML-escaped).
+func (r *Registry) MaskPlaceholdersRemaining(text string) int {
+	if r == nil || text == "" {
+		return 0
+	}
+	r.mu.Lock()
+	order := append([]string(nil), r.restoreOrder...)
+	r.mu.Unlock()
+	if len(order) == 0 {
+		return 0
+	}
+	var n int
+	for _, ph := range order {
+		entry, ok := r.byPlaceholder[ph]
+		if !ok || entry.policy != PolicyMask {
+			continue
+		}
+		n += countPlaceholderForms(text, ph)
+	}
+	return n
+}
+
 // RestoreStreamChunk restores MASK placeholders in a streaming chunk,
 // holding back a suffix that might be an incomplete placeholder token.
 func (r *Registry) RestoreStreamChunk(chunk []byte, carry []byte) (emit []byte, newCarry []byte) {
@@ -131,6 +173,10 @@ func (r *Registry) RestoreStreamChunk(chunk []byte, carry []byte) (emit []byte, 
 	}
 	toProcess := combined[:safeLen]
 	newCarry = combined[safeLen:]
+	if len(newCarry) > maxPlaceholderCarry {
+		toProcess = combined
+		newCarry = nil
+	}
 	restored := r.RestoreUserFacing(string(toProcess))
 	return []byte(restored), newCarry
 }

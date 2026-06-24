@@ -29,7 +29,7 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 					"X-LLM-Input-Tokens, X-LLM-Output-Tokens, X-LLM-Total-Tokens, "+
 					"X-LLM-Provider, X-LLM-Model, "+
 					"X-LLM-PII-Outcome, X-LLM-PII-Detected, X-LLM-PII-Masked, "+
-					"X-LLM-PII-Sealed, X-LLM-PII-Redacted, X-LLM-PII-Restored, X-LLM-PII-Entities")
+					"X-LLM-PII-Sealed, X-LLM-PII-Redacted, X-LLM-PII-Restored, X-LLM-PII-Leaked, X-LLM-PII-Entities")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return

@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,45 @@ func TestRegistry_MaskRestoresJSONEscapedPlaceholders(t *testing.T) {
 	}
 	if strings.Contains(out, escaped) {
 		t.Fatalf("escaped placeholder should be replaced: %q", out)
+	}
+}
+
+func TestRegistry_MaskRestoresHTMLEscapedPlaceholders(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("EMAIL_ADDRESS", "bob@example.com")
+	escaped := htmlEscapedPlaceholder(ph)
+	in := `<p>` + escaped + `</p>`
+	out := reg.RestoreUserFacing(in)
+	if !strings.Contains(out, "bob@example.com") {
+		t.Fatalf("expected restored email in %q", out)
+	}
+	if strings.Contains(out, escaped) {
+		t.Fatalf("html-escaped placeholder should be replaced: %q", out)
+	}
+}
+
+func TestRegistry_MaskPlaceholdersRemaining(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("EMAIL_ADDRESS", "a@b.com")
+	if got := reg.MaskPlaceholdersRemaining("reply: " + ph); got != 1 {
+		t.Fatalf("remaining = %d, want 1", got)
+	}
+	reg.RestoreUserFacing("reply: " + ph)
+	if got := reg.MaskPlaceholdersRemaining("reply: a@b.com"); got != 0 {
+		t.Fatalf("remaining after restore = %d, want 0", got)
+	}
+}
+
+func TestRegistry_RestoreStreamChunk_EnforcesMaxCarry(t *testing.T) {
+	reg := NewRegistry()
+	garbage := bytes.Repeat([]byte("x"), maxPlaceholderCarry+10)
+	garbage[0] = '<'
+	emit, newCarry := reg.RestoreStreamChunk(garbage, nil)
+	if len(newCarry) != 0 {
+		t.Fatalf("expected carry flushed after max, got %d bytes", len(newCarry))
+	}
+	if len(emit) == 0 {
+		t.Fatal("expected forced emit of oversized carry")
 	}
 }
 

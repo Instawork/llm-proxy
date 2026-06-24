@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
@@ -26,6 +27,7 @@ type piiSummaryHolder struct {
 	Sealed   int
 	Redacted int
 	Restored int
+	Leaked   int
 	Entities map[string]int
 }
 
@@ -62,7 +64,13 @@ func finalizePIIRestored(ctx context.Context, reg *redact.Registry) {
 	}
 }
 
-func writePIIResponseHeaders(w http.ResponseWriter, ctx context.Context) {
+func finalizePIILeaked(ctx context.Context, reg *redact.Registry, responseText string) {
+	if h := piiSummaryHolderFromContext(ctx); h != nil && reg != nil {
+		h.Leaked = reg.MaskPlaceholdersRemaining(responseText)
+	}
+}
+
+func writePIIResponseHeadersPartial(w http.ResponseWriter, ctx context.Context) {
 	h := piiSummaryHolderFromContext(ctx)
 	if h == nil || h.Outcome == "" {
 		return
@@ -75,10 +83,85 @@ func writePIIResponseHeaders(w http.ResponseWriter, ctx context.Context) {
 	w.Header().Set("X-LLM-PII-Masked", strconv.Itoa(h.Masked))
 	w.Header().Set("X-LLM-PII-Sealed", strconv.Itoa(h.Sealed))
 	w.Header().Set("X-LLM-PII-Redacted", strconv.Itoa(h.Redacted))
-	w.Header().Set("X-LLM-PII-Restored", strconv.Itoa(h.Restored))
 	if len(h.Entities) > 0 {
 		if b, err := json.Marshal(h.Entities); err == nil {
 			w.Header().Set("X-LLM-PII-Entities", string(b))
 		}
+	}
+}
+
+func writePIIResponseHeadersRestoredLeaked(w http.ResponseWriter, ctx context.Context) {
+	h := piiSummaryHolderFromContext(ctx)
+	if h == nil || h.Outcome != PIIOutcomeOK {
+		return
+	}
+	w.Header().Set("X-LLM-PII-Restored", strconv.Itoa(h.Restored))
+	w.Header().Set("X-LLM-PII-Leaked", strconv.Itoa(h.Leaked))
+}
+
+// writePIIResponseHeaders writes the full PII header set (used on error paths
+// and in unit tests).
+func writePIIResponseHeaders(w http.ResponseWriter, ctx context.Context) {
+	writePIIResponseHeadersPartial(w, ctx)
+	writePIIResponseHeadersRestoredLeaked(w, ctx)
+}
+
+func announcePIITrailers(w http.ResponseWriter) {
+	w.Header().Add("Trailer", "X-LLM-PII-Restored")
+	w.Header().Add("Trailer", "X-LLM-PII-Leaked")
+}
+
+func writePIIResponseTrailers(w http.ResponseWriter, ctx context.Context) error {
+	h := piiSummaryHolderFromContext(ctx)
+	if h == nil || h.Outcome != PIIOutcomeOK {
+		return nil
+	}
+	// Trailer keys were predeclared in announcePIITrailers; values are sent after
+	// the body per net/http.ResponseWriter contract.
+	w.Header().Set("X-LLM-PII-Restored", strconv.Itoa(h.Restored))
+	w.Header().Set("X-LLM-PII-Leaked", strconv.Itoa(h.Leaked))
+	return nil
+}
+
+// piiDeferHeadersResponseWriter delays committing response headers until the
+// first Write. ReverseProxy calls WriteHeader before copying the body, which
+// would flush headers before PII restore runs. Restored/Leaked are sent as HTTP
+// trailers after the body so bytes can stream through without buffering.
+type piiDeferHeadersResponseWriter struct {
+	http.ResponseWriter
+	ctx        context.Context
+	statusCode int
+	headerSent bool
+	once       sync.Once
+}
+
+func (pw *piiDeferHeadersResponseWriter) WriteHeader(statusCode int) {
+	if pw.headerSent {
+		return
+	}
+	pw.statusCode = statusCode
+}
+
+func (pw *piiDeferHeadersResponseWriter) flushHeaders() {
+	pw.once.Do(func() {
+		writePIIResponseHeadersPartial(pw.ResponseWriter, pw.ctx)
+		announcePIITrailers(pw.ResponseWriter)
+		if pw.statusCode == 0 {
+			pw.statusCode = http.StatusOK
+		}
+		pw.headerSent = true
+		pw.ResponseWriter.WriteHeader(pw.statusCode)
+	})
+}
+
+func (pw *piiDeferHeadersResponseWriter) Write(b []byte) (int, error) {
+	pw.flushHeaders()
+	return pw.ResponseWriter.Write(b)
+}
+
+func (pw *piiDeferHeadersResponseWriter) Flush() {
+	pw.flushHeaders()
+	if f, ok := pw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
 	}
 }

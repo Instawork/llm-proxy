@@ -79,10 +79,10 @@ func (p *ProxyClient) AnthropicChatWithPIIScrub(ctx context.Context, apiKey, use
 		maxTokens = 64
 	}
 	payload := map[string]any{
-		"model":       "claude-haiku-4-5",
-		"max_tokens":  maxTokens,
-		"messages":    []map[string]any{{"role": "user", "content": userMessage}},
-		"stream":      stream,
+		"model":      "claude-haiku-4-5",
+		"max_tokens": maxTokens,
+		"messages":   []map[string]any{{"role": "user", "content": userMessage}},
+		"stream":     stream,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -105,8 +105,10 @@ func repeatEmailPromptFor(email string) string {
 	return fmt.Sprintf(repeatEmailPrompt, email)
 }
 
-type streamScrubFunc func(ctx context.Context, apiKey, userMessage string, maxTokens int64, stream bool) (*ProxyResponse, []byte, error)
-type bodyParseFunc func(body []byte) (string, error)
+type (
+	streamScrubFunc func(ctx context.Context, apiKey, userMessage string, maxTokens int64, stream bool) (*ProxyResponse, []byte, error)
+	bodyParseFunc   func(body []byte) (string, error)
+)
 
 func (p *ProxyClient) chatRepeatEmail(ctx context.Context, apiKey, email string, stream bool, scrub streamScrubFunc, parse bodyParseFunc) (*ProxyResponse, string, error) {
 	pr, body, err := scrub(ctx, apiKey, repeatEmailPromptFor(email), 40, stream)

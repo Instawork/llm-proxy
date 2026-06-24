@@ -222,10 +222,11 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, len(body), 0, piiOutcomeOversize)
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeOversize, nil))
 				if cfg.FailClosed {
-					writePIIResponseHeaders(w, ctx)
+					writePIIResponseHeadersPartial(w, ctx)
 					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
 					return
 				}
+				writePIIResponseHeadersPartial(w, ctx)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -269,7 +270,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 						slog.Duration("duration", redactDuration))
 					recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailClosed)
 					ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailClosed, nil))
-					writePIIResponseHeaders(w, ctx)
+					writePIIResponseHeadersPartial(w, ctx)
 					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -281,6 +282,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.Duration("duration", redactDuration))
 				recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailOpen)
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailOpen, nil))
+				writePIIResponseHeadersPartial(w, ctx)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -300,6 +302,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			ctx := attachPIISummary(r.Context(), summary)
 			ctx = context.WithValue(ctx, piiRedactCtxKey{}, redactedBytes)
 			if cfg.WirePlaceholders {
+				r.Header.Del("Accept-Encoding")
 				if registry != nil && registry.Len() > 0 {
 					ctx = context.WithValue(ctx, piiRegistryCtxKey{}, registry)
 				}

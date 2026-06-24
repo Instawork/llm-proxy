@@ -70,6 +70,13 @@ type FeaturesConfig struct {
 	FakeUpstream     FakeUpstreamConfig     `yaml:"fake_upstream"`
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 	History          HistoryConfig          `yaml:"history"`
+	ClientGzip       ClientGzipConfig       `yaml:"client_gzip"`
+}
+
+// ClientGzipConfig optionally gzip-compresses non-streaming responses to
+// clients that requested Accept-Encoding: gzip. Off by default.
+type ClientGzipConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // BYOKeysConfig gates whether callers may authenticate with raw provider

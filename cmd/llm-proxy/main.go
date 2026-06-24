@@ -1405,6 +1405,11 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Add middleware (order matters for streaming)
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 
+	if yamlConfig.Features.ClientGzip.Enabled {
+		r.Use(middleware.ClientGzipMiddleware(globalProviderManager))
+		logger.Info("🗜️  Client gzip enabled for non-streaming responses when Accept-Encoding: gzip")
+	}
+
 	// API key validation runs before PII redaction so per-key redact_pii
 	// overrides can be resolved from the DynamoDB record stashed in context.
 	if globalAPIKeyStore != nil {

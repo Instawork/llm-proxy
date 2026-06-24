@@ -5,12 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
+
+func piiMetricFromResponse(rec *httptest.ResponseRecorder, name string) string {
+	if v := rec.Header().Get(name); v != "" {
+		return v
+	}
+	return rec.Result().Trailer.Get(name)
+}
 
 func productionPIIWireStack(pm *providers.ProviderManager, handler http.Handler) http.Handler {
 	return TokenParsingMiddleware(pm)(

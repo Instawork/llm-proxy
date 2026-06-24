@@ -85,8 +85,6 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 
 			next.ServeHTTP(captureWriter, r)
 
-			writePIIResponseHeaders(w, r.Context())
-
 			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
 				strings.Contains(r.URL.Path, "/completions") ||
 				strings.Contains(r.URL.Path, "/messages") ||

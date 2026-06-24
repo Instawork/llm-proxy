@@ -55,6 +55,16 @@ func TestWritePIIResponseHeaders_FailOpen(t *testing.T) {
 	}
 }
 
+func TestFinalizePIILeaked_CountsRemainingPlaceholders(t *testing.T) {
+	reg := redact.NewRegistry()
+	ph := reg.Placeholder("EMAIL_ADDRESS", "leak@example.com")
+	ctx := attachPIISummary(context.Background(), newPIISummary(PIIOutcomeOK, map[string]int{"EMAIL_ADDRESS": 1}))
+	finalizePIILeaked(ctx, reg, `{"text":"`+ph+`"}`)
+	if got := piiSummaryHolderFromContext(ctx).Leaked; got != 1 {
+		t.Fatalf("leaked = %d, want 1", got)
+	}
+}
+
 func TestProductionPIIWireStack_EmitsPIIHeaders(t *testing.T) {
 	reg := redact.NewRegistry()
 	email := "header-restore@example.com"
@@ -76,8 +86,11 @@ func TestProductionPIIWireStack_EmitsPIIHeaders(t *testing.T) {
 	if got := rec.Header().Get("X-LLM-PII-Outcome"); got != "ok" {
 		t.Fatalf("outcome = %q, want ok", got)
 	}
-	if got := rec.Header().Get("X-LLM-PII-Restored"); got != "1" {
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Restored"); got != "1" {
 		t.Fatalf("restored = %q, want 1", got)
+	}
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
+		t.Fatalf("leaked = %q, want 0", got)
 	}
 	if !strings.Contains(rec.Body.String(), email) {
 		t.Fatalf("body missing restored email")
