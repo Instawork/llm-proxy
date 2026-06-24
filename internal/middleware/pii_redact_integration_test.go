@@ -68,7 +68,7 @@ func TestIntegration_PIIRedactMiddleware_LegacyObservabilityMode(t *testing.T) {
 	analyzerURL := requirePresidioForMiddleware(t)
 	redactor := newLiveRedactor(t, analyzerURL, redact.DefaultEntityTypes)
 
-	originalBody := `{"messages":[{"role":"user","content":"my ssn is 222-33-4444 and email alice@example.com"}]}`
+	originalBody := `{"messages":[{"role":"user","content":"my ssn is 222-33-4444 and email alice@gmail.com"}]}`
 
 	var (
 		upstreamBody []byte
@@ -108,7 +108,7 @@ func TestIntegration_PIIRedactMiddleware_LegacyObservabilityMode(t *testing.T) {
 			t.Errorf("expected %q in redacted body, got %q", marker, string(redacted))
 		}
 	}
-	for _, leak := range []string{"222-33-4444", "alice@example.com"} {
+	for _, leak := range []string{"222-33-4444", "alice@gmail.com"} {
 		if strings.Contains(string(redacted), leak) {
 			t.Errorf("raw value %q leaked into redacted body: %q", leak, string(redacted))
 		}
@@ -125,7 +125,7 @@ func TestIntegration_PIIWireMode_ScrubAndRestore_EndToEnd(t *testing.T) {
 	redactor := newLiveRedactor(t, analyzerURL, []string{"US_SSN", "EMAIL_ADDRESS"})
 
 	const ssn = "222-33-4444"
-	const email = "alice@example.com"
+	const email = "alice@gmail.com"
 	originalBody := `{"messages":[{"role":"user","content":"my ssn is ` + ssn + ` and email ` + email + `"}]}`
 
 	var upstreamBody []byte
@@ -202,7 +202,7 @@ func testIntegrationPIIWireModeScrubAndRestore(t *testing.T, tc wireStackProvide
 	analyzerURL := requirePresidioForMiddleware(t)
 	redactor := newLiveRedactor(t, analyzerURL, []string{"EMAIL_ADDRESS"})
 
-	const email = "alice@example.com"
+	const email = "alice@gmail.com"
 	originalBody := tc.requestBody(email)
 
 	var upstreamBody []byte

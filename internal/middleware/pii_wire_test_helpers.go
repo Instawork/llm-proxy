@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/redact"
@@ -139,4 +140,71 @@ func geminiUserTextFromBody(body []byte) string {
 		return ""
 	}
 	return root.Contents[0].Parts[0].Text
+}
+
+type wireDetection struct {
+	value      string
+	entityType string
+}
+
+func wireTestRedactorWithDetections(t *testing.T, detections []wireDetection) PIIRedactor {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		spans := make([]redact.Span, 0, len(detections))
+		for _, d := range detections {
+			idx := strings.Index(payload.Text, d.value)
+			if idx < 0 {
+				continue
+			}
+			start := utf8.RuneCountInString(payload.Text[:idx])
+			end := start + utf8.RuneCountInString(d.value)
+			spans = append(spans, redact.Span{
+				Start:      start,
+				End:        end,
+				EntityType: d.entityType,
+				Score:      0.95,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(spans)
+	}))
+	t.Cleanup(srv.Close)
+	r, err := redact.New(redact.Config{AnalyzerURL: srv.URL})
+	if err != nil {
+		t.Fatalf("redact.New: %v", err)
+	}
+	return r
+}
+
+func wireStackOpenAINamePrompt(prompt string) func(string) string {
+	return func(_ string) string {
+		return fmt.Sprintf(
+			`{"model":"gpt-4o-mini","max_tokens":40,"messages":[{"role":"user","content":%q}]}`,
+			prompt,
+		)
+	}
+}
+
+func wireStackAnthropicNamePrompt(prompt string) func(string) string {
+	return func(_ string) string {
+		return fmt.Sprintf(
+			`{"model":"claude-haiku-4-5","max_tokens":40,"messages":[{"role":"user","content":%q}]}`,
+			prompt,
+		)
+	}
+}
+
+func wireStackGeminiNamePrompt(prompt string) func(string) string {
+	return func(_ string) string {
+		return fmt.Sprintf(
+			`{"contents":[{"parts":[{"text":%q}]}]}`,
+			prompt,
+		)
+	}
 }

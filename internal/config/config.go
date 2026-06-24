@@ -164,6 +164,10 @@ type PIIRedactConfig struct {
 	// Datadog configures the dogstatsd sink for PII redaction metrics
 	// (llm.pii.*). Independent of cost_tracking and circuit_breaker.
 	Datadog *DatadogTransportConfig `yaml:"datadog,omitempty"`
+
+	// AllowTestEmails, when nil or true, lets obvious fixture emails pass
+	// through middle-ground filtering (example.com, test@*, dev@*).
+	AllowTestEmails *bool `yaml:"allow_test_emails,omitempty"`
 }
 
 // IDGateConfig configures OCR + Presidio scanning of embedded chat images to

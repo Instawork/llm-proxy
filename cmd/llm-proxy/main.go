@@ -1464,11 +1464,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 
 		redactCfg := redact.Config{
-			AnalyzerURL:    analyzerURL,
-			Timeout:        time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
-			ScoreThreshold: piiCfg.ScoreThreshold,
-			EntityTypes:    piiCfg.EntityTypes,
-			Language:       piiCfg.Language,
+			AnalyzerURL:     analyzerURL,
+			Timeout:         time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			ScoreThreshold:  piiCfg.ScoreThreshold,
+			EntityTypes:     piiCfg.EntityTypes,
+			Language:        piiCfg.Language,
+			AllowTestEmails: piiCfg.AllowTestEmails,
 		}
 		var err error
 		redactor, err = redact.New(redactCfg)
@@ -1531,6 +1532,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		if piiCfg.DefaultAllowStreaming != nil {
 			defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
 		}
+		env := strings.ToLower(os.Getenv("ENVIRONMENT"))
+		devLogRawEntities := env == "dev" || env == "local"
 		r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
 			GlobalEnabled:         piiCfg.Enabled,
 			FailClosed:            failClosed,
@@ -1540,6 +1543,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			Metrics:               initializePIIMetrics(yamlConfig),
 			WirePlaceholders:      wirePlaceholders,
 			DefaultAllowStreaming: defaultAllowStreaming,
+			DevLogRawEntities:     devLogRawEntities,
 		}))
 		logger.Info(
 			"🛡️  PII redaction middleware installed",
@@ -1547,6 +1551,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			"allow_per_key_override", piiCfg.AllowPerKeyOverride,
 			"wire_placeholders", wirePlaceholders,
 			"default_allow_streaming", defaultAllowStreaming,
+			"dev_log_raw_entities", devLogRawEntities,
 			"analyzer_url", piiCfg.AnalyzerURL,
 			"fail_mode", piiCfg.FailMode,
 		)

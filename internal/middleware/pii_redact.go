@@ -140,6 +140,9 @@ type PIIRedactConfig struct {
 	// DefaultAllowStreaming is the global default for whether wire-mode
 	// requests may keep stream:true. Per-key allow_streaming overrides this.
 	DefaultAllowStreaming bool
+
+	// DevLogRawEntities logs raw detected PII values. Only enable in local dev.
+	DevLogRawEntities bool
 }
 
 // PIIRedactMiddleware wires a PIIRedactor into the request lifecycle.
@@ -331,9 +334,23 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				slog.Int("images_stripped", len(imageRestores)),
 				slog.Int("entity_types_detected", len(result.EntityCounts)),
 				slog.Any("entity_counts", result.EntityCounts),
+				slog.Int("entity_types_allowed", len(redact.AllowedEntityCounts(result.AllowedEntities))),
+				slog.Any("allowed_entity_counts", redact.AllowedEntityCounts(result.AllowedEntities)),
 				slog.Duration("duration", redactDuration))
 
 			recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
+			if cfg.DevLogRawEntities && len(result.DetectedEntities) > 0 {
+				logger.Info("pii_redact: dev raw entities",
+					slog.String("path", r.URL.Path),
+					slog.String("provider", provider),
+					slog.Any("entities", result.DetectedEntities))
+			}
+			if cfg.DevLogRawEntities && len(result.AllowedEntities) > 0 {
+				logger.Info("pii_redact: dev allowed entities",
+					slog.String("path", r.URL.Path),
+					slog.String("provider", provider),
+					slog.Any("entities", result.AllowedEntities))
+			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

@@ -34,6 +34,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -117,12 +118,34 @@ type Span struct {
 	Score      float64 `json:"score"`
 }
 
+type DetectedEntity struct {
+	EntityType string
+	Text       string
+	Policy     string
+	Score      float64
+	Start      int
+	End        int
+}
+
+// AllowedEntity is a Presidio hit that matched middle-ground policy and
+// was intentionally left in the outbound body.
+type AllowedEntity struct {
+	EntityType string
+	Text       string
+	Score      float64
+	Reason     string
+	Start      int
+	End        int
+}
+
 // Result is the return value of Redact: the redacted text plus the
 // distinct entity types observed (useful for log/metric tags without
 // leaking the raw values).
 type Result struct {
-	Text         string
-	EntityCounts map[string]int
+	Text             string
+	EntityCounts     map[string]int
+	DetectedEntities []DetectedEntity
+	AllowedEntities  []AllowedEntity
 }
 
 // Config controls the redactor wire behaviour.
@@ -160,6 +183,10 @@ type Config struct {
 	// HTTPClient overrides the default http.Client. Tests inject an
 	// httptest.Server-backed client here.
 	HTTPClient *http.Client
+
+	// AllowTestEmails, when nil or true, lets obvious fixture emails
+	// (example.com, test@*, dev@*) pass through middle-ground filtering.
+	AllowTestEmails *bool
 }
 
 // Defaults returns a Config populated with the documented defaults.
@@ -176,8 +203,9 @@ func Defaults() Config {
 // Redactor wraps a Config + http.Client. Cheap to construct and safe to
 // share — the underlying http.Client is concurrent-safe.
 type Redactor struct {
-	cfg    Config
-	client *http.Client
+	cfg             Config
+	client          *http.Client
+	allowTestEmails bool
 }
 
 // New constructs a Redactor. AnalyzerURL is required.
@@ -207,6 +235,10 @@ func New(cfg Config) (*Redactor, error) {
 	if cfg.Language == "" {
 		cfg.Language = "en"
 	}
+	allowTestEmails := true
+	if cfg.AllowTestEmails != nil {
+		allowTestEmails = *cfg.AllowTestEmails
+	}
 	if len(cfg.EntityTypes) == 0 {
 		cfg.EntityTypes = DefaultEntityTypes
 	} else {
@@ -234,7 +266,7 @@ func New(cfg Config) (*Redactor, error) {
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
-	return &Redactor{cfg: cfg, client: client}, nil
+	return &Redactor{cfg: cfg, client: client, allowTestEmails: allowTestEmails}, nil
 }
 
 // Redact returns “text“ with every detected span replaced by
@@ -254,11 +286,12 @@ func (r *Redactor) scrub(ctx context.Context, text string, reg *Registry, forceR
 	if text == "" {
 		return Result{Text: text, EntityCounts: map[string]int{}}, nil
 	}
-	spans, err := r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+	analysisText := prepareJSONForAnalysis(text)
+	spans, err := r.analyze(ctx, analysisText, nil, r.cfg.ScoreThreshold)
 	if err != nil {
 		return Result{}, err
 	}
-	return spliceSpans(text, spans, r.cfg.ScoreThreshold, reg, forceRedactMarkers), nil
+	return spliceSpans(text, spans, r.cfg.ScoreThreshold, reg, forceRedactMarkers, r.allowTestEmails), nil
 }
 
 // Analyze posts text to Presidio /analyze using the redactor's configured
@@ -364,13 +397,14 @@ type byteSpan struct {
 // replacements. We also drop spans below the score threshold and
 // silently skip ranges that fall outside the input — defensive, since a
 // buggy sidecar could return a stale offset.
-func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, forceRedactMarkers bool) Result {
+func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, forceRedactMarkers bool, allowTestEmails bool) Result {
 	counts := map[string]int{}
 	if len(spans) == 0 {
 		return Result{Text: text, EntityCounts: counts}
 	}
 
 	filtered := make([]byteSpan, 0, len(spans))
+	allowed := make([]AllowedEntity, 0)
 	for _, s := range spans {
 		if s.Score < threshold {
 			continue
@@ -379,11 +413,23 @@ func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, fo
 		if !ok {
 			continue
 		}
+		original := text[byteStart:byteEnd]
+		if reason, allow := middleGroundAllowReason(original, s.EntityType, allowTestEmails); allow {
+			allowed = append(allowed, AllowedEntity{
+				EntityType: s.EntityType,
+				Text:       original,
+				Score:      s.Score,
+				Reason:     reason,
+				Start:      s.Start,
+				End:        s.End,
+			})
+			continue
+		}
 		filtered = append(filtered, byteSpan{Span: s, byteStart: byteStart, byteEnd: byteEnd})
 	}
 	filtered = nonOverlappingByteSpans(filtered)
 	if len(filtered) == 0 {
-		return Result{Text: text, EntityCounts: counts}
+		return Result{Text: text, EntityCounts: counts, AllowedEntities: allowed}
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
@@ -391,8 +437,10 @@ func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, fo
 	})
 
 	out := []byte(text)
+	entities := make([]DetectedEntity, 0, len(filtered))
 	for _, s := range filtered {
 		original := text[s.byteStart:s.byteEnd]
+		policy := PolicyFor(s.EntityType)
 		var marker string
 		switch {
 		case forceRedactMarkers:
@@ -404,8 +452,72 @@ func spliceSpans(text string, spans []Span, threshold float64, reg *Registry, fo
 		}
 		out = append(out[:s.byteStart], append([]byte(marker), out[s.byteEnd:]...)...)
 		counts[s.EntityType]++
+		entities = append(entities, DetectedEntity{
+			EntityType: s.EntityType,
+			Text:       original,
+			Policy:     policy.String(),
+			Score:      s.Score,
+			Start:      s.Start,
+			End:        s.End,
+		})
 	}
-	return Result{Text: string(out), EntityCounts: counts}
+	return Result{Text: string(out), EntityCounts: counts, DetectedEntities: entities, AllowedEntities: allowed}
+}
+
+func middleGroundAllowReason(value, entityType string, allowTestEmails bool) (string, bool) {
+	switch entityType {
+	case "PERSON":
+		if len(strings.Fields(value)) < 2 {
+			return "single_token_person", true
+		}
+	case "LOCATION":
+		if !looksLikeStreetAddress(value) {
+			return "non_street_location", true
+		}
+	case "IP_ADDRESS":
+		if isPrivateOrLoopbackIP(value) {
+			return "private_ip", true
+		}
+	case "EMAIL_ADDRESS":
+		if allowTestEmails && isTestEmail(value) {
+			return "test_email", true
+		}
+	}
+	return "", false
+}
+
+func AllowedEntityCounts(allowed []AllowedEntity) map[string]int {
+	if len(allowed) == 0 {
+		return nil
+	}
+	counts := make(map[string]int, len(allowed))
+	for _, e := range allowed {
+		counts[e.EntityType]++
+	}
+	return counts
+}
+
+func looksLikeStreetAddress(value string) bool {
+	lower := strings.ToLower(value)
+	hasDigit := false
+	for _, ch := range lower {
+		if ch >= '0' && ch <= '9' {
+			hasDigit = true
+			break
+		}
+	}
+	if !hasDigit {
+		return false
+	}
+	for _, token := range []string{
+		" street", " st", " avenue", " ave", " road", " rd", " boulevard", " blvd",
+		" lane", " ln", " drive", " dr", " court", " ct", " place", " pl", " way",
+	} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func nonOverlappingByteSpans(spans []byteSpan) []byteSpan {
@@ -456,6 +568,64 @@ func overlapsAnyByteSpan(s byteSpan, spans []byteSpan) bool {
 		}
 	}
 	return false
+}
+
+type jsonContainerState int
+
+const (
+	jsonObjectKey jsonContainerState = iota
+	jsonObjectColon
+	jsonObjectValue
+	jsonObjectCommaOrEnd
+	jsonArrayValue
+	jsonArrayCommaOrEnd
+)
+
+func copyOrMaskJSONString(in, out []rune, start int, mask bool) int {
+	i := start + 1
+	for i < len(in) {
+		switch in[i] {
+		case '\\':
+			if mask {
+				out[i] = ' '
+			}
+			i++
+			if i < len(in) {
+				if mask {
+					out[i] = ' '
+				}
+				i++
+			}
+		case '"':
+			return i + 1
+		default:
+			if mask {
+				out[i] = ' '
+			}
+			i++
+		}
+	}
+	return i
+}
+
+func markJSONValueSeen(stack *[]jsonContainerState) {
+	if len(*stack) == 0 {
+		return
+	}
+	switch (*stack)[len(*stack)-1] {
+	case jsonObjectValue:
+		(*stack)[len(*stack)-1] = jsonObjectCommaOrEnd
+	case jsonArrayValue:
+		(*stack)[len(*stack)-1] = jsonArrayCommaOrEnd
+	}
+}
+
+func isJSONWhitespace(ch rune) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
+}
+
+func isJSONDelimiter(ch rune) bool {
+	return isJSONWhitespace(ch) || ch == ',' || ch == ']' || ch == '}'
 }
 
 func spanCharacterOffsetsToBytes(text string, start, end int) (int, int, bool) {

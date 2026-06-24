@@ -61,6 +61,7 @@ features:
     # becomes a problem; raise it if the WARN counter trends up in
     # Datadog and you'd rather pay the redaction cost.
     max_body_bytes: 0
+    allow_test_emails: true
     allow_per_key_override: false
     # wire_placeholders: true   # default when enabled — send <PERSON_1> upstream
     # default_allow_streaming: true  # per-key allow_streaming can force stream:false

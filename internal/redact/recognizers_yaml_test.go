@@ -116,17 +116,16 @@ func TestRecognizersYAML_MatchesDefaultEntityTypes(t *testing.T) {
 		yamlEntities[r.SupportedEntity] = struct{}{}
 	}
 
+	codeEntities := make(map[string]struct{}, len(DefaultEntityTypes))
+	for _, e := range DefaultEntityTypes {
+		codeEntities[e] = struct{}{}
+	}
 	// LOCATION rides on SpacyRecognizer (already present as PERSON);
 	// Presidio's spaCy adapter emits both PERSON and LOCATION from a
 	// single registry entry. The YAML lists the recognizer once, but
 	// DefaultEntityTypes reasonably names both entities. Special-case
 	// LOCATION here so the equality check passes.
 	yamlEntities["LOCATION"] = struct{}{}
-
-	codeEntities := make(map[string]struct{}, len(DefaultEntityTypes))
-	for _, e := range DefaultEntityTypes {
-		codeEntities[e] = struct{}{}
-	}
 
 	var onlyInYAML, onlyInCode []string
 	for e := range yamlEntities {

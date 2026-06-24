@@ -148,13 +148,13 @@ func TestIntegration_RedactsRealUSSSN(t *testing.T) {
 func TestIntegration_RedactsMultipleEntityTypes(t *testing.T) {
 	r := newIntegrationRedactor(t, DefaultEntityTypes)
 
-	input := "Hi, my name is Alice Johnson, ssn 222-33-4444, email alice@example.com"
+	input := "Hi, my name is Alice Johnson, ssn 222-33-4444, email alice@gmail.com"
 	res, err := r.Redact(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
 
-	for _, leak := range []string{"222-33-4444", "alice@example.com", "Alice Johnson"} {
+	for _, leak := range []string{"222-33-4444", "alice@gmail.com", "Alice Johnson"} {
 		if strings.Contains(res.Text, leak) {
 			t.Errorf("raw value %q leaked into result %q", leak, res.Text)
 		}
@@ -398,7 +398,7 @@ func TestIntegration_ScrubUsesTieredPlaceholders(t *testing.T) {
 	reg := NewRegistry()
 
 	const ssn = "222-33-4444"
-	const email = "alice@example.com"
+	const email = "alice@gmail.com"
 	input := "ssn " + ssn + " email " + email
 
 	res, err := r.Scrub(context.Background(), input, reg)
@@ -464,7 +464,7 @@ func TestIntegration_ScrubJSONPayload(t *testing.T) {
 	reg := NewRegistry()
 
 	const ssn = "222-33-4444"
-	const email = "bob@example.com"
+	const email = "bob@gmail.com"
 	input := fmt.Sprintf(
 		`{"messages":[{"role":"user","content":"my ssn is %s and email %s"}]}`,
 		ssn, email,

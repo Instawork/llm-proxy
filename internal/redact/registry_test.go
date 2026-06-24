@@ -165,7 +165,7 @@ func TestScrub_PolicyAwarePlaceholders(t *testing.T) {
 		{Start: 9, End: 20, EntityType: "US_SSN", Score: 0.9},
 	}
 	reg := NewRegistry()
-	res := spliceSpans("Jane Doe 222-33-4444", spans, 0.5, reg, false)
+	res := spliceSpans("Jane Doe 222-33-4444", spans, 0.5, reg, false, true)
 	if !strings.Contains(res.Text, "<PERSON_1>") {
 		t.Fatalf("expected PERSON placeholder in %q", res.Text)
 	}

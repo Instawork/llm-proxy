@@ -191,3 +191,107 @@ func testPIIRedactWireStackProviderEndToEnd(t *testing.T, tc wireStackProviderCa
 		t.Fatalf("%s MASK placeholder leaked after restore: %q", tc.name, respBody)
 	}
 }
+
+func TestPIIRedactWireStack_MiddleGroundNamePolicy(t *testing.T) {
+	const fullName = "Alice Johnson"
+	const firstName = "Jess"
+	const state = "Massachusetts"
+	const email = "jess@gmail.com"
+	prompt := fmt.Sprintf(
+		"Hi %s, contact %s in %s at %s.",
+		firstName, fullName, state, email,
+	)
+	detections := []wireDetection{
+		{firstName, "PERSON"},
+		{fullName, "PERSON"},
+		{state, "LOCATION"},
+		{email, "EMAIL_ADDRESS"},
+	}
+
+	providers := []wireStackProviderCase{
+		func() wireStackProviderCase {
+			c := wireStackOpenAICase()
+			c.requestBody = wireStackOpenAINamePrompt(prompt)
+			return c
+		}(),
+		func() wireStackProviderCase {
+			c := wireStackAnthropicCase()
+			c.requestBody = wireStackAnthropicNamePrompt(prompt)
+			return c
+		}(),
+		func() wireStackProviderCase {
+			c := wireStackGeminiCase()
+			c.requestBody = wireStackGeminiNamePrompt(prompt)
+			return c
+		}(),
+	}
+
+	for _, tc := range providers {
+		t.Run(tc.name, func(t *testing.T) {
+			testPIIRedactWireStackNamePolicy(t, tc, detections, []string{firstName, state}, []string{fullName, email}, fullName, email)
+		})
+	}
+}
+
+func testPIIRedactWireStackNamePolicy(
+	t *testing.T,
+	tc wireStackProviderCase,
+	detections []wireDetection,
+	mustKeep, mustRedact []string,
+	fullName, email string,
+) {
+	t.Helper()
+	redactor := wireTestRedactorWithDetections(t, detections)
+	pm := wireTestProviderManager(t)
+
+	var upstreamBody []byte
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamBody, _ = io.ReadAll(r.Body)
+		echo := tc.upstreamText(upstreamBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(tc.responseBody(echo)))
+	})
+
+	stack := PIIRedactMiddleware(redactor, PIIRedactConfig{
+		GlobalEnabled:         true,
+		WirePlaceholders:      true,
+		DefaultAllowStreaming: true,
+	})(productionPIIWireStack(pm, handler))
+
+	req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.requestBody("unused")))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	stack.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s stack returned %d: %s", tc.name, rec.Code, rec.Body.String())
+	}
+	upstream := string(upstreamBody)
+	for _, keep := range mustKeep {
+		if !strings.Contains(upstream, keep) {
+			t.Fatalf("%s upstream missing allowed value %q: %q", tc.name, keep, upstream)
+		}
+	}
+	for _, redact := range mustRedact {
+		if strings.Contains(upstream, redact) {
+			t.Fatalf("%s upstream still contains %q: %q", tc.name, redact, upstream)
+		}
+	}
+	if !strings.Contains(upstream, "<EMAIL_ADDRESS_1>") {
+		t.Fatalf("%s upstream missing email placeholder: %q", tc.name, upstream)
+	}
+	if !strings.Contains(upstream, "<PERSON_1>") {
+		t.Fatalf("%s upstream missing full-name placeholder: %q", tc.name, upstream)
+	}
+	if !strings.Contains(rec.Body.String(), email) {
+		t.Fatalf("%s client response missing restored email: %q", tc.name, rec.Body.String())
+	}
+	for _, keep := range mustKeep {
+		if !strings.Contains(rec.Body.String(), keep) {
+			t.Fatalf("%s client response missing %q: %q", tc.name, keep, rec.Body.String())
+		}
+	}
+	if !strings.Contains(rec.Body.String(), fullName) {
+		t.Fatalf("%s client response missing restored full name: %q", tc.name, rec.Body.String())
+	}
+}

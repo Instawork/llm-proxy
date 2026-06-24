@@ -211,6 +211,138 @@ func captureLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+func TestPIIRedactMiddleware_DevLogRawEntities(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"email josé@example.com"}]}`
+	r := &fakeRedactor{
+		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+			return redact.Result{
+				Text:         strings.Replace(in, "josé@example.com", "<EMAIL_ADDRESS_1>", 1),
+				EntityCounts: map[string]int{"EMAIL_ADDRESS": 1},
+				DetectedEntities: []redact.DetectedEntity{
+					{EntityType: "EMAIL_ADDRESS", Text: "josé@example.com", Policy: "mask", Score: 0.95, Start: 45, End: 61},
+				},
+			}, nil
+		},
+	}
+	cap := &captureHandler{}
+	var logBuf bytes.Buffer
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:     true,
+		WirePlaceholders:  true,
+		DevLogRawEntities: true,
+		Logger:            captureLogger(&logBuf),
+	})(cap)
+
+	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/anthropic/v1/messages", body))
+
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, `"msg":"pii_redact: dev raw entities"`) {
+		t.Fatalf("expected dev raw entity log, got %s", logOut)
+	}
+	if !strings.Contains(logOut, "josé@example.com") {
+		t.Fatalf("expected raw entity value in dev log, got %s", logOut)
+	}
+}
+
+func TestPIIRedactMiddleware_LogsAllowedEntityCounts(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"Hi Jess in Massachusetts"}]}`
+	r := &fakeRedactor{
+		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+			return redact.Result{
+				Text:         in,
+				EntityCounts: map[string]int{},
+				AllowedEntities: []redact.AllowedEntity{
+					{EntityType: "PERSON", Text: "Jess", Score: 0.9, Reason: "single_token_person"},
+					{EntityType: "LOCATION", Text: "Massachusetts", Score: 0.85, Reason: "non_street_location"},
+				},
+			}, nil
+		},
+	}
+	cap := &captureHandler{}
+	var logBuf bytes.Buffer
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:    true,
+		WirePlaceholders: true,
+		Logger:           captureLogger(&logBuf),
+	})(cap)
+
+	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/anthropic/v1/messages", body))
+
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, `"allowed_entity_counts":{"LOCATION":1,"PERSON":1}`) &&
+		!strings.Contains(logOut, `"allowed_entity_counts":{"PERSON":1,"LOCATION":1}`) {
+		t.Fatalf("expected allowed entity counts in ok log, got %s", logOut)
+	}
+	if strings.Contains(logOut, "Jess") || strings.Contains(logOut, "Massachusetts") {
+		t.Fatalf("allowed entity values should not appear without dev flag: %s", logOut)
+	}
+}
+
+func TestPIIRedactMiddleware_DevLogAllowedEntities(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"Hi Jess in Massachusetts"}]}`
+	r := &fakeRedactor{
+		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+			return redact.Result{
+				Text:         in,
+				EntityCounts: map[string]int{},
+				AllowedEntities: []redact.AllowedEntity{
+					{EntityType: "PERSON", Text: "Jess", Score: 0.9, Reason: "single_token_person"},
+					{EntityType: "LOCATION", Text: "Massachusetts", Score: 0.85, Reason: "non_street_location"},
+				},
+			}, nil
+		},
+	}
+	cap := &captureHandler{}
+	var logBuf bytes.Buffer
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:     true,
+		WirePlaceholders:  true,
+		DevLogRawEntities: true,
+		Logger:            captureLogger(&logBuf),
+	})(cap)
+
+	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/anthropic/v1/messages", body))
+
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, `"msg":"pii_redact: dev allowed entities"`) {
+		t.Fatalf("expected dev allowed entity log, got %s", logOut)
+	}
+	if !strings.Contains(logOut, "Jess") || !strings.Contains(logOut, "Massachusetts") {
+		t.Fatalf("expected allowed entity values in dev log, got %s", logOut)
+	}
+	if !strings.Contains(logOut, "single_token_person") || !strings.Contains(logOut, "non_street_location") {
+		t.Fatalf("expected allow reasons in dev log, got %s", logOut)
+	}
+}
+
+func TestPIIRedactMiddleware_RawEntitiesNotLoggedWithoutDevFlag(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"email josé@example.com"}]}`
+	r := &fakeRedactor{
+		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+			return redact.Result{
+				Text:         strings.Replace(in, "josé@example.com", "<EMAIL_ADDRESS_1>", 1),
+				EntityCounts: map[string]int{"EMAIL_ADDRESS": 1},
+				DetectedEntities: []redact.DetectedEntity{
+					{EntityType: "EMAIL_ADDRESS", Text: "josé@example.com", Policy: "mask", Score: 0.95, Start: 45, End: 61},
+				},
+			}, nil
+		},
+	}
+	cap := &captureHandler{}
+	var logBuf bytes.Buffer
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:    true,
+		WirePlaceholders: true,
+		Logger:           captureLogger(&logBuf),
+	})(cap)
+
+	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/anthropic/v1/messages", body))
+
+	if strings.Contains(logBuf.String(), "josé@example.com") {
+		t.Fatalf("raw entity should not be logged without dev flag: %s", logBuf.String())
+	}
+}
+
 func TestPIIRedactMiddleware_OversizeBodyFailOpenPassthrough(t *testing.T) {
 	big := strings.Repeat("a", 5000)
 	r := &fakeRedactor{}

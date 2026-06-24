@@ -48,3 +48,16 @@ func PolicyFor(entityType string) Policy {
 	}
 	return PolicyRedact
 }
+
+func (p Policy) String() string {
+	switch p {
+	case PolicyMask:
+		return "mask"
+	case PolicySeal:
+		return "seal"
+	case PolicyRedact:
+		return "redact"
+	default:
+		return "unknown"
+	}
+}
