@@ -864,9 +864,16 @@ func newPerKeyOverrideProvider(store *apikeys.Store, logger *slog.Logger) rateli
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		rec, err := store.GetKeyRecord(ctx, keyID)
 
 		e := entry{exp: now.Add(ttl)}
+		if !apikeys.HasKeyPrefix(keyID) {
+			mu.Lock()
+			cache[keyID] = e
+			mu.Unlock()
+			return e.limits, e.found
+		}
+
+		rec, err := store.GetKeyRecord(ctx, keyID)
 		if err == nil && rec != nil {
 			if lc, found := apikeys.RateLimitOverrides(rec); found {
 				e.limits = lc

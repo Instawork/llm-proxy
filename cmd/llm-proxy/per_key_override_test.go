@@ -38,6 +38,11 @@ func TestNewPerKeyOverrideProvider(t *testing.T) {
 		t.Fatal("missing key should not produce override")
 	}
 
+	_, ok = lookup("sk-proj-upstream-key")
+	if ok {
+		t.Fatal("upstream provider key should not produce override")
+	}
+
 	// Cached miss should not error on repeat.
 	_, ok = lookup(apikeys.KeyPrefix + "missing")
 	if ok {
