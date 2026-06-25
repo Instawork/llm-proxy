@@ -34,6 +34,16 @@ func TestComputeAnalyzeTimeout_CapsAtMax(t *testing.T) {
 	}
 }
 
+func TestComputeAnalyzeTimeout_DefaultMaxWhenUnset(t *testing.T) {
+	got := ComputeAnalyzeTimeout(2_000_000, AnalyzeTimeoutConfig{
+		Base:      8 * time.Second,
+		Per100KiB: 2 * time.Second,
+	})
+	if got != defaultAnalyzeTimeoutMax {
+		t.Fatalf("got %v, want default max %v", got, defaultAnalyzeTimeoutMax)
+	}
+}
+
 func TestAnalyzeTimeoutFromContext(t *testing.T) {
 	ctx := WithAnalyzeTimeout(t.Context(), 12*time.Second)
 	if got := AnalyzeTimeoutFromContext(ctx, 3*time.Second); got != 12*time.Second {

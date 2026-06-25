@@ -58,8 +58,6 @@ func TestScrubJSON_ParallelizesMultipleContentBlocks(t *testing.T) {
 	if peak < 2 {
 		t.Fatalf("expected concurrent /analyze calls, peak active = %d", peak)
 	}
-	sequential := time.Duration(len(body)) // nonsense guard
-	_ = sequential
 	if elapsed >= 3*delay {
 		t.Fatalf("parallel scrub took %v, expected well under sequential %v", elapsed, 3*delay)
 	}

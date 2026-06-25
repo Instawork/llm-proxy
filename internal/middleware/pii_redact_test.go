@@ -687,3 +687,36 @@ func TestPIIRedactMiddleware_StripsImageBeforeAnalyzeAndRestores(t *testing.T) {
 		t.Fatalf("wire body missing redaction marker: %s", wire)
 	}
 }
+
+type timeoutCaptureRedactor struct {
+	timeout time.Duration
+}
+
+func (t *timeoutCaptureRedactor) Redact(ctx context.Context, text string) (redact.Result, error) {
+	return t.Scrub(ctx, text, nil)
+}
+
+func (t *timeoutCaptureRedactor) Scrub(ctx context.Context, text string, _ *redact.Registry) (redact.Result, error) {
+	t.timeout = redact.AnalyzeTimeoutFromContext(ctx, 0)
+	return redact.Result{Text: text, EntityCounts: map[string]int{}}, nil
+}
+
+func TestPIIRedactMiddleware_ScalesAnalyzeTimeoutWithBodySize(t *testing.T) {
+	cap := &captureHandler{}
+	r := &timeoutCaptureRedactor{}
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:           true,
+		AnalyzeTimeout:          8 * time.Second,
+		AnalyzeTimeoutPer100KiB: 2 * time.Second,
+		AnalyzeTimeoutMax:       30 * time.Second,
+	})(cap)
+
+	body := strings.Repeat("x", 434_339)
+	req := newReq(t, http.MethodPost, "/anthropic/v1/messages", body)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if r.timeout != 16*time.Second {
+		t.Fatalf("analyze timeout = %v, want 16s for 434339-byte body", r.timeout)
+	}
+}

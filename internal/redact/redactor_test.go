@@ -863,3 +863,26 @@ func TestSpliceMarkers_Idempotent(t *testing.T) {
 		t.Errorf("idempotency broke: %q -> %q", first.Text, second.Text)
 	}
 }
+
+func TestAnalyze_RespectsScaledTimeoutFromContext(t *testing.T) {
+	const sleep = 80 * time.Millisecond
+
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(sleep)
+		_ = json.NewEncoder(w).Encode([]Span{})
+	})
+	r, err := New(Config{AnalyzerURL: srv.URL, Timeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := WithAnalyzeTimeout(context.Background(), 200*time.Millisecond)
+	if _, err := r.Scrub(ctx, "Jane Doe", NewRegistry()); err != nil {
+		t.Fatalf("scaled timeout should allow slow analyze: %v", err)
+	}
+
+	ctxShort := WithAnalyzeTimeout(context.Background(), 20*time.Millisecond)
+	if _, err := r.Scrub(ctxShort, "Jane Doe", NewRegistry()); err == nil {
+		t.Fatal("short scaled timeout should fail slow analyze")
+	}
+}

@@ -146,6 +146,11 @@ func (r *Redactor) runJSONScrubTasks(
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
 				return
 			}
 
@@ -169,7 +174,13 @@ func (r *Redactor) runJSONScrubTasks(
 	}
 
 	wg.Wait()
-	return firstErr
+	if firstErr != nil {
+		return firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Redactor) analyzeConcurrency() int {

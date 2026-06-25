@@ -3,7 +3,6 @@ package redact
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -42,7 +41,7 @@ func (c *redisAnalyzeCache) Get(ctx context.Context, analysisText string) ([]Spa
 		slog.Debug("redact: analyze cache redis decode failed", "error", err)
 		return nil, false
 	}
-	return spans, true
+	return cloneSpans(spans), true
 }
 
 func (c *redisAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string) map[string][]Span {
@@ -60,62 +59,40 @@ func (c *redisAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string
 	}
 
 	hits := make(map[string][]Span)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, defaultAnalyzeConcurrency)
-
 	for start := 0; start < len(keys); start += redisMGetChunkSize {
+		if err := ctx.Err(); err != nil {
+			break
+		}
 		end := start + redisMGetChunkSize
 		if end > len(keys) {
 			end = len(keys)
 		}
 		chunk := keys[start:end]
 
-		wg.Add(1)
-		go func(chunk []string) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
+		vals, err := c.rdb.MGet(ctx, chunk...).Result()
+		if err != nil {
+			if err != redis.Nil {
+				slog.Debug("redact: analyze cache redis mget failed", "error", err)
 			}
+			continue
+		}
 
-			vals, err := c.rdb.MGet(ctx, chunk...).Result()
+		for i, val := range vals {
+			if val == nil {
+				continue
+			}
+			raw, ok := val.(string)
+			if !ok {
+				continue
+			}
+			spans, err := decodeAnalyzeCacheSpans([]byte(raw))
 			if err != nil {
-				if err != redis.Nil {
-					slog.Debug("redact: analyze cache redis mget failed", "error", err)
-				}
-				return
+				continue
 			}
-
-			local := make(map[string][]Span)
-			for i, val := range vals {
-				if val == nil {
-					continue
-				}
-				raw, ok := val.(string)
-				if !ok {
-					continue
-				}
-				spans, err := decodeAnalyzeCacheSpans([]byte(raw))
-				if err != nil {
-					continue
-				}
-				local[textByKey[chunk[i]]] = spans
-			}
-			if len(local) == 0 {
-				return
-			}
-			mu.Lock()
-			for text, spans := range local {
-				hits[text] = spans
-			}
-			mu.Unlock()
-		}(chunk)
+			hits[textByKey[chunk[i]]] = cloneSpans(spans)
+		}
 	}
 
-	wg.Wait()
 	if len(hits) == 0 {
 		return nil
 	}
@@ -125,6 +102,7 @@ func (c *redisAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string
 func (c *redisAnalyzeCache) Set(ctx context.Context, analysisText string, spans []Span) {
 	data, err := encodeAnalyzeCacheSpans(spans)
 	if err != nil {
+		slog.Debug("redact: analyze cache redis encode failed", "error", err)
 		return
 	}
 	if err := c.rdb.Set(ctx, c.redisKey(analysisText), data, c.ttl).Err(); err != nil {
