@@ -262,7 +262,7 @@ func TestScrub_JSONAnalysisIgnoresObjectKeys(t *testing.T) {
 
 func TestMaskJSONKeysForAnalysis_PreservesCharacterOffsets(t *testing.T) {
 	body := `{"méta":"ignored","value":"José in São Paulo"}`
-	analyzedText := prepareJSONForAnalysis(body)
+	analyzedText := prepareJSONForAnalysis(body, unionContentAdapter{})
 
 	for _, key := range []string{"méta", "value"} {
 		if strings.Contains(analyzedText, key) {

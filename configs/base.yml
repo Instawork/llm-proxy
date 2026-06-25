@@ -46,6 +46,11 @@ features:
     # Presidio /analyze can take hundreds of ms (cold start, large bodies).
     # When pii_redact is on, prefer waiting for redaction over failing open early.
     timeout_ms: 3000
+    # Extra /analyze budget per 100 KiB of request body. Large tool results
+    # (Redshift table_acl, etc.) need headroom beyond the base timeout.
+    timeout_ms_per_100kb: 1000
+    timeout_ms_max: 30000
+    analyze_concurrency: 4
     score_threshold: 0.5
     # Empty -> use redact.DefaultEntityTypes. Narrow this list to save
     # latency on known-safe payload shapes, never widen it here — the
@@ -63,6 +68,19 @@ features:
     max_body_bytes: 0
     allow_test_emails: true
     allow_per_key_override: false
+    # Cache Presidio /analyze spans per content block (5 min TTL).
+    # memory: per-task hot set; redis: shared across ECS tasks.
+    # analyze_cache:
+    #   enabled: true
+    #   ttl_seconds: 300
+    #   memory:
+    #     enabled: true
+    #     max_entries: 4096
+    #   redis:
+    #     enabled: true
+    #     redis:
+    #       url: "${REDIS_URL}"
+    #       db: 7
     # wire_placeholders: true   # default when enabled — send <PERSON_1> upstream
     # default_allow_streaming: true  # per-key allow_streaming can force stream:false
   # ---------------------------------------------------------------------------

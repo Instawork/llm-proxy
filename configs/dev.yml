@@ -78,6 +78,14 @@ features:
     analyzer_url: "http://presidio:3000"
     fail_mode: "open"
     allow_per_key_override: true
+    analyze_cache:
+      enabled: true
+      ttl_seconds: 300
+      memory:
+        enabled: true
+        max_entries: 4096
+      redis:
+        enabled: false
     datadog:
       host: "datadog-agent"
       port: "8125"

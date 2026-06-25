@@ -117,12 +117,24 @@ features:
     analyzer_url: "http://localhost:3000"
     fail_mode: "closed"
     # Large vision bodies (the proxy strips embedded base64 before /analyze,
-    # but big multi-part text + cold starts still take a while). 8s leaves
-    # headroom over the warm-sidecar p99 so fail_mode: closed doesn't 503 on
-    # the occasional slow scan. Tune down once images are reliably stripped
-    # and the warm p99 is baselined.
+    # but big multi-part text + cold starts still take a while). Base timeout
+    # plus per-100KiB scaling covers tool-result payloads (Redshift ACLs).
     timeout_ms: 8000
+    timeout_ms_per_100kb: 2000
+    timeout_ms_max: 30000
+    analyze_concurrency: 4
     allow_per_key_override: false
+    analyze_cache:
+      enabled: true
+      ttl_seconds: 300
+      memory:
+        enabled: true
+        max_entries: 4096
+      redis:
+        enabled: true
+        redis:
+          url: "${REDIS_URL}"
+          db: 7
     datadog:
       host: "localhost"
       port: "8125"

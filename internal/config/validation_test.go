@@ -169,6 +169,14 @@ func TestValidatePIIRedact_AllBranches(t *testing.T) {
 		{"max_body_bytes zero is fine (uses default)", func(c *PIIRedactConfig) { c.MaxBodyBytes = 0 }, true},
 		{"max_body_bytes positive ok", func(c *PIIRedactConfig) { c.MaxBodyBytes = 1024 * 1024 }, true},
 		{"max_body_bytes negative", func(c *PIIRedactConfig) { c.MaxBodyBytes = -1 }, false},
+		{"analyze_cache ttl negative", func(c *PIIRedactConfig) {
+			c.AnalyzeCache.Enabled = true
+			c.AnalyzeCache.TTLSeconds = -1
+		}, false},
+		{"analyze_cache redis enabled missing config", func(c *PIIRedactConfig) {
+			c.AnalyzeCache.Enabled = true
+			c.AnalyzeCache.Redis.Enabled = true
+		}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

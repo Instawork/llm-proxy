@@ -137,6 +137,15 @@ type PIIRedactConfig struct {
 
 	// DevLogRawEntities logs raw detected PII values. Only enable in local dev.
 	DevLogRawEntities bool
+
+	// AnalyzeTimeout is the base Presidio /analyze deadline (YAML timeout_ms).
+	AnalyzeTimeout time.Duration
+
+	// AnalyzeTimeoutPer100KiB adds budget per 100 KiB of request body when > 0.
+	AnalyzeTimeoutPer100KiB time.Duration
+
+	// AnalyzeTimeoutMax caps the scaled deadline. Zero uses redact default cap.
+	AnalyzeTimeoutMax time.Duration
 }
 
 // PIIRedactMiddleware wires a PIIRedactor into the request lifecycle.
@@ -245,6 +254,27 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			analysisBody, imageRestores := stripImageDataForAnalysis(body)
 			provider := getProviderFromPath(r.URL.Path)
 
+			analyzeTimeout := redact.ComputeAnalyzeTimeout(len(body), redact.AnalyzeTimeoutConfig{
+				Base:      cfg.AnalyzeTimeout,
+				Per100KiB: cfg.AnalyzeTimeoutPer100KiB,
+				Max:       cfg.AnalyzeTimeoutMax,
+			})
+			baseAnalyzeTimeout := cfg.AnalyzeTimeout
+			if baseAnalyzeTimeout <= 0 {
+				baseAnalyzeTimeout = analyzeTimeout
+			}
+			timeoutScaled := cfg.AnalyzeTimeoutPer100KiB > 0 && analyzeTimeout > baseAnalyzeTimeout
+			if timeoutScaled {
+				logger.Info("pii_redact: analyze timeout scaled",
+					slog.String("path", r.URL.Path),
+					slog.String("provider", provider),
+					slog.Int("body_bytes", len(body)),
+					slog.Duration("analyze_timeout_base", baseAnalyzeTimeout),
+					slog.Duration("analyze_timeout", analyzeTimeout))
+			}
+			redactCtx := redact.WithAnalyzeTimeout(r.Context(), analyzeTimeout)
+			redactCtx = redact.WithProvider(redactCtx, provider)
+
 			redactStart := time.Now()
 			var (
 				result    redact.Result
@@ -257,9 +287,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					logger.Debug("pii_redact: wire request before scrub",
 						piiWireBodyLogAttrs(r.Context(), r.URL.Path, provider, body)...)
 				}
-				result, redactErr = redactor.Scrub(r.Context(), string(analysisBody), registry)
+				result, redactErr = redactor.Scrub(redactCtx, string(analysisBody), registry)
 			} else {
-				result, redactErr = redactor.Redact(r.Context(), string(analysisBody))
+				result, redactErr = redactor.Redact(redactCtx, string(analysisBody))
 			}
 			redactDuration := time.Since(redactStart)
 
@@ -270,7 +300,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 						slog.String("provider", provider),
 						slog.Int("body_bytes", len(body)),
 						slog.String("error", redactErr.Error()),
-						slog.Duration("duration", redactDuration))
+						slog.Duration("duration", redactDuration),
+						slog.Duration("analyze_timeout", analyzeTimeout),
+						slog.Bool("analyze_timeout_scaled", timeoutScaled))
 					recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailClosed)
 					ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailClosed, nil))
 					writePIIResponseHeadersPartial(w, ctx)
@@ -282,7 +314,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					slog.String("provider", provider),
 					slog.Int("body_bytes", len(body)),
 					slog.String("error", redactErr.Error()),
-					slog.Duration("duration", redactDuration))
+					slog.Duration("duration", redactDuration),
+					slog.Duration("analyze_timeout", analyzeTimeout),
+					slog.Bool("analyze_timeout_scaled", timeoutScaled))
 				recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailOpen)
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailOpen, nil))
 				writePIIResponseHeadersPartial(w, ctx)
@@ -330,7 +364,9 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				slog.Any("entity_counts", result.EntityCounts),
 				slog.Int("entity_types_allowed", len(redact.AllowedEntityCounts(result.AllowedEntities))),
 				slog.Any("allowed_entity_counts", redact.AllowedEntityCounts(result.AllowedEntities)),
-				slog.Duration("duration", redactDuration))
+				slog.Duration("duration", redactDuration),
+				slog.Duration("analyze_timeout", analyzeTimeout),
+				slog.Bool("analyze_timeout_scaled", timeoutScaled))
 
 			recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, result.EntityCounts, len(body), redactDuration, piiOutcomeOK)
 			if cfg.DevLogRawEntities && len(result.DetectedEntities) > 0 {

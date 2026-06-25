@@ -8,7 +8,7 @@ import (
 
 func TestPrepareJSONForAnalysis_SkipsToolSchemaValues(t *testing.T) {
 	body := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hi Jess"}],"tools":[{"name":"GetBookingTemplateDetails","input_schema":{"properties":{"max":{"title":"Max Multiplier","description":"Per-position multiplier"}}}}]}`
-	analyzed := prepareJSONForAnalysis(body)
+	analyzed := prepareJSONForAnalysis(body, anthropicContentAdapter{})
 
 	for _, hidden := range []string{
 		"GetBookingTemplateDetails",
@@ -30,7 +30,7 @@ func TestPrepareJSONForAnalysis_SkipsToolSchemaValues(t *testing.T) {
 
 func TestPrepareJSONForAnalysis_ScansToolCallArguments(t *testing.T) {
 	body := `{"messages":[{"role":"assistant","tool_calls":[{"function":{"name":"lookup","arguments":"{\"email\":\"alice@example.com\"}"}}]}]}`
-	analyzed := prepareJSONForAnalysis(body)
+	analyzed := prepareJSONForAnalysis(body, anthropicContentAdapter{})
 
 	if !strings.Contains(analyzed, "alice@example.com") {
 		t.Fatalf("tool call arguments should remain visible to analyzer: %q", analyzed)
@@ -40,9 +40,26 @@ func TestPrepareJSONForAnalysis_ScansToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestPrepareJSONForAnalysis_MasksACLMetadata(t *testing.T) {
+	acl := strings.Repeat("insta_admin=r/insta_admin,", 500)
+	body := `{"tables":[{"table_name":"access_requests","table_acl":"` + acl + `"}]}`
+	analyzed := prepareJSONForAnalysis(body, anthropicContentAdapter{})
+
+	if strings.Contains(analyzed, "insta_admin") {
+		t.Fatalf("ACL grant string should be masked from analyzer text")
+	}
+	if !strings.Contains(analyzed, "access_requests") {
+		t.Fatalf("table_name should remain visible: %q", analyzed)
+	}
+	// Length-preserving mask keeps offsets stable for sibling fields.
+	if len(analyzed) != len(body) {
+		t.Fatalf("ACL mask should preserve length: got %d want %d", len(analyzed), len(body))
+	}
+}
+
 func TestPrepareJSONForAnalysis_PreservesOffsetsForMessageContent(t *testing.T) {
 	body := `{"messages":[{"role":"user","content":"José in Massachusetts"}]}`
-	analyzed := prepareJSONForAnalysis(body)
+	analyzed := prepareJSONForAnalysis(body, anthropicContentAdapter{})
 
 	for _, value := range []string{"José", "Massachusetts"} {
 		originalSpan := spanForValue(t, body, value, "PERSON")

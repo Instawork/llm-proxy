@@ -119,6 +119,19 @@ type PIIRedactConfig struct {
 	// Tune downward only after baselining warm sidecar p99 if latency matters.
 	TimeoutMs int `yaml:"timeout_ms"`
 
+	// TimeoutMsPer100KB adds extra /analyze budget per 100 KiB of request
+	// body (see redact.analyze100KiB). Zero disables scaling. Large tool
+	// results (Redshift table_acl, etc.) need the extra headroom.
+	TimeoutMsPer100KB int `yaml:"timeout_ms_per_100kb,omitempty"`
+
+	// TimeoutMsMax caps the scaled deadline. Zero defaults to 30s when
+	// timeout_ms_per_100kb is set.
+	TimeoutMsMax int `yaml:"timeout_ms_max,omitempty"`
+
+	// AnalyzeConcurrency caps parallel Presidio /analyze calls per JSON body.
+	// Zero defaults to 4. Tune down if the sidecar shows queue latency.
+	AnalyzeConcurrency int `yaml:"analyze_concurrency,omitempty"`
+
 	// ScoreThreshold is the minimum Presidio confidence score for a
 	// span to be redacted. Default: 0.5.
 	ScoreThreshold float64 `yaml:"score_threshold"`
@@ -168,6 +181,28 @@ type PIIRedactConfig struct {
 	// AllowTestEmails, when nil or true, lets obvious fixture emails pass
 	// through middle-ground filtering (example.com, test@*, dev@*).
 	AllowTestEmails *bool `yaml:"allow_test_emails,omitempty"`
+
+	// AnalyzeCache caches Presidio span lists per content block (memory
+	// and/or Redis) so unchanged chat history skips redundant /analyze calls.
+	AnalyzeCache PIIRedactAnalyzeCacheConfig `yaml:"analyze_cache,omitempty"`
+}
+
+// PIIRedactAnalyzeCacheConfig configures optional Presidio span caching.
+type PIIRedactAnalyzeCacheConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	TTLSeconds int  `yaml:"ttl_seconds,omitempty"`
+	Memory     PIIRedactAnalyzeCacheMemoryConfig `yaml:"memory"`
+	Redis      PIIRedactAnalyzeCacheRedisConfig  `yaml:"redis"`
+}
+
+type PIIRedactAnalyzeCacheMemoryConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	MaxEntries int  `yaml:"max_entries,omitempty"`
+}
+
+type PIIRedactAnalyzeCacheRedisConfig struct {
+	Enabled bool `yaml:"enabled"`
+	Redis   *RedisConfig `yaml:"redis,omitempty"`
 }
 
 // IDGateConfig configures OCR + Presidio scanning of embedded chat images to
@@ -1165,11 +1200,29 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	if r.TimeoutMs < 0 {
 		return fmt.Errorf("timeout_ms cannot be negative")
 	}
+	if r.TimeoutMsPer100KB < 0 {
+		return fmt.Errorf("timeout_ms_per_100kb cannot be negative")
+	}
+	if r.TimeoutMsMax < 0 {
+		return fmt.Errorf("timeout_ms_max cannot be negative")
+	}
+	if r.AnalyzeConcurrency < 0 {
+		return fmt.Errorf("analyze_concurrency cannot be negative")
+	}
 	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
 		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)
 	}
 	if r.MaxBodyBytes < 0 {
 		return fmt.Errorf("max_body_bytes cannot be negative")
+	}
+	if r.AnalyzeCache.TTLSeconds < 0 {
+		return fmt.Errorf("analyze_cache.ttl_seconds cannot be negative")
+	}
+	if r.AnalyzeCache.Memory.MaxEntries < 0 {
+		return fmt.Errorf("analyze_cache.memory.max_entries cannot be negative")
+	}
+	if r.AnalyzeCache.Enabled && r.AnalyzeCache.Redis.Enabled && r.AnalyzeCache.Redis.Redis == nil {
+		return fmt.Errorf("analyze_cache.redis.redis is required when analyze_cache.redis.enabled is true")
 	}
 	env := os.Getenv("ENVIRONMENT")
 	if env == "production" && r.WirePlaceholders != nil && !*r.WirePlaceholders {

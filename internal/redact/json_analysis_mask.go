@@ -5,7 +5,10 @@ import (
 	"strings"
 )
 
-func prepareJSONForAnalysis(text string) string {
+func prepareJSONForAnalysis(text string, adapter ContentAdapter) string {
+	if adapter == nil {
+		adapter = unionContentAdapter{}
+	}
 	if !json.Valid([]byte(text)) {
 		return text
 	}
@@ -90,7 +93,7 @@ func prepareJSONForAnalysis(text string) string {
 				pendingKey, _ = readJSONString(runes, keyStart)
 				stack[len(stack)-1] = jsonObjectColon
 			} else {
-				maskValue := shouldMaskJSONStringValue(path, pendingKey)
+				maskValue := shouldMaskJSONStringValue(path, pendingKey, adapter)
 				i = copyOrMaskJSONString(runes, out, i, maskValue)
 				pendingKey = ""
 				markJSONValueSeen(&stack)
@@ -127,17 +130,20 @@ func readJSONString(runes []rune, start int) (string, int) {
 	return b.String(), i
 }
 
-func shouldMaskJSONStringValue(path []string, key string) bool {
-	if isUserContentJSONPath(path, key) {
+func shouldMaskJSONStringValue(path []string, key string, adapter ContentAdapter) bool {
+	if isMetadataACLKey(key) {
+		return true
+	}
+	if adapter.ScrubString(path, key) {
 		return false
 	}
 	if key == "description" || key == "title" {
 		return true
 	}
-	if key == "name" && (hasJSONPathAncestor(path, "tools") || hasJSONPathAncestor(path, "functions") || hasJSONPathAncestor(path, "tool_calls")) {
+	if key == "name" && (hasPathAncestor(path, "tools") || hasPathAncestor(path, "functions") || hasPathAncestor(path, "tool_calls")) {
 		return true
 	}
-	if hasJSONPathAncestor(path, "enum") {
+	if hasPathAncestor(path, "enum") {
 		return true
 	}
 	for _, seg := range path {
@@ -148,27 +154,14 @@ func shouldMaskJSONStringValue(path []string, key string) bool {
 	return jsonSchemaContainerKey(key)
 }
 
-func isUserContentJSONPath(path []string, key string) bool {
+func isMetadataACLKey(key string) bool {
 	switch key {
-	case "system":
+	case "table_acl", "relacl", "column_acl", "acl",
+		"privileges", "grants", "table_privileges", "column_privileges",
+		"grantee", "defaclacl":
 		return true
-	case "content":
-		return hasJSONPathAncestor(path, "messages") ||
-			hasJSONPathAncestor(path, "tool_result") ||
-			hasJSONPathAncestor(path, "output")
-	case "text":
-		return hasJSONPathAncestor(path, "parts") ||
-			hasJSONPathAncestor(path, "content") ||
-			hasJSONPathAncestor(path, "message")
-	case "input":
-		return hasJSONPathAncestor(path, "tool_use") ||
-			hasJSONPathAncestor(path, "tool_calls") ||
-			hasJSONPathAncestor(path, "function_call")
-	case "arguments", "output":
-		return hasJSONPathAncestor(path, "tool_calls") ||
-			hasJSONPathAncestor(path, "function")
 	default:
-		return false
+		return strings.HasSuffix(key, "_acl")
 	}
 }
 
@@ -180,13 +173,4 @@ func jsonSchemaContainerKey(seg string) bool {
 	default:
 		return false
 	}
-}
-
-func hasJSONPathAncestor(path []string, key string) bool {
-	for _, seg := range path {
-		if seg == key {
-			return true
-		}
-	}
-	return false
 }

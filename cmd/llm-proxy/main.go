@@ -163,6 +163,8 @@ var globalCircuitConfig circuit.Config
 // breaker is running without distributed coordination.
 var globalCircuitRedisFallback bool
 
+var globalAnalyzeCacheClose func() error
+
 // Known provider names the circuit breaker tracks.  Kept as a single source
 // of truth so the wiring code, /health handler, and any future diagnostics
 // agree on the list.  Bedrock is appended at runtime in runServer when the
@@ -1471,12 +1473,23 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 
 		redactCfg := redact.Config{
-			AnalyzerURL:     analyzerURL,
-			Timeout:         time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
-			ScoreThreshold:  piiCfg.ScoreThreshold,
-			EntityTypes:     piiCfg.EntityTypes,
-			Language:        piiCfg.Language,
-			AllowTestEmails: piiCfg.AllowTestEmails,
+			AnalyzerURL:        analyzerURL,
+			Timeout:            time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			ScoreThreshold:     piiCfg.ScoreThreshold,
+			EntityTypes:        piiCfg.EntityTypes,
+			Language:           piiCfg.Language,
+			AllowTestEmails:    piiCfg.AllowTestEmails,
+			AnalyzeConcurrency: piiCfg.AnalyzeConcurrency,
+		}
+		cacheCfg := redact.AnalyzeCacheConfigFromYAML(piiCfg.AnalyzeCache)
+		fingerprint := redact.AnalyzeCacheFingerprint(redactCfg)
+		analyzeCache, closeCache, cacheErr := redact.NewAnalyzeCache(cacheCfg, fingerprint)
+		if cacheErr != nil {
+			logger.Error("Failed to construct PII analyze cache; continuing without cache",
+				"error", cacheErr)
+		} else if analyzeCache != nil {
+			redactCfg.AnalyzeCache = analyzeCache
+			globalAnalyzeCacheClose = closeCache
 		}
 		var err error
 		redactor, err = redact.New(redactCfg)
@@ -1486,6 +1499,13 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			redactor = nil
 		} else {
 			redact.SetGlobal(redactor)
+			if analyzeCache != nil {
+				logger.Info("PII analyze cache enabled",
+					"ttl_seconds", int(cacheCfg.TTL.Seconds()),
+					"memory", cacheCfg.MemoryEnabled,
+					"redis", cacheCfg.RedisEnabled,
+				)
+			}
 		}
 	}
 
@@ -1542,15 +1562,18 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		env := strings.ToLower(os.Getenv("ENVIRONMENT"))
 		devLogRawEntities := env == "dev" || env == "local"
 		r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
-			GlobalEnabled:         piiCfg.Enabled,
-			FailClosed:            failClosed,
-			MaxBodyBytes:          piiCfg.MaxBodyBytes,
-			Logger:                logger,
-			Recorder:              globalPIIRecorder,
-			Metrics:               initializePIIMetrics(yamlConfig),
-			WirePlaceholders:      wirePlaceholders,
-			DefaultAllowStreaming: defaultAllowStreaming,
-			DevLogRawEntities:     devLogRawEntities,
+			GlobalEnabled:           piiCfg.Enabled,
+			FailClosed:              failClosed,
+			MaxBodyBytes:            piiCfg.MaxBodyBytes,
+			Logger:                  logger,
+			Recorder:                globalPIIRecorder,
+			Metrics:                 initializePIIMetrics(yamlConfig),
+			WirePlaceholders:        wirePlaceholders,
+			DefaultAllowStreaming:   defaultAllowStreaming,
+			DevLogRawEntities:       devLogRawEntities,
+			AnalyzeTimeout:          time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			AnalyzeTimeoutPer100KiB: time.Duration(piiCfg.TimeoutMsPer100KB) * time.Millisecond,
+			AnalyzeTimeoutMax:       time.Duration(piiCfg.TimeoutMsMax) * time.Millisecond,
 		}))
 		logger.Info(
 			"🛡️  PII redaction middleware installed",
@@ -1561,6 +1584,10 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			"dev_log_raw_entities", devLogRawEntities,
 			"analyzer_url", piiCfg.AnalyzerURL,
 			"fail_mode", piiCfg.FailMode,
+			"timeout_ms", piiCfg.TimeoutMs,
+			"timeout_ms_per_100kb", piiCfg.TimeoutMsPer100KB,
+			"timeout_ms_max", piiCfg.TimeoutMsMax,
+			"analyze_concurrency", piiCfg.AnalyzeConcurrency,
 		)
 	}
 
@@ -1852,6 +1879,11 @@ func gracefulShutdown(server *http.Server) {
 	if globalAdminRollupStore != nil {
 		if err := globalAdminRollupStore.Close(); err != nil {
 			logger.Warn("Admin rollups: Redis close failed", "error", err)
+		}
+	}
+	if globalAnalyzeCacheClose != nil {
+		if err := globalAnalyzeCacheClose(); err != nil {
+			logger.Warn("PII analyze cache: Redis close failed", "error", err)
 		}
 	}
 

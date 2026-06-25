@@ -187,6 +187,13 @@ type Config struct {
 	// AllowTestEmails, when nil or true, lets obvious fixture emails
 	// (example.com, test@*, dev@*) pass through middle-ground filtering.
 	AllowTestEmails *bool
+
+	// AnalyzeConcurrency caps parallel /analyze calls when scrubbing JSON
+	// with multiple user-content strings. Zero defaults to 4.
+	AnalyzeConcurrency int
+
+	// AnalyzeCache optionally caches Presidio span lists per content block.
+	AnalyzeCache AnalyzeCache
 }
 
 // Defaults returns a Config populated with the documented defaults.
@@ -206,6 +213,7 @@ type Redactor struct {
 	cfg             Config
 	client          *http.Client
 	allowTestEmails bool
+	analyzeCache    AnalyzeCache
 }
 
 // New constructs a Redactor. AnalyzerURL is required.
@@ -264,9 +272,16 @@ func New(cfg Config) (*Redactor, error) {
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: cfg.Timeout}
+		// Per-request context deadlines in analyze() govern /analyze latency;
+		// a non-zero Client.Timeout would cap scaled body-size budgets.
+		client = &http.Client{}
 	}
-	return &Redactor{cfg: cfg, client: client, allowTestEmails: allowTestEmails}, nil
+	return &Redactor{
+		cfg:             cfg,
+		client:          client,
+		allowTestEmails: allowTestEmails,
+		analyzeCache:    cfg.AnalyzeCache,
+	}, nil
 }
 
 // Redact returns “text“ with every detected span replaced by
@@ -292,12 +307,33 @@ func (r *Redactor) scrub(ctx context.Context, text string, reg *Registry, forceR
 	if text == "" {
 		return Result{Text: text, EntityCounts: map[string]int{}}, nil
 	}
-	analysisText := prepareJSONForAnalysis(text)
-	spans, err := r.analyze(ctx, analysisText, nil, r.cfg.ScoreThreshold)
+	analysisText := prepareJSONForAnalysis(text, AdapterForContext(ctx))
+	spans, err := r.analyzeSpans(ctx, analysisText)
 	if err != nil {
 		return Result{}, err
 	}
 	return spliceSpans(text, spans, r.cfg.ScoreThreshold, reg, forceRedactMarkers, r.allowTestEmails), nil
+}
+
+func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Span, error) {
+	if prefetch := analyzeCachePrefetchFromContext(ctx); prefetch != nil {
+		if spans, ok := prefetch[analysisText]; ok {
+			return spans, nil
+		}
+	}
+	if r.analyzeCache != nil {
+		if spans, ok := r.analyzeCache.Get(ctx, analysisText); ok {
+			return spans, nil
+		}
+	}
+	spans, err := r.analyze(ctx, analysisText, nil, r.cfg.ScoreThreshold)
+	if err != nil {
+		return nil, err
+	}
+	if r.analyzeCache != nil {
+		r.analyzeCache.Set(ctx, analysisText, spans)
+	}
+	return spans, nil
 }
 
 // Analyze posts text to Presidio /analyze using the redactor's configured
@@ -354,7 +390,8 @@ func (r *Redactor) analyze(ctx context.Context, text string, entityTypesOverride
 		return nil, fmt.Errorf("redact: marshal payload: %w", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
+	timeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(

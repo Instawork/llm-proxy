@@ -54,7 +54,7 @@ func LogPreview(ctx context.Context, text string, maxLen int) string {
 	// Bound to a tight slice of the redactor timeout so a slow sidecar
 	// can never drag down the calling request — debug previews are
 	// strictly best-effort.
-	cctx, cancel := context.WithTimeout(ctx, r.cfg.Timeout/2+10*time.Millisecond)
+	cctx, cancel := context.WithTimeout(ctx, AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)/2+10*time.Millisecond)
 	defer cancel()
 	res, err := r.Redact(cctx, excerpt)
 	if err != nil {
