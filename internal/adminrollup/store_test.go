@@ -187,3 +187,50 @@ func TestInferBackendFromConfig(t *testing.T) {
 	require.Equal(t, BackendMemory, mem.Backend())
 	t.Cleanup(func() { _ = mem.Close() })
 }
+
+func TestMergeHourlyMapsFieldNames(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	day := now.Format("2006-01-02")
+	hour := now.Hour()
+
+	require.NoError(t, store.ApplyHourlyTotals(ctx, MetricCost, day, hour, map[string]float64{
+		"spend_usd": 12.34,
+		"requests":  99,
+	}))
+	require.NoError(t, store.ApplyHourlyTotals(ctx, MetricUsage, day, hour, map[string]float64{
+		"tokens":   5000,
+		"requests": 42,
+	}))
+
+	costSnap := map[string]interface{}{}
+	store.MergeHourly(ctx, MetricCost, costSnap)
+	require.True(t, costSnap["hourly_history_available"].(bool))
+	costRows := costSnap["hourly_history"].([]map[string]interface{})
+	var costRow map[string]interface{}
+	for _, row := range costRows {
+		if row["hour"] == hour {
+			costRow = row
+			break
+		}
+	}
+	require.NotNil(t, costRow)
+	require.InDelta(t, 12.34, costRow["spend_today_usd"].(float64), 0.001)
+	require.Equal(t, int64(99), costRow["requests_today"].(int64))
+	require.Nil(t, costRow["spend_usd"])
+
+	usageSnap := map[string]interface{}{}
+	store.MergeHourly(ctx, MetricUsage, usageSnap)
+	usageRows := usageSnap["hourly_history"].([]map[string]interface{})
+	var usageRow map[string]interface{}
+	for _, row := range usageRows {
+		if row["hour"] == hour {
+			usageRow = row
+			break
+		}
+	}
+	require.NotNil(t, usageRow)
+	require.Equal(t, int64(5000), usageRow["tokens_today"].(int64))
+	require.Nil(t, usageRow["tokens"])
+}

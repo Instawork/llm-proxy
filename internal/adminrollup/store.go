@@ -217,11 +217,7 @@ func (s *Store) MergeHourly(ctx context.Context, metric string, snap map[string]
 	}
 	rows := make([]map[string]interface{}, 0, len(records))
 	for _, rec := range records {
-		row := map[string]interface{}{"hour": rec.Hour}
-		for k, v := range rec.Data {
-			row[k] = v
-		}
-		rows = append(rows, row)
+		rows = append(rows, hourlyRowFromTotals(metric, rec.Hour, rec.Data))
 	}
 	snap["hourly_history"] = rows
 	snap["hourly_history_available"] = true

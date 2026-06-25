@@ -195,24 +195,25 @@ func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[str
 		})
 	}
 
-	data := map[string]interface{}{
+	data := costScalarsFromTotals(totals)
+	data["by_provider"] = byProviderOut
+	data["by_key"] = byKeyOut
+	return data
+}
+
+func costScalarsFromTotals(totals map[string]float64) map[string]interface{} {
+	return map[string]interface{}{
 		"spend_today_usd":        totals["spend_usd"],
 		"input_spend_today_usd":  totals["input_spend_usd"],
 		"output_spend_today_usd": totals["output_spend_usd"],
 		"requests_today":         int64(totals["requests"]),
 		"input_tokens_today":     int64(totals["input_tokens"]),
 		"output_tokens_today":    int64(totals["output_tokens"]),
-		"by_provider":            byProviderOut,
-		"by_key":                 byKeyOut,
 	}
-	return data
 }
 
 func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]interface{} {
-	data := map[string]interface{}{
-		"requests_today": int64(totals["requests"]),
-		"tokens_today":   int64(totals["tokens"]),
-	}
+	data := usageScalarsFromTotals(totals)
 	if len(byModel) > 0 {
 		data["by_model"] = scopeMapFromDim(byModel)
 	}
@@ -228,6 +229,13 @@ func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byK
 		data["by_user"] = scopeMapFromNames(top, other, "user")
 	}
 	return data
+}
+
+func usageScalarsFromTotals(totals map[string]float64) map[string]interface{} {
+	return map[string]interface{}{
+		"requests_today": int64(totals["requests"]),
+		"tokens_today":   int64(totals["tokens"]),
+	}
 }
 
 func flattenScopeDim(h map[string]float64) map[string]float64 {
@@ -430,4 +438,25 @@ func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason
 		"by_provider":      byProvOut,
 		"by_reason":        byReasonOut,
 	}
+}
+
+// hourlyRowFromTotals maps raw Redis hourly hash fields to the scalar names
+// the admin dashboard charts expect (matching daily_history naming).
+func hourlyRowFromTotals(metric string, hour int, totals map[string]float64) map[string]interface{} {
+	row := map[string]interface{}{"hour": hour}
+	switch metric {
+	case MetricCost:
+		for k, v := range costScalarsFromTotals(totals) {
+			row[k] = v
+		}
+	case MetricUsage:
+		for k, v := range usageScalarsFromTotals(totals) {
+			row[k] = v
+		}
+	default:
+		for k, v := range totals {
+			row[k] = v
+		}
+	}
+	return row
 }
