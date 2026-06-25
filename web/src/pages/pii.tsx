@@ -205,7 +205,7 @@ export default function PIIPage() {
         idGateFailMode={data.id_gate_fail_mode}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <LiveStat
           title="Fail mode"
           value={<span className="capitalize">{data.fail_mode}</span>}

@@ -67,7 +67,10 @@ export function DataSourceBadge({
 }) {
   const meta = META[source];
   return (
-    <span className={`badge badge-sm ${meta.className}`} title={title ?? meta.hint}>
+    <span
+      className={`badge badge-sm shrink-0 whitespace-nowrap ${meta.className}`}
+      title={title ?? meta.hint}
+    >
       {meta.label}
     </span>
   );
@@ -249,9 +252,9 @@ export function LiveStat({
   valueClassName?: string;
 }) {
   return (
-    <div className="stat glass-panel px-5 py-4">
-      <div className="flex items-start justify-between gap-2">
-        <div className="stat-title">{title}</div>
+    <div className="stat glass-panel min-w-0 px-5 py-4">
+      <div className="flex items-start justify-between gap-x-2 gap-y-1">
+        <div className="stat-title min-w-0 flex-1 leading-snug">{title}</div>
         <DataSourceBadge source={source} />
       </div>
       <div className={`stat-value ${valueClassName}`}>{value}</div>
