@@ -128,13 +128,14 @@ type KeyResponse struct {
 
 // CreateKeyRequest creates a new proxy API key.
 type CreateKeyRequest struct {
-	Provider       string            `json:"provider"`
-	ActualKey      string            `json:"actual_key,omitempty"`
-	AutoProvision  bool              `json:"auto_provision,omitempty"`
-	Personal       bool              `json:"personal,omitempty"`
-	Description    string            `json:"description,omitempty"`
-	DailyCostLimit int64             `json:"daily_cost_limit"`
-	Tags           map[string]string `json:"tags,omitempty"`
+	Provider         string            `json:"provider"`
+	ActualKey        string            `json:"actual_key,omitempty"`
+	AutoProvision    bool              `json:"auto_provision,omitempty"`
+	Personal         bool              `json:"personal,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	DailyCostLimit   int64             `json:"daily_cost_limit"`
+	MonthlyCostLimit int64             `json:"monthly_cost_limit,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
 	RedactPII      *bool             `json:"redact_pii,omitempty"`
 	RateLimitRPM   int               `json:"rate_limit_rpm,omitempty"`
 	RateLimitTPM   int               `json:"rate_limit_tpm,omitempty"`
@@ -144,10 +145,11 @@ type CreateKeyRequest struct {
 
 // UpdateKeyRequest patches mutable key fields.
 type UpdateKeyRequest struct {
-	Enabled        *bool             `json:"enabled,omitempty"`
-	Description    *string           `json:"description,omitempty"`
-	DailyCostLimit *int64            `json:"daily_cost_limit,omitempty"`
-	Tags           map[string]string `json:"tags,omitempty"`
+	Enabled          *bool             `json:"enabled,omitempty"`
+	Description      *string           `json:"description,omitempty"`
+	DailyCostLimit   *int64            `json:"daily_cost_limit,omitempty"`
+	MonthlyCostLimit *int64            `json:"monthly_cost_limit,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
 	RedactPII      OptionalBool      `json:"redact_pii,omitempty"`
 	RateLimitRPM   *int              `json:"rate_limit_rpm,omitempty"`
 	RateLimitTPM   *int              `json:"rate_limit_tpm,omitempty"`

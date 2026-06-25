@@ -454,6 +454,20 @@ func TestStore_CreatePersonalKeyAndListByOwner(t *testing.T) {
 	assert.Empty(t, other)
 }
 
+func TestStore_CreateKeyWithMonthlyCostLimit(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+
+	key, err := store.CreateKeyWithMeta(ctx, "openai", "sk-org", "monthly org", 0, 3000, nil, nil, KeyCreateMeta{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), key.DailyCostLimit)
+	assert.Equal(t, int64(3000), key.MonthlyCostLimit)
+
+	record, err := store.GetKeyRecord(ctx, key.PK)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3000), record.MonthlyCostLimit)
+}
+
 func TestStore_GetKeyRecord_LoadsMonthlyCostLimit(t *testing.T) {
 	store, fake := newFakeStore(t)
 	pk := KeyPrefix + "personal-monthly"

@@ -75,6 +75,9 @@ func (h *handler) validatePersonalCreate(r *http.Request, req *CreateKeyRequest,
 	if req.DailyCostLimit != 0 {
 		return fmt.Errorf("daily_cost_limit cannot be set on personal keys")
 	}
+	if req.MonthlyCostLimit != 0 {
+		return fmt.Errorf("monthly_cost_limit cannot be set on personal keys")
+	}
 	if req.Tags != nil {
 		return fmt.Errorf("tags cannot be set on personal keys")
 	}

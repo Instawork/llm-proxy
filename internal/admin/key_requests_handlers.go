@@ -312,6 +312,7 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 		actualKey,
 		req.Description,
 		req.DailyCostLimit,
+		req.MonthlyCostLimit,
 		req.Tags,
 		req.RedactPII,
 		meta,

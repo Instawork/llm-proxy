@@ -32,6 +32,7 @@ import {
   effectiveDailyLimitCents,
   effectiveMonthlyLimitCents,
   isPersonalKey,
+  keyCostLimitPeriod,
   maskKeyId,
 } from "../../lib/format";
 import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey, keyDetailPath } from "../../lib/key-routes";
@@ -217,6 +218,7 @@ export default function KeyDetailPage() {
   const title = keyRecord?.description?.trim() || "Unnamed key";
   const notFound = Boolean(keyError && !keyRecord);
   const isPersonal = keyRecord ? isPersonalKey(keyRecord) : false;
+  const costLimitPeriod = keyRecord ? keyCostLimitPeriod(keyRecord) : "daily";
   const viewerMonthlyCents = me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 0;
   const dailyLimitCents = keyRecord ? effectiveDailyLimitCents(keyRecord) : 0;
   const monthlyLimitCents = keyRecord
@@ -325,10 +327,14 @@ export default function KeyDetailPage() {
                 />
               ) : (
                 <>
-                  <Meta label="Daily limit" value={formatDailyCostLimit(dailyLimitCents)} />
-                  {monthlyLimitCents > 0 ? (
-                    <Meta label="Monthly limit" value={formatMonthlyCostLimit(monthlyLimitCents)} />
-                  ) : null}
+                  <Meta
+                    label={costLimitPeriod === "monthly" ? "Monthly limit" : "Daily limit"}
+                    value={
+                      costLimitPeriod === "monthly"
+                        ? formatMonthlyCostLimit(monthlyLimitCents)
+                        : formatDailyCostLimit(dailyLimitCents)
+                    }
+                  />
                   <Meta
                     label="Rate limits"
                     value={
@@ -387,7 +393,8 @@ export default function KeyDetailPage() {
                 monthlyLimitCents={monthlyLimitCents}
                 costSource={costSource}
                 monthSource={monthSource}
-                showDailyLimit={!isPersonal}
+                showDailyLimit={costLimitPeriod === "daily" && dailyLimitCents > 0}
+                showMonthlyLimit={costLimitPeriod === "monthly" && monthlyLimitCents > 0}
               />
 
               <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
@@ -520,8 +527,16 @@ export default function KeyDetailPage() {
                             subtitle="UTC calendar day"
                             source={costSource}
                             spentUsd={costToday?.spend_usd ?? 0}
-                            limitCents={isPersonal ? undefined : dailyLimitCents}
-                            limitLabel={isPersonal ? undefined : "Daily limit"}
+                            limitCents={
+                              costLimitPeriod === "daily" && dailyLimitCents > 0
+                                ? dailyLimitCents
+                                : undefined
+                            }
+                            limitLabel={
+                              costLimitPeriod === "daily" && dailyLimitCents > 0
+                                ? "Daily limit"
+                                : undefined
+                            }
                           >
                             <div className="grid gap-3 sm:grid-cols-2">
                               <Meta label="Input spend" value={formatUsd(costToday?.input_spend_usd ?? 0)} />
@@ -536,8 +551,16 @@ export default function KeyDetailPage() {
                             subtitle={monthLabel}
                             source={monthSource}
                             spentUsd={costMonth?.spend_usd ?? 0}
-                            limitCents={monthlyLimitCents}
-                            limitLabel="Monthly limit"
+                            limitCents={
+                              costLimitPeriod === "monthly" && monthlyLimitCents > 0
+                                ? monthlyLimitCents
+                                : undefined
+                            }
+                            limitLabel={
+                              costLimitPeriod === "monthly" && monthlyLimitCents > 0
+                                ? "Monthly limit"
+                                : undefined
+                            }
                           >
                             <p className="text-sm text-base-content/60">
                               Month-to-date total includes today. Prior days are archived in Redis; today may

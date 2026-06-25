@@ -21,7 +21,10 @@ import { CopyButton } from "../../components/ui/copy-button";
 import { maskKey } from "../../components/ui/masked-key";
 import { useToast } from "../../components/ui/toast";
 import { formatShareExpiry } from "../../lib/share-expiry";
-import { dailyCostLimitFormDollars } from "../../lib/format";
+import {
+  costLimitFormFromKey,
+  type CostLimitPeriod,
+} from "../../lib/format";
 import {
   useBYOKeys,
   useConfig,
@@ -67,7 +70,8 @@ type KeyFormState = {
   provider: Provider;
   actual_key: string;
   description: string;
-  daily_cost_limit_dollars: string;
+  cost_limit_period: CostLimitPeriod;
+  cost_limit_dollars: string;
   enabled: boolean;
   redact_pii: PiiFormValue;
   rate_limit_rpm: string;
@@ -81,7 +85,8 @@ const defaultForm: KeyFormState = {
   provider: "openai",
   actual_key: "",
   description: "",
-  daily_cost_limit_dollars: "100",
+  cost_limit_period: "daily",
+  cost_limit_dollars: "100",
   enabled: true,
   redact_pii: "inherit",
   rate_limit_rpm: "",
@@ -143,6 +148,17 @@ function rateLimitsFromForm(form: KeyFormState) {
     rate_limit_rpd: parseLimitField(form.rate_limit_rpd),
     rate_limit_tpd: parseLimitField(form.rate_limit_tpd),
   };
+}
+
+function costLimitsFromForm(form: KeyFormState): {
+  daily_cost_limit: number;
+  monthly_cost_limit: number;
+} {
+  const cents = Math.round(Number(form.cost_limit_dollars || "0") * 100);
+  if (form.cost_limit_period === "monthly") {
+    return { daily_cost_limit: 0, monthly_cost_limit: cents };
+  }
+  return { daily_cost_limit: cents, monthly_cost_limit: 0 };
 }
 
 function keyStatsDescription(hasCostRedis: boolean, hasPiiRedis: boolean): string {
@@ -418,13 +434,13 @@ export default function KeysPage() {
   const openEdit = (record: APIKey) => {
     setEditingKey(record);
     setPersonalMode(false);
+    const costLimit = costLimitFormFromKey(record);
     setForm({
       provider: record.provider,
       actual_key: "",
       description: record.description ?? "",
-      daily_cost_limit_dollars: dailyCostLimitFormDollars(
-        record.daily_cost_limit,
-      ),
+      cost_limit_period: costLimit.period,
+      cost_limit_dollars: costLimit.dollars,
       enabled: record.enabled,
       redact_pii: piiToFormValue(record.redact_pii),
       rate_limit_rpm: record.rate_limit_rpm
@@ -454,11 +470,15 @@ export default function KeysPage() {
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const dailyCostLimit = Math.round(
-      Number(form.daily_cost_limit_dollars || "0") * 100,
-    );
-    if (editorMaxCents > 0 && dailyCostLimit > editorMaxCents) {
-      push(`Daily cost limit cannot exceed $${editorMaxDollars}`, "error");
+    const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
+      costLimitsFromForm(form);
+    const activeCostLimit =
+      form.cost_limit_period === "monthly" ? monthlyCostLimit : dailyCostLimit;
+    if (editorMaxCents > 0 && activeCostLimit > editorMaxCents) {
+      push(
+        `${form.cost_limit_period === "monthly" ? "Monthly" : "Daily"} cost limit cannot exceed $${editorMaxDollars}`,
+        "error",
+      );
       return;
     }
     const redactPii = piiFromFormValue(form.redact_pii);
@@ -477,6 +497,7 @@ export default function KeysPage() {
             body: {
               description: form.description,
               daily_cost_limit: dailyCostLimit,
+              monthly_cost_limit: monthlyCostLimit,
               enabled: form.enabled,
               redact_pii: redactPii,
               ...rateLimitsFromForm(form),
@@ -520,6 +541,7 @@ export default function KeysPage() {
           provider: form.provider,
           description: form.description,
           daily_cost_limit: dailyCostLimit,
+          monthly_cost_limit: monthlyCostLimit,
           enabled: form.enabled,
           redact_pii: redactPii,
           ...rateLimitsFromForm(form),
@@ -570,12 +592,15 @@ export default function KeysPage() {
               ...(isAdmin ? { personal: true } : {}),
             });
           } else {
-            const dailyCostLimit = Math.round(
-              Number(defaultForm.daily_cost_limit_dollars || "0") * 100,
-            );
-            if (editorMaxCents > 0 && dailyCostLimit > editorMaxCents) {
+            const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
+              costLimitsFromForm(defaultForm);
+            const activeCostLimit =
+              defaultForm.cost_limit_period === "monthly"
+                ? monthlyCostLimit
+                : dailyCostLimit;
+            if (editorMaxCents > 0 && activeCostLimit > editorMaxCents) {
               push(
-                `Daily cost limit cannot exceed $${editorMaxDollars}`,
+                `${defaultForm.cost_limit_period === "monthly" ? "Monthly" : "Daily"} cost limit cannot exceed $${editorMaxDollars}`,
                 "error",
               );
               return;
@@ -584,6 +609,7 @@ export default function KeysPage() {
               provider,
               description: "",
               daily_cost_limit: dailyCostLimit,
+              monthly_cost_limit: monthlyCostLimit,
               enabled: defaultForm.enabled,
               redact_pii: piiFromFormValue(defaultForm.redact_pii),
               auto_provision: true,
@@ -1042,29 +1068,46 @@ export default function KeysPage() {
                   {!treatAsPersonal ? (
                     <>
                       <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-                        <label className="form-control w-full">
-                          <span className="label-text">Daily cost limit (USD)</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            className="input input-bordered w-full"
-                            placeholder="0 = unlimited"
-                            value={form.daily_cost_limit_dollars}
-                            onChange={(event) =>
-                              setForm((current) => ({
-                                ...current,
-                                daily_cost_limit_dollars: event.target.value,
-                              }))
-                            }
-                          />
+                        <div className="form-control w-full">
+                          <span className="label-text">Cost limit (USD)</span>
+                          <div className="flex gap-2">
+                            <select
+                              className="select select-bordered w-32 shrink-0"
+                              value={form.cost_limit_period}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  cost_limit_period: event.target
+                                    .value as CostLimitPeriod,
+                                  cost_limit_dollars: "",
+                                }))
+                              }
+                            >
+                              <option value="daily">Daily</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className="input input-bordered min-w-0 flex-1"
+                              placeholder="0 = unlimited"
+                              value={form.cost_limit_dollars}
+                              onChange={(event) =>
+                                setForm((current) => ({
+                                  ...current,
+                                  cost_limit_dollars: event.target.value,
+                                }))
+                              }
+                            />
+                          </div>
                           <p className="mt-1.5 text-xs text-base-content/60">
                             Leave at 0 for unlimited
-                            {editorMaxDollars != null
+                            {editorMaxDollars != null && form.cost_limit_period === "daily"
                               ? ` · Editor max $${editorMaxDollars}/day`
                               : null}
                           </p>
-                        </label>
+                        </div>
 
                         <div className="form-control w-full sm:w-auto">
                           <span className="label-text">Key status</span>

@@ -225,10 +225,20 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.validateEditorCostLimit(r, req.DailyCostLimit); err != nil {
+	dailyLimit := req.DailyCostLimit
+	monthlyLimit := req.MonthlyCostLimit
+	if monthlyLimit > 0 {
+		dailyLimit = 0
+		if err := h.validateEditorCostLimit(r, monthlyLimit); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	} else if err := h.validateEditorCostLimit(r, dailyLimit); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	req.DailyCostLimit = dailyLimit
+	req.MonthlyCostLimit = monthlyLimit
 
 	key, err := h.createOrgKey(r, role, req)
 	if err != nil {
@@ -321,7 +331,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if role == adminusers.RoleViewer {
-		if req.Enabled != nil || req.DailyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
+		if req.Enabled != nil || req.DailyCostLimit != nil || req.MonthlyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
 			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "viewers may only update description"})
 			return
@@ -339,12 +349,30 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil {
 		updates["description"] = *req.Description
 	}
-	if req.DailyCostLimit != nil {
-		if err := h.validateEditorCostLimit(r, *req.DailyCostLimit); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if req.DailyCostLimit != nil || req.MonthlyCostLimit != nil {
+		if req.DailyCostLimit == nil || req.MonthlyCostLimit == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "daily_cost_limit and monthly_cost_limit must be updated together",
+			})
 			return
 		}
-		updates["daily_cost_limit"] = *req.DailyCostLimit
+		daily := *req.DailyCostLimit
+		monthly := *req.MonthlyCostLimit
+		if monthly > 0 {
+			if err := h.validateEditorCostLimit(r, monthly); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			updates["monthly_cost_limit"] = monthly
+			updates["daily_cost_limit"] = int64(0)
+		} else {
+			if err := h.validateEditorCostLimit(r, daily); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			updates["daily_cost_limit"] = daily
+			updates["monthly_cost_limit"] = int64(0)
+		}
 	}
 	if req.Tags != nil {
 		updates["tags"] = req.Tags

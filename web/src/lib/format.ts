@@ -25,6 +25,8 @@ export function percent(ratio: number | undefined | null, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`;
 }
 
+export type CostLimitPeriod = "daily" | "monthly";
+
 /** Formats per-key daily cost limit (cents). Zero means unlimited. */
 export function formatDailyCostLimit(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents <= 0) return "Unlimited";
@@ -56,27 +58,39 @@ export function isPersonalKey(
   return Boolean(key.owner_email?.trim());
 }
 
-/** Daily cap for org keys; monthly cap for personal keys. */
+/** Which spend cap window applies to this key. */
+export function keyCostLimitPeriod(
+  key: Pick<
+    APIKey,
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+  >,
+): CostLimitPeriod {
+  if (isPersonalKey(key)) return "monthly";
+  if (key.monthly_cost_limit && key.monthly_cost_limit > 0) return "monthly";
+  return "daily";
+}
+
+/** Human-readable spend cap for the keys table. */
 export function formatKeySpendCap(
   key: Pick<
     APIKey,
     "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
   >,
 ): string {
-  if (isPersonalKey(key)) {
+  if (keyCostLimitPeriod(key) === "monthly") {
     return formatMonthlyCostLimit(key.monthly_cost_limit);
   }
   return formatDailyCostLimit(key.daily_cost_limit);
 }
 
-/** Spend cap in cents: monthly for personal keys, daily for org keys. */
+/** Active spend cap in cents for the configured window. */
 export function keySpendCapCents(
   key: Pick<
     APIKey,
     "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
   >,
 ): number {
-  if (isPersonalKey(key)) {
+  if (keyCostLimitPeriod(key) === "monthly") {
     return key.monthly_cost_limit ?? 0;
   }
   return key.daily_cost_limit ?? 0;
@@ -96,20 +110,40 @@ export function effectiveMonthlyLimitCents(
   return 0;
 }
 
-/** Effective daily spend cap in cents (org keys only). */
+/** Effective daily spend cap in cents (org keys with a daily cap only). */
 export function effectiveDailyLimitCents(
-  key: Pick<APIKey, "tags" | "owner_email" | "daily_cost_limit">,
+  key: Pick<
+    APIKey,
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+  >,
 ): number {
-  if (isPersonalKey(key)) {
+  if (isPersonalKey(key) || keyCostLimitPeriod(key) !== "daily") {
     return 0;
   }
   return key.daily_cost_limit ?? 0;
 }
 
 /** Dollars string for the key edit form. Empty when unlimited (0 cents). */
-export function dailyCostLimitFormDollars(cents: number | undefined | null): string {
+export function costLimitFormDollars(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents <= 0) return "";
   return String(cents / 100);
+}
+
+/** @deprecated use costLimitFormDollars */
+export function dailyCostLimitFormDollars(cents: number | undefined | null): string {
+  return costLimitFormDollars(cents);
+}
+
+export function costLimitFormFromKey(
+  key: Pick<
+    APIKey,
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+  >,
+): { period: CostLimitPeriod; dollars: string } {
+  const period = keyCostLimitPeriod(key);
+  const cents =
+    period === "monthly" ? key.monthly_cost_limit ?? 0 : key.daily_cost_limit ?? 0;
+  return { period, dollars: costLimitFormDollars(cents) };
 }
 
 /** Formats USD spend from the cost tracker (already in dollars, not cents). */

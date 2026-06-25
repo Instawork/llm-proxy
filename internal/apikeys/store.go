@@ -527,11 +527,11 @@ func GenerateKey() (string, error) {
 
 // CreateKey creates a new API key record.
 func (s *Store) CreateKey(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string, redactPII *bool, rateLimits ...KeyRateLimits) (*APIKey, error) {
-	return s.CreateKeyWithMeta(ctx, provider, actualKey, description, dailyCostLimit, tags, redactPII, KeyCreateMeta{}, rateLimits...)
+	return s.CreateKeyWithMeta(ctx, provider, actualKey, description, dailyCostLimit, 0, tags, redactPII, KeyCreateMeta{}, rateLimits...)
 }
 
 // CreateKeyWithMeta creates a new API key record with optional provision metadata.
-func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, description string, dailyCostLimit int64, tags map[string]string, redactPII *bool, meta KeyCreateMeta, rateLimits ...KeyRateLimits) (*APIKey, error) {
+func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, description string, dailyCostLimit, monthlyCostLimit int64, tags map[string]string, redactPII *bool, meta KeyCreateMeta, rateLimits ...KeyRateLimits) (*APIKey, error) {
 	// Generate new key
 	newKey, err := GenerateKey()
 	if err != nil {
@@ -545,11 +545,12 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 
 	now := time.Now()
 	apiKey := &APIKey{
-		PK:             newKey,
-		Provider:       provider,
-		ActualKey:      actualKey,
-		DailyCostLimit: dailyCostLimit,
-		Description:    description,
+		PK:               newKey,
+		Provider:         provider,
+		ActualKey:        actualKey,
+		DailyCostLimit:   dailyCostLimit,
+		MonthlyCostLimit: monthlyCostLimit,
+		Description:      description,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		Enabled:        true,
@@ -584,7 +585,8 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 		"key", RedactKey(newKey),
 		"provider", provider,
 		"description", description,
-		"daily_cost_limit", dailyCostLimit)
+		"daily_cost_limit", dailyCostLimit,
+		"monthly_cost_limit", monthlyCostLimit)
 
 	return apiKey, nil
 }

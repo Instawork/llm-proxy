@@ -12,6 +12,7 @@ export function SpendOverview({
   costSource,
   monthSource,
   showDailyLimit,
+  showMonthlyLimit = true,
 }: {
   todayUsd: number;
   monthUsd: number;
@@ -20,8 +21,10 @@ export function SpendOverview({
   monthlyLimitCents: number;
   costSource: DataSource;
   monthSource: DataSource;
-  /** Personal keys use monthly caps only; org keys show a daily limit row. */
+  /** Show daily limit progress when the key uses a daily cap. */
   showDailyLimit: boolean;
+  /** Show monthly limit progress when the key uses a monthly cap. */
+  showMonthlyLimit?: boolean;
 }) {
   return (
     <div className="glass-panel p-5">
@@ -42,8 +45,8 @@ export function SpendOverview({
           label="This month"
           hint={monthLabel}
           spentUsd={monthUsd}
-          limitCents={monthlyLimitCents}
-          limitLabel="Monthly limit"
+          limitCents={showMonthlyLimit ? monthlyLimitCents : 0}
+          limitLabel={showMonthlyLimit ? "Monthly limit" : undefined}
           source={monthSource}
         />
       </div>

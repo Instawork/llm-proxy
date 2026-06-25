@@ -155,6 +155,81 @@ func TestHandleUpdateKey_RateLimits(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
+func TestHandleCreateKey_MonthlyCostLimit(t *testing.T) {
+	h, _ := testAdminHandler(t)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:         "openai",
+		ActualKey:        "sk-real",
+		Description:      "monthly cap",
+		MonthlyCostLimit: 5000,
+	})
+	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKey(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	var resp KeyResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, int64(0), resp.DailyCostLimit)
+	assert.Equal(t, int64(5000), resp.MonthlyCostLimit)
+}
+
+func TestHandleUpdateKey_SwitchCostLimitPeriod(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+
+	key, err := store.CreateKey(ctx, "openai", "sk", "daily key", 10000, nil, nil)
+	require.NoError(t, err)
+
+	toMonthly := []byte(`{"daily_cost_limit": 0, "monthly_cost_limit": 2500}`)
+	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, toMonthly)
+	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+	rec := httptest.NewRecorder()
+	h.handleUpdateKey(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	updated, err := store.GetKeyRecord(ctx, key.PK)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), updated.DailyCostLimit)
+	assert.Equal(t, int64(2500), updated.MonthlyCostLimit)
+
+	toDaily := []byte(`{"daily_cost_limit": 8000, "monthly_cost_limit": 0}`)
+	req = authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, toDaily)
+	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+	rec = httptest.NewRecorder()
+	h.handleUpdateKey(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	updated, err = store.GetKeyRecord(ctx, key.PK)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8000), updated.DailyCostLimit)
+	assert.Equal(t, int64(0), updated.MonthlyCostLimit)
+}
+
+func TestHandleUpdateKey_RejectPartialCostLimitPatch(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+
+	key, err := store.CreateKey(ctx, "openai", "sk", "monthly key", 0, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateKey(ctx, key.PK, map[string]interface{}{
+		"monthly_cost_limit": int64(3000),
+	}))
+
+	body := []byte(`{"daily_cost_limit": 10000}`)
+	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, body)
+	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+	rec := httptest.NewRecorder()
+	h.handleUpdateKey(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	updated, err := store.GetKeyRecord(ctx, key.PK)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), updated.DailyCostLimit)
+	assert.Equal(t, int64(3000), updated.MonthlyCostLimit)
+}
+
 func TestHandleCreateShare_Errors(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()

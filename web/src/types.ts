@@ -114,6 +114,7 @@ export interface CreateAPIKeyRequest {
   personal?: boolean;
   description?: string;
   daily_cost_limit?: number;
+  monthly_cost_limit?: number;
   enabled?: boolean;
   redact_pii?: PiiRedactSetting;
   rate_limit_rpm?: number;
@@ -127,6 +128,7 @@ export interface UpdateAPIKeyRequest {
   enabled?: boolean;
   description?: string;
   daily_cost_limit?: number;
+  monthly_cost_limit?: number;
   redact_pii?: PiiRedactSetting;
   rate_limit_rpm?: number;
   rate_limit_tpm?: number;
