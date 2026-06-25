@@ -145,12 +145,18 @@ func TestRedact_MultipleSpansSpliceInReverse(t *testing.T) {
 
 func TestScrub_PresidioCharacterOffsetsDoNotCorruptUTF8JSON(t *testing.T) {
 	body := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"José needs an appointment in São Paulo. Email josé@gmail.com."}]}`
-	spans := []Span{
-		spanForValue(t, body, "José", "PERSON"),
-		spanForValue(t, body, "São Paulo", "LOCATION"),
-		spanForValue(t, body, "josé@gmail.com", "EMAIL_ADDRESS"),
-	}
-	srv := fakeAnalyzer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode analyzer payload: %v", err)
+		}
+		spans := []Span{
+			spanForValue(t, payload.Text, "José", "PERSON"),
+			spanForValue(t, payload.Text, "São Paulo", "LOCATION"),
+			spanForValue(t, payload.Text, "josé@gmail.com", "EMAIL_ADDRESS"),
+		}
 		_ = json.NewEncoder(w).Encode(spans)
 	})
 	r, _ := New(Config{AnalyzerURL: srv.URL})
@@ -173,7 +179,7 @@ func TestScrub_PresidioCharacterOffsetsDoNotCorruptUTF8JSON(t *testing.T) {
 	if strings.Contains(res.Text, "josé@gmail.com") {
 		t.Fatalf("email should be scrubbed from body %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<EMAIL_ADDRESS_1>") {
+	if !containsWirePlaceholderJSON(res.Text, "<EMAIL_ADDRESS_1>") {
 		t.Fatalf("expected EMAIL placeholder in %q", res.Text)
 	}
 }
@@ -204,7 +210,7 @@ func TestScrub_ResultIncludesDetectedEntitiesForDevDiagnostics(t *testing.T) {
 }
 
 func TestScrub_JSONAnalysisIgnoresObjectKeys(t *testing.T) {
-	body := `{"max":"Alice","job_application_id":"Boston","nested":{"availability_flag":"Jess","email":"jess@gmail.com"}}`
+	body := `{"max":"Alice","job_application_id":"Boston","nested":{"availability_flag":"Jess","email":"jess@gmail.com"},"messages":[{"role":"user","content":"reach jess@gmail.com about Alice in Boston with Jess"}]}`
 	var analyzedText string
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
 		var payload struct {
@@ -228,10 +234,12 @@ func TestScrub_JSONAnalysisIgnoresObjectKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scrub: %v", err)
 	}
-	for _, key := range []string{"max", "job_application_id", "availability_flag", "email"} {
+	for _, key := range []string{"max", "job_application_id", "availability_flag", "email", "messages", "role", "content"} {
 		if strings.Contains(analyzedText, key) {
 			t.Fatalf("JSON key %q should be hidden from analyzer text: %q", key, analyzedText)
 		}
+	}
+	for _, key := range []string{"max", "job_application_id", "availability_flag", "email"} {
 		if !strings.Contains(res.Text, key) {
 			t.Fatalf("JSON key %q should remain in scrubbed body: %q", key, res.Text)
 		}
@@ -241,10 +249,10 @@ func TestScrub_JSONAnalysisIgnoresObjectKeys(t *testing.T) {
 			t.Fatalf("allowed JSON value %q missing from scrubbed body: %q", allowed, res.Text)
 		}
 	}
-	if strings.Contains(res.Text, "jess@gmail.com") {
-		t.Fatalf("email should be scrubbed from body: %q", res.Text)
+	if strings.Contains(res.Text, "reach jess@gmail.com") {
+		t.Fatalf("email should be scrubbed from user content: %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<EMAIL_ADDRESS_1>") {
+	if !containsWirePlaceholderJSON(res.Text, "<EMAIL_ADDRESS_1>") {
 		t.Fatalf("expected EMAIL placeholder in %q", res.Text)
 	}
 	if !json.Valid([]byte(res.Text)) {

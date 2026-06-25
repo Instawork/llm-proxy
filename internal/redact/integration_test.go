@@ -482,6 +482,9 @@ func TestIntegration_ScrubJSONPayload(t *testing.T) {
 	if !strings.Contains(res.Text, "<US_SSN_") || !strings.Contains(res.Text, "<EMAIL_ADDRESS_") {
 		t.Errorf("scrubbed JSON missing placeholders: %q", res.Text)
 	}
+	if !json.Valid([]byte(res.Text)) {
+		t.Errorf("scrubbed JSON is invalid: %q", res.Text)
+	}
 }
 
 // TestIntegration_UsStreetAddressRedacts asserts that the strict

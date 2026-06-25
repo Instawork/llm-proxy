@@ -273,12 +273,18 @@ func New(cfg Config) (*Redactor, error) {
 // “[REDACTED:ENTITY_TYPE]“ regardless of policy tier. Use this for
 // one-way observability (log previews) where placeholders must not leak.
 func (r *Redactor) Redact(ctx context.Context, text string) (Result, error) {
+	if json.Valid([]byte(text)) {
+		return r.scrubJSON(ctx, text, nil, true)
+	}
 	return r.scrub(ctx, text, nil, true)
 }
 
 // Scrub analyzes text and replaces spans using policy-aware placeholders.
 // When reg is non-nil, MASK/SEAL entries are recorded for response restore.
 func (r *Redactor) Scrub(ctx context.Context, text string, reg *Registry) (Result, error) {
+	if json.Valid([]byte(text)) {
+		return r.scrubJSON(ctx, text, reg, false)
+	}
 	return r.scrub(ctx, text, reg, false)
 }
 
