@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { KeyCostEventsTable, KeyPiiEventsTable, KeyRateUsageTable } from "../../components/keys/key-detail-tables";
 import { ProxyKeyUsagePanel } from "../../components/keys/proxy-key-usage-panel";
@@ -22,7 +22,7 @@ import {
 import { SpendOverview, SpendPeriodPanel } from "../../components/ui/spend-breakdown";
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
-import { useKey, useKeyStats, useMe, usePII, useRateLimits } from "../../hooks/queries";
+import { useKey, useKeyStats, useMe, usePII, useRateLimits, useUpdateKey } from "../../hooks/queries";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import {
   formatDailyCostLimit,
@@ -34,10 +34,11 @@ import {
   isPersonalKey,
   maskKeyId,
 } from "../../lib/format";
-import { decodeKeyRouteParam, isProxyKey } from "../../lib/key-routes";
+import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey, keyDetailPath } from "../../lib/key-routes";
 import { dismissKeySetup, isKeySetupDismissed } from "../../lib/key-setup-dismiss";
 import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
 import type { KeyStatsSource } from "../../types";
+import { useToast } from "../../components/ui/toast";
 
 type DetailTab = "cost" | "pii" | "rate-limits" | "usage";
 
@@ -66,29 +67,52 @@ function detailTabClass(active: boolean): string {
 }
 
 export default function KeyDetailPage() {
+  const navigate = useNavigate();
+  const { push } = useToast();
   const { key: keyParam } = useParams<{ key: string }>();
   const { data: me } = useMe();
   const isViewer = me?.role === "viewer";
-  const keyValue = keyParam ? decodeKeyRouteParam(keyParam) : undefined;
-  const validKey = isProxyKey(keyValue) ? keyValue : undefined;
+  const routeKeyId = keyParam ? decodeKeyRouteParam(keyParam) : undefined;
+  const validRoute = isKeyRouteParam(routeKeyId) ? routeKeyId : undefined;
 
-  const keyQuery = useKey(validKey);
-  const statsQuery = useKeyStats(validKey);
+  const keyQuery = useKey(validRoute);
+  const statsQuery = useKeyStats(validRoute);
+  const updateKey = useUpdateKey();
   const piiQuery = usePII();
   const rateQuery = useRateLimits();
   const [tab, setTab] = useState<DetailTab>("cost");
   const tabDefaultedRef = useRef(false);
-  const [setupDismissed, setSetupDismissed] = useState(() =>
-    validKey ? isKeySetupDismissed(validKey) : false,
-  );
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
 
   const keyRecord = keyQuery.data;
+  const proxyKey = keyRecord?.key;
+  const [setupDismissed, setSetupDismissed] = useState(() =>
+    proxyKey ? isKeySetupDismissed(proxyKey) : false,
+  );
+
+  useEffect(() => {
+    if (!proxyKey) return;
+    setSetupDismissed(isKeySetupDismissed(proxyKey));
+  }, [proxyKey]);
+
+  useEffect(() => {
+    if (!routeKeyId || !isProxyKey(routeKeyId) || isMaskedKeyRouteParam(routeKeyId)) return;
+    navigate(keyDetailPath(routeKeyId), { replace: true });
+  }, [routeKeyId, navigate]);
+
+  useEffect(() => {
+    if (keyRecord?.description != null) {
+      setNameDraft(keyRecord.description);
+    }
+  }, [keyRecord?.description]);
+
   const keyError = keyQuery.error;
   const stats = statsQuery.data;
 
-  const masked = validKey ? maskKeyId(validKey) : "";
+  const masked = proxyKey ? maskKeyId(proxyKey) : routeKeyId ?? "";
   const rateUsageFromStats = stats?.rate_usage ?? [];
-  const rateUsageLegacy = rateLimitUsageForKey(rateQuery.data, validKey ?? "");
+  const rateUsageLegacy = rateLimitUsageForKey(rateQuery.data, proxyKey ?? "");
   const rateUsage =
     rateUsageFromStats.length > 0
       ? rateUsageFromStats.map((row) => ({
@@ -97,7 +121,7 @@ export default function KeyDetailPage() {
         tokens: row.tokens,
       }))
       : rateUsageLegacy;
-  const rateOverride = rateLimitOverrideForKey(rateQuery.data, validKey ?? "");
+  const rateOverride = rateLimitOverrideForKey(rateQuery.data, proxyKey ?? "");
   const rateSource = rateLimitUsageSource(stats?.rate_backend ?? rateQuery.data?.backend);
 
   const costToday = stats?.cost_today;
@@ -141,26 +165,41 @@ export default function KeyDetailPage() {
   );
 
   useEffect(() => {
-    if (tabDefaultedRef.current || keyQuery.isPending || statsQuery.isPending || !validKey) return;
+    if (tabDefaultedRef.current || keyQuery.isPending || statsQuery.isPending || !validRoute) return;
     tabDefaultedRef.current = true;
     if (isViewer && !hasBeenUsed && !setupDismissed) {
       setTab("usage");
     }
-  }, [hasBeenUsed, isViewer, keyQuery.isPending, setupDismissed, statsQuery.isPending, validKey]);
+  }, [hasBeenUsed, isViewer, keyQuery.isPending, setupDismissed, statsQuery.isPending, validRoute]);
 
   const dismissSetup = () => {
-    if (!validKey) return;
-    dismissKeySetup(validKey);
+    if (!proxyKey) return;
+    dismissKeySetup(proxyKey);
     setSetupDismissed(true);
+  };
+
+  const saveName = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!proxyKey || !validRoute) return;
+    try {
+      await updateKey.mutateAsync({
+        key: validRoute,
+        body: { description: nameDraft.trim() },
+      });
+      push("Name updated", "success");
+      setEditingName(false);
+    } catch (err) {
+      push(err instanceof Error ? err.message : "Failed to update name", "error");
+    }
   };
 
   const sdkBaseUrl = keyRecord?.base_url;
 
-  if (!keyValue) {
+  if (!routeKeyId) {
     return <ErrorAlert message="Missing key in URL." />;
   }
 
-  if (!validKey) {
+  if (!validRoute) {
     return (
       <div className="space-y-4">
         <Link to="/keys" className="link link-hover text-sm text-base-content/60">
@@ -175,7 +214,7 @@ export default function KeyDetailPage() {
     return <LoadingBlock />;
   }
 
-  const title = keyRecord?.description || masked;
+  const title = keyRecord?.description?.trim() || "Unnamed key";
   const notFound = Boolean(keyError && !keyRecord);
   const isPersonal = keyRecord ? isPersonalKey(keyRecord) : false;
   const viewerMonthlyCents = me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 0;
@@ -195,15 +234,52 @@ export default function KeyDetailPage() {
       </div>
 
       <PageHeader
-        title={title}
+        title={
+          editingName ? (
+            <form className="flex flex-wrap items-center gap-2" onSubmit={saveName}>
+              <input
+                type="text"
+                className="input input-bordered input-sm w-full max-w-md"
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                placeholder="Key name"
+                autoFocus
+              />
+              <button type="submit" className="btn btn-primary btn-sm" disabled={updateKey.isPending}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setEditingName(false);
+                  setNameDraft(keyRecord?.description ?? "");
+                }}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span>{title}</span>
+              {keyRecord && !notFound ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs text-base-content/60"
+                  onClick={() => setEditingName(true)}
+                >
+                  Rename
+                </button>
+              ) : null}
+            </span>
+          )
+        }
         description={
           notFound
             ? "This key is not registered (it may have been deleted)."
             : isViewer
               ? "Your personal proxy key."
-              : keyRecord?.description
-                ? masked
-                : "Per-key cost, PII, and rate-limit stats."
+              : masked
         }
         actions={
           <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />

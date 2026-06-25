@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { RequestKeyTabIcon } from "../ui/key-tab-icons";
 import { useToast } from "../ui/toast";
 import { dailyCostLimitFormDollars } from "../../lib/format";
+import { keyDetailPath } from "../../lib/key-routes";
 import { useCreateKeyRequest, useMe, useMyKeyRequests } from "../../hooks/queries";
 import type { KeyRequestRecord, Provider } from "../../types";
 
@@ -221,7 +222,7 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
                       <td>
                         {req.created_key ? (
                           <Link
-                            to={`/keys/${encodeURIComponent(req.created_key)}`}
+                            to={keyDetailPath(req.created_key)}
                             className="link link-primary text-xs"
                             onClick={onClose}
                           >

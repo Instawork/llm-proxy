@@ -1016,7 +1016,7 @@ export default function KeysPage() {
                   ) : null}
 
                   <label className="form-control w-full">
-                    <span className="label-text">Description</span>
+                    <span className="label-text">Name</span>
                     <textarea
                       className="textarea textarea-bordered w-full"
                       rows={2}

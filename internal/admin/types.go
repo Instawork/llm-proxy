@@ -103,6 +103,7 @@ func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 // KeyResponse is a safe JSON view of an API key record.
 type KeyResponse struct {
 	Key              string            `json:"key"`
+	MaskedKeyID      string            `json:"masked_key_id"`
 	Provider         string            `json:"provider"`
 	Description      string            `json:"description,omitempty"`
 	DailyCostLimit   int64             `json:"daily_cost_limit"`
@@ -216,6 +217,7 @@ type ProvisioningProvider struct {
 func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	resp := KeyResponse{
 		Key:              k.PK,
+		MaskedKeyID:      apikeys.MaskKeyID(k.PK),
 		Provider:         k.Provider,
 		Description:      k.Description,
 		DailyCostLimit:   k.DailyCostLimit,

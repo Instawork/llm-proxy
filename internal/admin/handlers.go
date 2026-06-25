@@ -252,7 +252,7 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := mux.Vars(r)["key"]
-	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -306,7 +306,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	existing, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -386,7 +386,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.deps.APIKeyStore.UpdateKey(r.Context(), keyID, updates); err != nil {
+	if err := h.deps.APIKeyStore.UpdateKey(r.Context(), existing.PK, updates); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 			return
@@ -396,7 +396,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), existing.PK)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 		return
@@ -411,7 +411,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := mux.Vars(r)["key"]
-	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -457,7 +457,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.deps.APIKeyStore.DeleteKey(r.Context(), keyID); err != nil {
+	if err := h.deps.APIKeyStore.DeleteKey(r.Context(), record.PK); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 			return

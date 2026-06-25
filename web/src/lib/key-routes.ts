@@ -1,4 +1,4 @@
-import { fnv1a32Hex, maskKeyId } from "./format";
+import { fnv1a32Hex, maskKeyId, parseMaskedCredentialId } from "./format";
 import { isProxyKey, matchedProxyKeyPrefix, trimProxyKeyPrefix } from "./proxy-key";
 import type { APIKey } from "../types";
 
@@ -12,11 +12,23 @@ export function decodeKeyRouteParam(param: string): string {
   return decodeURIComponent(param);
 }
 
+/** Safe dashboard URL for a proxy key (masked id, not the secret). */
 export function keyDetailPath(key: string): string {
-  return `/keys/${encodeKeyRouteParam(key)}`;
+  return `/keys/${encodeKeyRouteParam(maskKeyId(key))}`;
 }
 
-export { isProxyKey };
+/** Whether a URL segment is a full proxy key or a masked dashboard id. */
+export function isKeyRouteParam(value: string | undefined): boolean {
+  if (!value) return false;
+  if (isProxyKey(value)) return true;
+  return parseMaskedCredentialId(value) !== null && isProxyKey(parseMaskedCredentialId(value)!.prefix);
+}
+
+export function isMaskedKeyRouteParam(value: string | undefined): boolean {
+  if (!value) return false;
+  const parsed = parseMaskedCredentialId(value);
+  return parsed !== null && isProxyKey(parsed.prefix);
+}
 
 /** Matches admin API rate-limit scope redaction (last 4 of key body after prefix). */
 export function redactedRateLimitScopeForKey(key: string): string {
@@ -80,3 +92,5 @@ export function resolveKeyLinkTarget(
   }
   return undefined;
 }
+
+export { isProxyKey };

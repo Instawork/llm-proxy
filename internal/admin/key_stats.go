@@ -92,8 +92,8 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyID := strings.TrimSpace(mux.Vars(r)["key"])
-	if !apikeys.HasKeyPrefix(keyID) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid key format"})
+	if keyID == "" || (!apikeys.HasKeyPrefix(keyID) && !apikeys.IsProxyMaskedKeyID(keyID)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid key identifier"})
 		return
 	}
 
@@ -108,7 +108,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), keyID)
+	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -123,7 +123,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	masked := middleware.MaskKeyID(keyID)
+	masked := middleware.MaskKeyID(record.PK)
 	today := time.Now().UTC().Format("2006-01-02")
 	ctx := r.Context()
 
@@ -132,8 +132,8 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		Day:         today,
 	}
 
-	memCost := memoryCostForKey(h.deps.CostSummary, masked, keyID)
-	resp.RecentCost = sanitizeRecentCost(memoryRecentCostForKey(h.deps.CostSummary, masked, keyID))
+	memCost := memoryCostForKey(h.deps.CostSummary, masked, record.PK)
+	resp.RecentCost = sanitizeRecentCost(memoryRecentCostForKey(h.deps.CostSummary, masked, record.PK))
 	resp.RecentPII = sanitizeRecentPII(memoryRecentPIIForKey(h.deps.PIISummary, masked))
 	if len(resp.RecentCost) > 0 {
 		memCost = mergeMemoryKeyCosts(memCost, memoryCostFromRecent(recentCostOnUTCDay(resp.RecentCost, today)))
@@ -184,7 +184,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		if snapshotter, ok := h.deps.RateLimiter.(ratelimit.Snapshotter); ok {
 			snap := snapshotter.Snapshot(time.Now())
 			sanitizeLimitsSnapshot(&snap)
-			resp.RateUsage = rateUsageForKeyFromSnapshot(snap, keyID)
+			resp.RateUsage = rateUsageForKeyFromSnapshot(snap, record.PK)
 			resp.RateBackend = snap.Backend
 			if resp.RateBackend == "" {
 				resp.RateBackend = "memory"

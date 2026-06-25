@@ -312,6 +312,23 @@ func TestHandleGetKey(t *testing.T) {
 	assert.Equal(t, at.Format(time.RFC3339), body["first_request_at"])
 }
 
+func TestHandleGetKey_ByMaskedID(t *testing.T) {
+	h, store := testDashboardHandler(t)
+	key, err := store.CreateKey(context.Background(), "anthropic", "sk-ant", "k1", 0, nil, nil)
+	require.NoError(t, err)
+
+	masked := apikeys.MaskKeyID(key.PK)
+	rec := httptest.NewRecorder()
+	req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/keys/"+masked, nil)
+	req = mux.SetURLVars(req, map[string]string{"key": masked})
+	h.handleGetKey(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decodeJSONBody(t, rec)
+	assert.Equal(t, key.PK, body["key"])
+	assert.Equal(t, masked, body["masked_key_id"])
+}
+
 func TestHandleGetKey_NotFound(t *testing.T) {
 	h, _ := testDashboardHandler(t)
 	rec := httptest.NewRecorder()

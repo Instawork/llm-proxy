@@ -90,6 +90,7 @@ export interface APIKey {
   proxy_base?: string;
   base_url?: string;
   first_request_at?: string | null;
+  masked_key_id?: string;
 }
 
 export interface ProvisioningProviderStatus {

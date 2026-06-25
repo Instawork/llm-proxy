@@ -39,11 +39,23 @@ export default function KeysTable({
   const columns = useMemo<ColumnDef<APIKey, unknown>[]>(() => {
     const cols: ColumnDef<APIKey, unknown>[] = [
       {
+        id: "name",
+        accessorKey: "description",
+        header: "Name",
+        cell: ({ row }) => (
+          <KeyLink
+            keyValue={row.original.key}
+            keys={keys}
+            label={row.original.description?.trim() || "Unnamed key"}
+          />
+        ),
+      },
+      {
         id: "key",
         accessorKey: "key",
         header: "Key",
         cell: ({ row }) => (
-          <KeyLink keyValue={row.original.key} keys={keys} label={maskKey(row.original.key)} />
+          <span className="font-mono text-xs text-base-content/80">{maskKey(row.original.key)}</span>
         ),
       },
       {
@@ -91,18 +103,8 @@ export default function KeysTable({
       );
     }
 
+
     cols.push(
-      {
-        id: "description",
-        accessorKey: "description",
-        header: "Description",
-        cell: ({ row }) =>
-          row.original.description ? (
-            <KeyLink keyValue={row.original.key} keys={keys} label={row.original.description} />
-          ) : (
-            <span className="max-w-xs truncate text-base-content/70">—</span>
-          ),
-      },
       {
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,

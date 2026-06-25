@@ -79,13 +79,7 @@ const (
 // byte in the web UI (see web/src/lib/format.ts maskKeyId), which recomputes
 // this value to join spend stats. Keys are ASCII so byte/char encodings agree.
 func MaskKeyID(key string) string {
-	if key == "" {
-		return ""
-	}
-	if len(key) <= 12 {
-		return key
-	}
-	return key[:12] + "…" + keyIDHashSuffix(key)
+	return apikeys.MaskKeyID(key)
 }
 
 // keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key.

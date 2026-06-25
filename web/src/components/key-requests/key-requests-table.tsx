@@ -3,6 +3,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Link } from "react-router-dom";
 
 import DataTable from "../ui/data-table";
+import { keyDetailPath } from "../../lib/key-routes";
 import type { KeyRequestRecord } from "../../types";
 
 function formatTime(value?: string): string {
@@ -83,7 +84,7 @@ export default function KeyRequestsTable({
         cell: ({ row }) =>
           row.original.created_key ? (
             <Link
-              to={`/keys/${encodeURIComponent(row.original.created_key)}`}
+              to={keyDetailPath(row.original.created_key!)}
               className="link link-primary"
             >
               View

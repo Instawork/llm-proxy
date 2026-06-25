@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { relativeTime } from "../../lib/format";
 
 interface PageHeaderProps {
-  title: string;
+  title: React.ReactNode;
   description?: string;
   actions?: React.ReactNode;
 }
