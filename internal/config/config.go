@@ -189,8 +189,8 @@ type PIIRedactConfig struct {
 
 // PIIRedactAnalyzeCacheConfig configures optional Presidio span caching.
 type PIIRedactAnalyzeCacheConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	TTLSeconds int  `yaml:"ttl_seconds,omitempty"`
+	Enabled    bool                              `yaml:"enabled"`
+	TTLSeconds int                               `yaml:"ttl_seconds,omitempty"`
 	Memory     PIIRedactAnalyzeCacheMemoryConfig `yaml:"memory"`
 	Redis      PIIRedactAnalyzeCacheRedisConfig  `yaml:"redis"`
 }
@@ -201,7 +201,7 @@ type PIIRedactAnalyzeCacheMemoryConfig struct {
 }
 
 type PIIRedactAnalyzeCacheRedisConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool         `yaml:"enabled"`
 	Redis   *RedisConfig `yaml:"redis,omitempty"`
 }
 

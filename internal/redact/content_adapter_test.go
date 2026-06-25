@@ -124,7 +124,7 @@ func taskTexts(tasks []jsonScrubTask) []string {
 }
 
 func containsAll(haystack []string, needles ...string) bool {
- joined := strings.Join(haystack, "\n")
+	joined := strings.Join(haystack, "\n")
 	for _, n := range needles {
 		if !strings.Contains(joined, n) {
 			return false
