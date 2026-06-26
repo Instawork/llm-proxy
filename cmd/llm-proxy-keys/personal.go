@@ -122,7 +122,8 @@ func runPersonalBumpLimit(configDir, environment string, fromCents, toCents int6
 	if apply {
 		mode = "APPLY"
 	}
-	fmt.Printf("%s: %d personal key(s) $%.2f/month -> $%.2f/month (table=%s region=%s)\n\n",
+	fmt.Printf(
+		"%s: %d personal key(s) $%.2f/month -> $%.2f/month (table=%s region=%s)\n\n",
 		mode,
 		len(candidates),
 		float64(fromCents)/100,
@@ -135,7 +136,8 @@ func runPersonalBumpLimit(configDir, environment string, fromCents, toCents int6
 	fmt.Fprintln(w, "KEY\tOWNER\tPROVIDER\tCURRENT\tNEW")
 	fmt.Fprintln(w, "---\t-----\t--------\t-------\t---")
 	for _, key := range candidates {
-		fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f/mo\t$%.2f/mo\n",
+		fmt.Fprintf(
+			w, "%s\t%s\t%s\t$%.2f/mo\t$%.2f/mo\n",
 			apikeys.RedactKey(key.PK),
 			key.OwnerEmail,
 			key.Provider,

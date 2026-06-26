@@ -1500,7 +1500,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		} else {
 			redact.SetGlobal(redactor)
 			if analyzeCache != nil {
-				logger.Info("PII analyze cache enabled",
+				logger.Info(
+					"PII analyze cache enabled",
 					"ttl_seconds", int(cacheCfg.TTL.Seconds()),
 					"memory", cacheCfg.MemoryEnabled,
 					"redis", cacheCfg.RedisEnabled,
