@@ -180,15 +180,15 @@ func testPIIRedactWireStackProviderEndToEnd(t *testing.T, tc wireStackProviderCa
 	if strings.Contains(string(upstreamBody), email) {
 		t.Fatalf("%s upstream saw raw email: %q", tc.name, upstreamBody)
 	}
-	if !strings.Contains(string(upstreamBody), "<EMAIL_ADDRESS_1>") {
+	if !strings.Contains(string(upstreamBody), "<PII_EMAIL_ADDRESS_1>") {
 		t.Fatalf("%s upstream missing placeholder: %q", tc.name, upstreamBody)
 	}
 	respBody := rec.Body.String()
 	if !strings.Contains(respBody, email) {
 		t.Fatalf("%s client response missing restored email: %q", tc.name, respBody)
 	}
-	if strings.Contains(respBody, "<EMAIL_ADDRESS_") {
-		t.Fatalf("%s MASK placeholder leaked after restore: %q", tc.name, respBody)
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
+		t.Fatalf("%s MASK placeholder leaked (X-LLM-PII-Leaked=%q): %q", tc.name, got, respBody)
 	}
 }
 
@@ -277,10 +277,10 @@ func testPIIRedactWireStackNamePolicy(
 			t.Fatalf("%s upstream still contains %q: %q", tc.name, redact, upstream)
 		}
 	}
-	if !strings.Contains(upstream, "<EMAIL_ADDRESS_1>") {
+	if !strings.Contains(upstream, "<PII_EMAIL_ADDRESS_1>") {
 		t.Fatalf("%s upstream missing email placeholder: %q", tc.name, upstream)
 	}
-	if !strings.Contains(upstream, "<PERSON_1>") {
+	if !strings.Contains(upstream, "<PII_PERSON_1>") {
 		t.Fatalf("%s upstream missing full-name placeholder: %q", tc.name, upstream)
 	}
 	if !strings.Contains(rec.Body.String(), email) {

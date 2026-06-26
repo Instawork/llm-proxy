@@ -95,6 +95,8 @@ func (r *Runner) runScenario(ctx context.Context, name string) (bool, string) {
 		return r.piiPresidioRedaction(ctx)
 	case "pii-wire-restore-email":
 		return r.piiWireRestoreEmail(ctx)
+	case "pii-wire-restore-formats":
+		return r.piiWireRestoreFormats(ctx)
 	case "pii-wire-seal-ssn":
 		return r.piiWireSealSSN(ctx)
 	case "cost-fuzzy-model":

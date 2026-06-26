@@ -592,12 +592,12 @@ func (r *Runner) runPIIRedaction(ctx context.Context, piiCfg map[string]any) []R
 
 func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 	start := time.Now()
-	redact := true
+	redactPII := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    "openai",
 		ActualKey:   r.cfg.OpenAIKey,
 		Description: "live-pii-wire",
-		RedactPII:   &redact,
+		RedactPII:   &redactPII,
 	})
 	if err != nil {
 		return []Result{
@@ -621,9 +621,9 @@ func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 	if !strings.Contains(content, email) {
 		out = append(out, failResult("pii", "wire-restore",
 			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
-	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
+	} else if leaked, ok := PIIMaskLeaked(pr.Headers, pr.Trailer); ok && leaked > 0 {
 		out = append(out, failResult("pii", "wire-restore",
-			"MASK placeholder leaked to client — response restore middleware missing or wire_placeholders disabled"))
+			fmt.Sprintf("MASK placeholder leaked to client (X-LLM-PII-Leaked=%d)", leaked)))
 	} else {
 		out = append(out, passResult("pii", "wire-restore",
 			fmt.Sprintf("MASK email restored in client reply (%s)", truncate(content, 80)), elapsed(start)))
@@ -644,7 +644,7 @@ func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 	if strings.Contains(ssnReply, ssn) {
 		out = append(out, failResult("pii", "wire-seal",
 			fmt.Sprintf("raw SSN leaked to client: %q", ssnReply)))
-	} else if !strings.Contains(ssnReply, "<US_SSN") && !strings.Contains(ssnReply, `[REDACTED:US_SSN]`) {
+	} else if !strings.Contains(ssnReply, "<PII_US_SSN") && !strings.Contains(ssnReply, `[REDACTED:US_SSN]`) {
 		out = append(out, failResult("pii", "wire-seal",
 			fmt.Sprintf("expected SEAL placeholder or redact marker in reply, got %q", truncate(ssnReply, 80))))
 	} else {
@@ -684,12 +684,12 @@ type piiWireRestoreProviderSpec struct {
 
 func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRestoreProviderSpec) []Result {
 	start := time.Now()
-	redact := true
+	redactPII := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    spec.provider,
 		ActualKey:   spec.actualKey,
 		Description: spec.keyDesc,
-		RedactPII:   &redact,
+		RedactPII:   &redactPII,
 	})
 	if err != nil {
 		return []Result{
@@ -713,9 +713,9 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	if !strings.Contains(content, email) {
 		out = append(out, failResult("pii", spec.suitePrefix,
 			fmt.Sprintf("expected restored email %q in assistant reply %q", email, content)))
-	} else if strings.Contains(content, "<EMAIL_ADDRESS") {
+	} else if leaked, ok := PIIMaskLeaked(pr.Headers, pr.Trailer); ok && leaked > 0 {
 		out = append(out, failResult("pii", spec.suitePrefix,
-			fmt.Sprintf("MASK placeholder leaked to client on %s non-streaming path", spec.provider)))
+			fmt.Sprintf("MASK placeholder leaked to client on %s non-streaming path (X-LLM-PII-Leaked=%d)", spec.provider, leaked)))
 	} else {
 		out = append(out, passResult("pii", spec.suitePrefix,
 			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
@@ -736,9 +736,9 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	if !strings.Contains(streamBody, streamEmail) {
 		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("expected restored email %q in stream body %q", streamEmail, truncate(streamBody, 120))))
-	} else if strings.Contains(streamBody, "<EMAIL_ADDRESS") {
+	} else if leaked, ok := PIIMaskLeaked(pr.Headers, pr.Trailer); ok && leaked > 0 {
 		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
-			fmt.Sprintf("MASK placeholder leaked to client on %s streaming path", spec.provider)))
+			fmt.Sprintf("MASK placeholder leaked to client on %s streaming path (X-LLM-PII-Leaked=%d)", spec.provider, leaked)))
 	} else {
 		out = append(out, passResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))

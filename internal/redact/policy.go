@@ -5,7 +5,7 @@ package redact
 type Policy int
 
 const (
-	// PolicyMask replaces with a numbered placeholder (<PERSON_1>) that
+	// PolicyMask replaces with a numbered placeholder (<PII_PERSON_1>) that
 	// round-trips back to the original value in responses to the client.
 	PolicyMask Policy = iota
 	// PolicySeal replaces with a numbered placeholder that stays opaque

@@ -95,7 +95,7 @@ func (p *ProxyClient) AnthropicChatWithPIIScrub(ctx context.Context, apiKey, use
 	if err != nil {
 		return nil, nil, err
 	}
-	pr := ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone()}
+	pr := ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone(), Trailer: resp.Trailer.Clone()}
 	return &pr, data, nil
 }
 
@@ -213,7 +213,7 @@ func (p *ProxyClient) GeminiChatWithPIIScrub(ctx context.Context, apiKey, userMe
 	if err != nil {
 		return nil, nil, err
 	}
-	pr := ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone()}
+	pr := ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone(), Trailer: resp.Trailer.Clone()}
 	return &pr, data, nil
 }
 

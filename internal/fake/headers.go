@@ -16,4 +16,8 @@ const (
 	// scenarios to exercise response-restore through the real proxy stack
 	// (Presidio scrub → fake upstream → restore middleware) without a live LLM.
 	HeaderEchoPlaceholders = "X-LLM-Proxy-Fake-Echo-Placeholders"
+	// HeaderEchoPlaceholdersFormat selects how echoed placeholders are wrapped.
+	// Values: square (default wire uses angle brackets), curly, paren,
+	// spaced-square. The inner token always retains the PII_ prefix.
+	HeaderEchoPlaceholdersFormat = "X-LLM-Proxy-Fake-Echo-Placeholders-Format"
 )

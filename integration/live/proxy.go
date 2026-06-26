@@ -17,6 +17,7 @@ import (
 type ProxyResponse struct {
 	Status    int
 	Headers   http.Header
+	Trailer   http.Header
 	InputTok  string
 	OutputTok string
 	Provider  string
@@ -151,7 +152,7 @@ func (p *ProxyClient) Health(ctx context.Context) (*ProxyResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone()}, nil
+	return &ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone(), Trailer: resp.Trailer.Clone()}, nil
 }
 
 func proxyOK(pr *ProxyResponse) error {

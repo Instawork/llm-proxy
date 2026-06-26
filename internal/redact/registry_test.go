@@ -28,7 +28,7 @@ func TestPolicyFor_KnownTiers(t *testing.T) {
 func TestRegistry_MaskRoundTrip(t *testing.T) {
 	reg := NewRegistry()
 	ph := reg.Placeholder("PERSON", "Jane Doe")
-	if ph != "<PERSON_1>" {
+	if ph != "<PII_PERSON_1>" {
 		t.Fatalf("placeholder = %q", ph)
 	}
 	again := reg.Placeholder("PERSON", "Jane Doe")
@@ -110,7 +110,7 @@ func TestRegistry_RestoreStreamChunk_EnforcesMaxCarry(t *testing.T) {
 func TestRegistry_SealDoesNotRestore(t *testing.T) {
 	reg := NewRegistry()
 	ph := reg.Placeholder("US_SSN", "222-33-4444")
-	if ph != "<US_SSN_1>" {
+	if ph != "<PII_US_SSN_1>" {
 		t.Fatalf("placeholder = %q", ph)
 	}
 	out := reg.RestoreUserFacing("ssn " + ph)
@@ -166,10 +166,10 @@ func TestScrub_PolicyAwarePlaceholders(t *testing.T) {
 	}
 	reg := NewRegistry()
 	res := spliceSpans("Jane Doe 222-33-4444", spans, 0.5, reg, false, true)
-	if !strings.Contains(res.Text, "<PERSON_1>") {
+	if !strings.Contains(res.Text, "<PII_PERSON_1>") {
 		t.Fatalf("expected PERSON placeholder in %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<US_SSN_1>") {
+	if !strings.Contains(res.Text, "<PII_US_SSN_1>") {
 		t.Fatalf("expected US_SSN placeholder in %q", res.Text)
 	}
 	restored := reg.RestoreUserFacing(res.Text)

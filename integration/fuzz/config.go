@@ -58,6 +58,7 @@ func AllScenarios() []string {
 		"ratelimit-key-rpd",
 		"pii-presidio-redaction",
 		"pii-wire-restore-email",
+		"pii-wire-restore-formats",
 		"pii-wire-seal-ssn",
 		"ratelimit-tpm-atomicity-stress",
 		"ratelimit-daily-atomicity-stress",
@@ -75,6 +76,7 @@ func PIIScenarios() []string {
 	return []string{
 		"pii-presidio-redaction",
 		"pii-wire-restore-email",
+		"pii-wire-restore-formats",
 		"pii-wire-seal-ssn",
 		"pii-concurrent-no-bleed",
 	}
@@ -125,6 +127,7 @@ func ProxyIssuesScenarios() []string {
 		"ratelimit-key-rpd",
 		"pii-presidio-redaction",
 		"pii-wire-restore-email",
+		"pii-wire-restore-formats",
 		"pii-wire-seal-ssn",
 	}
 }

@@ -179,7 +179,7 @@ func TestScrub_PresidioCharacterOffsetsDoNotCorruptUTF8JSON(t *testing.T) {
 	if strings.Contains(res.Text, "josé@gmail.com") {
 		t.Fatalf("email should be scrubbed from body %q", res.Text)
 	}
-	if !containsWirePlaceholderJSON(res.Text, "<EMAIL_ADDRESS_1>") {
+	if !containsWirePlaceholderJSON(res.Text, "<PII_EMAIL_ADDRESS_1>") {
 		t.Fatalf("expected EMAIL placeholder in %q", res.Text)
 	}
 }
@@ -252,7 +252,7 @@ func TestScrub_JSONAnalysisIgnoresObjectKeys(t *testing.T) {
 	if strings.Contains(res.Text, "reach jess@gmail.com") {
 		t.Fatalf("email should be scrubbed from user content: %q", res.Text)
 	}
-	if !containsWirePlaceholderJSON(res.Text, "<EMAIL_ADDRESS_1>") {
+	if !containsWirePlaceholderJSON(res.Text, "<PII_EMAIL_ADDRESS_1>") {
 		t.Fatalf("expected EMAIL placeholder in %q", res.Text)
 	}
 	if !json.Valid([]byte(res.Text)) {
@@ -290,7 +290,7 @@ func TestScrub_PresidioCharacterOffsetsAtEndOfMultibyteString(t *testing.T) {
 	if strings.Contains(res.Text, "Alice Smith") {
 		t.Fatalf("raw PERSON leaked into scrubbed text: %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<PERSON_1>") {
+	if !strings.Contains(res.Text, "<PII_PERSON_1>") {
 		t.Fatalf("expected PERSON placeholder in %q", res.Text)
 	}
 }
@@ -344,10 +344,10 @@ func TestScrub_OverlappingCharacterOffsetsPreferStricterPolicy(t *testing.T) {
 	if strings.Contains(res.Text, "222-33-4444") {
 		t.Fatalf("raw SSN leaked into scrubbed text: %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<US_SSN_1>") {
+	if !strings.Contains(res.Text, "<PII_US_SSN_1>") {
 		t.Fatalf("expected stricter US_SSN placeholder in %q", res.Text)
 	}
-	if strings.Contains(res.Text, "<PERSON_") {
+	if strings.Contains(res.Text, "<PII_PERSON_") {
 		t.Fatalf("broader MASK span should not swallow SEAL span: %q", res.Text)
 	}
 	if got := res.EntityCounts["US_SSN"]; got != 1 {

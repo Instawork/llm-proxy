@@ -67,7 +67,7 @@ func TestScrub_JSONUserEmailAfterNewlinePreservesValidJSON(t *testing.T) {
 	if strings.Contains(res.Text, welcome) {
 		t.Fatalf("raw welcome text leaked into scrubbed body: %q", res.Text)
 	}
-	if !containsWirePlaceholderJSON(res.Text, "<EMAIL_ADDRESS_1>") || !containsWirePlaceholderJSON(res.Text, "<PERSON_1>") {
+	if !containsWirePlaceholderJSON(res.Text, "<PII_EMAIL_ADDRESS_1>") || !containsWirePlaceholderJSON(res.Text, "<PII_PERSON_1>") {
 		t.Fatalf("expected wire placeholders in %q", res.Text)
 	}
 }

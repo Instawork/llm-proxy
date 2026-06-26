@@ -165,10 +165,10 @@ func TestIntegration_PIIWireMode_ScrubAndRestore_EndToEnd(t *testing.T) {
 	if strings.Contains(up, email) {
 		t.Errorf("upstream saw raw email: %q", up)
 	}
-	if !strings.Contains(up, "<US_SSN_") {
+	if !strings.Contains(up, "<PII_US_SSN_") {
 		t.Errorf("upstream missing SSN placeholder: %q", up)
 	}
-	if !strings.Contains(up, "<EMAIL_ADDRESS_") {
+	if !strings.Contains(up, "<PII_EMAIL_ADDRESS_") {
 		t.Errorf("upstream missing email placeholder: %q", up)
 	}
 
@@ -179,11 +179,11 @@ func TestIntegration_PIIWireMode_ScrubAndRestore_EndToEnd(t *testing.T) {
 	if strings.Contains(respBody, ssn) {
 		t.Errorf("client response leaked raw SEAL SSN: %q", respBody)
 	}
-	if !strings.Contains(respBody, "<US_SSN_") && !strings.Contains(respBody, `\u003cUS_SSN_`) {
+	if !strings.Contains(respBody, "<PII_US_SSN_") && !strings.Contains(respBody, `\u003cPII_US_SSN_`) {
 		t.Errorf("client response should keep SEAL placeholder opaque: %q", respBody)
 	}
-	if strings.Contains(respBody, "<EMAIL_ADDRESS_") || strings.Contains(respBody, `\u003cEMAIL_ADDRESS_`) {
-		t.Errorf("client response should not contain MASK placeholder after restore: %q", respBody)
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
+		t.Errorf("client response MASK placeholder leaked (X-LLM-PII-Leaked=%q): %q", got, respBody)
 	}
 }
 
@@ -232,7 +232,7 @@ func testIntegrationPIIWireModeScrubAndRestore(t *testing.T, tc wireStackProvide
 	if strings.Contains(up, email) {
 		t.Errorf("%s upstream saw raw email: %q", tc.name, up)
 	}
-	if !strings.Contains(up, "<EMAIL_ADDRESS_") {
+	if !strings.Contains(up, "<PII_EMAIL_ADDRESS_") {
 		t.Errorf("%s upstream missing email placeholder: %q", tc.name, up)
 	}
 
@@ -240,8 +240,8 @@ func testIntegrationPIIWireModeScrubAndRestore(t *testing.T, tc wireStackProvide
 	if !strings.Contains(respBody, email) {
 		t.Errorf("%s client response missing restored MASK email: %q", tc.name, respBody)
 	}
-	if strings.Contains(respBody, "<EMAIL_ADDRESS_") || strings.Contains(respBody, `\u003cEMAIL_ADDRESS_`) {
-		t.Errorf("%s client response should not contain MASK placeholder after restore: %q", tc.name, respBody)
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
+		t.Errorf("%s client response MASK placeholder leaked (X-LLM-PII-Leaked=%q): %q", tc.name, got, respBody)
 	}
 }
 

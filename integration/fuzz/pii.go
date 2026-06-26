@@ -115,27 +115,48 @@ func (r *Runner) piiPresidioRedaction(ctx context.Context) (bool, string) {
 }
 
 // piiWireRestoreEmail exercises MASK-tier wire restore: Presidio scrubs the
-// email to <EMAIL_ADDRESS_N>, fake upstream echoes the placeholder, and the
+// email to <PII_EMAIL_ADDRESS_N>, fake upstream echoes the placeholder, and the
 // client must see the original address restored — not the placeholder token.
 func (r *Runner) piiWireRestoreEmail(ctx context.Context) (bool, string) {
+	return r.piiWireRestoreEmailWithFormat(ctx, "fuzz-pii-restore", "")
+}
+
+// piiWireRestoreFormats exercises restore when the fake upstream echoes MASK
+// placeholders with alternate delimiters (square, curly, paren, spaced).
+func (r *Runner) piiWireRestoreFormats(ctx context.Context) (bool, string) {
+	formats := []string{"square", "curly", "paren", "spaced-square"}
+	for _, format := range formats {
+		ok, detail := r.piiWireRestoreEmailWithFormat(ctx, "fuzz-pii-restore-"+format, format)
+		if !ok {
+			return false, format + ": " + detail
+		}
+	}
+	return true, "MASK email restored for square, curly, paren, spaced-square"
+}
+
+func (r *Runner) piiWireRestoreEmailWithFormat(ctx context.Context, keyDesc, echoFormat string) (bool, string) {
 	if _, ok, msg := r.requirePIIReady(ctx); !ok {
 		return false, msg
 	}
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
-	key, err := kh.createWithPII(ctx, "fuzz-pii-restore", 1000, 5_000_000, true)
+	key, err := kh.createWithPII(ctx, keyDesc, 1000, 5_000_000, true)
 	if err != nil {
 		return false, err.Error()
 	}
-	email := fmt.Sprintf("fuzz-restore-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("fuzz-restore-%s-%d@example.com", echoFormat, time.Now().UnixNano())
+	if echoFormat == "" {
+		email = fmt.Sprintf("fuzz-restore-%d@example.com", time.Now().UnixNano())
+	}
 	prompt := fmt.Sprintf("My email is %s. Reply with ONLY that email address and nothing else.", email)
 	zero := 0.0
 	res := r.proxy.OpenAIChat(ctx, ChatOpts{
-		APIKey:               key,
-		ChaosRate:            &zero,
-		Content:              prompt,
-		OutputTok:            32,
-		FakeEchoPlaceholders: true,
+		APIKey:                     key,
+		ChaosRate:                  &zero,
+		Content:                    prompt,
+		OutputTok:                  32,
+		FakeEchoPlaceholders:       true,
+		FakeEchoPlaceholdersFormat: echoFormat,
 	})
 	if res.Status == http.StatusServiceUnavailable {
 		return false, "503 — Presidio unavailable"
@@ -151,8 +172,12 @@ func (r *Runner) piiWireRestoreEmail(ctx context.Context) (bool, string) {
 	if !strings.Contains(content, email) {
 		return false, fmt.Sprintf("MASK email not restored: want %q in %q", email, truncate(content, 120))
 	}
-	if strings.Contains(content, "<EMAIL_ADDRESS") {
-		return false, fmt.Sprintf("MASK placeholder leaked to client: %q", truncate(content, 120))
+	if leaked, ok := live.PIIMaskLeaked(res.Headers, res.Trailer); ok {
+		if leaked > 0 {
+			return false, fmt.Sprintf("MASK placeholder leaked (X-LLM-PII-Leaked=%d): %q", leaked, truncate(content, 120))
+		}
+	} else {
+		return false, "missing X-LLM-PII-Leaked header/trailer on restore response"
 	}
 	return true, fmt.Sprintf("MASK email restored (%s)", truncate(content, 60))
 }
@@ -205,10 +230,12 @@ func (r *Runner) piiConcurrentNoBleed(ctx context.Context) (bool, string) {
 			switch {
 			case res.Status != http.StatusOK:
 				fail = fmt.Sprintf("status=%d", res.Status)
-			case strings.Contains(content, "<EMAIL_ADDRESS"):
-				fail = fmt.Sprintf("placeholder leaked: %q", truncate(content, 60))
-			case !strings.Contains(content, email):
-				fail = fmt.Sprintf("restored wrong/missing email: sent=%s got=%q", email, truncate(content, 60))
+			default:
+				if leaked, ok := live.PIIMaskLeaked(res.Headers, res.Trailer); ok && leaked > 0 {
+					fail = fmt.Sprintf("placeholder leaked (X-LLM-PII-Leaked=%d): %q", leaked, truncate(content, 60))
+				} else if !strings.Contains(content, email) {
+					fail = fmt.Sprintf("restored wrong/missing email: sent=%s got=%q", email, truncate(content, 60))
+				}
 			}
 			if fail != "" {
 				mu.Lock()
@@ -264,7 +291,7 @@ func (r *Runner) piiWireSealSSN(ctx context.Context) (bool, string) {
 	if strings.Contains(content, ssn) {
 		return false, fmt.Sprintf("raw SSN leaked in assistant content: %q", truncate(content, 80))
 	}
-	if !strings.Contains(content, "<US_SSN") {
+	if !strings.Contains(content, "<PII_US_SSN") {
 		return false, fmt.Sprintf("expected SEAL placeholder in reply, got %q", truncate(content, 80))
 	}
 	return true, fmt.Sprintf("SEAL SSN stayed opaque (%s)", truncate(content, 60))

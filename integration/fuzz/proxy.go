@@ -32,22 +32,24 @@ func NewProxy(base string, timeout time.Duration, report *Report) *Proxy {
 }
 
 type ChatOpts struct {
-	APIKey               string
-	Model                string
-	Content              string
-	ChaosRate            *float64
-	FakeOutcome          string
-	OutputTok            int
-	CachedTokens         int
-	FakeEchoPlaceholders bool
-	LatencyMS            int
-	TestMode             string
-	MaxTokens            int
+	APIKey                     string
+	Model                      string
+	Content                    string
+	ChaosRate                  *float64
+	FakeOutcome                string
+	OutputTok                  int
+	CachedTokens               int
+	FakeEchoPlaceholders       bool
+	FakeEchoPlaceholdersFormat string
+	LatencyMS                  int
+	TestMode                   string
+	MaxTokens                  int
 }
 
 type ChatResult struct {
 	Status  int
 	Headers http.Header
+	Trailer http.Header
 	Body    string
 	Err     error
 }
@@ -93,6 +95,9 @@ func (p *Proxy) applyFakeHeaders(req *http.Request, opts ChatOpts) {
 	if opts.FakeEchoPlaceholders {
 		req.Header.Set("X-LLM-Proxy-Fake-Echo-Placeholders", "1")
 	}
+	if opts.FakeEchoPlaceholdersFormat != "" {
+		req.Header.Set("X-LLM-Proxy-Fake-Echo-Placeholders-Format", opts.FakeEchoPlaceholdersFormat)
+	}
 	if opts.LatencyMS > 0 {
 		req.Header.Set("X-LLM-Proxy-Fake-Latency-Ms", strconv.Itoa(opts.LatencyMS))
 	}
@@ -124,7 +129,7 @@ func (p *Proxy) do(req *http.Request) ChatResult {
 			p.report.RecordDegraded()
 		}
 	}
-	return ChatResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Body: string(data)}
+	return ChatResult{Status: resp.StatusCode, Headers: resp.Header.Clone(), Trailer: resp.Trailer.Clone(), Body: string(data)}
 }
 
 func (p *Proxy) Burst(ctx context.Context, n int, workers int, fn func(context.Context) ChatResult) []ChatResult {

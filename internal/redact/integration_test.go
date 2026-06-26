@@ -411,10 +411,10 @@ func TestIntegration_ScrubUsesTieredPlaceholders(t *testing.T) {
 	if strings.Contains(res.Text, email) {
 		t.Errorf("raw email leaked in scrubbed text: %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<US_SSN_") {
+	if !strings.Contains(res.Text, "<PII_US_SSN_") {
 		t.Errorf("expected SEAL SSN placeholder; got %q", res.Text)
 	}
-	if !strings.Contains(res.Text, "<EMAIL_ADDRESS_") {
+	if !strings.Contains(res.Text, "<PII_EMAIL_ADDRESS_") {
 		t.Errorf("expected MASK email placeholder; got %q", res.Text)
 	}
 	if reg.Len() < 2 {
@@ -428,7 +428,7 @@ func TestIntegration_ScrubUsesTieredPlaceholders(t *testing.T) {
 	if strings.Contains(restored, ssn) {
 		t.Errorf("SEAL SSN must not restore to client: %q", restored)
 	}
-	if !strings.Contains(restored, "<US_SSN_") {
+	if !strings.Contains(restored, "<PII_US_SSN_") {
 		t.Errorf("SEAL placeholder should survive restore pass: %q", restored)
 	}
 }
@@ -479,7 +479,7 @@ func TestIntegration_ScrubJSONPayload(t *testing.T) {
 			t.Errorf("raw value %q leaked into scrubbed JSON: %q", leak, res.Text)
 		}
 	}
-	if !strings.Contains(res.Text, "<US_SSN_") || !strings.Contains(res.Text, "<EMAIL_ADDRESS_") {
+	if !strings.Contains(res.Text, "<PII_US_SSN_") || !strings.Contains(res.Text, "<PII_EMAIL_ADDRESS_") {
 		t.Errorf("scrubbed JSON missing placeholders: %q", res.Text)
 	}
 	if !json.Valid([]byte(res.Text)) {

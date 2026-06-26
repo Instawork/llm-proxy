@@ -216,7 +216,7 @@ func TestPIIRedactMiddleware_DevLogRawEntities(t *testing.T) {
 	r := &fakeRedactor{
 		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
 			return redact.Result{
-				Text:         strings.Replace(in, "josé@example.com", "<EMAIL_ADDRESS_1>", 1),
+				Text:         strings.Replace(in, "josé@example.com", "<PII_EMAIL_ADDRESS_1>", 1),
 				EntityCounts: map[string]int{"EMAIL_ADDRESS": 1},
 				DetectedEntities: []redact.DetectedEntity{
 					{EntityType: "EMAIL_ADDRESS", Text: "josé@example.com", Policy: "mask", Score: 0.95, Start: 45, End: 61},
@@ -320,7 +320,7 @@ func TestPIIRedactMiddleware_RawEntitiesNotLoggedWithoutDevFlag(t *testing.T) {
 	r := &fakeRedactor{
 		scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
 			return redact.Result{
-				Text:         strings.Replace(in, "josé@example.com", "<EMAIL_ADDRESS_1>", 1),
+				Text:         strings.Replace(in, "josé@example.com", "<PII_EMAIL_ADDRESS_1>", 1),
 				EntityCounts: map[string]int{"EMAIL_ADDRESS": 1},
 				DetectedEntities: []redact.DetectedEntity{
 					{EntityType: "EMAIL_ADDRESS", Text: "josé@example.com", Policy: "mask", Score: 0.95, Start: 45, End: 61},

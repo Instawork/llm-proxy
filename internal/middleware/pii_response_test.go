@@ -14,7 +14,7 @@ func TestPIIRedactMiddleware_WireModeSendsScrubbedBodyUpstream(t *testing.T) {
 	original := `{"messages":[{"role":"user","content":"call Jane Doe"}],"stream":true}`
 	r := &fakeRedactor{
 		mutate: func(in string) (redact.Result, error) {
-			out := strings.Replace(in, "Jane Doe", "<PERSON_1>", 1)
+			out := strings.Replace(in, "Jane Doe", "<PII_PERSON_1>", 1)
 			return redact.Result{Text: out, EntityCounts: map[string]int{"PERSON": 1}}, nil
 		},
 	}
@@ -30,7 +30,7 @@ func TestPIIRedactMiddleware_WireModeSendsScrubbedBodyUpstream(t *testing.T) {
 		newReq(t, http.MethodPost, "/openai/v1/chat/completions", original),
 	)
 
-	if !strings.Contains(string(cap.bodySeen), "<PERSON_1>") {
+	if !strings.Contains(string(cap.bodySeen), "<PII_PERSON_1>") {
 		t.Fatalf("upstream body missing placeholder: %q", cap.bodySeen)
 	}
 	if strings.Contains(string(cap.bodySeen), "Jane Doe") {

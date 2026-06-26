@@ -172,6 +172,32 @@ func TestPIIRedactMiddleware_WireModeStripsAcceptEncoding(t *testing.T) {
 	}
 }
 
+func TestPIIResponseRestoreMiddleware_RestoresSquareBracketPIIPlaceholder(t *testing.T) {
+	reg := redact.NewRegistry()
+	_ = reg.Placeholder("PERSON", "Eric Hagman")
+	pm := providers.NewProviderManager()
+
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"content":"Your full name is **[PII_PERSON_1]**!"}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	summary := newPIISummary(PIIOutcomeOK, map[string]int{"PERSON": 1})
+	req = req.WithContext(attachPIISummary(withPIIRegistry(req.Context(), reg), summary))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if !strings.Contains(rec.Body.String(), "Eric Hagman") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+	if reg.MaskPlaceholdersRemaining(rec.Body.String()) != 0 {
+		t.Fatalf("placeholder leaked: %q", rec.Body.String())
+	}
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
+		t.Fatalf("leaked = %q, want 0", got)
+	}
+}
+
 func TestPIIResponseRestoreMiddleware_GunzipFailurePassthrough(t *testing.T) {
 	reg := redact.NewRegistry()
 	_ = reg.Placeholder("EMAIL_ADDRESS", "a@b.com")

@@ -59,6 +59,7 @@ func responseFromCapture(resp *http.Response) ProxyResponse {
 	return ProxyResponse{
 		Status:    resp.StatusCode,
 		Headers:   resp.Header.Clone(),
+		Trailer:   resp.Trailer.Clone(),
 		InputTok:  resp.Header.Get("X-LLM-Input-Tokens"),
 		OutputTok: resp.Header.Get("X-LLM-Output-Tokens"),
 		Provider:  resp.Header.Get("X-LLM-Provider"),

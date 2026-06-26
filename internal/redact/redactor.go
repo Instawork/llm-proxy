@@ -2,7 +2,7 @@
 // Presidio analyzer sidecar over HTTP and replacing detected spans with
 // policy-aware tokens:
 //
-//   - MASK  → numbered placeholders (<PERSON_1>) restored to the client
+//   - MASK  → numbered placeholders (<PII_PERSON_1>) restored to the client
 //   - SEAL  → numbered placeholders that stay opaque to the client
 //   - REDACT → fixed [REDACTED:TYPE] markers (no restore)
 //

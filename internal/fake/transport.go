@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
-var wirePlaceholderRE = regexp.MustCompile(`<[A-Z][A-Z0-9_]*_\d+>`)
+var wirePlaceholderRE = regexp.MustCompile(redact.WirePlaceholderPattern)
 
 const defaultOutputTokens = 16
 
@@ -236,7 +237,10 @@ func parseBoolHeader(req *http.Request, name string) bool {
 
 // echoWirePlaceholders returns wire-tier placeholders from the (scrubbed)
 // request body so fuzz can test MASK restore / SEAL opacity through the real
-// proxy without a live LLM echoing placeholders back.
+// proxy without a live LLM echoing placeholders back. When
+// X-LLM-Proxy-Fake-Echo-Placeholders-Format is set (square, curly, paren,
+// spaced-square), the inner PII_ token is echoed with those delimiters instead
+// of angle brackets — mimicking LLM reformatted output.
 func echoWirePlaceholders(req *http.Request) string {
 	if req.Body == nil {
 		return "fake response"
@@ -250,5 +254,18 @@ func echoWirePlaceholders(req *http.Request) string {
 	if len(matches) == 0 {
 		return "fake response"
 	}
-	return strings.Join(matches, " ")
+	format := strings.ToLower(strings.TrimSpace(req.Header.Get(HeaderEchoPlaceholdersFormat)))
+	joined := strings.Join(matches, " ")
+	switch format {
+	case "square", "brackets", "bracket":
+		return redact.ReformatWirePlaceholderList(matches, '[', ']', false)
+	case "curly", "brace":
+		return redact.ReformatWirePlaceholderList(matches, '{', '}', false)
+	case "paren", "parens", "parenthesis":
+		return redact.ReformatWirePlaceholderList(matches, '(', ')', false)
+	case "spaced-square", "spaced-brackets":
+		return redact.ReformatWirePlaceholderList(matches, '[', ']', true)
+	default:
+		return joined
+	}
 }
