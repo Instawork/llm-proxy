@@ -178,7 +178,11 @@ func (r *Runner) costLimitUpdateRaisesCap(ctx context.Context) (bool, string) {
 		return false, "expected block before limit raise"
 	}
 	raised := fuzzCostLimitHigh
-	if _, err := r.admin.UpdateKey(ctx, key, live.UpdateKeyRequest{DailyCostLimit: &raised}); err != nil {
+	zeroMonthly := int64(0)
+	if _, err := r.admin.UpdateKey(ctx, key, live.UpdateKeyRequest{
+		DailyCostLimit:   &raised,
+		MonthlyCostLimit: &zeroMonthly,
+	}); err != nil {
 		return false, err.Error()
 	}
 	res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero, OutputTok: 8})
@@ -201,7 +205,10 @@ func (r *Runner) costLimitUpdateRemovesCap(ctx context.Context) (bool, string) {
 		return false, "expected block before cap removal"
 	}
 	unlimited := int64(0)
-	if _, err := r.admin.UpdateKey(ctx, key, live.UpdateKeyRequest{DailyCostLimit: &unlimited}); err != nil {
+	if _, err := r.admin.UpdateKey(ctx, key, live.UpdateKeyRequest{
+		DailyCostLimit:   &unlimited,
+		MonthlyCostLimit: &unlimited,
+	}); err != nil {
 		return false, err.Error()
 	}
 	res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero, OutputTok: 8})

@@ -136,11 +136,11 @@ type CreateKeyRequest struct {
 	DailyCostLimit   int64             `json:"daily_cost_limit"`
 	MonthlyCostLimit int64             `json:"monthly_cost_limit,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
-	RedactPII      *bool             `json:"redact_pii,omitempty"`
-	RateLimitRPM   int               `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM   int               `json:"rate_limit_tpm,omitempty"`
-	RateLimitRPD   int               `json:"rate_limit_rpd,omitempty"`
-	RateLimitTPD   int               `json:"rate_limit_tpd,omitempty"`
+	RedactPII        *bool             `json:"redact_pii,omitempty"`
+	RateLimitRPM     int               `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD     int               `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD     int               `json:"rate_limit_tpd,omitempty"`
 }
 
 // UpdateKeyRequest patches mutable key fields.
@@ -150,11 +150,11 @@ type UpdateKeyRequest struct {
 	DailyCostLimit   *int64            `json:"daily_cost_limit,omitempty"`
 	MonthlyCostLimit *int64            `json:"monthly_cost_limit,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
-	RedactPII      OptionalBool      `json:"redact_pii,omitempty"`
-	RateLimitRPM   *int              `json:"rate_limit_rpm,omitempty"`
-	RateLimitTPM   *int              `json:"rate_limit_tpm,omitempty"`
-	RateLimitRPD   *int              `json:"rate_limit_rpd,omitempty"`
-	RateLimitTPD   *int              `json:"rate_limit_tpd,omitempty"`
+	RedactPII        OptionalBool      `json:"redact_pii,omitempty"`
+	RateLimitRPM     *int              `json:"rate_limit_rpm,omitempty"`
+	RateLimitTPM     *int              `json:"rate_limit_tpm,omitempty"`
+	RateLimitRPD     *int              `json:"rate_limit_rpd,omitempty"`
+	RateLimitTPD     *int              `json:"rate_limit_tpd,omitempty"`
 }
 
 // OptionalBool distinguishes omitted, null (inherit), and explicit bool values.
