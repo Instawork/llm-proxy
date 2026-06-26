@@ -82,6 +82,51 @@ func (g *Gemini) Provision(ctx context.Context, req ProvisionRequest) (Result, e
 	return Result{}, fmt.Errorf("gemini provision: operation timed out")
 }
 
+// Rename updates the displayName of the GCP API key in-place. The key value
+// is not rotated, so the returned Result is empty.
+func (g *Gemini) Rename(ctx context.Context, upstreamID, upstreamKind, newName string) (Result, error) {
+	if upstreamKind != UpstreamKindGCPAPIKey || upstreamID == "" {
+		return Result{}, nil
+	}
+	path := "/" + strings.TrimPrefix(upstreamID, "/")
+	body, _ := json.Marshal(map[string]string{"displayName": SanitizeName(newName)})
+	req, err := g.newRequest(ctx, http.MethodPatch, path+"?updateMask=displayName", body)
+	if err != nil {
+		return Result{}, fmt.Errorf("gemini rename: %w", err)
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return Result{}, fmt.Errorf("gemini rename: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Result{}, fmt.Errorf("gemini rename: status %d: %s", resp.StatusCode, truncate(raw, 300))
+	}
+	var op struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &op); err != nil {
+		return Result{}, fmt.Errorf("gemini rename: decode operation: %w", err)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _, done, err := g.pollOperation(ctx, op.Name)
+		if err != nil {
+			return Result{}, fmt.Errorf("gemini rename: %w", err)
+		}
+		if done {
+			return Result{}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return Result{}, fmt.Errorf("gemini rename: operation timed out")
+}
+
 func (g *Gemini) Revoke(ctx context.Context, upstreamID, upstreamKind string) error {
 	if upstreamKind != UpstreamKindGCPAPIKey || upstreamID == "" {
 		return nil

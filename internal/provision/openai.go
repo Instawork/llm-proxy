@@ -77,6 +77,19 @@ func (o *OpenAI) Provision(ctx context.Context, prov ProvisionRequest) (Result, 
 	}, nil
 }
 
+// Rename an OpenAI service account by revoking the old one and creating a new
+// one with the updated name. The returned Result carries the new upstream
+// credentials that must be persisted by the caller.
+func (o *OpenAI) Rename(ctx context.Context, upstreamID, upstreamKind, newName string) (Result, error) {
+	if upstreamKind != UpstreamKindOpenAIServiceAccount || upstreamID == "" {
+		return Result{}, nil
+	}
+	if err := o.Revoke(ctx, upstreamID, upstreamKind); err != nil {
+		return Result{}, fmt.Errorf("openai rename: revoke old service account: %w", err)
+	}
+	return o.Provision(ctx, ProvisionRequest{Name: newName})
+}
+
 func (o *OpenAI) Revoke(ctx context.Context, upstreamID, upstreamKind string) error {
 	if upstreamKind != UpstreamKindOpenAIServiceAccount || upstreamID == "" {
 		return nil

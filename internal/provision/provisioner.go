@@ -36,6 +36,12 @@ type Result struct {
 // Provisioner mints or assigns an upstream API key for one provider.
 type Provisioner interface {
 	Provision(ctx context.Context, req ProvisionRequest) (Result, error)
+	// Rename updates the display name of an existing upstream credential.
+	// For providers that rotate credentials on rename (e.g. OpenAI), the
+	// returned Result carries the new ActualKey and UpstreamID. For providers
+	// that rename in-place (e.g. Gemini), the Result is empty. For providers
+	// that do not track names (Anthropic), this is a no-op.
+	Rename(ctx context.Context, upstreamID, upstreamKind, newName string) (Result, error)
 	Revoke(ctx context.Context, upstreamID, upstreamKind string) error
 	PoolStatus(ctx context.Context) (available int, ok bool)
 }
@@ -89,6 +95,28 @@ func (m *Manager) Provision(ctx context.Context, provider string, req ProvisionR
 			"tier", req.Tier,
 			"upstream_kind", res.UpstreamKind,
 			"upstream_id", res.UpstreamID,
+		)
+	}
+	return res, nil
+}
+
+// Rename updates the display name of an upstream credential.
+// If the provider is not configured, it returns (Result{}, nil) silently.
+func (m *Manager) Rename(ctx context.Context, provider, upstreamID, upstreamKind, newName string) (Result, error) {
+	p, ok := m.ForProvider(provider)
+	if !ok {
+		return Result{}, nil
+	}
+	res, err := p.Rename(ctx, upstreamID, upstreamKind, newName)
+	if err != nil {
+		return Result{}, err
+	}
+	if res.ActualKey != "" && m.logger != nil {
+		m.logger.Info(
+			"provision: upstream key rotated on rename",
+			"provider", provider,
+			"upstream_kind", upstreamKind,
+			"new_upstream_id", res.UpstreamID,
 		)
 	}
 	return res, nil

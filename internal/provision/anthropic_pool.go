@@ -49,6 +49,10 @@ func (p *AnthropicPool) Provision(ctx context.Context, req ProvisionRequest) (Re
 	}, nil
 }
 
+func (p *AnthropicPool) Rename(_ context.Context, _, _, _ string) (Result, error) {
+	return Result{}, nil
+}
+
 func (p *AnthropicPool) Revoke(ctx context.Context, upstreamID, upstreamKind string) error {
 	if upstreamKind != UpstreamKindAnthropicPooled || p.adminKey == "" || upstreamID == "" {
 		return nil

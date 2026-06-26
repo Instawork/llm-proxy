@@ -29,6 +29,10 @@ func (f *fakeProvisioner) Provision(_ context.Context, _ provision.ProvisionRequ
 	}, nil
 }
 
+func (f *fakeProvisioner) Rename(_ context.Context, _, _, _ string) (provision.Result, error) {
+	return provision.Result{}, nil
+}
+
 func (f *fakeProvisioner) Revoke(_ context.Context, _, _ string) error {
 	return nil
 }

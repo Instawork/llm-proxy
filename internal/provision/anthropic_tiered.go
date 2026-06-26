@@ -52,6 +52,10 @@ func (a *AnthropicTiered) Provision(ctx context.Context, req ProvisionRequest) (
 	}, nil
 }
 
+func (a *AnthropicTiered) Rename(_ context.Context, _, _, _ string) (Result, error) {
+	return Result{}, nil
+}
+
 func (a *AnthropicTiered) Revoke(ctx context.Context, upstreamID, upstreamKind string) error {
 	_ = ctx
 	_ = upstreamID

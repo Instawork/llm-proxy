@@ -779,6 +779,9 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 		case "actual_key":
 			updateExpr.WriteString(", actual_key = :actual_key")
 			exprAttrValues[":actual_key"] = &types.AttributeValueMemberS{Value: value.(string)}
+		case "upstream_key_id":
+			updateExpr.WriteString(", upstream_key_id = :upstream_key_id")
+			exprAttrValues[":upstream_key_id"] = &types.AttributeValueMemberS{Value: value.(string)}
 		case "daily_cost_limit":
 			updateExpr.WriteString(", daily_cost_limit = :daily_cost_limit")
 			exprAttrValues[":daily_cost_limit"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", value.(int64))}

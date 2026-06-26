@@ -22,6 +22,9 @@ USERS_MAIN_PATH=./cmd/llm-proxy-users
 GO_VERSION=$(shell go version | cut -d' ' -f3)
 GIT_COMMIT=$(shell git rev-parse --short HEAD || echo "unknown")
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GOPATH_BIN=$(shell go env GOPATH)/bin
+export PATH := $(GOPATH_BIN):$(PATH)
+GOFUMPT=$(shell command -v gofumpt 2>/dev/null || echo "$(GOPATH_BIN)/gofumpt")
 
 # Colors for output (auto-detect or force with FORCE_COLOR=1)
 ifdef FORCE_COLOR
@@ -107,8 +110,14 @@ help:
 	@echo "  dev            - Run in development mode with live reload"
 	@echo ""
 	@echo "$(GREEN)Code Quality:$(NC)"
+	@echo "  ci             - Run all CI checks (format, vet, tests) — use before push"
+	@echo "  ci-fix         - Apply CI formatters then run ci"
+	@echo "  ci-extended    - ci + fuzz-test + web typecheck/tests"
+	@echo "  fmt            - Format Go code (go fmt)"
+	@echo "  fmt-strict     - Apply gofmt -s and gofumpt (what CI enforces)"
+	@echo "  fmt-check      - Verify gofmt -s and gofumpt (no writes)"
 	@echo "  lint           - Run golint"
-	@echo "  fmt            - Format Go code"
+	@echo "  validate-config - Validate configs/*.yml"
 	@echo ""
 	@echo "$(GREEN)Docker:$(NC)"
 	@echo "  docker-build         - Build Docker image (dev environment)"
@@ -498,11 +507,50 @@ fmt:
 	@go fmt ./cmd/... ./internal/...
 	@echo "$(GREEN)✓ Format completed$(NC)"
 
+.PHONY: install-gofumpt
+install-gofumpt:
+	@if ! command -v gofumpt >/dev/null 2>&1; then \
+		echo "$(YELLOW)gofumpt not installed; installing...$(NC)"; \
+		go install mvdan.cc/gofumpt@latest; \
+	fi
+
+.PHONY: fmt-strict
+fmt-strict: install-gofumpt
+	@echo "$(BLUE)Applying gofmt -s and gofumpt...$(NC)"
+	@gofmt -s -w .
+	@$(GOFUMPT) -w .
+	@echo "$(GREEN)✓ Strict format completed$(NC)"
+
+.PHONY: fmt-check
+fmt-check: install-gofumpt
+	@echo "$(BLUE)Checking gofmt -s and gofumpt...$(NC)"
+	@unformatted=$$(gofmt -s -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "$(RED)✗ Go code is not formatted (gofmt -s):$(NC)"; \
+		echo "$$unformatted"; \
+		echo "$(YELLOW)  Run: make fmt-strict$(NC)"; \
+		exit 1; \
+	fi; \
+	unfumpted=$$($(GOFUMPT) -l .); \
+	if [ -n "$$unfumpted" ]; then \
+		echo "$(RED)✗ Go code is not formatted (gofumpt):$(NC)"; \
+		echo "$$unfumpted"; \
+		echo "$(YELLOW)  Run: make fmt-strict$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ Format check passed$(NC)"
+
+.PHONY: validate-config
+validate-config:
+	@echo "$(BLUE)Validating configs/*.yml...$(NC)"
+	@go run ./cmd/config-validator/
+	@echo "$(GREEN)✓ Config validation passed$(NC)"
+
 # Run go vet
 .PHONY: vet
 vet:
 	@echo "$(BLUE)Running go vet...$(NC)"
-	@go vet ./cmd/... ./internal/...
+	@go vet ./...
 	@echo "$(GREEN)✓ Vet completed$(NC)"
 
 # Guard against raw PII/model-output dumps in logs. A debug log line that
@@ -528,8 +576,34 @@ lint-pii-logs:
 
 # Run all code quality checks
 .PHONY: check
-check: fmt vet lint lint-pii-logs
+check: fmt-check vet lint lint-pii-logs
 	@echo "$(GREEN)✓ All code quality checks completed$(NC)"
+
+# Mirror CircleCI lint + unit-tests jobs (the default pre-push gate).
+.PHONY: ci
+ci: fmt-check vet lint-pii-logs validate-config test
+	@echo "$(GREEN)✓ CI checks passed$(NC)"
+
+# Apply formatters then run ci.
+.PHONY: ci-fix
+ci-fix: fmt-strict ci
+
+# Extra local checks beyond default CI (fuzz unit tests + admin web).
+.PHONY: ci-extended
+ci-extended: ci fuzz-test web-check web-test
+	@echo "$(GREEN)✓ Extended CI checks passed$(NC)"
+
+.PHONY: web-check
+web-check:
+	@echo "$(BLUE)Running web TypeScript check...$(NC)"
+	@cd web && npm run check
+	@echo "$(GREEN)✓ Web typecheck passed$(NC)"
+
+.PHONY: web-test
+web-test:
+	@echo "$(BLUE)Running web unit tests...$(NC)"
+	@cd web && npm test
+	@echo "$(GREEN)✓ Web tests passed$(NC)"
 
 # Build Docker image for development (default)
 .PHONY: docker-build

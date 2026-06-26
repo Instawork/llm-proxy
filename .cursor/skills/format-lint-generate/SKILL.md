@@ -6,9 +6,11 @@ description: Format, lint, vet, validate config, and test the `llm-proxy` Go ser
 # Format, Lint & Generate (llm-proxy)
 
 Run all formatting, linting, vetting, config validation, and tests for the `llm-proxy` Go service.
-Commands run from the project root `/Users/eric/go/src/github.com/Instawork/llm-proxy`.
+Commands run from the repository root (the directory containing `Makefile` and `go.mod`).
 
-Default to the `Makefile` targets (`make fmt`, `make vet`, `make check`, `make test`) where they exist, and use the raw CI commands (`gofmt -s -l .`, `gofumpt -l .`) only for the cases the Makefile does not cover — most notably the **`gofmt -s` simplify** and **gofumpt stricter format** checks that CI enforces but `make fmt` does not run.
+Default to the `Makefile` targets (`make ci`, `make fmt-strict`, `make vet`, `make check`, `make test`) where they exist, and use the raw CI commands (`gofmt -s -l .`, `gofumpt -l .`) only for the cases the Makefile does not cover — most notably the **`gofmt -s` simplify** and **gofumpt stricter format** checks that CI enforces but `make fmt` does not run.
+
+**Quick start:** from the repo root, run `make ci` (or `./scripts/ci-check.sh`) before pushing. To auto-fix formatting first: `make ci-fix`.
 
 Before deciding whether to install tooling or regenerate anything, inspect the changed files (`git status --short`, `git diff --stat`). Do not start the server just for these checks.
 
@@ -22,8 +24,8 @@ The `.circleci/config.yml` `lint` job fails the build if any of these fail:
 
 And the `unit-tests` job runs:
 
-4. `go run ./cmd/config-validator/`
-5. `make test` — which is `go test -race -v ./internal/... -short -skip "Integration"`
+1. `go run ./cmd/config-validator/`
+2. `make test` — which is `go test -race -v ./internal/... -short -skip "Integration"`
 
 A "passes locally" check sequence must cover **all five**. `make check` (which is `fmt vet lint`) is necessary but **not sufficient** — it does not run `gofmt -s` (only `go fmt`, which is non-simplifying), does not run `gofumpt`, and does not run the config validator. Always run the explicit CI commands when reproducing a CI failure.
 
@@ -118,19 +120,37 @@ Pricing/model changes to `configs/base.yml` have their own dedicated playbook �
 
 ## Quick Reference: Full Check Sequence
 
-For a clean "ready to push" pass, run in order:
+For a clean "ready to push" pass, run:
+
+```bash
+make ci
+```
+
+Or, to fix formatting then verify:
+
+```bash
+make ci-fix
+```
+
+`make ci` runs, in order: `fmt-check`, `vet`, `lint-pii-logs`, `validate-config`, `test`.
+
+For extra local coverage (fuzz unit tests + web typecheck/tests):
+
+```bash
+make ci-extended
+```
+
+Manual step checklist (equivalent to `make ci`):
 
 ```
 Task Progress:
-- [ ] gofmt -s -w .
-- [ ] gofumpt -w .            (after `go install mvdan.cc/gofumpt@latest` if needed)
-- [ ] gofmt -s -l . is empty
-- [ ] gofumpt -l . is empty
-- [ ] go vet ./...
-- [ ] make lint               (golint; non-fatal if golint install fails)
-- [ ] go run ./cmd/config-validator/   (only if configs/*.yml changed)
-- [ ] make test               (race-enabled unit tests)
-- [ ] go mod tidy             (only if go.mod / go.sum changed)
+- [ ] gofmt -s -l . is empty          (or: make fmt-check)
+- [ ] gofumpt -l . is empty           (or: make fmt-check)
+- [ ] go vet ./...                    (or: make vet)
+- [ ] make lint-pii-logs
+- [ ] go run ./cmd/config-validator/  (or: make validate-config)
+- [ ] make test                       (race-enabled unit tests)
+- [ ] go mod tidy                     (only if go.mod / go.sum changed)
 ```
 
 ## Reproducing the CI "Go code is not formatted" failure

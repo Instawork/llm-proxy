@@ -70,6 +70,13 @@ func (f *Fake) Provision(_ context.Context, req ProvisionRequest) (Result, error
 	}
 }
 
+func (f *Fake) Rename(ctx context.Context, _, upstreamKind, newName string) (Result, error) {
+	if upstreamKind == UpstreamKindOpenAIServiceAccount {
+		return f.Provision(ctx, ProvisionRequest{Name: newName})
+	}
+	return Result{}, nil
+}
+
 func (f *Fake) Revoke(context.Context, string, string) error {
 	return nil
 }

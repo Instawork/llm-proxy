@@ -415,6 +415,22 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Description != nil && existing.Provisioned && h.deps.KeyProvisioner != nil {
+		res, renameErr := h.deps.KeyProvisioner.Rename(
+			r.Context(),
+			existing.Provider,
+			existing.UpstreamKeyID,
+			existing.UpstreamKind,
+			*req.Description,
+		)
+		if renameErr != nil {
+			h.deps.Logger.Error("admin: upstream rename failed", "error", renameErr, "provider", existing.Provider)
+		} else if res.ActualKey != "" {
+			updates["actual_key"] = res.ActualKey
+			updates["upstream_key_id"] = res.UpstreamID
+		}
+	}
+
 	if err := h.deps.APIKeyStore.UpdateKey(r.Context(), existing.PK, updates); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
