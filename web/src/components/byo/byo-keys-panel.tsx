@@ -7,7 +7,7 @@ import { MaskedCredentialId } from "../ui/masked-credential-id";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { useBYOKeys } from "../../hooks/queries";
 import { useByoBanActions } from "../../hooks/use-byo-ban-actions";
-import { canManageByoBans } from "../../lib/rbac";
+import { permissions } from "../../lib/permissions";
 import { formatUsd, MASKED_CREDENTIAL_HASH_TITLE } from "../../lib/format";
 import type { BYOKeyRecord } from "../../types";
 

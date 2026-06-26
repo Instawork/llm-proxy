@@ -2,15 +2,20 @@ import { Link } from "react-router-dom";
 
 import { StatusBadge } from "./page-header";
 import { featureEnabled, featureLabel, featureMeta } from "../../lib/features";
+import { permissions } from "../../lib/permissions";
+import { useMe } from "../../hooks/queries";
 import type { ConfigSummary } from "../../types";
 
 export function FeatureFlagList({
   features,
-  linkToConfig = true,
+  linkToConfig,
 }: {
   features: ConfigSummary["features"] | undefined;
   linkToConfig?: boolean;
 }) {
+  const { data: me } = useMe();
+  const showConfigLink =
+    (linkToConfig ?? true) && permissions.canManageConfigPage(me?.role);
   const rows = Object.entries(features ?? {}).map(([name, feature]) => ({
     name,
     label: featureLabel(name),
@@ -41,7 +46,7 @@ export function FeatureFlagList({
           </li>
         ))}
       </ul>
-      {linkToConfig ? (
+      {showConfigLink ? (
         <Link to="/config" className="btn btn-ghost btn-xs">
           Full configuration
         </Link>

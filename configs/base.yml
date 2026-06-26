@@ -141,7 +141,7 @@ features:
     editor_limits:
       max_daily_cost_limit_cents: 10000
     viewer_limits:
-      personal_monthly_cost_limit_cents: 1000
+      personal_monthly_cost_limit_cents: 2000
   # ---------------------------------------------------------------------------
   # Row history (gzipped JSONL archive — independent of Redis rollups)
   # ---------------------------------------------------------------------------

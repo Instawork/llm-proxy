@@ -23,6 +23,8 @@ import { SpendOverview, SpendPeriodPanel } from "../../components/ui/spend-break
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
 import { useKey, useKeyStats, useMe, usePII, useRateLimits, useUpdateKey } from "../../hooks/queries";
+import { permissions } from "../../lib/permissions";
+import KeyDetailPolicyEditor from "../../components/keys/key-detail-policy-editor";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import {
   formatDailyCostLimit,
@@ -72,7 +74,8 @@ export default function KeyDetailPage() {
   const { push } = useToast();
   const { key: keyParam } = useParams<{ key: string }>();
   const { data: me } = useMe();
-  const isViewer = me?.role === "viewer";
+  const isViewer = permissions.isViewer(me?.role);
+  const canManagePolicy = permissions.canManageKeyPolicy(me?.role);
   const routeKeyId = keyParam ? decodeKeyRouteParam(keyParam) : undefined;
   const validRoute = isKeyRouteParam(routeKeyId) ? routeKeyId : undefined;
 
@@ -226,6 +229,8 @@ export default function KeyDetailPage() {
     : 0;
   const monthLabel = formatMonthYear(costMonth?.month);
   const rateRequestTotal = rateUsage.reduce((s, r) => s + r.requests, 0);
+  const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
+  const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   return (
     <div className="space-y-6">
@@ -521,6 +526,14 @@ export default function KeyDetailPage() {
                         }
                         source={costSource}
                       >
+                        {canManagePolicy && !isPersonal ? (
+                          <KeyDetailPolicyEditor
+                            keyRecord={keyRecord}
+                            routeKey={validRoute}
+                            section="cost"
+                            editorMaxDollars={editorMaxDollars}
+                          />
+                        ) : null}
                         <div className="grid gap-4 p-5 lg:grid-cols-2">
                           <SpendPeriodPanel
                             title="Today"
@@ -599,6 +612,14 @@ export default function KeyDetailPage() {
                         }
                         source={piiSource}
                       >
+                        {canManagePolicy && !isPersonal ? (
+                          <KeyDetailPolicyEditor
+                            keyRecord={keyRecord}
+                            routeKey={validRoute}
+                            section="pii"
+                            editorMaxDollars={editorMaxDollars}
+                          />
+                        ) : null}
                         <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
                           <Meta label="Detections today" value={piiToday?.detections ?? 0} />
                           <Meta label="Recent events" value={recentPii.length} />
@@ -620,6 +641,14 @@ export default function KeyDetailPage() {
                       subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
                       source={rateSource}
                     >
+                      {canManagePolicy && !isPersonal ? (
+                        <KeyDetailPolicyEditor
+                          keyRecord={keyRecord}
+                          routeKey={validRoute}
+                          section="rate-limits"
+                          editorMaxDollars={editorMaxDollars}
+                        />
+                      ) : null}
                       <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
                         <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord.rate_limit_rpm)} />
                         <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord.rate_limit_tpm)} />

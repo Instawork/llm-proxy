@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -330,7 +331,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if role == adminusers.RoleViewer {
+	if !permissions.UpdateKeyPolicyFieldsAllowed(role) {
 		if req.Enabled != nil || req.DailyCostLimit != nil || req.MonthlyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
 			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "viewers may only update description"})
@@ -459,11 +460,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
-	if role == adminusers.RoleEditor {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "editors cannot delete keys"})
-		return
-	}
-	if !canAccessKey(role, user.Email, record) {
+	if !permissions.CanDeleteKey(role, user.Email, record) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}

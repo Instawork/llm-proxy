@@ -85,12 +85,12 @@ func viewerPersonalMonthlyLimitFromConfig(cfg config.ViewerLimitsConfig) int64 {
 	if cfg.PersonalMonthlyCostLimitCents > 0 {
 		return cfg.PersonalMonthlyCostLimitCents
 	}
-	return 1000
+	return 2000
 }
 
 func (h *handler) viewerPersonalMonthlyLimit() int64 {
 	if h.deps.YAMLConfig == nil {
-		return 1000
+		return 2000
 	}
 	return viewerPersonalMonthlyLimitFromConfig(h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits)
 }

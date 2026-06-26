@@ -77,7 +77,7 @@ Wait for the index to reach `ACTIVE` before rolling out the feature.
 Dashboard users with the **viewer** role can manage personal proxy keys only:
 
 - **One key per provider** (`openai`, `anthropic`, `gemini`; Bedrock is not available)
-- **Monthly spend cap** (default **$10/month**, configured via `admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents` in `configs/base.yml`)
+- **Monthly spend cap** (default **$20/month**, configured via `admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents` in `configs/base.yml`)
 - **No daily cap** on personal keys (`daily_cost_limit` is `0`)
 - Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
 - Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
@@ -143,6 +143,29 @@ Created:     2024-01-15T10:30:00Z
 # Delete a key (permanent)
 ./llm-proxy-keys -env=production -delete=YOUR_PROXY_KEY
 ```
+
+### Backfill personal key monthly limits
+
+After raising `admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents` in config, existing personal keys keep their stored `monthly_cost_limit` until updated. To bump keys still at the old default ($10 → $20):
+
+```bash
+# SSO into production, then dry-run (lists matching keys only)
+export AWS_PROFILE=your-prod-sso-profile
+aws sso login --profile "$AWS_PROFILE"
+./scripts/bump-personal-key-limits.sh
+
+# Apply (only keys with monthly_cost_limit exactly at the old default)
+LLM_PROXY_ALLOW_PROD=1 ./scripts/bump-personal-key-limits.sh --apply
+```
+
+Or without the wrapper:
+
+```bash
+go run ./cmd/llm-proxy-keys personal bump-limit -env=production
+LLM_PROXY_ALLOW_PROD=1 go run ./cmd/llm-proxy-keys personal bump-limit -env=production --apply
+```
+
+Only personal keys whose `monthly_cost_limit` equals `--from` (default 1000 cents) are updated to `--to` (default 2000 cents). Custom limits are left unchanged.
 
 ## Using Proxy Keys in API Requests
 

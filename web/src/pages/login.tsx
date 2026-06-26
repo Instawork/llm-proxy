@@ -10,7 +10,7 @@ import type { AdminRole } from "../types";
 const DEV_ROLES: AdminRole[] = ["viewer", "editor", "admin"];
 
 const DEV_ROLE_LABELS: Record<AdminRole, string> = {
-  viewer: "Viewer — monitoring only",
+  viewer: "Viewer — personal keys only",
   editor: "Editor — keys and monitoring",
   admin: "Admin — full access",
 };

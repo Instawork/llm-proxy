@@ -333,7 +333,7 @@ type EditorLimitsConfig struct {
 // ViewerLimitsConfig caps viewer personal-key permissions.
 type ViewerLimitsConfig struct {
 	// PersonalMonthlyCostLimitCents is the monthly spend cap (cents) applied
-	// to viewer personal keys. Defaults to 1000 when unset.
+	// to viewer personal keys. Defaults to 2000 when unset.
 	PersonalMonthlyCostLimitCents int64 `yaml:"personal_monthly_cost_limit_cents"`
 }
 

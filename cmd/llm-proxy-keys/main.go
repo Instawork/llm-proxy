@@ -24,6 +24,10 @@ func main() {
 		runPoolCommand(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "personal" {
+		runPersonalCommand(os.Args[2:])
+		return
+	}
 
 	// Command-line flags
 	var (
@@ -54,7 +58,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  Enable key:      -enable=sk-iw-xxx\n\n")
 		fmt.Fprintf(os.Stderr, "Pool commands:\n")
 		fmt.Fprintf(os.Stderr, "  pool add:        pool add --provider anthropic --key sk-ant-api03-...\n")
-		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n\n")
+		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n")
+		fmt.Fprintf(os.Stderr, "  personal bump:   personal bump-limit -env=production [--apply]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}

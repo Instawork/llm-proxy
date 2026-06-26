@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
-import { canManageByoBans, roleAtLeast } from "../lib/rbac";
+import { permissions } from "../lib/permissions";
+import { roleAtLeast } from "../lib/rbac";
 import type {
   AdminUser,
   AdminUserRecord,
@@ -380,7 +381,7 @@ export function useBYOKeys(provider?: Provider) {
   return useQuery({
     queryKey: queryKeys.byoKeys(provider),
     queryFn: () => apiFetch<BYOKeyRecord[]>(`/admin/api/byo-keys${qs}`),
-    enabled: canManageByoBans(me?.role),
+    enabled: permissions.canManageByo(me?.role),
   });
 }
 
@@ -390,7 +391,7 @@ export function useBYOBans(provider?: Provider) {
   return useQuery({
     queryKey: queryKeys.byoBans(provider),
     queryFn: () => apiFetch<BYOBanRecord[]>(`/admin/api/byo-bans${qs}`),
-    enabled: canManageByoBans(me?.role),
+    enabled: permissions.canManageByo(me?.role),
   });
 }
 
@@ -399,7 +400,7 @@ export function useBanBYOKey() {
   const { data: me } = useMe();
   return useMutation({
     mutationFn: (body: CreateBYOBanRequest) => {
-      if (!canManageByoBans(me?.role)) {
+      if (!permissions.canManageByo(me?.role)) {
         return Promise.reject(new Error("Admin role required"));
       }
       return apiFetch<BYOBanRecord>("/admin/api/byo-bans", {
@@ -419,7 +420,7 @@ export function useUnbanBYOKey() {
   const { data: me } = useMe();
   return useMutation({
     mutationFn: ({ provider, hash }: { provider: Provider; hash: string }) => {
-      if (!canManageByoBans(me?.role)) {
+      if (!permissions.canManageByo(me?.role)) {
         return Promise.reject(new Error("Admin role required"));
       }
       return apiFetch<void>(`/admin/api/byo-bans/${encodeURIComponent(provider)}/${encodeURIComponent(hash)}`, {

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import KeyRequestsPanel from "../../components/keys/key-requests-panel";
+import ApiKeysModal from "../../components/keys/api-keys-modal";
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
@@ -22,9 +23,18 @@ import { maskKey } from "../../components/ui/masked-key";
 import { useToast } from "../../components/ui/toast";
 import { formatShareExpiry } from "../../lib/share-expiry";
 import {
-  costLimitFormFromKey,
-  type CostLimitPeriod,
-} from "../../lib/format";
+  costLimitsFromForm,
+  defaultKeyForm,
+  formPiiOffRequiresBedrock,
+  formatRateLimits,
+  keyFormFromRecord,
+  KEY_PROVIDERS,
+  piiFromFormValue,
+  rateLimitsFromForm,
+  VIEWER_PROVIDERS,
+  type KeyFormState,
+} from "../../lib/key-form";
+import { permissions } from "../../lib/permissions";
 import {
   useBYOKeys,
   useConfig,
@@ -42,19 +52,21 @@ import {
 import type {
   APIKey,
   CreateAPIKeyRequest,
-  PiiRedactSetting,
   Provider,
   ShareCreateResponse,
 } from "../../types";
 
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
-const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
+const PROVIDERS = KEY_PROVIDERS;
 
 type KeysTab = "keys" | "requests" | "byo-keys";
 
-function parseKeysTab(value: string | null, isAdmin: boolean): KeysTab {
-  if (value === "requests" && isAdmin) return "requests";
-  if ((value === "byo-keys" || value === "byo-bans") && isAdmin) return "byo-keys";
+function parseKeysTab(
+  value: string | null,
+  canReviewRequests: boolean,
+  canManageByo: boolean,
+): KeysTab {
+  if (value === "requests" && canReviewRequests) return "requests";
+  if ((value === "byo-keys" || value === "byo-bans") && canManageByo) return "byo-keys";
   return "keys";
 }
 
@@ -62,103 +74,6 @@ function keysTabClass(active: boolean): string {
   return active
     ? "btn btn-primary btn-sm gap-2 shadow-sm"
     : "btn btn-ghost btn-sm gap-2 text-base-content/70 hover:text-base-content";
-}
-
-type PiiFormValue = "inherit" | "on" | "off";
-
-type KeyFormState = {
-  provider: Provider;
-  actual_key: string;
-  description: string;
-  cost_limit_period: CostLimitPeriod;
-  cost_limit_dollars: string;
-  enabled: boolean;
-  redact_pii: PiiFormValue;
-  rate_limit_rpm: string;
-  rate_limit_tpm: string;
-  rate_limit_rpd: string;
-  rate_limit_tpd: string;
-  anthropic_tier: string;
-};
-
-const defaultForm: KeyFormState = {
-  provider: "openai",
-  actual_key: "",
-  description: "",
-  cost_limit_period: "daily",
-  cost_limit_dollars: "100",
-  enabled: true,
-  redact_pii: "inherit",
-  rate_limit_rpm: "",
-  rate_limit_tpm: "",
-  rate_limit_rpd: "",
-  rate_limit_tpd: "",
-  anthropic_tier: "metered",
-};
-
-function piiToFormValue(value?: PiiRedactSetting): PiiFormValue {
-  if (value === true) return "on";
-  if (value === false) return "off";
-  return "inherit";
-}
-
-function piiFromFormValue(value: PiiFormValue): PiiRedactSetting {
-  if (value === "on") return true;
-  if (value === "off") return false;
-  return null;
-}
-
-function formPiiOffRequiresBedrock(
-  redactPii: PiiFormValue,
-  globalPiiEnabled: boolean,
-  canBypass: boolean,
-): boolean {
-  if (canBypass) return false;
-  if (redactPii === "off") return true;
-  if (redactPii === "inherit" && globalPiiEnabled) return false;
-  return false;
-}
-
-function piiLabel(value?: PiiRedactSetting): string {
-  if (value === true) return "On";
-  if (value === false) return "Off";
-  return "Inherit";
-}
-
-function parseLimitField(value: string): number {
-  const n = Number(value.trim());
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
-}
-
-function formatRateLimits(record: APIKey): string {
-  const parts: string[] = [];
-  if (record.rate_limit_rpm) parts.push(`${record.rate_limit_rpm} rpm`);
-  if (record.rate_limit_tpm)
-    parts.push(`${record.rate_limit_tpm.toLocaleString()} tpm`);
-  if (record.rate_limit_rpd) parts.push(`${record.rate_limit_rpd} rpd`);
-  if (record.rate_limit_tpd)
-    parts.push(`${record.rate_limit_tpd.toLocaleString()} tpd`);
-  return parts.length ? parts.join(" · ") : "—";
-}
-
-function rateLimitsFromForm(form: KeyFormState) {
-  return {
-    rate_limit_rpm: parseLimitField(form.rate_limit_rpm),
-    rate_limit_tpm: parseLimitField(form.rate_limit_tpm),
-    rate_limit_rpd: parseLimitField(form.rate_limit_rpd),
-    rate_limit_tpd: parseLimitField(form.rate_limit_tpd),
-  };
-}
-
-function costLimitsFromForm(form: KeyFormState): {
-  daily_cost_limit: number;
-  monthly_cost_limit: number;
-} {
-  const cents = Math.round(Number(form.cost_limit_dollars || "0") * 100);
-  if (form.cost_limit_period === "monthly") {
-    return { daily_cost_limit: 0, monthly_cost_limit: cents };
-  }
-  return { daily_cost_limit: cents, monthly_cost_limit: 0 };
 }
 
 function keyStatsDescription(hasCostRedis: boolean, hasPiiRedis: boolean): string {
@@ -187,15 +102,21 @@ export default function KeysPage() {
   const canBypassPiiBedrockPolicy = Boolean(
     me?.can_bypass_pii_off_non_bedrock_policy,
   );
-  const isViewer = me?.role === "viewer";
-  const isEditor = me?.role === "editor";
-  const isAdmin = me?.role === "admin";
-  const canRequestServiceKey = isViewer || isEditor;
-  const tab = parseKeysTab(searchParams.get("tab"), isAdmin);
+  const isViewer = permissions.isViewer(me?.role);
+  const isAdmin = permissions.isAdmin(me?.role);
+  const isEditor = permissions.isEditor(me?.role);
+  const canManagePolicy = permissions.canManageKeyPolicy(me?.role);
+  const canRequestServiceKey = permissions.canRequestServiceKey(me?.role);
+  const canReviewKeyRequests = permissions.canReviewKeyRequests(me?.role);
+  const canManageByo = permissions.canManageByo(me?.role);
+  const canBulkGeneratePersonalKeys = permissions.canBulkGeneratePersonalKeys(me?.role);
+  const canBulkGenerateOrgKeys = permissions.canBulkGenerateOrgKeys(me?.role);
+  const bulkCreatesPersonalKeys = canBulkGeneratePersonalKeys;
+  const tab = parseKeysTab(searchParams.get("tab"), canReviewKeyRequests, canManageByo);
   const { data: pendingRequests = [] } = useKeyRequests("pending");
   const { data: byoKeys = [] } = useBYOKeys();
   const bannedByoCount = byoKeys.filter((row) => row.banned).length;
-  const pendingRequestCount = isAdmin ? pendingRequests.length : 0;
+  const pendingRequestCount = canReviewKeyRequests ? pendingRequests.length : 0;
   const [requestKeyModalOpen, setRequestKeyModalOpen] = useState(false);
   const handledRequestDeepLink = useRef(false);
 
@@ -219,10 +140,10 @@ export default function KeysPage() {
     next.delete("tab");
     setSearchParams(next, { replace: true });
   }, [canRequestServiceKey, searchParams, setSearchParams]);
-  const provisionedKeysOnly = !isAdmin;
-  const canDeleteKeys = isViewer || me?.role === "admin";
+  const provisionedKeysOnly = permissions.requiresProvisionedKeysOnly(me?.role);
+  const canDeleteKeys = permissions.canDeleteKeys(me?.role);
   const viewerMonthlyCents =
-    me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 1000;
+    me?.viewer_limits?.personal_monthly_cost_limit_cents ?? 2000;
   const viewerMonthlyLimitLabel =
     viewerMonthlyCents > 0
       ? `$${(viewerMonthlyCents / 100).toFixed(2)}`
@@ -234,7 +155,7 @@ export default function KeysPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<APIKey | null>(null);
   const [editingKey, setEditingKey] = useState<APIKey | null>(null);
-  const [form, setForm] = useState<KeyFormState>(defaultForm);
+  const [form, setForm] = useState<KeyFormState>(defaultKeyForm);
   const [manualKeyEntry, setManualKeyEntry] = useState(false);
   const [personalMode, setPersonalMode] = useState(false);
   const [shareResult, setShareResult] = useState<ShareCreateResponse | null>(
@@ -376,7 +297,12 @@ export default function KeysPage() {
       ? missingPersonalProvidersForBulk
       : missingProvidersForBulk;
 
-  const canBulkGeneratePersonalKeys = bulkTargetProviders.length > 0;
+  const showBulkGenerate =
+    bulkTargetProviders.length > 0 &&
+    (canBulkGeneratePersonalKeys || canBulkGenerateOrgKeys);
+  const bulkGenerateLabel = bulkCreatesPersonalKeys
+    ? "Generate Personal Keys"
+    : "Generate Missing Keys";
 
   const providerAutoProvision = Boolean(
     provisioning?.enabled &&
@@ -409,11 +335,11 @@ export default function KeysPage() {
   const openCreate = () => {
     setEditingKey(null);
     const nextProvider = provisionedKeysOnly
-      ? (availableProviders[0] ?? defaultForm.provider)
+      ? (availableProviders[0] ?? defaultKeyForm.provider)
       : isViewer
         ? (availableProviders[0] ?? "openai")
-        : defaultForm.provider;
-    setForm({ ...defaultForm, provider: nextProvider });
+        : defaultKeyForm.provider;
+    setForm({ ...defaultKeyForm, provider: nextProvider });
     setManualKeyEntry(false);
     setPersonalMode(false);
     setModalOpen(true);
@@ -427,43 +353,21 @@ export default function KeysPage() {
       provider: on
         ? (VIEWER_PROVIDERS.find((p) => !myPersonalProviders.has(p)) ??
           current.provider)
-        : defaultForm.provider,
+        : defaultKeyForm.provider,
     }));
   };
 
   const openEdit = (record: APIKey) => {
     setEditingKey(record);
     setPersonalMode(false);
-    const costLimit = costLimitFormFromKey(record);
-    setForm({
-      provider: record.provider,
-      actual_key: "",
-      description: record.description ?? "",
-      cost_limit_period: costLimit.period,
-      cost_limit_dollars: costLimit.dollars,
-      enabled: record.enabled,
-      redact_pii: piiToFormValue(record.redact_pii),
-      rate_limit_rpm: record.rate_limit_rpm
-        ? String(record.rate_limit_rpm)
-        : "",
-      rate_limit_tpm: record.rate_limit_tpm
-        ? String(record.rate_limit_tpm)
-        : "",
-      rate_limit_rpd: record.rate_limit_rpd
-        ? String(record.rate_limit_rpd)
-        : "",
-      rate_limit_tpd: record.rate_limit_tpd
-        ? String(record.rate_limit_tpd)
-        : "",
-      anthropic_tier: record.tags?.tier ?? anthropicDefaultTier,
-    });
+    setForm(keyFormFromRecord(record, anthropicDefaultTier));
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
     setEditingKey(null);
-    setForm(defaultForm);
+    setForm(defaultKeyForm);
     setManualKeyEntry(false);
     setPersonalMode(false);
   };
@@ -485,7 +389,7 @@ export default function KeysPage() {
 
     try {
       if (editingKey) {
-        if (isViewer) {
+        if (!canManagePolicy) {
           await updateKey.mutateAsync({
             key: editingKey.key,
             body: { description: form.description },
@@ -584,23 +488,23 @@ export default function KeysPage() {
     try {
       for (const provider of bulkTargetProviders) {
         try {
-          if (isViewer || isAdmin) {
+          if (bulkCreatesPersonalKeys) {
             await createKey.mutateAsync({
               provider,
               description: bulkKeyDescription,
               auto_provision: true,
               ...(isAdmin ? { personal: true } : {}),
             });
-          } else {
+          } else if (isEditor) {
             const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
-              costLimitsFromForm(defaultForm);
+              costLimitsFromForm(defaultKeyForm);
             const activeCostLimit =
-              defaultForm.cost_limit_period === "monthly"
+              defaultKeyForm.cost_limit_period === "monthly"
                 ? monthlyCostLimit
                 : dailyCostLimit;
             if (editorMaxCents > 0 && activeCostLimit > editorMaxCents) {
               push(
-                `${defaultForm.cost_limit_period === "monthly" ? "Monthly" : "Daily"} cost limit cannot exceed $${editorMaxDollars}`,
+                `${defaultKeyForm.cost_limit_period === "monthly" ? "Monthly" : "Daily"} cost limit cannot exceed $${editorMaxDollars}`,
                 "error",
               );
               return;
@@ -610,10 +514,10 @@ export default function KeysPage() {
               description: "",
               daily_cost_limit: dailyCostLimit,
               monthly_cost_limit: monthlyCostLimit,
-              enabled: defaultForm.enabled,
-              redact_pii: piiFromFormValue(defaultForm.redact_pii),
+              enabled: defaultKeyForm.enabled,
+              redact_pii: piiFromFormValue(defaultKeyForm.redact_pii),
               auto_provision: true,
-              ...rateLimitsFromForm(defaultForm),
+              ...rateLimitsFromForm(defaultKeyForm),
             };
             if (provider === "anthropic" && anthropicDefaultTier) {
               body.tags = { tier: anthropicDefaultTier };
@@ -627,7 +531,7 @@ export default function KeysPage() {
       }
       if (created > 0) {
         push(
-          isViewer || isAdmin
+          bulkCreatesPersonalKeys
             ? `Created ${created} personal key${created === 1 ? "" : "s"}`
             : `Created ${created} key${created === 1 ? "" : "s"}`,
           "success",
@@ -704,7 +608,7 @@ export default function KeysPage() {
         }
       />
 
-      {isAdmin ? (
+      {canReviewKeyRequests || canManageByo ? (
         <div className="glass-panel p-2">
           <div role="tablist" className="flex flex-wrap gap-2" aria-label="API keys sections">
             <button
@@ -749,7 +653,7 @@ export default function KeysPage() {
         </div>
       ) : null}
 
-      {tab === "keys" && (canRequestServiceKey || isAdmin) ? (
+      {tab === "keys" && (canRequestServiceKey || canBulkGeneratePersonalKeys) ? (
         canRequestServiceKey ? (
           <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-warning/50 bg-warning/15 px-4 py-3 shadow-sm lg:flex-nowrap">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning text-warning-content">
@@ -774,11 +678,11 @@ export default function KeysPage() {
             </button>
           </div>
         ) : (
-          <div className="flex gap-4 rounded-xl border border-info/40 bg-info/10 px-5 py-4">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-info/20 text-info">
+          <div className="flex gap-3 rounded-xl border border-info/40 bg-info/10 px-4 py-3">
+            <div className="flex h-9 w-9 shrink-0 self-center items-center justify-center rounded-full bg-info/20 text-info">
               <KeyTabIcon className="h-5 w-5" />
             </div>
-            <div className="min-w-0 text-sm leading-relaxed text-base-content/80">
+            <div className="min-w-0 flex-1 text-sm leading-snug text-base-content/80">
               Use <span className="font-medium">Generate Personal Keys</span> below
               or toggle <span className="font-medium">Personal key</span> in Create
               key for your own testing keys (one per provider, capped at{" "}
@@ -786,7 +690,7 @@ export default function KeysPage() {
               Review pending requests on the{" "}
               <button
                 type="button"
-                className="link link-info inline-flex items-center gap-1 font-medium"
+                className="link link-info inline-flex items-center gap-1 align-middle font-medium"
                 onClick={() => setTab("requests")}
               >
                 <KeyRequestsTabIcon className="h-4 w-4" />
@@ -798,8 +702,8 @@ export default function KeysPage() {
         )
       ) : null}
 
-      {tab === "requests" && isAdmin ? <KeyRequestsPanel /> : null}
-      {tab === "byo-keys" && isAdmin ? <ByoKeysPanel /> : null}
+      {tab === "requests" && canReviewKeyRequests ? <KeyRequestsPanel /> : null}
+      {tab === "byo-keys" && canManageByo ? <ByoKeysPanel /> : null}
 
       <RequestKeyModal
         open={requestKeyModalOpen}
@@ -816,7 +720,7 @@ export default function KeysPage() {
             />
           ) : null}
 
-          {canBulkGeneratePersonalKeys && visibleKeys.length > 0 ? (
+          {showBulkGenerate && visibleKeys.length > 0 ? (
             <div className="glass-panel flex flex-col items-center gap-3 px-6 py-8 text-center sm:items-start sm:text-left">
               <button
                 type="button"
@@ -827,12 +731,12 @@ export default function KeysPage() {
                 {bulkGenerateBusy ? (
                   <span className="loading loading-spinner loading-md" />
                 ) : null}
-                Generate Personal Keys
+                {bulkGenerateLabel}
               </button>
               <p className="max-w-2xl text-sm text-base-content/60">
-                {isViewer || isAdmin
+                {bulkCreatesPersonalKeys
                   ? `Creates one auto-provisioned personal key for each provider you do not have yet (${bulkTargetProviders.join(", ")}).`
-                  : `Creates one auto-provisioned key for each provider without a key yet (${bulkTargetProviders.join(", ")}).`}
+                  : `Creates one auto-provisioned org key for each provider without a key yet (${bulkTargetProviders.join(", ")}).`}
               </p>
             </div>
           ) : null}
@@ -848,7 +752,7 @@ export default function KeysPage() {
                     : "No API keys yet. Create a proxy key to route provider requests through iw: keys."
                 }
                 action={
-                  canBulkGeneratePersonalKeys ? (
+                  showBulkGenerate ? (
                     <button
                       type="button"
                       className="btn btn-primary btn-lg min-h-16 w-full max-w-md px-8 text-lg"
@@ -858,7 +762,7 @@ export default function KeysPage() {
                       {bulkGenerateBusy ? (
                         <span className="loading loading-spinner loading-md" />
                       ) : null}
-                      Generate Personal Keys
+                      {bulkGenerateLabel}
                     </button>
                   ) : !isViewer && canCreateKey ? (
                     <button
@@ -886,389 +790,31 @@ export default function KeysPage() {
             )}
           </div>
 
-          {modalOpen ? (
-            <dialog className="modal modal-open" open>
-              <div className="modal-box max-w-lg">
-                <h3 className="text-lg font-semibold">
-                  {editingKey
-                    ? "Edit API key"
-                    : treatAsPersonal
-                      ? "Create personal key"
-                      : "Create API key"}
-                </h3>
-                <form className="mt-4 space-y-4" onSubmit={onSubmit}>
-                  {!editingKey && !isViewer ? (
-                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2">
-                      <span className="text-sm">
-                        <span className="font-medium">Personal key</span>
-                        <span className="block text-xs text-base-content/60">
-                          Owned by you, one per provider, capped at{" "}
-                          {viewerMonthlyLimitLabel}/month.
-                        </span>
-                      </span>
-                      <input
-                        type="checkbox"
-                        className="toggle toggle-primary"
-                        checked={personalMode}
-                        onChange={(event) =>
-                          onTogglePersonalMode(event.target.checked)
-                        }
-                      />
-                    </label>
-                  ) : null}
-
-                  <label className="form-control w-full">
-                    <span className="label-text">Provider</span>
-                    <select
-                      className="select select-bordered w-full"
-                      disabled={Boolean(editingKey)}
-                      value={form.provider}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          provider: event.target.value as Provider,
-                        }))
-                      }
-                    >
-                      {availableProviders.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {provider}
-                        </option>
-                      ))}
-                    </select>
-                    {piiOffRequiresBedrock && !treatAsPersonal ? (
-                      <span className="label-text-alt text-base-content/60">
-                        PII redaction off requires the Bedrock provider.
-                      </span>
-                    ) : null}
-                  </label>
-
-                  {!editingKey && useAutoProvision ? (
-                    <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-base-content/80">
-                      Upstream key will be created automatically for {form.provider}
-                      .
-                    </div>
-                  ) : null}
-
-                  {!editingKey &&
-                    (provisionedKeysOnly || treatAsPersonal) &&
-                    !providerAutoProvision ? (
-                    <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-                      Automatic key provisioning is not available for{" "}
-                      {form.provider}. Choose another provider or contact an
-                      administrator.
-                    </div>
-                  ) : null}
-
-                  {!treatAsPersonal && showAnthropicTierSelect ? (
-                    <label className="form-control w-full">
-                      <span className="label-text">Anthropic tier</span>
-                      <select
-                        className="select select-bordered w-full"
-                        value={form.anthropic_tier}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            anthropic_tier: event.target.value,
-                          }))
-                        }
-                      >
-                        {anthropicTierOptions.map((tier) => (
-                          <option key={tier} value={tier}>
-                            {tier}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="label-text-alt text-base-content/60">
-                        metered = tight limits; elevated = trusted workloads;
-                        unrestricted = administrators only.
-                      </span>
-                    </label>
-                  ) : null}
-
-                  {!editingKey &&
-                    providerAutoProvision &&
-                    !provisionedKeysOnly &&
-                    !treatAsPersonal ? (
-                    <details
-                      className="rounded-lg border border-base-300 px-3 py-2"
-                      open={manualKeyEntry}
-                      onToggle={(event) =>
-                        setManualKeyEntry(event.currentTarget.open)
-                      }
-                    >
-                      <summary className="cursor-pointer text-sm font-medium">
-                        Advanced: paste provider key
-                      </summary>
-                      <label className="form-control mt-3 w-full">
-                        <span className="label-text">Provider API key</span>
-                        <input
-                          type="password"
-                          autoComplete="new-password"
-                          className="input input-bordered w-full font-mono"
-                          placeholder="sk-..."
-                          value={form.actual_key}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              actual_key: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </details>
-                  ) : null}
-
-                  {!editingKey &&
-                    !providerAutoProvision &&
-                    !provisionedKeysOnly &&
-                    !treatAsPersonal ? (
-                    <label className="form-control w-full">
-                      <span className="label-text">Provider API key</span>
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        className="input input-bordered w-full font-mono"
-                        placeholder="sk-..."
-                        value={form.actual_key}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            actual_key: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  ) : null}
-
-                  <label className="form-control w-full">
-                    <span className="label-text">Name</span>
-                    <textarea
-                      className="textarea textarea-bordered w-full"
-                      rows={2}
-                      placeholder="What is this key used for?"
-                      value={form.description}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-
-                  {treatAsPersonal && !editingKey ? (
-                    <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
-                      Monthly spend limit:{" "}
-                      <span className="font-medium">{viewerMonthlyLimitLabel}</span>{" "}
-                      (set by your organization).
-                    </div>
-                  ) : null}
-
-                  {!treatAsPersonal ? (
-                    <>
-                      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-                        <div className="form-control w-full">
-                          <span className="label-text">Cost limit (USD)</span>
-                          <div className="flex gap-2">
-                            <select
-                              className="select select-bordered w-32 shrink-0"
-                              value={form.cost_limit_period}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  cost_limit_period: event.target
-                                    .value as CostLimitPeriod,
-                                  cost_limit_dollars: "",
-                                }))
-                              }
-                            >
-                              <option value="daily">Daily</option>
-                              <option value="monthly">Monthly</option>
-                            </select>
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              className="input input-bordered min-w-0 flex-1"
-                              placeholder="0 = unlimited"
-                              value={form.cost_limit_dollars}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  cost_limit_dollars: event.target.value,
-                                }))
-                              }
-                            />
-                          </div>
-                          <p className="mt-1.5 text-xs text-base-content/60">
-                            Leave at 0 for unlimited
-                            {editorMaxDollars != null && form.cost_limit_period === "daily"
-                              ? ` · Editor max $${editorMaxDollars}/day`
-                              : null}
-                          </p>
-                        </div>
-
-                        <div className="form-control w-full sm:w-auto">
-                          <span className="label-text">Key status</span>
-                          <label className="flex h-12 cursor-pointer items-center gap-3">
-                            <input
-                              type="checkbox"
-                              className="toggle toggle-primary"
-                              checked={form.enabled}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  enabled: event.target.checked,
-                                }))
-                              }
-                            />
-                            <span className="text-sm font-medium">
-                              {form.enabled ? "Enabled" : "Disabled"}
-                            </span>
-                          </label>
-                        </div>
-                      </div>
-
-                      <label className="form-control w-full">
-                        <span className="label-text">PII redaction</span>
-                        <select
-                          className="select select-bordered w-full"
-                          value={form.redact_pii}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              redact_pii: event.target.value as PiiFormValue,
-                            }))
-                          }
-                        >
-                          <option value="inherit">Inherit global default</option>
-                          <option value="on">On</option>
-                          <option value="off">Off</option>
-                        </select>
-                        {piiOffRequiresBedrock &&
-                          editingKey &&
-                          editingKey.provider !== "bedrock" ? (
-                          <p className="mt-1.5 text-xs text-warning">
-                            Turning PII off requires a Bedrock key. Create a new
-                            Bedrock key instead.
-                          </p>
-                        ) : null}
-                      </label>
-
-                      <div className="rounded-xl border border-base-300/70 p-4">
-                        <div className="mb-3 text-sm font-medium">Rate limits</div>
-                        <p className="mb-3 text-xs text-base-content/60">
-                          Optional per-key overrides. Leave blank to inherit global
-                          limits. Zero clears an override.
-                        </p>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="form-control">
-                            <span className="label-text text-xs">
-                              Requests / minute
-                            </span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="input input-bordered input-sm w-full"
-                              placeholder="inherit"
-                              value={form.rate_limit_rpm}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  rate_limit_rpm: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
-                          <label className="form-control">
-                            <span className="label-text text-xs">
-                              Tokens / minute
-                            </span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="input input-bordered input-sm w-full"
-                              placeholder="inherit"
-                              value={form.rate_limit_tpm}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  rate_limit_tpm: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
-                          <label className="form-control">
-                            <span className="label-text text-xs">
-                              Requests / day
-                            </span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="input input-bordered input-sm w-full"
-                              placeholder="inherit"
-                              value={form.rate_limit_rpd}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  rate_limit_rpd: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
-                          <label className="form-control">
-                            <span className="label-text text-xs">Tokens / day</span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="input input-bordered input-sm w-full"
-                              placeholder="inherit"
-                              value={form.rate_limit_tpd}
-                              onChange={(event) =>
-                                setForm((current) => ({
-                                  ...current,
-                                  rate_limit_tpd: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
-
-                  <div className="modal-action">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={closeModal}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      disabled={
-                        saving ||
-                        (!editingKey &&
-                          (provisionedKeysOnly || treatAsPersonal) &&
-                          !useAutoProvision)
-                      }
-                    >
-                      {saving ? (
-                        <span className="loading loading-spinner loading-sm" />
-                      ) : null}
-                      {editingKey ? "Save changes" : "Create key"}
-                    </button>
-                  </div>
-                </form>
-              </div>
-              <form method="dialog" className="modal-backdrop">
-                <button type="button" aria-label="Close" onClick={closeModal} />
-              </form>
-            </dialog>
-          ) : null}
+          <ApiKeysModal
+            open={modalOpen}
+            onClose={closeModal}
+            onSubmit={onSubmit}
+            saving={saving}
+            editingKey={editingKey}
+            form={form}
+            setForm={setForm}
+            isViewer={isViewer}
+            canManagePolicy={canManagePolicy}
+            treatAsPersonal={treatAsPersonal}
+            personalMode={personalMode}
+            onTogglePersonalMode={onTogglePersonalMode}
+            availableProviders={availableProviders}
+            provisionedKeysOnly={provisionedKeysOnly}
+            providerAutoProvision={providerAutoProvision}
+            useAutoProvision={useAutoProvision}
+            manualKeyEntry={manualKeyEntry}
+            setManualKeyEntry={setManualKeyEntry}
+            showAnthropicTierSelect={showAnthropicTierSelect}
+            anthropicTierOptions={anthropicTierOptions}
+            piiOffRequiresBedrock={piiOffRequiresBedrock}
+            viewerMonthlyLimitLabel={viewerMonthlyLimitLabel}
+            editorMaxDollars={editorMaxDollars}
+          />
 
           {shareResult ? (
             <dialog className="modal modal-open" open>

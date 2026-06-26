@@ -91,7 +91,10 @@ export function PiiPipelineCallout({
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-semibold text-base-content">PII Guidelines</h2>
             <StatusBadge enabled={piiEnabled} />
-            <span className="badge badge-info badge-outline">Presidio pipeline</span>
+            <span className="badge badge-sm badge-info badge-outline">Presidio pipeline</span>
+            {idGateEnabled ? (
+              <span className="badge badge-sm badge-warning badge-outline">ID gate</span>
+            ) : null}
           </div>
           <p className="text-xs text-base-content/60">
             Metadata-only view of text redaction and embedded image ID checks. Raw PII is not stored here.

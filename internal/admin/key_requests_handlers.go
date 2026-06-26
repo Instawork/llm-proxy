@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/provision"
@@ -28,7 +29,7 @@ func (h *handler) handleCreateKeyRequest(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
-	if role == adminusers.RoleAdmin {
+	if !permissions.CanCreateKeyRequest(role) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "admins can create keys directly"})
 		return
 	}

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { useBanBYOKey, useBYOBans, useMe, useUnbanBYOKey } from "./queries";
-import { canManageByoBans } from "../lib/rbac";
+import { permissions } from "../lib/permissions";
 import type { BYOBanRecord, Provider } from "../types";
 
 export interface ByoBanActions {
@@ -26,7 +26,7 @@ export function useByoBanActions(): ByoBanActions {
     return map;
   }, [bans]);
 
-  const canManage = canManageByoBans(me?.role);
+  const canManage = permissions.canManageByo(me?.role);
   const pending = banKey.isPending || unbanKey.isPending;
 
   return {

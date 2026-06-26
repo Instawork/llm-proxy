@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 )
@@ -21,13 +22,7 @@ func isViewerPersonalProvider(provider string) bool {
 }
 
 func canAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
-	if role.AtLeast(adminusers.RoleEditor) {
-		return true
-	}
-	if key == nil || strings.TrimSpace(key.OwnerEmail) == "" {
-		return false
-	}
-	return strings.EqualFold(key.OwnerEmail, userEmail)
+	return permissions.CanAccessKey(role, userEmail, key)
 }
 
 func filterKeysForUser(role adminusers.Role, email string, keys []*apikeys.APIKey) []*apikeys.APIKey {
@@ -48,7 +43,7 @@ func viewerPersonalMonthlyLimitCents(h *handler) int64 {
 }
 
 func requiresProvisionedKey(role adminusers.Role) bool {
-	return role == adminusers.RoleViewer || role == adminusers.RoleEditor
+	return permissions.RequiresAutoProvision(role)
 }
 
 func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) error {
