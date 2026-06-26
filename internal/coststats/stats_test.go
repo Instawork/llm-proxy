@@ -144,6 +144,28 @@ func TestRecorderAggregatesByKeyAndProvider(t *testing.T) {
 	}
 }
 
+func TestRecorderAggregatesByUser(t *testing.T) {
+	r := NewRecorder()
+
+	r.RecordRequest("openai", "iw:abc", "user-1", "gpt-4o-mini", 0.01, 0.006, 0.004, 10, 5)
+	r.RecordRequest("openai", "iw:abc", "user-2", "gpt-4o-mini", 0.02, 0.012, 0.008, 20, 10)
+
+	snap := r.Snapshot()
+	byUser, ok := snap["by_user"].(map[string]userSpend)
+	if !ok {
+		t.Fatalf("by_user type = %T", snap["by_user"])
+	}
+	if len(byUser) != 2 {
+		t.Fatalf("by_user len = %d, want 2", len(byUser))
+	}
+	if got := byUser["user:user-1"].SpendUSD; got != 0.01 {
+		t.Fatalf("user-1 spend = %v want 0.01", got)
+	}
+	if got := byUser["user:user-2"].SpendUSD; got != 0.02 {
+		t.Fatalf("user-2 spend = %v want 0.02", got)
+	}
+}
+
 func TestRecorderRollsDayBucket(t *testing.T) {
 	r := NewRecorder()
 	r.dayKey = time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")

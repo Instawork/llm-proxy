@@ -305,6 +305,15 @@ export interface CostKeySpend {
   output_tokens: number;
 }
 
+export interface CostScopeSpend {
+  spend_usd: number;
+  input_spend_usd?: number;
+  output_spend_usd?: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export interface CostProviderSpend {
   name: string;
   spend_usd: number;
@@ -339,6 +348,7 @@ export interface CostStats extends StatsWithDailyHistory {
   input_tokens_today?: number;
   output_tokens_today?: number;
   by_key?: CostKeySpend[];
+  by_user?: Record<string, CostScopeSpend>;
   by_provider?: CostProviderSpend[];
   recent?: CostRecentEvent[];
 }

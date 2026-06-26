@@ -156,7 +156,7 @@ func flattenCostByKey(h map[string]float64) map[string]float64 {
 	return out
 }
 
-func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64, caps TopNCaps) map[string]interface{} {
+func costDataFromAggregates(totals map[string]float64, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]interface{} {
 	provRows := buildDimRows(byProvider, nil)
 
 	byProviderOut := make([]map[string]interface{}, 0, len(provRows))
@@ -198,7 +198,31 @@ func costDataFromAggregates(totals map[string]float64, byProvider, byKey map[str
 	data := costScalarsFromTotals(totals)
 	data["by_provider"] = byProviderOut
 	data["by_key"] = byKeyOut
+	if len(byUser) > 0 {
+		userRows := buildDimRows(byUser, nil)
+		topUsers, otherSpend := topNWithOther(flattenCostByKey(byUser), caps.ByUser)
+		data["by_user"] = costScopeMapFromRows(userRows, topUsers, otherSpend, "user")
+	}
 	return data
+}
+
+func costScopeMapFromRows(rows map[string]map[string]float64, top []nameVal, otherSpend float64, kind string) map[string]map[string]float64 {
+	out := make(map[string]map[string]float64, len(top)+1)
+	for _, p := range top {
+		if fields := rows[p.Name]; fields != nil {
+			m := make(map[string]float64, len(fields))
+			for f, v := range fields {
+				m[f] = v
+			}
+			out[p.Name] = m
+			continue
+		}
+		out[p.Name] = map[string]float64{"spend_usd": p.Val}
+	}
+	if otherSpend > 0 {
+		out["other_"+kind] = map[string]float64{"spend_usd": otherSpend}
+	}
+	return out
 }
 
 func costScalarsFromTotals(totals map[string]float64) map[string]interface{} {

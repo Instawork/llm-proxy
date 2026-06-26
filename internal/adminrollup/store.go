@@ -372,7 +372,8 @@ func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps Top
 	case MetricCost:
 		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
 		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
-		return costDataFromAggregates(totals, byProv, byKey, caps), true
+		byUser, _ := s.loadHash(ctx, dimKey(metric, day, "by_user"))
+		return costDataFromAggregates(totals, byProv, byKey, byUser, caps), true
 	case MetricUsage:
 		byModel, _ := s.loadHash(ctx, dimKey(metric, day, "by_model"))
 		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))

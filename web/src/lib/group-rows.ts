@@ -1,4 +1,4 @@
-import type { CostKeyAgg, ProviderSpendAgg } from "./daily-history";
+import type { CostKeyAgg, CostUserAgg, ProviderSpendAgg } from "./daily-history";
 import type { NameCount } from "./daily-history";
 
 export const DEFAULT_TOP_N = 10;
@@ -75,6 +75,54 @@ export function spendByKeyDisplayRows(
     (aggregated, count) => ({
       ...aggregated,
       key_id: othersLabel(count),
+    }),
+    topN,
+    collapse,
+  );
+}
+
+export function aggregateCostUsers(rows: CostUserAgg[]): CostUserAgg {
+  return rows.reduce(
+    (acc, row) => ({
+      scope: "",
+      label: "",
+      spend_usd: acc.spend_usd + row.spend_usd,
+      input_spend_usd: acc.input_spend_usd + (row.input_spend_usd ?? 0),
+      output_spend_usd: acc.output_spend_usd + (row.output_spend_usd ?? 0),
+      requests: acc.requests + row.requests,
+      input_tokens: acc.input_tokens + row.input_tokens,
+      output_tokens: acc.output_tokens + row.output_tokens,
+    }),
+    {
+      scope: "",
+      label: "",
+      spend_usd: 0,
+      input_spend_usd: 0,
+      output_spend_usd: 0,
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+    },
+  );
+}
+
+export type SpendByUserDisplayRow = CostUserAgg & {
+  isOthers?: boolean;
+};
+
+export function spendByUserDisplayRows(
+  rows: CostUserAgg[],
+  topN = DEFAULT_TOP_N,
+  collapse = true,
+): SpendByUserDisplayRow[] {
+  return topDisplayRows(
+    rows,
+    (row) => row.spend_usd,
+    aggregateCostUsers,
+    (aggregated, count) => ({
+      ...aggregated,
+      scope: "__others__",
+      label: othersLabel(count),
     }),
     topN,
     collapse,

@@ -1,56 +1,35 @@
 import { useMemo } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
-import KeyLink from "../ui/key-link";
-import ByoBanButton from "../byo/ban-by-key-button";
 import DataTable from "../ui/data-table";
-import type { CostKeyAgg } from "../../lib/daily-history";
-import { spendByKeyDisplayRows, type SpendByKeyDisplayRow } from "../../lib/group-rows";
+import type { CostUserAgg } from "../../lib/daily-history";
+import { spendByUserDisplayRows, type SpendByUserDisplayRow } from "../../lib/group-rows";
 import { formatCount, formatUsd } from "../../lib/format";
-import { inferProviderFromMaskedId } from "../../lib/byo-ban";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
-import type { ByoBanActions } from "../../hooks/use-byo-ban-actions";
-import type { APIKey } from "../../types";
 
-interface SpendByKeyTableProps {
-  rows: CostKeyAgg[];
-  keys: APIKey[];
-  byoBanActions: ByoBanActions;
+interface SpendByUserTableProps {
+  rows: CostUserAgg[];
 }
 
-export default function SpendByKeyTable({ rows, keys, byoBanActions }: SpendByKeyTableProps) {
+export default function SpendByUserTable({ rows }: SpendByUserTableProps) {
   const { displayData, onSearchActiveChange, footer } = useCollapsedRows(
     rows,
-    spendByKeyDisplayRows,
-    "keys",
+    spendByUserDisplayRows,
+    "users",
   );
 
-  const columns = useMemo<ColumnDef<SpendByKeyDisplayRow, unknown>[]>(
+  const columns = useMemo<ColumnDef<SpendByUserDisplayRow, unknown>[]>(
     () => [
       {
-        id: "key",
-        accessorKey: "key_id",
-        header: "Key",
+        id: "user",
+        accessorKey: "label",
+        header: "User",
         cell: ({ row }) => {
           const data = row.original;
           if (data.isOthers) {
-            return <span className="italic text-base-content/60">{data.key_id}</span>;
+            return <span className="italic text-base-content/60">{data.label}</span>;
           }
-          const inferredProvider = inferProviderFromMaskedId(data.key_id);
-          return data.key_id ? (
-            <div className="flex items-center gap-2">
-              <KeyLink keys={keys} maskedId={data.key_id} showMasked className="text-xs" />
-              {inferredProvider ? (
-                <ByoBanButton
-                  maskedId={data.key_id}
-                  provider={inferredProvider}
-                  actions={byoBanActions}
-                />
-              ) : null}
-            </div>
-          ) : (
-            "—"
-          );
+          return <span className="font-medium">{data.label}</span>;
         },
       },
       {
@@ -93,16 +72,16 @@ export default function SpendByKeyTable({ rows, keys, byoBanActions }: SpendByKe
         ),
       },
     ],
-    [keys, byoBanActions],
+    [],
   );
 
   return (
     <DataTable
       data={displayData}
       columns={columns}
-      searchPlaceholder="Filter keys…"
+      searchPlaceholder="Filter users…"
       emptyMessage="No spend recorded for this window"
-      getRowId={(row) => (row.isOthers ? "__others__" : row.key_id || String(row.requests))}
+      getRowId={(row) => (row.isOthers ? "__others__" : row.scope || String(row.requests))}
       onSearchActiveChange={onSearchActiveChange}
       footer={footer}
     />

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import SpendByKeyTable from "../components/cost/spend-by-key-table";
+import SpendByUserTable from "../components/cost/spend-by-user-table";
 import SpendByProviderTable from "../components/cost/spend-by-provider-table";
 import { LimitSpendTable, RecentCostTable, TransportsTable } from "../components/cost/extra-tables";
 import { BarChart, ChartCard, DonutChart, GroupedBarChart, TrendChart } from "../components/charts";
@@ -18,20 +19,22 @@ import { useByoBanActions } from "../hooks/use-byo-ban-actions";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
   type CostKeyAgg,
+  type CostUserAgg,
   DAILY_HISTORY_SUBTITLE,
   HOURLY_HISTORY_FALLBACK_SUBTITLE,
   HOURLY_HISTORY_SUBTITLE,
   type RangeKey,
   RANGE_OPTIONS,
   aggCostByKey,
+  aggCostByUser,
   aggCostByProvider,
   hourlySeries,
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatCount, formatUsd, keySpendCapCents, maskKeyId } from "../lib/format";
+import { compact, formatCount, formatUsd, keySpendCapCents, maskKeyId, scopeLabel } from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
-import type { CostKeySpend } from "../types";
+import type { CostKeySpend, CostScopeSpend } from "../types";
 
 function rangeLabel(range: RangeKey): string {
   return range === "today" ? "today" : `last ${range === "7d" ? "7" : "30"} days`;
@@ -47,6 +50,21 @@ function memKeyAgg(byKey: CostKeySpend[]): CostKeyAgg[] {
     input_tokens: row.input_tokens,
     output_tokens: row.output_tokens,
   }));
+}
+
+function memUserAgg(byUser: Record<string, CostScopeSpend> | undefined): CostUserAgg[] {
+  return Object.entries(byUser ?? {})
+    .map(([scope, row]) => ({
+      scope,
+      label: scopeLabel(scope),
+      spend_usd: row.spend_usd,
+      input_spend_usd: row.input_spend_usd ?? 0,
+      output_spend_usd: row.output_spend_usd ?? 0,
+      requests: row.requests,
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+    }))
+    .sort((a, b) => b.spend_usd - a.spend_usd);
 }
 
 const SPEND_COLORS = [
@@ -140,11 +158,19 @@ export default function CostPage() {
   const useRedisBreakdown = hasRedis || range !== "today";
   const memKeys = memKeyAgg(byKey);
   const rangeByKey: CostKeyAgg[] = useRedisBreakdown ? aggCostByKey(history, range) : memKeys;
+  const memUsers = memUserAgg(stats?.by_user);
+  const rangeByUser: CostUserAgg[] = useRedisBreakdown
+    ? aggCostByUser(history, range, scopeLabel)
+    : memUsers;
   const breakdownSource: DataSource = useRedisBreakdown ? "redis" : "memory";
   const withSpend = rangeByKey.filter((row) => row.spend_usd > 0);
+  const withUserSpend = rangeByUser.filter((row) => row.spend_usd > 0);
   const rangeSpendTotal = withSpend.reduce((sum, row) => sum + row.spend_usd, 0);
   const donutData = donutSlices(
-    withSpend.map((row) => row.key_id || "unknown"),
+    withSpend.map((row) => {
+      const record = keyList.find((k) => maskKeyId(k.key) === row.key_id);
+      return record?.description?.trim() || row.key_id || "unknown";
+    }),
     withSpend.map((row) => row.spend_usd),
     withSpend.map((_, i) => SPEND_COLORS[i % SPEND_COLORS.length]()),
     8,
@@ -282,14 +308,27 @@ export default function CostPage() {
         </ChartCard>
       </div>
 
-      {withSpend.length > 0 || withProviderSpend.length > 0 ? (
+      {withSpend.length > 0 || withUserSpend.length > 0 || withProviderSpend.length > 0 ? (
         <div className="grid gap-4 lg:grid-cols-2">
+          {withUserSpend.length > 0 ? (
+            <SectionPanel
+              title="Spend by user"
+              subtitle={
+                range === "today"
+                  ? `Client user rollup for ${stats?.day ?? "today"}`
+                  : `Summed Redis rollups · ${rangeLabel(range)}`
+              }
+              source={breakdownSource}
+            >
+              <SpendByUserTable rows={withUserSpend} />
+            </SectionPanel>
+          ) : null}
           {withSpend.length > 0 ? (
             <SectionPanel
               title="Spend by key"
               subtitle={
                 range === "today"
-                  ? `Rollup for ${stats?.day ?? "today"}`
+                  ? `API key rollup for ${stats?.day ?? "today"}`
                   : `Summed Redis rollups · ${rangeLabel(range)}`
               }
               source={breakdownSource}

@@ -199,6 +199,49 @@ export function aggCostByKey(
   return [...acc.values()].sort((a, b) => b.spend_usd - a.spend_usd);
 }
 
+export interface CostUserAgg {
+  scope: string;
+  label: string;
+  spend_usd: number;
+  input_spend_usd: number;
+  output_spend_usd: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export function aggCostByUser(
+  rows: DailyHistoryRow[] | undefined,
+  range: RangeKey,
+  labelForScope: (scope: string) => string,
+): CostUserAgg[] {
+  const acc = new Map<string, CostUserAgg>();
+  for (const row of sliceRange(rows, range)) {
+    const map = asRecord(row.by_user);
+    for (const [scope, raw] of Object.entries(map)) {
+      const rec = asRecord(raw);
+      const cur = acc.get(scope) ?? {
+        scope,
+        label: labelForScope(scope),
+        spend_usd: 0,
+        input_spend_usd: 0,
+        output_spend_usd: 0,
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+      };
+      cur.spend_usd += asNum(rec.spend_usd);
+      cur.input_spend_usd += asNum(rec.input_spend_usd);
+      cur.output_spend_usd += asNum(rec.output_spend_usd);
+      cur.requests += asNum(rec.requests);
+      cur.input_tokens += asNum(rec.input_tokens);
+      cur.output_tokens += asNum(rec.output_tokens);
+      acc.set(scope, cur);
+    }
+  }
+  return [...acc.values()].sort((a, b) => b.spend_usd - a.spend_usd);
+}
+
 export interface ProviderSpendAgg {
   name: string;
   spend_usd: number;

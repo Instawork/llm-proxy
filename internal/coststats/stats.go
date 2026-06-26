@@ -4,6 +4,7 @@ package coststats
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -28,6 +29,15 @@ type keySpend struct {
 
 type providerSpend struct {
 	Name           string  `json:"name"`
+	SpendUSD       float64 `json:"spend_usd"`
+	InputSpendUSD  float64 `json:"input_spend_usd"`
+	OutputSpendUSD float64 `json:"output_spend_usd"`
+	Requests       int64   `json:"requests"`
+	InputTokens    int64   `json:"input_tokens"`
+	OutputTokens   int64   `json:"output_tokens"`
+}
+
+type userSpend struct {
 	SpendUSD       float64 `json:"spend_usd"`
 	InputSpendUSD  float64 `json:"input_spend_usd"`
 	OutputSpendUSD float64 `json:"output_spend_usd"`
@@ -63,6 +73,7 @@ type Recorder struct {
 	outputTokensToday   int64
 
 	byKey      map[string]*keySpend
+	byUser     map[string]*userSpend
 	byProvider map[string]*providerSpend
 	recent     []recentEntry
 	flushed    costFlushed
@@ -79,9 +90,10 @@ type costFlushed struct {
 	requests, inputTokens, outputTokens     int64
 	byProvider                              map[string]providerSpend
 	byKey                                   map[string]keySpend
+	byUser                                  map[string]userSpend
 }
 
-var costRollupCaps = adminrollup.TopNCaps{ByKey: 100}
+var costRollupCaps = adminrollup.TopNCaps{ByKey: 100, ByUser: 100}
 
 // NewRecorder returns a ready-to-use Recorder scoped to the current UTC day.
 func NewRecorder() *Recorder {
@@ -90,8 +102,13 @@ func NewRecorder() *Recorder {
 		startedAt:  now,
 		dayKey:     now.Format("2006-01-02"),
 		byKey:      make(map[string]*keySpend),
+		byUser:     make(map[string]*userSpend),
 		byProvider: make(map[string]*providerSpend),
 	}
+}
+
+func costScopeKey(kind, name string) string {
+	return fmt.Sprintf("%s:%s", kind, name)
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
@@ -117,6 +134,7 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.inputTokensToday = 0
 	r.outputTokensToday = 0
 	r.byKey = make(map[string]*keySpend)
+	r.byUser = make(map[string]*userSpend)
 	r.byProvider = make(map[string]*providerSpend)
 	r.recent = nil
 }
@@ -130,6 +148,7 @@ func (r *Recorder) rollupDataLocked() map[string]interface{} {
 		"input_tokens_today":     r.inputTokensToday,
 		"output_tokens_today":    r.outputTokensToday,
 		"by_key":                 spendList(r.byKey),
+		"by_user":                userSpendMap(r.byUser),
 		"by_provider":            providerList(r.byProvider),
 	}
 }
@@ -171,15 +190,11 @@ func (r *Recorder) RecordRequest(
 		ps.OutputTokens += int64(outputTokens)
 	}
 
-	scope := keyID
-	if scope == "" {
-		scope = userID
-	}
-	if scope != "" {
-		ks := r.byKey[scope]
+	if keyID != "" {
+		ks := r.byKey[keyID]
 		if ks == nil {
 			ks = &keySpend{KeyID: keyID}
-			r.byKey[scope] = ks
+			r.byKey[keyID] = ks
 		}
 		ks.SpendUSD += spendUSD
 		ks.InputSpendUSD += inputSpendUSD
@@ -187,6 +202,20 @@ func (r *Recorder) RecordRequest(
 		ks.Requests++
 		ks.InputTokens += int64(inputTokens)
 		ks.OutputTokens += int64(outputTokens)
+	}
+	if userID != "" {
+		scope := costScopeKey("user", userID)
+		us := r.byUser[scope]
+		if us == nil {
+			us = &userSpend{}
+			r.byUser[scope] = us
+		}
+		us.SpendUSD += spendUSD
+		us.InputSpendUSD += inputSpendUSD
+		us.OutputSpendUSD += outputSpendUSD
+		us.Requests++
+		us.InputTokens += int64(inputTokens)
+		us.OutputTokens += int64(outputTokens)
 	}
 
 	entry := recentEntry{
@@ -249,6 +278,7 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 		Dimensions: map[string]map[string]float64{
 			"by_provider": {},
 			"by_key":      {},
+			"by_user":     {},
 		},
 	}
 	for name, ps := range r.byProvider {
@@ -260,18 +290,23 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 		addDim(d.Dimensions["by_provider"], name, "input_tokens", float64(ps.InputTokens-prev.InputTokens))
 		addDim(d.Dimensions["by_provider"], name, "output_tokens", float64(ps.OutputTokens-prev.OutputTokens))
 	}
-	for scope, ks := range r.byKey {
-		prev := r.flushed.byKey[scope]
-		member := scope
-		if ks.KeyID != "" {
-			member = ks.KeyID
-		}
-		addDim(d.Dimensions["by_key"], member, "spend_usd", ks.SpendUSD-prev.SpendUSD)
-		addDim(d.Dimensions["by_key"], member, "input_spend_usd", ks.InputSpendUSD-prev.InputSpendUSD)
-		addDim(d.Dimensions["by_key"], member, "output_spend_usd", ks.OutputSpendUSD-prev.OutputSpendUSD)
-		addDim(d.Dimensions["by_key"], member, "requests", float64(ks.Requests-prev.Requests))
-		addDim(d.Dimensions["by_key"], member, "input_tokens", float64(ks.InputTokens-prev.InputTokens))
-		addDim(d.Dimensions["by_key"], member, "output_tokens", float64(ks.OutputTokens-prev.OutputTokens))
+	for keyID, ks := range r.byKey {
+		prev := r.flushed.byKey[keyID]
+		addDim(d.Dimensions["by_key"], keyID, "spend_usd", ks.SpendUSD-prev.SpendUSD)
+		addDim(d.Dimensions["by_key"], keyID, "input_spend_usd", ks.InputSpendUSD-prev.InputSpendUSD)
+		addDim(d.Dimensions["by_key"], keyID, "output_spend_usd", ks.OutputSpendUSD-prev.OutputSpendUSD)
+		addDim(d.Dimensions["by_key"], keyID, "requests", float64(ks.Requests-prev.Requests))
+		addDim(d.Dimensions["by_key"], keyID, "input_tokens", float64(ks.InputTokens-prev.InputTokens))
+		addDim(d.Dimensions["by_key"], keyID, "output_tokens", float64(ks.OutputTokens-prev.OutputTokens))
+	}
+	for scope, us := range r.byUser {
+		prev := r.flushed.byUser[scope]
+		addDim(d.Dimensions["by_user"], scope, "spend_usd", us.SpendUSD-prev.SpendUSD)
+		addDim(d.Dimensions["by_user"], scope, "input_spend_usd", us.InputSpendUSD-prev.InputSpendUSD)
+		addDim(d.Dimensions["by_user"], scope, "output_spend_usd", us.OutputSpendUSD-prev.OutputSpendUSD)
+		addDim(d.Dimensions["by_user"], scope, "requests", float64(us.Requests-prev.Requests))
+		addDim(d.Dimensions["by_user"], scope, "input_tokens", float64(us.InputTokens-prev.InputTokens))
+		addDim(d.Dimensions["by_user"], scope, "output_tokens", float64(us.OutputTokens-prev.OutputTokens))
 	}
 	return d
 }
@@ -290,6 +325,9 @@ func (r *Recorder) advanceCostFlushedLocked() {
 	if r.flushed.byKey == nil {
 		r.flushed.byKey = make(map[string]keySpend)
 	}
+	if r.flushed.byUser == nil {
+		r.flushed.byUser = make(map[string]userSpend)
+	}
 	r.flushed.spendUSD = r.spendTodayUSD
 	r.flushed.inputSpendUSD = r.inputSpendTodayUSD
 	r.flushed.outputSpendUSD = r.outputSpendTodayUSD
@@ -299,9 +337,20 @@ func (r *Recorder) advanceCostFlushedLocked() {
 	for name, ps := range r.byProvider {
 		r.flushed.byProvider[name] = *ps
 	}
-	for scope, ks := range r.byKey {
-		r.flushed.byKey[scope] = *ks
+	for keyID, ks := range r.byKey {
+		r.flushed.byKey[keyID] = *ks
 	}
+	for scope, us := range r.byUser {
+		r.flushed.byUser[scope] = *us
+	}
+}
+
+func userSpendMap(m map[string]*userSpend) map[string]userSpend {
+	out := make(map[string]userSpend, len(m))
+	for k, v := range m {
+		out[k] = *v
+	}
+	return out
 }
 
 func spendList(m map[string]*keySpend) []keySpend {
@@ -356,6 +405,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	var spendToday, inputSpendToday, outputSpendToday float64
 	var requestsToday, inputTokensToday, outputTokensToday int64
 	var localByKey []keySpend
+	var localByUser map[string]userSpend
 	var localByProvider []providerSpend
 	if localActive {
 		spendToday = r.spendTodayUSD
@@ -365,6 +415,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		inputTokensToday = r.inputTokensToday
 		outputTokensToday = r.outputTokensToday
 		localByKey = spendList(r.byKey)
+		localByUser = userSpendMap(r.byUser)
 		localByProvider = providerList(r.byProvider)
 	}
 
@@ -379,6 +430,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		"input_tokens_today":     inputTokensToday,
 		"output_tokens_today":    outputTokensToday,
 		"by_key":                 localByKey,
+		"by_user":                localByUser,
 		"by_provider":            localByProvider,
 		"recent":                 recent,
 	}
@@ -388,6 +440,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if localActive {
 		mergeLocalCostTotalsIntoSnap(snap, spendToday, inputSpendToday, outputSpendToday, requestsToday, inputTokensToday, outputTokensToday)
 		mergeLocalByKeyIntoSnap(snap, localByKey)
+		mergeLocalByUserIntoSnap(snap, localByUser)
 		mergeLocalByProviderIntoSnap(snap, localByProvider)
 	}
 	r.MergeHistory(adminrollup.MetricCost, snap)
@@ -496,6 +549,48 @@ func mergeLocalByKeyIntoSnap(snap map[string]interface{}, local []keySpend) {
 		}
 	}
 	snap["by_key"] = typed
+}
+
+func mergeLocalByUserIntoSnap(snap map[string]interface{}, local map[string]userSpend) {
+	if snap == nil || len(local) == 0 {
+		return
+	}
+	existing, _ := snap["by_user"].(map[string]userSpend)
+	if existing == nil {
+		if raw, ok := snap["by_user"].(map[string]map[string]float64); ok {
+			existing = userSpendFromScopeMap(raw)
+		}
+	}
+	if existing == nil {
+		existing = make(map[string]userSpend, len(local))
+	}
+	for scope, loc := range local {
+		prev := existing[scope]
+		existing[scope] = userSpend{
+			SpendUSD:       maxFloat(prev.SpendUSD, loc.SpendUSD),
+			InputSpendUSD:  maxFloat(prev.InputSpendUSD, loc.InputSpendUSD),
+			OutputSpendUSD: maxFloat(prev.OutputSpendUSD, loc.OutputSpendUSD),
+			Requests:       maxInt64(prev.Requests, loc.Requests),
+			InputTokens:    maxInt64(prev.InputTokens, loc.InputTokens),
+			OutputTokens:   maxInt64(prev.OutputTokens, loc.OutputTokens),
+		}
+	}
+	snap["by_user"] = existing
+}
+
+func userSpendFromScopeMap(m map[string]map[string]float64) map[string]userSpend {
+	out := make(map[string]userSpend, len(m))
+	for scope, fields := range m {
+		out[scope] = userSpend{
+			SpendUSD:       fields["spend_usd"],
+			InputSpendUSD:  fields["input_spend_usd"],
+			OutputSpendUSD: fields["output_spend_usd"],
+			Requests:       int64(fields["requests"]),
+			InputTokens:    int64(fields["input_tokens"]),
+			OutputTokens:   int64(fields["output_tokens"]),
+		}
+	}
+	return out
 }
 
 func mergeKeySpendRowMax(existing map[string]interface{}, loc keySpend) map[string]interface{} {
