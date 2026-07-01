@@ -21,6 +21,7 @@ interface DataTableProps<T> {
   footer?: React.ReactNode;
   searchable?: boolean;
   tableClassName?: string;
+  initialSorting?: SortingState;
 }
 
 export default function DataTable<T>({
@@ -33,8 +34,9 @@ export default function DataTable<T>({
   footer,
   searchable = true,
   tableClassName = "table table-zebra",
+  initialSorting = [],
 }: DataTableProps<T>) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>(initialSorting);
   const [globalFilter, setGlobalFilter] = useState("");
 
   const table = useReactTable({

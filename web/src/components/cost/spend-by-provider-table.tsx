@@ -60,6 +60,7 @@ export default function SpendByProviderTable({ rows }: SpendByProviderTableProps
       getRowId={(row) => (row.isOthers ? "__others__" : row.name || String(row.requests))}
       onSearchActiveChange={onSearchActiveChange}
       footer={footer}
+      initialSorting={[{ id: "total", desc: true }]}
     />
   );
 }

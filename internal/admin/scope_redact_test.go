@@ -21,8 +21,9 @@ func TestRedactScopeKey(t *testing.T) {
 		{"provider:gemini", "provider:gemini"},
 		{"model:gpt-4o", "model:gpt-4o"},
 		{"key:" + longKey, "key:••••0dd9"},
-		{"user:ip:192.168.65.1:36371", "user:•••.•••.•••.•:36371"},
-		{"user:alice", "user:••••lice"},
+		{"user:ip:203.0.113.7:36371", "user:•••.•••.•••.•:36371"},
+		{"user:alice", "user:alice"},
+		{"user:Canvas Agent", "user:Canvas Agent"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.in, func(t *testing.T) {
@@ -55,7 +56,7 @@ func TestSanitizeRateLimitOverrides_RedactsKeys(t *testing.T) {
 		},
 	})
 	require.Contains(t, out.PerKey, "key:••••alue")
-	require.Contains(t, out.PerUser, "user:••••.com")
+	require.Contains(t, out.PerUser, "user:alice@example.com")
 }
 
 func TestMergeRedactedCounters_CollapsesSameSuffix(t *testing.T) {

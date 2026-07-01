@@ -84,6 +84,7 @@ export default function SpendByUserTable({ rows }: SpendByUserTableProps) {
       getRowId={(row) => (row.isOthers ? "__others__" : row.scope || String(row.requests))}
       onSearchActiveChange={onSearchActiveChange}
       footer={footer}
+      initialSorting={[{ id: "total", desc: true }]}
     />
   );
 }

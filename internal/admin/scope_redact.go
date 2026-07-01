@@ -10,9 +10,9 @@ import (
 
 const scopeSuffixLen = 4
 
-// RedactScopeKey returns a display-safe rate-limit scope string. Secrets and
-// client IPs are collapsed to a last-N suffix so operators can correlate rows
-// without exposing full credentials in JSON or the admin UI.
+// RedactScopeKey returns a display-safe rate-limit scope string. API keys and
+// client IPs are collapsed so operators can correlate rows without exposing
+// full credentials; agent/user ids are shown in full.
 func RedactScopeKey(scope string) string {
 	if scope == "" || scope == "global" {
 		return scope
@@ -30,7 +30,7 @@ func RedactScopeKey(scope string) string {
 		if strings.HasPrefix(rest, "ip:") {
 			return redactUserIPScope(rest)
 		}
-		return "user:" + redactScopeSecret(rest)
+		return "user:" + rest
 	default:
 		return scope
 	}

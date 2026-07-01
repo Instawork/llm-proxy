@@ -221,7 +221,7 @@ export function scopeLabel(scope: string): string {
   if (kind === "key") return `key ${redactScopeSecret(rest)}`;
   if (kind === "user") {
     if (rest.startsWith("ip:")) return `user ${redactUserIPScope(rest)}`;
-    return `user ${redactScopeSecret(rest)}`;
+    return `user ${rest}`;
   }
   return rest;
 }

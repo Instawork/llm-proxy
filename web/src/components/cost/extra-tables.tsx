@@ -107,6 +107,7 @@ export function LimitSpendTable({ rows, keys }: { rows: LimitSpendRow[]; keys: A
       getRowId={(row) => row.id}
       onSearchActiveChange={onSearchActiveChange}
       footer={footer}
+      initialSorting={[{ id: "spend", desc: true }]}
     />
   );
 }
@@ -172,6 +173,7 @@ export function RecentCostTable({ rows, keys }: { rows: CostRecentEvent[]; keys:
       searchPlaceholder="Filter events…"
       emptyMessage="No recent events"
       getRowId={(row, index) => `${row.time}-${row.model}-${index}`}
+      initialSorting={[{ id: "total", desc: true }]}
     />
   );
 }

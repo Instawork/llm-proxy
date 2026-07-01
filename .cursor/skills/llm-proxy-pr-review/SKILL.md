@@ -9,6 +9,11 @@ Review the current branch for issues likely introduced by AI/LLMs. Output only *
 
 This skill targets the Go `llm-proxy` codebase: fan out to readonly subagents, aggregate, emit a severity-ordered list, with Go- and proxy-specific anti-patterns.
 
+## Model policy
+
+- Parent session: use **Auto** (`default`) unless the user explicitly picks another model for this review.
+- **Every Task/subagent**: pass `model: composer-2.5-fast` unless the user explicitly requested a different model for this review.
+
 ## 1. Determine the diff scope
 
 Run these first and cache the output for the subagents:
@@ -50,7 +55,7 @@ Pass the branch diff and working diff separately to each reviewer so committed b
 
 ## 2. Fan out to parallel review subagents
 
-In a **single message**, launch the following subagent reviewers in parallel. Use `readonly: true`. Do **not** pass an explicit `model` unless the user requested one and it is currently available. Pass each subagent the exact list of files it owns, the branch diff, and the working diff. Each subagent should return a JSON list of findings with `{file, lines, severity, category, description, suggested_fix}`.
+In a **single message**, launch the following subagent reviewers in parallel. Use `readonly: true`. **Always pass `model: composer-2.5-fast`** on every Task/subagent unless the user explicitly requested a different model for this review. Pass each subagent the exact list of files it owns, the branch diff, and the working diff. Each subagent should return a JSON list of findings with `{file, lines, severity, category, description, suggested_fix}`.
 
 ### Subagent A — General AI-smell pass (all changed files)
 
@@ -68,7 +73,7 @@ Use `subagent_type: "ai-smell-reviewer"` with the full changed-file list and foc
 
 Use `subagent_type: "explore"` with thoroughness `"medium"`.
 
-- **Ignored errors.** Functions returning `(T, error)` whose `error` is discarded with `_` or by re-using a different name. Especially on `json.Unmarshal`, `io.Copy`, `req.Body.Close()`, `resp.Body.Close()` (write side), `tx.Commit()`, redis/DynamoDB ops.
+- **Ignored errors.** Functions returning `(T, error)` whose `error` is discarded with `_` or by re-using a different name. Especially on `json.Unmarshal`, `io.Copy`, `req.Body.Close()`, `resp.Body.Close()` (write side), `tx.Commit()`, Redis/DynamoDB calls.
 - **Context propagation.** Network/DB/redis/dynamodb/HTTP calls that take a `context.Context` but are passed `context.Background()` or `context.TODO()` where the surrounding function already has a `ctx context.Context` available. Same for goroutines spawned inside a request handler that don't carry the request `ctx`.
 - **Goroutine leaks.** `go func() {…}` started without a way to stop (no `ctx`, no `done` channel, no `sync.WaitGroup`); goroutines that do network IO with no timeout; goroutines that send to a channel nobody reads.
 - **HTTP clients without timeouts.** `&http.Client{}` literals with no `Timeout` and no `Transport.ResponseHeaderTimeout`. Reverse proxies in `internal/providers/` must have an explicit timeout strategy (or document why none).

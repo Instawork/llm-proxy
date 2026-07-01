@@ -272,7 +272,7 @@ func TestHandleRateLimits_WithSnapshotAndRedactedOverrides(t *testing.T) {
 	assert.Equal(t, "memory", resp.Backend)
 	require.NotNil(t, resp.Snapshot)
 	require.Contains(t, resp.Overrides.PerKey, "key:••••2345")
-	require.Contains(t, resp.Overrides.PerUser, "user:••••.com")
+	require.Contains(t, resp.Overrides.PerUser, "user:user@example.com")
 }
 
 func TestHandleListKeys(t *testing.T) {

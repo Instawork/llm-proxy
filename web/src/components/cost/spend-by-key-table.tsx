@@ -105,6 +105,7 @@ export default function SpendByKeyTable({ rows, keys, byoBanActions }: SpendByKe
       getRowId={(row) => (row.isOthers ? "__others__" : row.key_id || String(row.requests))}
       onSearchActiveChange={onSearchActiveChange}
       footer={footer}
+      initialSorting={[{ id: "total", desc: true }]}
     />
   );
 }
