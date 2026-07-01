@@ -1796,7 +1796,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      0, // streaming: rely on per-handler ctx deadlines
-		IdleTimeout:       120 * time.Second,
+		IdleTimeout:       300 * time.Second,
 	}
 
 	// Set up graceful shutdown
