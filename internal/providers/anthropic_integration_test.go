@@ -137,6 +137,12 @@ var anthropicTestModels = []anthropicTestModel{
 		testPrompt: "What is 2+2?",
 	},
 	{
+		name:       "Claude-Sonnet-5",
+		modelID:    "claude-sonnet-5",
+		maxTokens:  100,
+		testPrompt: "Hello! Can you tell me a short joke?",
+	},
+	{
 		name:       "Claude-Sonnet-4.6",
 		modelID:    "claude-sonnet-4-6",
 		maxTokens:  100,
