@@ -63,9 +63,9 @@ features:
 # =============================================================================
 # PROVIDER OVERRIDES
 # =============================================================================
-# Base config disables AWS Bedrock by default (see configs/base.yml).  Uncomment
-# the override below — and confirm the calling service's IAM role has bedrock:Invoke* /
-# Converse* grants for $AWS_REGION — to enable the SigV4 passthrough.
-# providers:
-#   bedrock:
-#     enabled: true
+# Bedrock Mantle uses the task role to SigV4-sign OpenAI-compatible requests.
+providers:
+  bedrock:
+    enabled: true
+  bedrock-mantle:
+    enabled: true

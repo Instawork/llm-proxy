@@ -33,6 +33,7 @@ type MetadataCallback func(r *http.Request, metadata *providers.LLMResponseMetad
 //   - /v1/models/gemini..., /v1beta/models/gemini...  Gemini compatibility
 //   - /bedrock/...                    Bedrock native (with /bedrock prefix)
 //   - /model/...                      Bedrock SigV4 passthrough
+//   - /bedrock-mantle/...             Bedrock Mantle OpenAI compatibility API
 func GetProviderFromRequest(providerManager *providers.ProviderManager, req *http.Request) providers.Provider {
 	path := req.URL.Path
 
@@ -41,7 +42,7 @@ func GetProviderFromRequest(providerManager *providers.ProviderManager, req *htt
 		if len(parts) >= 4 { // ["", "meta", "userID", "provider", ...]
 			providerName := parts[3]
 			switch providerName {
-			case "openai", "anthropic", "gemini", "bedrock":
+			case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
 				return providerManager.GetProvider(providerName)
 			}
 		}
@@ -58,6 +59,8 @@ func GetProviderFromRequest(providerManager *providers.ProviderManager, req *htt
 		return providerManager.GetProvider("gemini")
 	case strings.HasPrefix(path, "/bedrock/"), strings.HasPrefix(path, "/model/"):
 		return providerManager.GetProvider("bedrock")
+	case strings.HasPrefix(path, "/bedrock-mantle/"):
+		return providerManager.GetProvider("bedrock-mantle")
 	}
 
 	return nil
@@ -90,7 +93,8 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 				strings.Contains(r.URL.Path, "/messages") ||
 				strings.Contains(r.URL.Path, ":generateContent") ||
 				strings.Contains(r.URL.Path, ":streamGenerateContent") ||
-				strings.Contains(r.URL.Path, "/converse")
+				strings.Contains(r.URL.Path, "/converse") ||
+				strings.Contains(r.URL.Path, "/responses")
 
 			if provider == nil || !isAPIEndpoint {
 				return

@@ -695,6 +695,7 @@ func circuitModelExtractor(
 	anthropicProvider *providers.AnthropicProxy,
 	geminiProvider *providers.GeminiProxy,
 	bedrockProvider *providers.BedrockProxy,
+	bedrockMantleProvider *providers.BedrockMantleProxy,
 ) circuit.ModelFromRequestFunc {
 	return func(req *http.Request) string {
 		if req == nil || req.URL == nil {
@@ -722,6 +723,12 @@ func circuitModelExtractor(
 				return ""
 			}
 			model, _ := bedrockProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/bedrock-mantle/"):
+			if bedrockMantleProvider == nil {
+				return ""
+			}
+			model, _ := bedrockMantleProvider.ExtractRequestModelAndMessages(req)
 			return model
 		}
 		return ""
@@ -1245,6 +1252,7 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	anthropic *providers.AnthropicProxy,
 	gemini *providers.GeminiProxy,
 	bedrock *providers.BedrockProxy,
+	bedrockMantle *providers.BedrockMantleProxy,
 ) {
 	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
 	if disableGzip {
@@ -1268,7 +1276,15 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	} else {
 		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
 	}
-	return openAI, anthropic, gemini, bedrock
+	if mantleCfg, ok := yamlConfig.Providers["bedrock-mantle"]; ok && mantleCfg.Enabled {
+		bedrockMantle = providers.NewBedrockMantleProxy(proxyOpts)
+		globalProviderManager.RegisterProvider(bedrockMantle)
+		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock-mantle")
+		logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", bedrockMantle.GetHealthStatus()["region"])
+	} else {
+		logger.Info("☁️  Bedrock Mantle provider: DISABLED (set providers.bedrock-mantle.enabled: true to enable)")
+	}
+	return openAI, anthropic, gemini, bedrock, bedrockMantle
 }
 
 func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
@@ -1345,7 +1361,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 	}
 
-	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
+	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider := registerProviders(yamlConfig, disableGzip)
 
 	fakeAllowed := isFakeModeAllowed(yamlConfig)
 	fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
@@ -1374,6 +1390,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if bedrockProvider != nil {
 		namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
 	}
+	if bedrockMantleProvider != nil {
+		namedProviders = append(namedProviders, namedProvider{"bedrock-mantle", bedrockMantleProvider})
+	}
 
 	if fakeAllowed {
 		for _, np := range namedProviders {
@@ -1391,7 +1410,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		// is missing, which keeps test fixtures and Datadog-less
 		// deployments working unchanged.
 		circuitMetrics := initializeCircuitMetrics(yamlConfig)
-		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
+		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
@@ -1783,6 +1802,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
 	if bedrockProvider != nil {
 		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
+	}
+	if bedrockMantleProvider != nil {
+		logger.Info("Bedrock Mantle API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock-mantle/v1/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
 	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
 

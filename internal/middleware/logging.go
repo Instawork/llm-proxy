@@ -21,6 +21,7 @@ func isProviderRoute(path string) bool {
 		strings.HasPrefix(path, "/anthropic/") ||
 		strings.HasPrefix(path, "/gemini/") ||
 		strings.HasPrefix(path, "/bedrock/") ||
+		strings.HasPrefix(path, "/bedrock-mantle/") ||
 		strings.HasPrefix(path, "/model/") ||
 		strings.HasPrefix(path, "/v1/models/gemini") ||
 		strings.HasPrefix(path, "/v1beta/models/gemini")
@@ -37,6 +38,7 @@ func isAPIEndpoint(path string) bool {
 		strings.Contains(path, ":streamGenerateContent") ||
 		strings.Contains(path, "/converse") ||
 		strings.Contains(path, "/converse-stream") ||
+		strings.Contains(path, "/responses") ||
 		strings.Contains(path, "/invoke") ||
 		strings.Contains(path, "/invoke-with-response-stream")
 }
@@ -47,7 +49,7 @@ func isAPIEndpoint(path string) bool {
 func getProviderFromPath(path string) string {
 	name := circuit.ProviderFromPath(path)
 	switch name {
-	case "openai", "anthropic", "gemini", "bedrock":
+	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
 		return name
 	default:
 		return ""

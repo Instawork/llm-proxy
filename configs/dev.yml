@@ -167,3 +167,5 @@ features:
 providers:
   bedrock:
     enabled: true
+  bedrock-mantle:
+    enabled: true
