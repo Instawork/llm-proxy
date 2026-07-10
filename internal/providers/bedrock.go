@@ -394,6 +394,7 @@ func (b *BedrockProxy) ValidateAPIKey(req *http.Request, _ APIKeyStore) error {
 // reflect the model dimension when we ever want to read it from the router.
 func (b *BedrockProxy) RegisterExtraRoutes(router *mux.Router) {
 	router.PathPrefix("/bedrock/model/").Handler(b.Proxy()).Methods("POST", "OPTIONS")
+	router.PathPrefix("/model/").Handler(b.Proxy()).Methods("POST", "OPTIONS")
 }
 
 // ExtractRequestModelAndMessages implements Provider.

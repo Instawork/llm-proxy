@@ -71,15 +71,59 @@ func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {
 	if got.Header.Get("X-Amz-Security-Token") != "session" {
 		t.Fatalf("session token = %q, want signer credential token", got.Header.Get("X-Amz-Security-Token"))
 	}
+	if got.Header.Get("X-Forwarded-For") != "" {
+		t.Fatalf("X-Forwarded-For must not be signed: %q", got.Header.Get("X-Forwarded-For"))
+	}
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("body changed: got %q want %q", gotBody, body)
+	}
+}
+
+func TestBedrockMantle_ParseResponsesMetadataIncludesCostFields(t *testing.T) {
+	body := `{
+		"id":"resp_1",
+		"model":"openai.gpt-5.4",
+		"status":"completed",
+		"usage":{
+			"input_tokens":12,
+			"output_tokens":4,
+			"total_tokens":16,
+			"input_tokens_details":{"cached_tokens":3},
+			"output_tokens_details":{"reasoning_tokens":2}
+		}
+	}`
+	metadata, err := NewBedrockMantleProxy().ParseResponseMetadata(strings.NewReader(body), false)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if metadata.Provider != bedrockMantleName || metadata.Model != "openai.gpt-5.4" || metadata.TotalTokens != 16 {
+		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.CacheReadInputTokens != 3 || metadata.ThoughtTokens != 2 {
+		t.Fatalf("missing Mantle cost fields: %+v", metadata)
+	}
+}
+
+func TestBedrockMantle_ParseChatCompletionsMetadata(t *testing.T) {
+	body := `{
+		"id":"chatcmpl_1",
+		"model":"openai.gpt-5.4",
+		"choices":[{"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}
+	}`
+	metadata, err := NewBedrockMantleProxy().ParseResponseMetadata(strings.NewReader(body), false)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if metadata.Provider != bedrockMantleName || metadata.InputTokens != 12 || metadata.OutputTokens != 4 || metadata.FinishReason != "stop" {
+		t.Fatalf("unexpected chat completions metadata: %+v", metadata)
 	}
 }
 
 func TestBedrockMantle_ParseResponsesStreamingUsage(t *testing.T) {
 	stream := `data: {"type":"response.created","response":{"id":"resp_1","model":"claude-sonnet-4-5"}}
 
-data: {"type":"response.done","response":{"id":"resp_1","model":"claude-sonnet-4-5","status":"completed","usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}}}
+data: {"type":"response.done","response":{"id":"resp_1","model":"claude-sonnet-4-5","status":"completed","usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}}
 
 data: [DONE]
 `
@@ -89,5 +133,8 @@ data: [DONE]
 	}
 	if metadata.Provider != bedrockMantleName || metadata.Model != "claude-sonnet-4-5" || metadata.TotalTokens != 16 {
 		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.CacheReadInputTokens != 3 || metadata.ThoughtTokens != 2 {
+		t.Fatalf("missing Mantle streaming cost fields: %+v", metadata)
 	}
 }

@@ -76,6 +76,9 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		req.Header.Del("X-Amz-Date")
 		req.Header.Del("X-Amz-Content-Sha256")
 		req.Header.Del("X-Amz-Security-Token")
+		// AWS's edge appends the client address to X-Forwarded-For. Do not
+		// include a mutable forwarding header in the SigV4 canonical request.
+		req.Header.Del("X-Forwarded-For")
 		if opt.DisableGzip {
 			req.Header.Del("Accept-Encoding")
 		}
@@ -109,6 +112,9 @@ type sigV4Transport struct {
 }
 
 func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// ReverseProxy adds this after Director. AWS may append it at its edge,
+	// invalidating any signature that includes the header.
+	req.Header.Del("X-Forwarded-For")
 	payload, err := readAndRestoreMantleBody(req)
 	if err != nil {
 		return nil, fmt.Errorf("read Bedrock Mantle request body: %w", err)
@@ -154,8 +160,7 @@ func (b *BedrockMantleProxy) IsStreamingRequest(req *http.Request) bool {
 	if req.Method != http.MethodPost || (!strings.Contains(req.URL.Path, "/responses") && !strings.Contains(req.URL.Path, "/completions")) {
 		return false
 	}
-	body, err := readAndRestoreMantleBody(req)
-	return err == nil && bytes.Contains(body, []byte(`"stream":true`))
+	return (&OpenAIProxy{}).checkStreamingInBody(req)
 }
 
 func (b *BedrockMantleProxy) Proxy() http.Handler { return b.proxy }
@@ -175,7 +180,22 @@ func (b *BedrockMantleProxy) GetHealthStatus() map[string]interface{} {
 	}
 }
 
-func (b *BedrockMantleProxy) UserIDFromRequest(_ *http.Request) string { return "" }
+func (b *BedrockMantleProxy) UserIDFromRequest(req *http.Request) string {
+	if req == nil || req.Method != http.MethodPost {
+		return ""
+	}
+	body, err := readAndRestoreMantleBody(req)
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		User string `json:"user"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	return payload.User
+}
 
 // ValidateAPIKey accepts only normal llm-proxy keys registered for Mantle.
 // The resolved provider credential is deliberately discarded: Mantle is
@@ -247,12 +267,26 @@ func (b *BedrockMantleProxy) ExtractRequestModelAndMessages(req *http.Request) (
 }
 
 func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error) {
-	if isStreaming {
-		return parseMantleStream(responseBody)
+	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
+	if err != nil {
+		return nil, fmt.Errorf("decompress Bedrock Mantle response: %w", err)
 	}
-	body, err := io.ReadAll(responseBody)
+	if isStreaming {
+		return parseMantleStream(decompressedReader)
+	}
+	body, err := io.ReadAll(decompressedReader)
 	if err != nil {
 		return nil, err
+	}
+	var responseType struct {
+		Choices json.RawMessage `json:"choices"`
+	}
+	if json.Unmarshal(body, &responseType) == nil && responseType.Choices != nil {
+		metadata, err := (&OpenAIProxy{}).ParseResponseMetadata(bytes.NewReader(body), false)
+		if metadata != nil {
+			metadata.Provider = bedrockMantleName
+		}
+		return metadata, err
 	}
 	return parseMantleMetadata(body, false)
 }
@@ -291,22 +325,12 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 		ID     string `json:"id"`
 		Status string `json:"status"`
 		Type   string `json:"type"`
-		Usage  *struct {
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
+		Usage  *mantleUsage `json:"usage"`
 		Response *struct {
 			Model  string `json:"model"`
 			ID     string `json:"id"`
 			Status string `json:"status"`
-			Usage  *struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-				TotalTokens  int `json:"total_tokens"`
-			} `json:"usage"`
+			Usage  *mantleUsage `json:"usage"`
 		} `json:"response"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -324,17 +348,7 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 			envelope.Status = envelope.Response.Status
 		}
 		if usage == nil && envelope.Response.Usage != nil {
-			usage = &struct {
-				InputTokens      int `json:"input_tokens"`
-				OutputTokens     int `json:"output_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			}{
-				InputTokens:  envelope.Response.Usage.InputTokens,
-				OutputTokens: envelope.Response.Usage.OutputTokens,
-				TotalTokens:  envelope.Response.Usage.TotalTokens,
-			}
+			usage = envelope.Response.Usage
 		}
 	}
 	if usage == nil {
@@ -352,5 +366,21 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 		Model: envelope.Model, RequestID: envelope.ID, Provider: bedrockMantleName,
 		InputTokens: input, OutputTokens: output, TotalTokens: total,
 		FinishReason: envelope.Status, IsStreaming: streaming,
+		CacheReadInputTokens: usage.InputTokensDetails.CachedTokens,
+		ThoughtTokens:        usage.OutputTokensDetails.ReasoningTokens,
 	}, nil
+}
+
+type mantleUsage struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 }

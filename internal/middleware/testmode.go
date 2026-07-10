@@ -29,6 +29,7 @@ var knownProviders = map[string]struct{}{
 	"anthropic": {},
 	"gemini":    {},
 	"bedrock":   {},
+	"bedrock-mantle": {},
 }
 
 // safeProviderName returns provider verbatim when it appears in

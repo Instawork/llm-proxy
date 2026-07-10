@@ -718,7 +718,7 @@ func circuitModelExtractor(
 			strings.HasPrefix(path, "/v1/models/"):
 			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
 			return model
-		case strings.HasPrefix(path, "/bedrock/"):
+		case strings.HasPrefix(path, "/bedrock/"), strings.HasPrefix(path, "/model/"):
 			if bedrockProvider == nil {
 				return ""
 			}
