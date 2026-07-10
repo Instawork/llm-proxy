@@ -609,8 +609,21 @@ func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (stri
 
 // ValidateAPIKey validates and potentially replaces the API key in the request
 func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
-	// Get the API key from the x-api-key header (Anthropic uses this header)
+	// Get the API key from the x-api-key header (Anthropic uses this header).
 	apiKey := req.Header.Get("x-api-key")
+	if apiKey == "" {
+		// Some clients (e.g. OpenAI-compatible SDKs) send credentials as
+		// "Authorization: Bearer <key>" instead. Translate that onto
+		// x-api-key — the header Anthropic's API actually expects — so the
+		// rest of this function, and the upstream request, only ever deal
+		// with x-api-key.
+		const bearerPrefix = "Bearer "
+		if authHeader := req.Header.Get("Authorization"); strings.HasPrefix(authHeader, bearerPrefix) {
+			apiKey = strings.TrimPrefix(authHeader, bearerPrefix)
+			req.Header.Set("x-api-key", apiKey)
+			req.Header.Del("Authorization")
+		}
+	}
 	if apiKey == "" {
 		// No API key provided, let the provider handle the error
 		return nil
