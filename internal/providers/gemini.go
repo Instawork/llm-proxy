@@ -401,9 +401,13 @@ func (g *GeminiProxy) RegisterExtraRoutes(router *mux.Router) {
 
 // ValidateAPIKey validates and potentially replaces the API key in the request
 func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
-	// Gemini uses API keys in two ways:
+	// Gemini uses API keys in three ways:
 	// 1. In the URL query parameter as "key"
 	// 2. In the x-goog-api-key header
+	// 3. As "Authorization: Bearer <key>" (some OpenAI-compatible clients).
+	//    Unlike Anthropic, we leave this key in the Authorization header
+	//    rather than moving it to x-goog-api-key, since Gemini's
+	//    OpenAI-compatible endpoint expects Bearer auth there.
 
 	// Check query parameter first
 	query := req.URL.Query()
@@ -412,10 +416,20 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 	// Check header if no query parameter
 	apiKeyFromHeader := req.Header.Get("x-goog-api-key")
 
-	// Use whichever is present (query takes precedence)
+	const bearerPrefix = "Bearer "
+	apiKeyFromAuth := ""
+	if authHeader := req.Header.Get("Authorization"); strings.HasPrefix(authHeader, bearerPrefix) {
+		apiKeyFromAuth = strings.TrimPrefix(authHeader, bearerPrefix)
+	}
+
+	// Use whichever is present (query takes precedence, then x-goog-api-key,
+	// then Authorization).
 	inboundKey := apiKeyFromQuery
 	if inboundKey == "" {
 		inboundKey = apiKeyFromHeader
+	}
+	if inboundKey == "" {
+		inboundKey = apiKeyFromAuth
 	}
 
 	if inboundKey == "" {
@@ -445,6 +459,9 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 		} else if apiKeyFromHeader != "" {
 			// Replace in header
 			req.Header.Set("x-goog-api-key", actualKey)
+		} else if apiKeyFromAuth != "" {
+			// Replace in place, keeping it in the Authorization header.
+			req.Header.Set("Authorization", bearerPrefix+actualKey)
 		}
 		log.Printf("🔑 Gemini: Translated API key from iw: format")
 	}
