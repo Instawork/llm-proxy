@@ -19,13 +19,9 @@ features:
       - type: "file"
         file:
           path: "./logs/cost-tracking.jsonl"
-      - type: "datadog"
-        datadog:
-          host: "datadog-agent"
-          port: "8125"
-          namespace: "llm"
-          tags: ["env:dev", "service:llm-proxy"]
-          sample_rate: 1.0
+      # Datadog metrics require the profile-gated datadog-agent service:
+      #   docker compose --profile datadog up
+      # Default local compose uses file transport only so the proxy can bind :9002.
   api_key_management:
     enabled: true
     table_name: "llm-proxy-api-keys-dev"

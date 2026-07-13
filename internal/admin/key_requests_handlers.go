@@ -304,7 +304,10 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 			req.Tags["tier"] = res.UpstreamID
 		}
 	} else if actualKey == "" {
-		return nil, &orgKeyError{status: http.StatusBadRequest, message: "actual_key is required unless auto_provision is true"}
+		actualKey = apikeys.ResolveActualKey(req.Provider, actualKey)
+		if actualKey == "" {
+			return nil, &orgKeyError{status: http.StatusBadRequest, message: "actual_key is required unless auto_provision is true"}
+		}
 	}
 
 	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(

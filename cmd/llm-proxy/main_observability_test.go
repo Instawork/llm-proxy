@@ -82,7 +82,7 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 		},
 		{
 			name: "bedrock mantle responses",
-			path: "/bedrock-mantle/v1/responses",
+			path: "/bedrock-mantle/openai/v1/responses",
 			body: `{"model":"claude-sonnet-4-5","input":"hello"}`,
 			want: "claude-sonnet-4-5",
 		},

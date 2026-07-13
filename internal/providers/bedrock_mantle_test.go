@@ -27,6 +27,222 @@ func (mantleKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (st
 	return "discarded-provider-token", bedrockMantleName, nil
 }
 
+func TestBedrockMantle_RewritesAnthropicMessagesRequest(t *testing.T) {
+	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"anthropic.claude-haiku-4-5","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
+	req.Header.Set("x-api-key", "sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	if got.URL.String() != "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages" {
+		t.Fatalf("upstream URL = %q", got.URL.String())
+	}
+}
+
+func TestBedrockMantle_RoutesAnthropicToConfiguredRegion(t *testing.T) {
+	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleAnthropicRegion: "us-east-1"},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"anthropic.claude-haiku-4-5","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
+	req.Header.Set("x-api-key", "sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	if got.URL.String() != "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages" {
+		t.Fatalf("upstream URL = %q, want us-east-1 host", got.URL.String())
+	}
+	if auth := got.Header.Get("Authorization"); !strings.Contains(auth, "/us-east-1/bedrock-mantle/aws4_request") {
+		t.Fatalf("Anthropic request not signed for us-east-1: %q", auth)
+	}
+}
+
+func TestBedrockMantle_KeepsOpenAIInDefaultRegion(t *testing.T) {
+	body := []byte(`{"model":"openai.gpt-5.4","input":"hello"}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleAnthropicRegion: "us-east-1"},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"openai.gpt-5.4","usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	if got.URL.String() != "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses" {
+		t.Fatalf("upstream URL = %q, want us-west-2 host", got.URL.String())
+	}
+	if auth := got.Header.Get("Authorization"); !strings.Contains(auth, "/us-west-2/bedrock-mantle/aws4_request") {
+		t.Fatalf("OpenAI request not signed for us-west-2: %q", auth)
+	}
+}
+
+func TestBedrockMantle_StripsAnthropicBetaHeader(t *testing.T) {
+	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleAnthropicRegion: "us-east-1"},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"anthropic.claude-haiku-4-5","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
+	req.Header.Set("x-api-key", "sk-iw-mantle")
+	req.Header.Set("Anthropic-Beta", "advanced-tool-use-2025-11-20")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	if got.Header.Get("Anthropic-Beta") != "" {
+		t.Fatalf("Anthropic-Beta must be stripped for Mantle, got %q", got.Header.Get("Anthropic-Beta"))
+	}
+}
+
+func TestBedrockMantle_KeepsBetaHeaderOffOpenAIStrip(t *testing.T) {
+	// OpenAI Mantle traffic never carries an Anthropic-Beta header, and the
+	// strip must not touch the OpenAI path's own request shape.
+	body := []byte(`{"model":"openai.gpt-5.4","input":"hello"}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"openai.gpt-5.4","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	if got.URL.String() != "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses" {
+		t.Fatalf("upstream URL = %q", got.URL.String())
+	}
+}
+
+func TestBedrockMantle_IsStreamingRequestForMessages(t *testing.T) {
+	proxy := NewBedrockMantleProxy()
+	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
+	if !proxy.IsStreamingRequest(req) {
+		t.Fatal("expected streaming request for Anthropic messages with stream=true")
+	}
+}
+
+func TestBedrockMantle_AcceptsAnthropicXApiKey(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("x-api-key", "sk-iw-mantle")
+	if err := NewBedrockMantleProxy().ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	if req.Header.Get("x-api-key") != "" {
+		t.Fatal("x-api-key should be stripped after validation")
+	}
+}
+
+func TestBedrockMantle_AcceptsBedrockProviderKey(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer sk-iw-bedrock")
+	if err := NewBedrockMantleProxy().ValidateAPIKey(req, bedrockProviderKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+}
+
+type bedrockProviderKeyStore struct{}
+
+func (bedrockProviderKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (string, string, error) {
+	if key != "sk-iw-bedrock" {
+		return "", "", io.EOF
+	}
+	return "unused", "bedrock", nil
+}
+
 func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-5","input":"hello"}`)
 	proxy := newBedrockMantleProxy(
@@ -48,7 +264,7 @@ func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {
 		}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/v1/responses", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
 	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
 		t.Fatalf("ValidateAPIKey: %v", err)
@@ -76,6 +292,70 @@ func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {
 	}
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("body changed: got %q want %q", gotBody, body)
+	}
+}
+
+func mantleUpstreamHeader(t *testing.T, opt ProxyOptions, model, callerProject string) http.Header {
+	t.Helper()
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		opt,
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"` + model + `","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	body := []byte(`{"model":"` + model + `","input":"hello"}`)
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	if callerProject != "" {
+		req.Header.Set("OpenAI-Project", callerProject)
+	}
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+	return got.Header
+}
+
+func TestBedrockMantle_InjectsProjectHeaderForMappedModel(t *testing.T) {
+	opt := ProxyOptions{MantleModelProjects: map[string]string{"openai.gpt-5.5": "proj_abc123"}}
+	h := mantleUpstreamHeader(t, opt, "openai.gpt-5.5", "")
+	if got := h.Get("OpenAI-Project"); got != "proj_abc123" {
+		t.Fatalf("OpenAI-Project = %q, want proj_abc123", got)
+	}
+	// The header must be inside the SigV4 SignedHeaders list, else the upstream
+	// rejects the signature.
+	if auth := h.Get("Authorization"); !strings.Contains(auth, "openai-project") {
+		t.Fatalf("OpenAI-Project not covered by signature: %q", auth)
+	}
+}
+
+func TestBedrockMantle_NoProjectHeaderForUnmappedModel(t *testing.T) {
+	opt := ProxyOptions{MantleModelProjects: map[string]string{"openai.gpt-5.5": "proj_abc123"}}
+	h := mantleUpstreamHeader(t, opt, "anthropic.claude-sonnet-5", "")
+	if got := h.Get("OpenAI-Project"); got != "" {
+		t.Fatalf("OpenAI-Project = %q, want empty for unmapped model", got)
+	}
+}
+
+func TestBedrockMantle_PreservesCallerProjectHeader(t *testing.T) {
+	opt := ProxyOptions{MantleModelProjects: map[string]string{"openai.gpt-5.5": "proj_abc123"}}
+	h := mantleUpstreamHeader(t, opt, "openai.gpt-5.5", "proj_caller")
+	if got := h.Get("OpenAI-Project"); got != "proj_caller" {
+		t.Fatalf("OpenAI-Project = %q, want caller value proj_caller", got)
 	}
 }
 
@@ -136,5 +416,48 @@ data: [DONE]
 	}
 	if metadata.CacheReadInputTokens != 3 || metadata.ThoughtTokens != 2 {
 		t.Fatalf("missing Mantle streaming cost fields: %+v", metadata)
+	}
+}
+
+func TestStripMantleUnsupportedToolStrict(t *testing.T) {
+	in := []byte(`{"model":"anthropic.claude-haiku-4-5","tools":[{"name":"a","strict":true},{"type":"function","function":{"name":"b","strict":true}},{"type":"custom","custom":{"strict":true}}]}`)
+	out := stripMantleUnsupportedToolStrict(in)
+	if bytes.Contains(out, []byte(`"strict"`)) {
+		t.Fatalf("expected strict stripped, got %s", out)
+	}
+}
+
+func TestBedrockMantle_StripsStrictBeforeSigning(t *testing.T) {
+	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":1024,"tools":[{"name":"strict-test","description":"d","input_schema":{"type":"object"},"strict":true}],"messages":[{"role":"user","content":"hello"}]}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var gotBody []byte
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		var err error
+		gotBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read upstream body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"model":"anthropic.claude-haiku-4-5","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
+	req.Header.Set("x-api-key", "sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+
+	if bytes.Contains(gotBody, []byte(`"strict"`)) {
+		t.Fatalf("upstream body still contains strict: %s", gotBody)
 	}
 }

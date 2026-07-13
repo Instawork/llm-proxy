@@ -16,6 +16,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -210,7 +211,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 
 			body, oversize, err := readBoundedBody(r, maxBytes)
 			if err != nil {
-				logger.Warn("pii_redact: read body failed",
+				logger.Warn(proxylog.ProxyMsg("pii_redact: read body failed"),
 					slog.String("path", r.URL.Path),
 					slog.String("error", err.Error()))
 				next.ServeHTTP(w, r)
@@ -223,7 +224,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			r.ContentLength = int64(len(body))
 
 			if oversize {
-				logger.Warn("pii_redact: body exceeds max_body_bytes",
+				logger.Warn(proxylog.ProxyMsg("pii_redact: body exceeds max_body_bytes"),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", getProviderFromPath(r.URL.Path)),
 					slog.Int("body_bytes", len(body)),
@@ -232,7 +233,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeOversize, nil))
 				if cfg.FailClosed {
 					writePIIResponseHeadersPartial(w, ctx)
-					http.Error(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
+					proxylog.ProxyHTTPError(w, "request body too large for PII redaction", http.StatusServiceUnavailable)
 					return
 				}
 				writePIIResponseHeadersPartial(w, ctx)
@@ -295,7 +296,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 
 			if redactErr != nil {
 				if cfg.FailClosed {
-					logger.Error("pii_redact: redactor failed; FailClosed -> 503",
+					logger.Error(proxylog.ProxyMsg("pii_redact: redactor failed; FailClosed -> 503"),
 						slog.String("path", r.URL.Path),
 						slog.String("provider", provider),
 						slog.Int("body_bytes", len(body)),
@@ -306,10 +307,10 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, len(body), redactDuration, piiOutcomeFailClosed)
 					ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeFailClosed, nil))
 					writePIIResponseHeadersPartial(w, ctx)
-					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+					proxylog.ProxyHTTPError(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
-				logger.Warn("pii_redact: redactor failed; passing through unredacted (fail_open)",
+				logger.Warn(proxylog.ProxyMsg("pii_redact: redactor failed; passing through unredacted (fail_open)"),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
 					slog.Int("body_bytes", len(body)),

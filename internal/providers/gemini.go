@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/gorilla/mux"
 )
 
@@ -84,29 +85,28 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("Gemini proxy error: %v", err)
+		proxylog.Upstream("gemini reverse proxy transport error: %v", err)
 
 		// For streaming requests, we need to handle errors differently
 		if geminiProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
-			log.Printf("Error occurred during streaming request")
+			proxylog.Upstream("gemini streaming transport error: %v", err)
 
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceUpstream)
 				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprintf(w, "data: {\"error\": \"Proxy error: %v\"}\n\n", err)
+				fmt.Fprint(w, proxylog.UpstreamSSEDataLine("gemini transport: %v", err))
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 			} else {
 				// Headers already sent, just log the error
-				log.Printf("Cannot send error response, headers already sent")
+				proxylog.Proxy("gemini cannot send error response, headers already sent")
 			}
 		} else {
-			// Regular error handling for non-streaming requests
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "Gemini proxy error: %v", err)
+			proxylog.UpstreamHTTPError(w, fmt.Sprintf("gemini transport: %v", err), http.StatusBadGateway)
 		}
 	}
 
@@ -324,7 +324,7 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		var streamResponse GeminiStreamResponse
 		if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 			// Log error but continue processing other chunks
-			log.Printf("Warning: failed to parse Gemini streaming chunk: %v", err)
+			proxylog.Proxy("gemini failed to parse streaming chunk: %v", err)
 			continue
 		}
 
@@ -413,12 +413,12 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 	apiKeyFromHeader := req.Header.Get("x-goog-api-key")
 
 	// Use whichever is present (query takes precedence)
-	apiKey := apiKeyFromQuery
-	if apiKey == "" {
-		apiKey = apiKeyFromHeader
+	inboundKey := apiKeyFromQuery
+	if inboundKey == "" {
+		inboundKey = apiKeyFromHeader
 	}
 
-	if apiKey == "" {
+	if inboundKey == "" {
 		// No API key provided, let the provider handle the error
 		return nil
 	}
@@ -426,7 +426,7 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 	// Validate and potentially replace the key. Use the request context so
 	// client cancellation / handler-level deadlines propagate into the
 	// DynamoDB validation lookup.
-	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), apiKey)
+	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), inboundKey)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}
@@ -437,7 +437,7 @@ func (g *GeminiProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) er
 	}
 
 	// Replace the key in the appropriate location if it was translated
-	if actualKey != apiKey {
+	if actualKey != inboundKey {
 		if apiKeyFromQuery != "" {
 			// Replace in query parameter
 			query.Set("key", actualKey)

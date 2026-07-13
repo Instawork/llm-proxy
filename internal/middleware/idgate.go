@@ -16,6 +16,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/idgatestats"
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -96,7 +97,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 
 			body, oversize, err := readBoundedBody(r, maxBodyBytes)
 			if err != nil {
-				logger.Warn("id_gate: read body failed",
+				logger.Warn(proxylog.ProxyMsg("id_gate: read body failed"),
 					slog.String("path", r.URL.Path),
 					slog.String("error", err.Error()))
 				next.ServeHTTP(w, r)
@@ -112,7 +113,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 
 			images, err := extractImagesFromBody(body, maxImageBytes)
 			if err != nil {
-				logger.Warn("id_gate: parse body failed; passing through",
+				logger.Warn(proxylog.ProxyMsg("id_gate: parse body failed; passing through"),
 					slog.String("path", r.URL.Path),
 					slog.String("error", err.Error()))
 				next.ServeHTTP(w, r)
@@ -189,7 +190,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 			var haveErr bool
 			for res := range results {
 				if res.blocked {
-					logger.Warn("id_gate: blocked government identity document",
+					logger.Warn(proxylog.ProxyMsg("id_gate: blocked government identity document"),
 						slog.String("path", r.URL.Path),
 						slog.String("provider", provider),
 						slog.Int("image_index", res.index),
@@ -202,7 +203,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 							provider, keyID, res.entityType, res.score, res.index, len(images), time.Since(gateStart),
 						)
 					}
-					http.Error(w, idGateBlockMessage, http.StatusUnprocessableEntity)
+					proxylog.ProxyHTTPError(w, idGateBlockMessage, http.StatusUnprocessableEntity)
 					return
 				}
 				if res.err != nil && !haveErr {
@@ -213,7 +214,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 
 			if haveErr {
 				if cfg.FailClosed {
-					logger.Error("id_gate: scan failed; FailClosed -> 503",
+					logger.Error(proxylog.ProxyMsg("id_gate: scan failed; FailClosed -> 503"),
 						slog.String("path", r.URL.Path),
 						slog.String("provider", provider),
 						slog.Int("image_index", firstErr.index),
@@ -224,10 +225,10 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					if cfg.Recorder != nil {
 						cfg.Recorder.RecordScanFailed(provider, keyID, firstErr.stage, true, len(images), time.Since(gateStart))
 					}
-					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+					proxylog.ProxyHTTPError(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 					return
 				}
-				logger.Warn("id_gate: scan failed; passing through (fail_open)",
+				logger.Warn(proxylog.ProxyMsg("id_gate: scan failed; passing through (fail_open)"),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
 					slog.Int("image_index", firstErr.index),

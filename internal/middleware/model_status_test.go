@@ -10,6 +10,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 func TestModelStatusMiddleware_RetiredModelShortCircuits(t *testing.T) {
@@ -48,6 +49,9 @@ func TestModelStatusMiddleware_RetiredModelShortCircuits(t *testing.T) {
 	}
 	if got := rec.Header().Get(providers.HeaderModelRetired); got != "model_retired" {
 		t.Fatalf("header=%q", got)
+	}
+	if got := rec.Header().Get(proxylog.HeaderErrorSource); got != proxylog.ErrorSourceProxy {
+		t.Fatalf("error_source=%q", got)
 	}
 
 	var body map[string]any

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // RedactRateLimitMiddleware enforces per-API-key request limits on POST /redact.
@@ -27,7 +29,7 @@ func RedactRateLimitMiddleware(requestsPerMinute int) func(http.Handler) http.Ha
 			}
 			if !lim.allow(key, time.Now()) {
 				w.Header().Set("Retry-After", "60")
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				proxylog.ProxyHTTPError(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
 			next.ServeHTTP(w, r)

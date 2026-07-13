@@ -3,12 +3,12 @@ package middleware
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 type proxyKeyLookup interface {
@@ -34,10 +34,8 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 			provider := GetProviderFromRequest(providerManager, r)
 			if provider == nil {
 				if isProviderRoute(r.URL.Path) {
-					log.Printf("❌ API key validation: provider route %q has no registered provider", r.URL.Path)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusBadGateway)
-					fmt.Fprintf(w, `{"error": "Provider not configured for this route"}`)
+					proxylog.Proxy("API key validation: provider route %q has no registered provider", r.URL.Path)
+					proxylog.WriteProxyJSONError(w, http.StatusBadGateway, "Provider not configured for this route")
 					return
 				}
 				next.ServeHTTP(w, r)
@@ -51,43 +49,33 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 
 				if inboundKey != "" && !apikeys.HasKeyPrefix(inboundKey) {
 					if !byoKeysEnabled {
-						log.Printf("❌ BYO keys disabled for provider %s", provider.GetName())
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusForbidden)
-						fmt.Fprintf(w, `{"error": "Bring-your-own provider keys are not accepted; use a proxy key"}`)
+						proxylog.Proxy("BYO keys disabled for provider %s", provider.GetName())
+						proxylog.WriteProxyJSONError(w, http.StatusForbidden, "Bring-your-own provider keys are not accepted; use a proxy key")
 						return
 					}
 					checker, ok := keyStore.(byoBanChecker)
 					if !ok {
-						log.Printf("❌ BYO ban lookup unavailable: key store does not implement ban checker")
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusInternalServerError)
-						fmt.Fprintf(w, `{"error": "Internal server error"}`)
+						proxylog.Proxy("BYO ban lookup unavailable: key store does not implement ban checker")
+						proxylog.WriteProxyJSONError(w, http.StatusInternalServerError, "Internal server error")
 						return
 					}
 					hash := apikeys.CredentialHashSuffix(inboundKey)
 					banned, err := checker.IsBYOCredentialBanned(r.Context(), provider.GetName(), hash)
 					if err != nil {
-						log.Printf("❌ BYO ban lookup failed for %s: %v", provider.GetName(), err)
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusInternalServerError)
-						fmt.Fprintf(w, `{"error": "Internal server error"}`)
+						proxylog.Proxy("BYO ban lookup failed for %s: %v", provider.GetName(), err)
+						proxylog.WriteProxyJSONError(w, http.StatusInternalServerError, "Internal server error")
 						return
 					}
 					if banned {
-						log.Printf("❌ BYO credential banned for provider %s", provider.GetName())
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusForbidden)
-						fmt.Fprintf(w, `{"error": "API key is banned"}`)
+						proxylog.Proxy("BYO credential banned for provider %s", provider.GetName())
+						proxylog.WriteProxyJSONError(w, http.StatusForbidden, "API key is banned")
 						return
 					}
 				}
 
 				if err := provider.ValidateAPIKey(r, keyStore); err != nil {
-					log.Printf("❌ API key validation failed for %s: %v", provider.GetName(), err)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusUnauthorized)
-					fmt.Fprintf(w, `{"error": "Invalid API key: %s"}`, err.Error())
+					proxylog.Proxy("API key validation failed for %s: %v", provider.GetName(), err)
+					proxylog.WriteProxyJSONError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid API key: %s", err.Error()))
 					return
 				}
 
@@ -97,10 +85,8 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 						r = r.WithContext(apikeys.WithContext(r.Context(), record))
 						proxyKeyAttached = true
 						if err := apikeys.EnforcePIIOffBedrockProvider(globalPIIEnabled, record); err != nil {
-							log.Printf("❌ PII-off Bedrock policy violation for %s: %v", provider.GetName(), err)
-							w.Header().Set("Content-Type", "application/json")
-							w.WriteHeader(http.StatusForbidden)
-							fmt.Fprintf(w, `{"error": "%s"}`, err.Error())
+							proxylog.Proxy("PII-off Bedrock policy violation for %s: %v", provider.GetName(), err)
+							proxylog.WriteProxyJSONError(w, http.StatusForbidden, err.Error())
 							return
 						}
 					}

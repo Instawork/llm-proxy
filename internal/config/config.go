@@ -756,6 +756,13 @@ type ModelConfig struct {
 	Aliases     []string `yaml:"aliases,omitempty"` // Alternative model names
 	// Pricing can be a single price, or a list of tiers.
 	Pricing interface{} `yaml:"pricing,omitempty"`
+	// ProjectID scopes upstream requests for this model to a specific provider
+	// project. Currently consumed only by the Bedrock Mantle proxy, which sends
+	// it as the OpenAI-Project header so Mantle resolves data-retention (and
+	// other project-scoped policy) against that project instead of the account
+	// default. Supports ${VAR} env expansion so account-specific ids stay out of
+	// the committed YAML. Empty leaves the account-level policy in force.
+	ProjectID string `yaml:"project_id,omitempty"`
 }
 
 // Pricing represents a simple input/output cost structure.

@@ -338,7 +338,7 @@ func TestResponseCapture_FirstChunkGzip_LogsCompressedWarning(t *testing.T) {
 	if !rc.compressed {
 		t.Error("compressed flag must be set on gzip first chunk")
 	}
-	if !strings.Contains(logOut, "WARNING upstream still sent gzip") {
+	if !strings.Contains(logOut, "[UPSTREAM] upstream still sent gzip") {
 		t.Errorf("expected gzip warning; got: %s", logOut)
 	}
 }

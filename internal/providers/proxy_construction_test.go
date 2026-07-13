@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,37 +121,80 @@ func TestOpenAIProxy_ErrorHandler_Streaming(t *testing.T) {
 	rr := runErrorHandler(t, NewOpenAIProxy(), "/openai/v1/chat/completions", "text/event-stream")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
 	assert.Contains(t, rr.Header().Get("Content-Type"), "text/event-stream")
-	assert.Contains(t, rr.Body.String(), "Proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Header().Get("X-Llm-Proxy-Error-Source"), "upstream")
 }
 
 func TestOpenAIProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewOpenAIProxy(), "/openai/v1/chat/completions", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "OpenAI proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Body.String(), "openai transport")
 }
 
 func TestAnthropicProxy_ErrorHandler_Streaming(t *testing.T) {
 	rr := runErrorHandler(t, NewAnthropicProxy(), "/anthropic/v1/messages", "text/event-stream")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
 }
 
 func TestAnthropicProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewAnthropicProxy(), "/anthropic/v1/messages", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Anthropic proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Body.String(), "anthropic transport")
 }
 
 func TestGeminiProxy_ErrorHandler_Streaming(t *testing.T) {
 	rr := runErrorHandler(t, NewGeminiProxy(), "/gemini/v1/models/gemini-pro:streamGenerateContent?alt=sse", "text/event-stream")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
 }
 
 func TestGeminiProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewGeminiProxy(), "/gemini/v1/models/gemini-pro:generateContent", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Gemini proxy error")
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Body.String(), "gemini transport")
+}
+
+func TestBedrockProxy_ErrorHandler_Streaming(t *testing.T) {
+	rr := runErrorHandler(t, NewBedrockProxy(), "/bedrock/model/anthropic.claude-3-sonnet/converse-stream", bedrockEventStreamMIME)
+	assert.Equal(t, http.StatusBadGateway, rr.Code)
+	assert.Contains(t, rr.Header().Get("Content-Type"), bedrockEventStreamMIME)
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Header().Get("X-Llm-Proxy-Error-Source"), "upstream")
+}
+
+func TestBedrockProxy_ErrorHandler_NonStreaming(t *testing.T) {
+	rr := runErrorHandler(t, NewBedrockProxy(), "/bedrock/model/anthropic.claude-3-sonnet/converse", "")
+	assert.Equal(t, http.StatusBadGateway, rr.Code)
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Body.String(), "bedrock transport")
+}
+
+func TestBedrockMantleProxy_ErrorHandler_Streaming(t *testing.T) {
+	mantle := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	rr := runErrorHandler(t, mantle, "/bedrock-mantle/anthropic/v1/messages", "text/event-stream")
+	assert.Equal(t, http.StatusBadGateway, rr.Code)
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Header().Get("X-Llm-Proxy-Error-Source"), "upstream")
+}
+
+func TestBedrockMantleProxy_ErrorHandler_NonStreaming(t *testing.T) {
+	mantle := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	rr := runErrorHandler(t, mantle, "/bedrock-mantle/anthropic/v1/messages", "")
+	assert.Equal(t, http.StatusBadGateway, rr.Code)
+	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
+	assert.Contains(t, rr.Body.String(), "bedrock-mantle transport")
 }
 
 func TestProvider_ModifyResponse_SSEHeaders(t *testing.T) {

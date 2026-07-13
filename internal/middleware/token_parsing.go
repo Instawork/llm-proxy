@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -106,7 +107,7 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
 			if err != nil {
 				if !isStreaming {
-					log.Printf("Warning: failed to parse response metadata for %s: %v", provider.GetName(), err)
+					proxylog.Proxy("failed to parse response metadata for %s: %v", provider.GetName(), err)
 					if captureWriter.body.Len() > 0 {
 						bodyBytes := captureWriter.body.Bytes()
 						// Both branches route through redact.LogPreview so
@@ -259,7 +260,7 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 		rc.compressedOnce.Do(func() {
 			if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
 				rc.compressed = true
-				log.Printf("🗜  WARNING upstream still sent gzip despite Accept-Encoding strip (passthrough)")
+				proxylog.Upstream("upstream still sent gzip despite Accept-Encoding strip (passthrough)")
 			}
 		})
 	}

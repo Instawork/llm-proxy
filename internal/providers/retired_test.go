@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 func TestRetiredModelError_VendorShapes(t *testing.T) {
@@ -158,6 +159,9 @@ func TestWriteRetiredModelResponse_SetsProxyHeader(t *testing.T) {
 	}
 	if got := rec.Header().Get(HeaderModelRetired); got != "model_retired" {
 		t.Fatalf("header=%q", got)
+	}
+	if got := rec.Header().Get(proxylog.HeaderErrorSource); got != proxylog.ErrorSourceProxy {
+		t.Fatalf("error_source=%q", got)
 	}
 }
 

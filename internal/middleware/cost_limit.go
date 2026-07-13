@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
-	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -11,6 +9,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 const (
@@ -288,7 +287,7 @@ func enforceReadOnly(
 				writeCostDegraded(w, prov, rec, rec.DailyCostLimit)
 				return
 			}
-			log.Printf("costlimit: WARN fleet spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
+			proxylog.Proxy("costlimit: fleet spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
 				prov.GetName(), prefix(rec.PK), rec.DailyCostLimit)
 		}
 		spendCents := int64(math.Ceil(spendUSD * 100))
@@ -319,7 +318,7 @@ func enforceReadOnly(
 				writeCostDegraded(w, prov, rec, rec.MonthlyCostLimit)
 				return
 			}
-			log.Printf("costlimit: WARN fleet monthly spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
+			proxylog.Proxy("costlimit: fleet monthly spend read degraded, enforcing per-instance only provider=%s key_prefix=%s limit_cents=%d",
 				prov.GetName(), prefix(rec.PK), rec.MonthlyCostLimit)
 		}
 		spendCents := int64(math.Ceil(spendUSD * 100))
@@ -334,32 +333,24 @@ func enforceReadOnly(
 
 func writeCostDegraded(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64) {
 	w.Header().Set(costLimitReasonHeader, costLimitDegraded)
-	log.Printf("costlimit: fail-closed (fleet spend read degraded) provider=%s key_prefix=%s limit_cents=%d",
+	proxylog.Proxy("costlimit: fail-closed (fleet spend read degraded) provider=%s key_prefix=%s limit_cents=%d",
 		prov.GetName(), prefix(rec.PK), limitCents)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": "cost limit temporarily unverifiable",
-	})
+	proxylog.WriteProxyJSONError(w, http.StatusServiceUnavailable, "cost limit temporarily unverifiable")
 }
 
 func writeCostBlocked(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64, reason, msg string) {
 	w.Header().Set(costLimitReasonHeader, reason)
 	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
-	log.Printf("costlimit: block (reserved) provider=%s key_prefix=%s limit_cents=%d reason=%s",
+	proxylog.Proxy("costlimit: block (reserved) provider=%s key_prefix=%s limit_cents=%d reason=%s",
 		prov.GetName(), prefix(rec.PK), limitCents, reason)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusPaymentRequired)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	proxylog.WriteProxyJSONError(w, http.StatusPaymentRequired, msg)
 }
 
 func writeCostBlockedWithSpend(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents, spendCents int64, reason, msg string) {
 	w.Header().Set(costLimitReasonHeader, reason)
 	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
 	w.Header().Set(costSpendCentsHeader, strconv.FormatInt(spendCents, 10))
-	log.Printf("costlimit: block provider=%s key_prefix=%s spend_cents=%d limit_cents=%d reason=%s",
+	proxylog.Proxy("costlimit: block provider=%s key_prefix=%s spend_cents=%d limit_cents=%d reason=%s",
 		prov.GetName(), prefix(rec.PK), spendCents, limitCents, reason)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusPaymentRequired)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	proxylog.WriteProxyJSONError(w, http.StatusPaymentRequired, msg)
 }

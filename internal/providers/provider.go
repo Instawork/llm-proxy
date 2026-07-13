@@ -127,6 +127,22 @@ type ProxyOptions struct {
 	// Useful for debugging SSE streams where you want plain-text event data
 	// visible in logs.  Defaults to false (gzip enabled).
 	DisableGzip bool
+
+	// MantleModelProjects maps a Bedrock Mantle model id (or alias) to the
+	// Bedrock project id that should handle it. When a request's model matches,
+	// the Mantle proxy sets the OpenAI-Project header so Mantle resolves
+	// data-retention (and other project-scoped policy) against that project
+	// instead of the account default. Consumed only by the Bedrock Mantle
+	// proxy; nil/empty leaves the account-level policy in force.
+	MantleModelProjects map[string]string
+
+	// MantleAnthropicRegion overrides the AWS region used for Bedrock Mantle
+	// `/anthropic/v1/messages` traffic. Claude Mantle SKUs are provisioned in a
+	// different region than the OpenAI SKUs, so Anthropic requests are
+	// retargeted (host + SigV4) here. Empty falls back to the proxy's default
+	// region (public constructor: BEDROCK_MANTLE_ANTHROPIC_REGION env or
+	// us-east-1). Consumed only by the Bedrock Mantle proxy.
+	MantleAnthropicRegion string
 }
 
 // ProviderManager manages multiple providers

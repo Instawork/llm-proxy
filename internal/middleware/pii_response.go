@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -51,12 +52,12 @@ func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) fu
 			finalizePIIRestored(r.Context(), reg)
 			finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
 			if err := writePIIResponseTrailers(deferWriter, r.Context()); err != nil {
-				slog.Warn("pii_restore: failed to set PII trailers",
+				proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: failed to set PII trailers",
 					slog.String("error", err.Error()),
 					slog.String("path", r.URL.Path))
 			}
 			if h := piiSummaryHolderFromContext(r.Context()); h != nil && h.Leaked > 0 {
-				slog.Warn("pii_restore: MASK placeholders leaked in response",
+				proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: MASK placeholders leaked in response",
 					slog.Int("leaked", h.Leaked),
 					slog.Int("restored", h.Restored),
 					slog.Bool("streaming", isStreaming),
@@ -99,7 +100,7 @@ func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
 	if !pw.streaming {
 		plain, _, err := decompressPIIResponseIfGzip(b)
 		if err != nil {
-			slog.Warn("pii_restore: gzip decompress failed; passing through without placeholder restore",
+			proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: gzip decompress failed; passing through without placeholder restore",
 				slog.String("error", err.Error()))
 			return pw.writeRestored(b)
 		}

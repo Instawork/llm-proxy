@@ -11,6 +11,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 )
@@ -57,7 +58,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				// request — that is strictly worse than briefly not enforcing a
 				// limit. This mirrors the circuit breaker, which also fails open
 				// (GetState returns closed) when its store is unreachable.
-				log.Printf("ratelimit: backend error, failing open: %v", err)
+				proxylog.Proxy("ratelimit: backend error, failing open: %v", err)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -90,7 +91,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				}
 				log.Printf("ratelimit: throttle provider=%s model=%s user=%s key_prefix=%s reason=%s",
 					prov.GetName(), model, userID, prefix(apiKey), res.Reason)
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				proxylog.ProxyHTTPError(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
 
@@ -113,7 +114,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			if actualInput > 0 {
 				delta := actualInput - estTokens
 				if err := limiter.Adjust(r.Context(), reservationID, scope, delta, time.Now()); err != nil {
-					log.Printf("ratelimit: adjust error: %v", err)
+					proxylog.Proxy("ratelimit: adjust error: %v", err)
 				} else if delta != 0 {
 					log.Printf("ratelimit: adjust (input) provider=%s model=%s user=%s key_prefix=%s delta_input_tokens=%d",
 						prov.GetName(), model, userID, prefix(apiKey), delta)
@@ -128,7 +129,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				// input-token header is a streaming/parsed success that the
 				// Adjust branch above (or estimation) already accounts for.
 				if err := limiter.Cancel(r.Context(), reservationID, scope, estTokens, time.Now()); err != nil {
-					log.Printf("ratelimit: cancel error: %v", err)
+					proxylog.Proxy("ratelimit: cancel error: %v", err)
 				} else {
 					log.Printf("ratelimit: cancel (upstream %d) provider=%s model=%s user=%s key_prefix=%s est_tokens=%d",
 						sw.status, prov.GetName(), model, userID, prefix(apiKey), estTokens)

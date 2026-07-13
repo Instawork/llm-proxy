@@ -5,13 +5,13 @@ package coststats
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/history"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // MaxRecentEvents bounds the recent-requests ring buffer.
@@ -260,7 +260,7 @@ func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta admi
 			continue
 		}
 		if err := r.ApplyFleetMonthlyKeySpend(ctx, adminrollup.MetricCost, month, member, spendUSD); err != nil {
-			log.Printf("coststats: apply monthly key spend failed key=%s spend_usd=%f error=%v", member, spendUSD, err)
+			proxylog.Proxy("coststats: apply monthly key spend failed key=%s spend_usd=%f error=%v", member, spendUSD, err)
 		}
 	}
 }
@@ -828,7 +828,7 @@ func (r *Recorder) AdjustKeyReservation(ctx context.Context, keyID string, delta
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 	if err := r.AdjustFleetKeyReservation(ctx, adminrollup.MetricCost, today, keyID, deltaUSD); err != nil {
-		log.Printf("coststats: adjust reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
+		proxylog.Proxy("coststats: adjust reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
 	}
 }
 
@@ -893,7 +893,7 @@ func (r *Recorder) AdjustKeyMonthlyReservation(ctx context.Context, keyID string
 	}
 	month := time.Now().UTC().Format("2006-01")
 	if err := r.AdjustFleetKeyMonthlyReservation(ctx, adminrollup.MetricCost, month, keyID, deltaUSD); err != nil {
-		log.Printf("coststats: adjust monthly reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
+		proxylog.Proxy("coststats: adjust monthly reservation failed key=%s delta_usd=%f error=%v", keyID, deltaUSD, err)
 	}
 }
 

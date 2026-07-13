@@ -8,6 +8,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // isProviderRoute checks if the request is for a provider route. Bedrock is
@@ -103,7 +104,7 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 					reason = "Unknown reason"
 				}
 
-				slog.Log(r.Context(), level, "Non-tracked provider route",
+				slog.Log(r.Context(), level, proxylog.ProxyMsg("Non-tracked provider route"),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", providerName),
@@ -142,7 +143,7 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 						slog.String("path", r.URL.Path),
 						slog.Bool("cost_tracked", true))
 				} else {
-					slog.Warn("Provider route not tracked",
+					slog.Warn(proxylog.ProxyMsg("Provider route not tracked"),
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
 						slog.Bool("cost_tracked", false))

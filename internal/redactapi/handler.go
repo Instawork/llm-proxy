@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -126,7 +127,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	result, redactErr := h.redactor.Redact(r.Context(), text)
 	if redactErr != nil {
-		h.logger.Warn("redact_api: redactor failed",
+		h.logger.Warn(proxylog.ProxyMsg("redact_api: redactor failed"),
 			slog.String("reason", redactFailureReason(redactErr)))
 		writeJSONError(w, http.StatusServiceUnavailable, "redaction failed")
 		return
@@ -189,9 +190,7 @@ func extractCredential(r *http.Request) string {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	proxylog.WriteProxyJSONError(w, status, msg)
 }
 
 // redactFailureReason maps Presidio errors to stable log labels without
