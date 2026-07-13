@@ -54,10 +54,11 @@ type BedrockMantleProxy struct {
 	modelProjects map[string]string
 }
 
-// NewBedrockMantleProxy creates a Bedrock Mantle proxy using AWS credentials
-// from the shared config profile (SSO, ~/.aws/credentials, etc.). The profile
-// chain is used explicitly so docker-compose's DynamoDB Local static keys do
-// not override real AWS credentials for upstream SigV4.
+// NewBedrockMantleProxy creates a Bedrock Mantle proxy using the AWS default
+// credential chain (env, shared config, ECS/EC2 task role). When
+// BEDROCK_AWS_PROFILE or AWS_PROFILE is set, that shared config profile is
+// used instead — docker-compose sets BEDROCK_AWS_PROFILE so DynamoDB Local
+// static keys (AWS_ACCESS_KEY_ID=local) do not override real SigV4 creds.
 func NewBedrockMantleProxy(opts ...ProxyOptions) *BedrockMantleProxy {
 	var opt ProxyOptions
 	if len(opts) > 0 {
@@ -82,18 +83,20 @@ func NewBedrockMantleProxy(opts ...ProxyOptions) *BedrockMantleProxy {
 }
 
 func loadBedrockMantleAWSConfig(ctx context.Context, region string) (aws.Config, error) {
+	opts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(region),
+	}
+	// Only pin a shared-config profile when one is explicitly requested.
+	// Forcing "default" breaks CI and ECS task-role auth when ~/.aws/config
+	// has no such profile (AWS SDK error: failed to get shared config profile).
 	profile := os.Getenv("BEDROCK_AWS_PROFILE")
 	if profile == "" {
 		profile = os.Getenv("AWS_PROFILE")
 	}
-	if profile == "" {
-		profile = "default"
+	if profile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
 	}
-	return awsconfig.LoadDefaultConfig(
-		ctx,
-		awsconfig.WithRegion(region),
-		awsconfig.WithSharedConfigProfile(profile),
-	)
+	return awsconfig.LoadDefaultConfig(ctx, opts...)
 }
 
 func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, opt ProxyOptions) *BedrockMantleProxy {

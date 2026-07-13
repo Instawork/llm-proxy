@@ -297,6 +297,8 @@ workflows:
               only: /.*/
 
       - unit-tests:
+          context:
+            - AWS
           filters:
             branches:
               only: /.*/
@@ -313,6 +315,8 @@ workflows:
               only: /.*/
 
       - fuzz-tests:
+          context:
+            - AWS
           filters:
             branches:
               only: /.*/
