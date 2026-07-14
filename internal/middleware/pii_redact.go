@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -220,8 +221,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			// Always restore the body for the upstream proxy regardless
 			// of redaction outcome — we never want to truncate or drop
 			// the upstream payload.
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
+			setRequestBody(r, body)
 
 			if oversize {
 				logger.Warn(proxylog.ProxyMsg("pii_redact: body exceeds max_body_bytes"),
@@ -352,8 +352,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 					logger.Debug("pii_redact: wire request after scrub",
 						piiWireBodyLogAttrs(ctx, r.URL.Path, provider, upstreamBody)...)
 				}
-				r.Body = io.NopCloser(bytes.NewReader(upstreamBody))
-				r.ContentLength = int64(len(upstreamBody))
+				setRequestBody(r, upstreamBody)
 			}
 
 			logger.Info("pii_redact: ok",
@@ -386,6 +385,22 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// setRequestBody replaces r.Body and keeps Content-Length in sync on both
+// the typed field and the header map. Scrubbing changes body length; leaving
+// the inbound Content-Length header stale makes ReverseProxy advertise the
+// old size to OpenAI (truncated JSON or hung read) — which Cloudflare then
+// surfaces as origin 502s, especially on tool-bearing chat.completions.
+func setRequestBody(r *http.Request, body []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	r.Header.Del("Transfer-Encoding")
+	if len(body) == 0 {
+		r.Header.Del("Content-Length")
+		return
+	}
+	r.Header.Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
 }
 
 func piiWireBodyLogAttrs(ctx context.Context, path, provider string, body []byte) []any {

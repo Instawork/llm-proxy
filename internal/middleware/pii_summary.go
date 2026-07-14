@@ -176,6 +176,10 @@ func (pw *piiBufferResponseWriter) Flush() {}
 
 func (pw *piiBufferResponseWriter) commit() error {
 	writePIIResponseHeaders(pw.ResponseWriter, pw.ctx)
+	// Restore may change body length vs the upstream Content-Length that
+	// ReverseProxy copied onto the shared header map; drop it so the server
+	// can chunk or recompute rather than truncate.
+	pw.ResponseWriter.Header().Del("Content-Length")
 	code := pw.statusCode
 	if code == 0 {
 		code = http.StatusOK
