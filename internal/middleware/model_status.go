@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -10,6 +8,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // ModelStatusMiddleware short-circuits requests to retired models and records
@@ -44,11 +43,9 @@ func ModelStatusMiddleware(
 				recorder.RecordRetired(providerName, model)
 				emitModelMetric(metrics, "model.retired_call", providerName, model)
 				if err := providers.WriteRetiredModelResponse(w, provider, model, entry); err != nil {
-					log.Printf("model status: failed to encode retired response: %v", err)
-					w.Header().Set("Content-Type", "application/json")
+					proxylog.Proxy("model status: failed to encode retired response: %v", err)
 					w.Header().Set(providers.HeaderModelRetired, "model_retired")
-					w.WriteHeader(http.StatusNotFound)
-					fmt.Fprintf(w, `{"error":"model retired"}`)
+					proxylog.WriteProxyJSONError(w, http.StatusNotFound, "model retired")
 				}
 				return
 			}
@@ -59,7 +56,7 @@ func ModelStatusMiddleware(
 				emitModelMetric(metrics, "model.deprecated_call", providerName, model)
 			} else if modelCfg == nil {
 				recorder.RecordUnknown(providerName, model)
-				log.Printf("model status: unrecognized model %q for provider %q", model, providerName)
+				proxylog.Proxy("model status: unrecognized model %q for provider %q", model, providerName)
 				emitModelMetric(metrics, "model.unknown_call", providerName, "__unknown__")
 			}
 

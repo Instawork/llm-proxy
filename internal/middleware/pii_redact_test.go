@@ -373,7 +373,7 @@ func TestPIIRedactMiddleware_OversizeBodyFailOpenPassthrough(t *testing.T) {
 	// on. If any go missing, dashboards silently lose signal.
 	logOut := logBuf.String()
 	for _, want := range []string{
-		`"msg":"pii_redact: body exceeds max_body_bytes"`,
+		`"msg":"[PROXY] pii_redact: body exceeds max_body_bytes"`,
 		`"provider":"openai"`,
 		`"body_bytes":5000`,
 		`"max_body_bytes":1024`,

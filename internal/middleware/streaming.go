@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // StreamingMiddleware ensures proper handling of streaming responses
@@ -24,7 +24,7 @@ func StreamingMiddleware(providerManager *providers.ProviderManager) func(http.H
 					}
 					next.ServeHTTP(streamingWriter, r)
 				} else {
-					log.Printf("Warning: ResponseWriter does not support flushing for streaming request")
+					proxylog.Proxy("streaming: ResponseWriter does not support flushing")
 					next.ServeHTTP(w, r)
 				}
 			} else {

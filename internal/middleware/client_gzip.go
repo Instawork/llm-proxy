@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 var errClientGzipWriteAfterFinish = errors.New("client gzip: write after finish")
@@ -34,11 +35,11 @@ func ClientGzipMiddleware(providerManager *providers.ProviderManager) func(http.
 			gw := &clientGzipResponseWriter{ResponseWriter: w}
 			next.ServeHTTP(gw, r)
 			if err := gw.finish(); err != nil {
-				slog.Error("client_gzip: failed to compress response",
+				proxylog.SlogProxy(slog.Default(), slog.LevelError, "client_gzip: failed to compress response",
 					slog.String("error", err.Error()),
 					slog.String("path", r.URL.Path))
 				if !gw.headerSent {
-					http.Error(w, "response compression failed", http.StatusInternalServerError)
+					proxylog.ProxyHTTPError(w, "response compression failed", http.StatusInternalServerError)
 				}
 			}
 		})

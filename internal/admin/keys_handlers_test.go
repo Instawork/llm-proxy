@@ -82,6 +82,32 @@ func TestHandleCreateKey_PIIOffBedrockAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code)
 }
 
+func TestHandleCreateKey_BedrockMantleWithoutActualKey(t *testing.T) {
+	h, _ := testAdminHandler(t)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:    "bedrock-mantle",
+		Description: "local mantle",
+	})
+	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKey(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestHandleCreateKey_BedrockWithoutActualKey(t *testing.T) {
+	h, _ := testAdminHandler(t)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:    "bedrock",
+		Description: "local bedrock",
+	})
+	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKey(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
 func TestHandleCreateKey_PIIOffBypassAdmin(t *testing.T) {
 	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "admin@example.com")
 	// The shipped allowlist is empty; opt this admin in for the test.

@@ -34,6 +34,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/pii"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/provision"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 	"github.com/Instawork/llm-proxy/internal/redact"
@@ -89,6 +90,14 @@ func (h *CustomPrettyHandler) WithGroup(name string) slog.Handler {
 }
 
 var logger *slog.Logger
+
+func logProxyError(msg string, args ...any) {
+	logger.Error(proxylog.ProxyMsg(msg), args...)
+}
+
+func logProxyWarn(msg string, args ...any) {
+	logger.Warn(proxylog.ProxyMsg(msg), args...)
+}
 
 const (
 	// Version of the LLM Proxy
@@ -232,7 +241,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	// Get all transport configurations
 	transportConfigs := yamlConfig.GetAllTransports()
 	if len(transportConfigs) == 0 {
-		logger.Error("💰 Cost Tracker: No transport configurations found")
+		logProxyError("💰 Cost Tracker: No transport configurations found")
 		return nil
 	}
 
@@ -272,35 +281,35 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			switch transportConfig.Type {
 			case "dynamodb":
 				if transportConfig.DynamoDB != nil {
-					logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
+					logProxyError("💰 Cost Tracker: Failed to create DynamoDB transport",
 						"configured_type", transportConfig.Type,
 						"table_name", transportConfig.DynamoDB.TableName,
 						"region", transportConfig.DynamoDB.Region,
 						"error", err)
 				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+					logProxyError("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 				}
 			case "file":
 				if transportConfig.File != nil {
-					logger.Error("💰 Cost Tracker: Failed to create file transport",
+					logProxyError("💰 Cost Tracker: Failed to create file transport",
 						"configured_type", transportConfig.Type,
 						"path", transportConfig.File.Path,
 						"error", err)
 				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+					logProxyError("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 				}
 			case "datadog":
 				if transportConfig.Datadog != nil {
-					logger.Error("💰 Cost Tracker: Failed to create Datadog transport",
+					logProxyError("💰 Cost Tracker: Failed to create Datadog transport",
 						"configured_type", transportConfig.Type,
 						"host", transportConfig.Datadog.Host,
 						"port", transportConfig.Datadog.Port,
 						"error", err)
 				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+					logProxyError("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 				}
 			default:
-				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
+				logProxyError("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
 			}
 			failedTransports = append(failedTransports, transportConfig.Type)
 			continue
@@ -312,7 +321,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 
 	// Check if we have at least one working transport
 	if len(transports) == 0 {
-		logger.Error("💰 Cost Tracker: No transports could be created, falling back to file transport")
+		logProxyError("💰 Cost Tracker: No transports could be created, falling back to file transport")
 
 		// Fallback to file transport with env var or default
 		outputFile := os.Getenv("COST_TRACKING_FILE")
@@ -320,7 +329,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 			outputFile = "logs/cost-tracking.jsonl"
 		}
 
-		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
+		logProxyWarn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
 		transport := cost.NewFileTransport(outputFile)
 		transports = append(transports, transport)
 		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
@@ -338,7 +347,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	}
 
 	if len(failedTransports) > 0 {
-		logger.Warn("💰 Cost Tracker: Initialized with some transport failures",
+		logProxyWarn("💰 Cost Tracker: Initialized with some transport failures",
 			"successful_transports", transportTypes,
 			"failed_transports", failedTransports)
 	} else {
@@ -369,8 +378,8 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 
 		// Start the async workers
 		if err := costTracker.StartAsyncWorkers(); err != nil {
-			logger.Error("💰 Cost Tracker: Failed to start async workers", "error", err)
-			logger.Warn("💰 Cost Tracker: Falling back to synchronous mode")
+			logProxyError("💰 Cost Tracker: Failed to start async workers", "error", err)
+			logProxyWarn("💰 Cost Tracker: Falling back to synchronous mode")
 			costTracker.SetSyncMode()
 		} else {
 			logger.Info("💰 Cost Tracker: Async mode enabled", "workers", workers, "queue_size", queueSize, "flush_interval_seconds", flushInterval)
@@ -396,7 +405,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 				// Convert YAML pricing to cost tracker format
 				modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
 				if !ok {
-					logger.Warn("Could not parse pricing", "provider", providerName, "model", modelName)
+					logProxyWarn("Could not parse pricing", "provider", providerName, "model", modelName)
 					continue
 				}
 
@@ -432,7 +441,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 					totalModelsConfigured++
 				}
 			} else {
-				logger.Warn("Model has no pricing configured", "provider", providerName, "model", modelName)
+				logProxyWarn("Model has no pricing configured", "provider", providerName, "model", modelName)
 			}
 		}
 	}
@@ -585,13 +594,13 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 
 	cfg := circuitConfigFromYAML(cb, isTestModeAllowed(yamlConfig))
 	if err := cfg.Validate(); err != nil {
-		logger.Error("⚡ Circuit Breaker: invalid configuration — falling back to memory store", "error", err)
+		logProxyError("⚡ Circuit Breaker: invalid configuration — falling back to memory store", "error", err)
 		cfg.Backend = "memory"
 	}
 
 	store, err := circuit.Factory(cfg)
 	if err != nil {
-		logger.Error(
+		logProxyError(
 			"⚡ Circuit Breaker: store construction failed — falling back to memory store",
 			"backend", cfg.Backend,
 			"error", err,
@@ -603,7 +612,7 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 	if rs, ok := store.(*circuit.RedisStore); ok {
 		pingCtx, cancel := context.WithTimeout(context.Background(), redisPingTimeout)
 		if pingErr := rs.Ping(pingCtx); pingErr != nil {
-			logger.Warn(
+			logProxyWarn(
 				"⚡ Circuit Breaker: Redis PING failed at startup — proxy will continue (store fails open on Redis errors)",
 				"error", pingErr,
 			)
@@ -695,6 +704,7 @@ func circuitModelExtractor(
 	anthropicProvider *providers.AnthropicProxy,
 	geminiProvider *providers.GeminiProxy,
 	bedrockProvider *providers.BedrockProxy,
+	bedrockMantleProvider *providers.BedrockMantleProxy,
 ) circuit.ModelFromRequestFunc {
 	return func(req *http.Request) string {
 		if req == nil || req.URL == nil {
@@ -717,11 +727,17 @@ func circuitModelExtractor(
 			strings.HasPrefix(path, "/v1/models/"):
 			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
 			return model
-		case strings.HasPrefix(path, "/bedrock/"):
+		case strings.HasPrefix(path, "/bedrock/"), strings.HasPrefix(path, "/model/"):
 			if bedrockProvider == nil {
 				return ""
 			}
 			model, _ := bedrockProvider.ExtractRequestModelAndMessages(req)
+			return model
+		case strings.HasPrefix(path, "/bedrock-mantle/"):
+			if bedrockMantleProvider == nil {
+				return ""
+			}
+			model, _ := bedrockMantleProvider.ExtractRequestModelAndMessages(req)
 			return model
 		}
 		return ""
@@ -757,7 +773,7 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	// Get API key management configuration
 	apiKeyConfig := yamlConfig.Features.APIKeyManagement
 	if apiKeyConfig.TableName == "" || apiKeyConfig.Region == "" {
-		logger.Error("🔑 API Key Store: Missing required configuration (table_name or region)")
+		logProxyError("🔑 API Key Store: Missing required configuration (table_name or region)")
 		return nil
 	}
 
@@ -796,7 +812,7 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	})
 	if err != nil {
 		globalAPIKeyStoreInitError = err
-		logger.Error("🔑 API Key Store: Failed to create API key store", "error", err)
+		logProxyError("🔑 API Key Store: Failed to create API key store", "error", err)
 		return nil
 	}
 
@@ -812,7 +828,7 @@ func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
 
 	userCfg := yamlConfig.Features.AdminDashboard.Users.DynamoDB
 	if userCfg.TableName == "" || userCfg.Region == "" {
-		logger.Error("👤 Admin User Store: missing table_name or region")
+		logProxyError("👤 Admin User Store: missing table_name or region")
 		globalAdminUserStoreError = fmt.Errorf("admin users dynamodb table_name and region are required")
 		return nil
 	}
@@ -831,7 +847,7 @@ func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
 	})
 	if err != nil {
 		globalAdminUserStoreError = err
-		logger.Error("👤 Admin User Store: failed to initialize", "error", err)
+		logProxyError("👤 Admin User Store: failed to initialize", "error", err)
 		return nil
 	}
 
@@ -951,7 +967,7 @@ func initHistory(yamlConfig *config.YAMLConfig) {
 	}
 	sink, err := history.New(history.ConfigFromYAML(hc, logger))
 	if err != nil {
-		logger.Warn("History sink: disabled", "error", err)
+		logProxyWarn("History sink: disabled", "error", err)
 		return
 	}
 	if sink == nil {
@@ -982,7 +998,7 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	rollupCfg.Logger = logger
 	store, err := adminrollup.NewStore(rollupCfg)
 	if err != nil {
-		logger.Warn("Admin rollups: disabled", "error", err)
+		logProxyWarn("Admin rollups: disabled", "error", err)
 		return
 	}
 	if store == nil {
@@ -1061,7 +1077,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 				// that helps an attacker enumerate the deployment).
 				// Operators get the full detail via the structured
 				// logger below.
-				logger.Warn(
+				logProxyWarn(
 					"⚡ Circuit Breaker: GetStats error on /health",
 					"provider", name,
 					"error", err,
@@ -1235,6 +1251,32 @@ func handleVersionFlag(yamlConfig *config.YAMLConfig) {
 	os.Exit(0)
 }
 
+// buildMantleModelProjects flattens a Bedrock Mantle provider config into a
+// model-id/alias -> project-id map for OpenAI-Project header injection. Project
+// ids are expanded with os.ExpandEnv so account-specific values stay out of the
+// committed YAML (e.g. project_id: "${LLM_PROXY_..._PROJECT_ID}"). Models with
+// no configured (or env-empty) project id are skipped, leaving the account
+// default in force.
+func buildMantleModelProjects(cfg config.ProviderConfig) map[string]string {
+	projects := make(map[string]string)
+	for name, model := range cfg.Models {
+		project := os.ExpandEnv(model.ProjectID)
+		if project == "" {
+			continue
+		}
+		projects[name] = project
+		for _, alias := range model.Aliases {
+			if alias != "" {
+				projects[alias] = project
+			}
+		}
+	}
+	if len(projects) == 0 {
+		return nil
+	}
+	return projects
+}
+
 // runServer starts and runs the LLM proxy server
 // registerProviders constructs each provider proxy, registers it with the
 // global provider manager, and returns concrete handles needed by the
@@ -1245,10 +1287,11 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	anthropic *providers.AnthropicProxy,
 	gemini *providers.GeminiProxy,
 	bedrock *providers.BedrockProxy,
+	bedrockMantle *providers.BedrockMantleProxy,
 ) {
 	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
 	if disableGzip {
-		logger.Warn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
+		logProxyWarn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
 	}
 
 	openAI = providers.NewOpenAIProxy(proxyOpts)
@@ -1268,7 +1311,27 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	} else {
 		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
 	}
-	return openAI, anthropic, gemini, bedrock
+	if mantleCfg, ok := yamlConfig.Providers["bedrock-mantle"]; ok && mantleCfg.Enabled {
+		mantleOpts := proxyOpts
+		mantleOpts.MantleModelProjects = buildMantleModelProjects(mantleCfg)
+		var mantleErr error
+		bedrockMantle, mantleErr = providers.NewBedrockMantleProxy(mantleOpts)
+		if mantleErr != nil {
+			logger.Warn("☁️  Bedrock Mantle provider: UNAVAILABLE (AWS config failed; other providers still registered)", "error", mantleErr)
+			bedrockMantle = nil
+		} else {
+			globalProviderManager.RegisterProvider(bedrockMantle)
+			circuitBreakerProviders = append(circuitBreakerProviders, "bedrock-mantle")
+			if len(mantleOpts.MantleModelProjects) > 0 {
+				logger.Info("☁️  Bedrock Mantle project routing: ENABLED", "models", len(mantleOpts.MantleModelProjects))
+			}
+			mantleHealth := bedrockMantle.GetHealthStatus()
+			logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", mantleHealth["region"], "anthropic_region", mantleHealth["anthropic_region"])
+		}
+	} else {
+		logger.Info("☁️  Bedrock Mantle provider: DISABLED (set providers.bedrock-mantle.enabled: true to enable)")
+	}
+	return openAI, anthropic, gemini, bedrock, bedrockMantle
 }
 
 func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
@@ -1300,7 +1363,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
 	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
 	if provErr != nil {
-		logger.Error("Key provisioning disabled: setup failed", "error", provErr)
+		logProxyError("Key provisioning disabled: setup failed", "error", provErr)
 	} else {
 		globalKeyProvisioner = keyProvisioner
 		if keyProvisioner.Enabled() {
@@ -1312,7 +1375,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if yamlConfig.Features.RateLimiting.Enabled {
 		lim, err := ratelimit.Factory(yamlConfig)
 		if err != nil {
-			logger.Error("Failed to initialize rate limiter", "error", err)
+			logProxyError("Failed to initialize rate limiter", "error", err)
 		} else {
 			globalRateLimiter = lim
 			globalRateLimitStatsRecorder = ratelimitstats.NewRecorder()
@@ -1345,17 +1408,17 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 	}
 
-	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider := registerProviders(yamlConfig, disableGzip)
+	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider := registerProviders(yamlConfig, disableGzip)
 
 	fakeAllowed := isFakeModeAllowed(yamlConfig)
 	fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
 	if fakeAllowed {
-		logger.Warn(
+		logProxyWarn(
 			"🎭 Fake upstream: ENABLED — synthetic LLM responses, no real provider calls",
 			"chaos_failure_rate", yamlConfig.Features.FakeUpstream.ChaosFailureRate,
 		)
 	} else if yamlConfig.Features.FakeUpstream.Enabled {
-		logger.Warn(
+		logProxyWarn(
 			"🎭 Fake upstream: requested in YAML but LLM_PROXY_ALLOW_FAKE_MODE is not set; fake transport NOT installed",
 		)
 	}
@@ -1374,6 +1437,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if bedrockProvider != nil {
 		namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
 	}
+	if bedrockMantleProvider != nil {
+		namedProviders = append(namedProviders, namedProvider{"bedrock-mantle", bedrockMantleProvider})
+	}
 
 	if fakeAllowed {
 		for _, np := range namedProviders {
@@ -1391,7 +1457,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		// is missing, which keeps test fixtures and Datadog-less
 		// deployments working unchanged.
 		circuitMetrics := initializeCircuitMetrics(yamlConfig)
-		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
+		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
@@ -1485,7 +1551,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		fingerprint := redact.AnalyzeCacheFingerprint(redactCfg)
 		analyzeCache, closeCache, cacheErr := redact.NewAnalyzeCache(cacheCfg, fingerprint)
 		if cacheErr != nil {
-			logger.Error("Failed to construct PII analyze cache; continuing without cache",
+			logProxyError("Failed to construct PII analyze cache; continuing without cache",
 				"error", cacheErr)
 		} else if analyzeCache != nil {
 			redactCfg.AnalyzeCache = analyzeCache
@@ -1494,7 +1560,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		var err error
 		redactor, err = redact.New(redactCfg)
 		if err != nil {
-			logger.Error("Failed to construct PII redactor; redaction features disabled",
+			logProxyError("Failed to construct PII redactor; redaction features disabled",
 				"error", err)
 			redactor = nil
 		} else {
@@ -1512,7 +1578,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	if idGateCfg.Enabled {
 		if redactor == nil {
-			logger.Error("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
+			logProxyError("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
 		} else {
 			globalIDGateRecorder = idgatestats.NewRecorder()
 			ocrURL := idGateCfg.OCRSidecarURL
@@ -1612,9 +1678,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if testModeAllowed {
 		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, testModeAllowed)
 		r.Use(middleware.NewTestModeMiddleware(cbCfg.DegradedSignal))
-		logger.Warn("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
+		logProxyWarn("⚡ Circuit Breaker: test-mode middleware ENABLED (not for production)")
 	} else if yamlConfig.Features.CircuitBreaker.TestModeEnabled {
-		logger.Warn(
+		logProxyWarn(
 			"⚡ Circuit Breaker: test-mode requested in YAML but one or more guards not satisfied; middleware NOT installed",
 			"circuit_breaker_enabled", yamlConfig.Features.CircuitBreaker.Enabled,
 			"allow_env_set", os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1",
@@ -1645,12 +1711,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 					keyID = middleware.MaskKeyID(keyRecord.PK)
 					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
 						if err := store.MarkFirstRequest(r.Context(), keyRecord.PK, time.Now()); err != nil {
-							logger.Warn("Failed to mark first request", "error", err, "key", keyID)
+							logProxyWarn("Failed to mark first request", "error", err, "key", keyID)
 						}
 					}
 				}
 				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {
-					logger.Warn("Failed to track request cost", "error", err)
+					logProxyWarn("Failed to track request cost", "error", err)
 				}
 			}
 		}
@@ -1670,7 +1736,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
 			keyLookup = store
 		} else if !allowUnauth {
-			logger.Error("redact_api enabled but API key store unavailable — POST /redact not registered")
+			logProxyError("redact_api enabled but API key store unavailable — POST /redact not registered")
 		}
 		if keyLookup != nil || allowUnauth {
 			maxBody := redactAPICfg.MaxBodyBytes
@@ -1687,7 +1753,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				"dev_allow_unauthenticated", allowUnauth)
 		}
 	} else if redactAPICfg.Enabled {
-		logger.Error("redact_api enabled but redactor unavailable — POST /redact not registered")
+		logProxyError("redact_api enabled but redactor unavailable — POST /redact not registered")
 	}
 
 	// robots.txt: keep the admin dashboard and (capability-URL) share pages
@@ -1784,6 +1850,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if bedrockProvider != nil {
 		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
 	}
+	if bedrockMantleProvider != nil {
+		logger.Info("Bedrock Mantle API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
+	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
 
 	// Server-level timeouts to bound resource usage and avoid Slowloris-style
@@ -1803,7 +1872,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	go func() {
 		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Server failed to start", "error", err)
+			logProxyError("Server failed to start", "error", err)
 		}
 	}()
 
@@ -1834,7 +1903,7 @@ func gracefulShutdown(server *http.Server) {
 
 	logger.Info("🔄 Shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server shutdown failed", "error", err)
+		logProxyError("HTTP server shutdown failed", "error", err)
 	} else {
 		logger.Info("✅ HTTP server shut down successfully")
 	}
@@ -1869,7 +1938,7 @@ func gracefulShutdown(server *http.Server) {
 	if globalHistorySink != nil {
 		logger.Info("🔄 Flushing history sink...")
 		if err := closeGlobalHistorySink(); err != nil {
-			logger.Warn("History sink: close failed", "error", err)
+			logProxyWarn("History sink: close failed", "error", err)
 		} else {
 			logger.Info("✅ History sink flushed")
 		}
@@ -1879,18 +1948,18 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalAdminRollupStore != nil {
 		if err := globalAdminRollupStore.Close(); err != nil {
-			logger.Warn("Admin rollups: Redis close failed", "error", err)
+			logProxyWarn("Admin rollups: Redis close failed", "error", err)
 		}
 	}
 	if globalAnalyzeCacheClose != nil {
 		if err := globalAnalyzeCacheClose(); err != nil {
-			logger.Warn("PII analyze cache: Redis close failed", "error", err)
+			logProxyWarn("PII analyze cache: Redis close failed", "error", err)
 		}
 	}
 
 	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok {
 		if err := rs.Close(); err != nil {
-			logger.Warn("Circuit Breaker: Redis close failed", "error", err)
+			logProxyWarn("Circuit Breaker: Redis close failed", "error", err)
 		} else {
 			logger.Info("✅ Circuit Breaker: Redis client closed")
 		}
@@ -1901,7 +1970,7 @@ func gracefulShutdown(server *http.Server) {
 	if globalRateLimiter != nil {
 		if closer, ok := globalRateLimiter.(interface{ Close() error }); ok {
 			if err := closer.Close(); err != nil {
-				logger.Warn("Rate limiter: Redis close failed", "error", err)
+				logProxyWarn("Rate limiter: Redis close failed", "error", err)
 			} else {
 				logger.Info("✅ Rate limiter: Redis client closed")
 			}
@@ -1937,12 +2006,12 @@ func main() {
 		env := os.Getenv("ENVIRONMENT")
 		allowDefault := os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
 		if !allowDefault {
-			logger.Error("Failed to load environment config; refusing to start with in-binary defaults",
+			logProxyError("Failed to load environment config; refusing to start with in-binary defaults",
 				"error", err, "environment", env,
 				"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to opt in to default config")
 			os.Exit(1)
 		}
-		logger.Warn("Failed to load environment config, using defaults (dev only)", "error", err)
+		logProxyWarn("Failed to load environment config, using defaults (dev only)", "error", err)
 		yamlConfig = config.GetDefaultYAMLConfig()
 	}
 

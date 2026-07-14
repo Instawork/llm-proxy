@@ -49,6 +49,11 @@ func AdapterForProvider(name string) ContentAdapter {
 		return geminiContentAdapter{}
 	case "bedrock":
 		return bedrockContentAdapter{}
+	case "bedrock-mantle":
+		// Mantle serves both OpenAI- and Anthropic-shaped payloads under one
+		// provider name; use the union so Anthropic fields (system, tool_use)
+		// are scrubbed when the request took /anthropic/v1/messages.
+		return unionContentAdapter{}
 	default:
 		return unionContentAdapter{}
 	}

@@ -66,6 +66,8 @@ export function n8nSetupGuide(provider: Provider, baseUrl: string): N8nSetupGuid
           "The native AWS Bedrock node signs requests with IAM and has no custom endpoint field.",
           "It cannot route through this proxy's SigV4 passthrough without custom Code/HTTP nodes.",
           "For n8n, use OpenAI, Anthropic, or Gemini credentials pointed at the proxy instead.",
+          `For Bedrock Mantle GPT models, use an OpenAI credential with Base URL set to ${baseUrl}/bedrock-mantle/openai/v1 and a bedrock-provider iw: proxy key.`,
+          `For Bedrock Mantle Claude models, use an Anthropic credential/node with Base URL set to ${baseUrl}/bedrock-mantle/anthropic and the same proxy key.`,
         ],
         note: "Bedrock via llm-proxy requires client-side SigV4 URL rewriting — not supported by n8n's built-in Bedrock node.",
       };

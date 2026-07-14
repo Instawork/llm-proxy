@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Instawork/llm-proxy/internal/circuit"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // knownProviders is the allowlist writeDegradedResponse uses to decide
@@ -25,10 +26,11 @@ import (
 // /bedrock/... or /model/... path, we want the synthetic 503 body to
 // carry "bedrock" instead of being silently coerced to "unknown".
 var knownProviders = map[string]struct{}{
-	"openai":    {},
-	"anthropic": {},
-	"gemini":    {},
-	"bedrock":   {},
+	"openai":         {},
+	"anthropic":      {},
+	"gemini":         {},
+	"bedrock":        {},
+	"bedrock-mantle": {},
 }
 
 // safeProviderName returns provider verbatim when it appears in
@@ -122,6 +124,7 @@ func providerFromRequest(r *http.Request) string {
 func writeDegradedResponse(w http.ResponseWriter, provider, signal string) {
 	msg := fmt.Sprintf("%s Provider %s is currently degraded or unavailable. Please try again later.",
 		signal, safeProviderName(provider))
+	msg = proxylog.ProxyMsg(msg)
 
 	body := map[string]interface{}{
 		"error": map[string]interface{}{
@@ -134,6 +137,7 @@ func writeDegradedResponse(w http.ResponseWriter, provider, signal string) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Llm-Proxy-Error-Class", string(circuit.FailureClassDegraded))
+	w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceProxy)
 	w.WriteHeader(http.StatusServiceUnavailable)
 	w.Write(b) //nolint:errcheck
 }

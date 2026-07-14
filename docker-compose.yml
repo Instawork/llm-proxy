@@ -12,6 +12,8 @@ services:
       - /app/bin # Exclude bin directory to avoid conflicts
       - /app/tmp # air build output (linux binary) — keep out of host mount
       - ./logs:/app/logs # Ensure logs directory is writable
+      # Bedrock Mantle SigV4 + optional SSO (run `aws sso login` on the host first).
+      - ~/.aws:/root/.aws:ro
     working_dir: /app
     # air watches Go sources + YAML and rebuilds/restarts on change.
     # See .air.toml. Falls back to `go run` only if air is unavailable.
@@ -39,7 +41,10 @@ services:
       # Local DynamoDB for API key management in docker-compose dev.
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-local}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-local}
+      - AWS_REGION=${AWS_REGION:-us-west-2}
       - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-http://dynamodb:8000}
+      # Bedrock Mantle SigV4 uses ~/.aws profile creds, not the DynamoDB Local keys above.
+      - BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
       # Override the YAML default analyzer_url for the docker-compose
       # network. The sidecar service hostname `presidio` resolves only
       # over this network; production ECS task definitions point at
@@ -224,7 +229,8 @@ services:
     environment:
       - VITE_API_PROXY_TARGET=http://llm-proxy:9002
     depends_on:
-      - llm-proxy
+      llm-proxy:
+        condition: service_healthy
     command: [ "sh", "-c", "npm install && npm run dev -- --host 0.0.0.0" ]
     networks:
       - llm-proxy-network

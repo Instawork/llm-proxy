@@ -28,8 +28,12 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 	anthropicProvider := providers.NewAnthropicProxy()
 	geminiProvider := providers.NewGeminiProxy()
 	bedrockProvider := providers.NewBedrockProxy()
+	bedrockMantleProvider, err := providers.NewBedrockMantleProxy()
+	if err != nil {
+		t.Fatalf("NewBedrockMantleProxy: %v", err)
+	}
 
-	extract := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider)
+	extract := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider)
 
 	cases := []struct {
 		name string
@@ -80,6 +84,12 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 			want: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		},
 		{
+			name: "bedrock mantle responses",
+			path: "/bedrock-mantle/openai/v1/responses",
+			body: `{"model":"claude-sonnet-4-5","input":"hello"}`,
+			want: "claude-sonnet-4-5",
+		},
+		{
 			name: "non-matching path returns empty",
 			path: "/healthz",
 			body: ``,
@@ -111,11 +121,16 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 // reaches the circuit transport with a nil URL must produce "" and
 // not crash, since model attribution is best-effort.
 func TestCircuitModelExtractor_NilSafe(t *testing.T) {
+	bedrockMantleProvider, err := providers.NewBedrockMantleProxy()
+	if err != nil {
+		t.Fatalf("NewBedrockMantleProxy: %v", err)
+	}
 	extract := circuitModelExtractor(
 		providers.NewOpenAIProxy(),
 		providers.NewAnthropicProxy(),
 		providers.NewGeminiProxy(),
 		providers.NewBedrockProxy(),
+		bedrockMantleProvider,
 	)
 	if got := extract(nil); got != "" {
 		t.Fatalf("nil request: want \"\", got %q", got)
@@ -130,6 +145,7 @@ func TestCircuitModelExtractor_NilBedrockSafe(t *testing.T) {
 		providers.NewOpenAIProxy(),
 		providers.NewAnthropicProxy(),
 		providers.NewGeminiProxy(),
+		nil,
 		nil,
 	)
 	req := httptest.NewRequestWithContext(

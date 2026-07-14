@@ -5,6 +5,16 @@ import type { APIKey, PiiRedactSetting, Provider } from "../types";
 export const KEY_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 export const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
 
+export const BEDROCK_AWS_AUTH_PROVIDERS: Provider[] = ["bedrock"];
+
+export function providerNeedsUpstreamKey(provider: Provider): boolean {
+  return !BEDROCK_AWS_AUTH_PROVIDERS.includes(provider);
+}
+
+export function providerLabel(provider: Provider): string {
+  return provider;
+}
+
 export type PiiFormValue = "inherit" | "on" | "off";
 
 export type KeyFormState = {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // errRetryBodyTooLarge is an internal sentinel returned by cacheBody when
@@ -407,7 +408,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.testModeFromRequest(req) == TestModeForceDegraded {
 		t.log.Info("circuit: test-mode force_degraded",
 			t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen).attrs()...)
-		return t.degradedResponse(req), nil
+		return t.degradedResponse(req, false), nil
 	}
 
 	// ── Bypass header / query param ───────────────────────────────────────
@@ -434,13 +435,13 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	switch state {
 	case StateOpen:
 		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
-		t.log.Warn("circuit: fast-fail (circuit open)",
+		t.log.Warn(proxylog.ProxyMsg("circuit: fast-fail (circuit open)"),
 			append(fc.attrs(), "mode", ModeEnforce)...)
 		t.emit("fast_fail", fc)
 		if t.activity != nil {
 			t.activity.RecordFastFail(t.provider, key)
 		}
-		return t.degradedResponse(req), nil
+		return t.degradedResponse(req, false), nil
 
 	case StateHalfOpen:
 		return t.runProbe(req, key)
@@ -477,7 +478,7 @@ func (t *Transport) effectiveStateForRequest(req *http.Request) (State, string) 
 		var err error
 		state, err = t.store.GetState(ctx, key)
 		if err != nil {
-			t.log.Warn("circuit: GetState error, treating as closed", "key", key, "error", err)
+			t.log.Warn(proxylog.ProxyMsg("circuit: GetState error, treating as closed"), "key", key, "error", err)
 			state = StateClosed
 		}
 	} else {
@@ -522,7 +523,7 @@ func (t *Transport) effectiveStateForRequest(req *http.Request) (State, string) 
 			)
 			if open {
 				t.log.Warn(
-					"circuit: provider rollup open, treating per-key state as Open",
+					proxylog.ProxyMsg("circuit: provider rollup open, treating per-key state as Open"),
 					"provider", t.provider,
 					"cb_key", key,
 					"rollup_threshold", t.cfg.PerProviderRollupThreshold,
@@ -698,7 +699,7 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		// pass-through, GetBody is nil, model extraction will return
 		// "" — that's acceptable for log mode.
 		t.log.Warn(
-			"circuit: log-mode request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+			proxylog.ProxyMsg("circuit: log-mode request body exceeds MaxRetryableBodyBytes, model attribution unavailable"),
 			"provider", t.provider,
 			"path", req.URL.Path,
 			"content_length", req.ContentLength,
@@ -754,7 +755,7 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		// so this cannot cascade.
 		newState, openedNow, recErr := t.store.RecordTerminalFailure(ctx, key)
 		if recErr != nil {
-			t.log.Error("circuit: log-mode RecordTerminalFailure error",
+			t.log.Error(proxylog.ProxyMsg("circuit: log-mode RecordTerminalFailure error"),
 				"key", key, "error", recErr)
 		}
 		t.maybeRecordRollup(ctx, key, openedNow)
@@ -798,7 +799,7 @@ func (t *Transport) maybeRecordRollup(ctx context.Context, key string, openedNow
 	}
 	if err := rec.RecordKeyOpenedForRollup(ctx, t.provider, key,
 		t.cfg.PerProviderRollupWindowSeconds); err != nil {
-		t.log.Warn("circuit: RecordKeyOpenedForRollup error (rollup may lag)",
+		t.log.Warn(proxylog.ProxyMsg("circuit: RecordKeyOpenedForRollup error (rollup may lag)"),
 			"provider", t.provider, "key", key, "error", err)
 	}
 }
@@ -819,7 +820,7 @@ func (t *Transport) reArmRollup(ctx context.Context, key string) {
 	}
 	if err := rec.RecordKeyOpenedForRollup(ctx, t.provider, key,
 		t.cfg.PerProviderRollupWindowSeconds); err != nil {
-		t.log.Warn("circuit: RecordKeyOpenedForRollup (re-arm) error",
+		t.log.Warn(proxylog.ProxyMsg("circuit: RecordKeyOpenedForRollup (re-arm) error"),
 			"provider", t.provider, "key", key, "error", err)
 	}
 }
@@ -848,7 +849,7 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 			return nil, fmt.Errorf("circuit: cacheBody (bypass): %w", err)
 		}
 		t.log.Warn(
-			"circuit: bypass request body exceeds MaxRetryableBodyBytes, model attribution unavailable",
+			proxylog.ProxyMsg("circuit: bypass request body exceeds MaxRetryableBodyBytes, model attribution unavailable"),
 			"provider", t.provider,
 			"path", req.URL.Path,
 			"content_length", req.ContentLength,
@@ -898,7 +899,7 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 		// modes are intentionally orthogonal.
 		_, openedNow, recErr := t.store.RecordTerminalFailure(ctx, key)
 		if recErr != nil {
-			t.log.Error("circuit: bypass RecordTerminalFailure error",
+			t.log.Error(proxylog.ProxyMsg("circuit: bypass RecordTerminalFailure error"),
 				"key", key, "error", recErr)
 		}
 		if openedNow {
@@ -940,7 +941,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	if err := t.cacheBody(req); err != nil {
 		if errors.Is(err, errRetryBodyTooLarge) {
 			t.log.Warn(
-				"circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request",
+				proxylog.ProxyMsg("circuit: request body exceeds MaxRetryableBodyBytes, retries disabled for this request"),
 				"provider", t.provider,
 				"path", req.URL.Path,
 				"content_length", req.ContentLength,
@@ -968,13 +969,13 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	switch state {
 	case StateOpen:
 		fc := t.newFailureContext(req, nil, nil).withKind(KindCircuitOpen)
-		t.log.Warn("circuit: fast-fail per-model breaker open",
+		t.log.Warn(proxylog.ProxyMsg("circuit: fast-fail per-model breaker open"),
 			append(fc.attrs(), "mode", ModeEnforce, "stage", "post_cache_body")...)
 		t.emit("fast_fail", fc)
 		if t.activity != nil {
 			t.activity.RecordFastFail(t.provider, key)
 		}
-		return t.degradedResponse(req), nil
+		return t.degradedResponse(req, false), nil
 	case StateHalfOpen:
 		return t.runProbe(req, key)
 	}
@@ -1082,7 +1083,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 			// otherwise it closes.  (No retry here: retrying a billing cap is
 			// pointless.)
 			if fErr := t.store.ForceOpen(ctx, t.provider, t.cfg.CooldownSeconds); fErr != nil {
-				t.log.Warn("circuit: ForceOpen (insufficient_quota) error",
+				t.log.Warn(proxylog.ProxyMsg("circuit: ForceOpen (insufficient_quota) error"),
 					"provider", t.provider, "error", fErr)
 			} else {
 				if t.activity != nil {
@@ -1090,7 +1091,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				}
 				t.emitOpened(evt, "insufficient_quota")
 			}
-			t.log.Warn("circuit: insufficient_quota — forcing provider open, passing upstream response through",
+			t.log.Warn(proxylog.UpstreamMsg("circuit: insufficient_quota — forcing provider open, passing upstream response through"),
 				append(evt.attrs(),
 					"cooldown_seconds", t.cfg.CooldownSeconds)...)
 			t.emit("insufficient_quota_force_open", evt)
@@ -1200,7 +1201,7 @@ func (t *Transport) handleRateLimitFailure(
 ) (*http.Response, error, bool) {
 	if st.rateLimitAttempts >= t.cfg.MaxRateLimitRetries {
 		evt := t.enrichedFailureContext(req, st.lastResp, st.lastErr, st.lastUpstreamError)
-		t.log.Warn("circuit: rate-limit retries exhausted",
+		t.log.Warn(proxylog.UpstreamMsg("circuit: rate-limit retries exhausted"),
 			append(
 				evt.attrs(),
 				"attempts", st.rateLimitAttempts,
@@ -1212,7 +1213,7 @@ func (t *Transport) handleRateLimitFailure(
 		if fc == FailureClassGlobalRateLimit && !st.firstRateLimitAt.IsZero() {
 			elapsed := time.Since(st.firstRateLimitAt).Seconds()
 			if int(elapsed) >= t.cfg.GlobalRateLimitEscalationWindow {
-				t.log.Warn("circuit: global rate-limit escalated to provider_degraded",
+				t.log.Warn(proxylog.UpstreamMsg("circuit: global rate-limit escalated to provider_degraded"),
 					append(evt.attrs(), "elapsed_seconds", elapsed)...)
 				resp, err := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
 				return resp, err, true
@@ -1277,7 +1278,7 @@ func (t *Transport) handleDegradedFailure(
 	}
 
 	if st.transientAttempts >= t.cfg.MaxTransientRetries {
-		t.log.Warn("circuit: transient retries exhausted, recording terminal failure",
+		t.log.Warn(proxylog.UpstreamMsg("circuit: transient retries exhausted, recording terminal failure"),
 			append(t.enrichedFailureContext(req, st.lastResp, st.lastErr, st.lastUpstreamError).attrs(),
 				"attempts", st.transientAttempts)...)
 		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
@@ -1381,7 +1382,7 @@ func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, err
 		if t.activity != nil {
 			t.activity.RecordFastFail(t.provider, key)
 		}
-		return t.degradedResponse(req), nil
+		return t.degradedResponse(req, false), nil
 	}
 	if stopLease != nil {
 		defer stopLease()
@@ -1512,7 +1513,7 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 		upstreamDetail = peekUpstreamErrorDetail(t.provider, resp)
 	}
 	evt := t.enrichedFailureContext(req, resp, err, upstreamDetail)
-	t.log.Warn("circuit: probe failed, re-opening circuit",
+	t.log.Warn(proxylog.UpstreamMsg("circuit: probe failed, re-opening circuit"),
 		append(evt.attrs(), "new_state", StateOpen.String())...)
 	t.emit("probe_failed", evt)
 	t.emitOpened(evt, "probe_failed")
@@ -1526,7 +1527,7 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 	drainResponseBody(resp)
 	_ = t.store.RecordProbeFailed(ctx, key)
 	t.reArmRollup(ctx, key)
-	return t.degradedResponse(req), nil
+	return t.degradedResponse(req, true), nil
 }
 
 // handleTerminalFailure records the failure, potentially opens the circuit,
@@ -1542,7 +1543,7 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 	evt := t.enrichedFailureContext(req, lastResp, lastErr, upstreamError)
 	newState, openedNow, err := t.store.RecordTerminalFailure(ctx, key)
 	if err != nil {
-		t.log.Error("circuit: RecordTerminalFailure error", "key", key, "error", err)
+		t.log.Error(proxylog.ProxyMsg("circuit: RecordTerminalFailure error"), "key", key, "error", err)
 	}
 	if openedNow {
 		if t.activity != nil {
@@ -1559,12 +1560,12 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 	)
 
 	if newState == StateOpen {
-		t.log.Warn("circuit: threshold crossed — circuit opened", attrs...)
+		t.log.Warn(proxylog.ProxyMsg("circuit: threshold crossed — circuit opened"), attrs...)
 	}
 
-	t.log.Warn("circuit: terminal failure, returning degraded signal", attrs...)
+	t.log.Warn(proxylog.UpstreamMsg("circuit: terminal failure, returning degraded signal"), attrs...)
 	t.emit("terminal_failure", evt)
-	return t.degradedResponse(req), nil
+	return t.degradedResponse(req, true), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1574,8 +1575,14 @@ func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request
 // degradedResponse returns a synthetic HTTP 503 response whose JSON body
 // contains Config.DegradedSignal so downstream clients can detect
 // proxy-originated provider degradation (see DefaultDegradedSignal).
-func (t *Transport) degradedResponse(req *http.Request) *http.Response {
-	body := buildDegradedBody(t.provider, t.cfg.DegradedSignal)
+// upstream controls whether the body is tagged [UPSTREAM] (observed provider
+// failures) or [PROXY] (proxy fast-fail / circuit-open decisions).
+func (t *Transport) degradedResponse(req *http.Request, upstream bool) *http.Response {
+	body := buildDegradedBody(t.provider, t.cfg.DegradedSignal, upstream)
+	source := proxylog.ErrorSourceProxy
+	if upstream {
+		source = proxylog.ErrorSourceUpstream
+	}
 	return &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
 		Status:     "503 Service Unavailable",
@@ -1583,8 +1590,9 @@ func (t *Transport) degradedResponse(req *http.Request) *http.Response {
 		ProtoMajor: 1,
 		ProtoMinor: 1,
 		Header: http.Header{
-			"Content-Type":            []string{"application/json"},
-			"X-Llm-Proxy-Error-Class": []string{string(FailureClassDegraded)},
+			"Content-Type":             []string{"application/json"},
+			"X-Llm-Proxy-Error-Class":  []string{string(FailureClassDegraded)},
+			proxylog.HeaderErrorSource: []string{source},
 		},
 		Body:          io.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
@@ -1595,7 +1603,13 @@ func (t *Transport) degradedResponse(req *http.Request) *http.Response {
 // rateLimitResponse returns a synthetic 429 without the DegradedSignal — the
 // request is throttled but the provider is not considered degraded.
 func (t *Transport) rateLimitResponse(fc FailureClass) *http.Response {
-	body := []byte(`{"error":{"message":"Rate limit exceeded; please retry later.","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+	body, _ := json.Marshal(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": proxylog.UpstreamMsg("Rate limit exceeded; please retry later."),
+			"type":    "rate_limit_error",
+			"code":    "rate_limit_exceeded",
+		},
+	})
 	return &http.Response{
 		StatusCode: http.StatusTooManyRequests,
 		Status:     "429 Too Many Requests",
@@ -1603,8 +1617,9 @@ func (t *Transport) rateLimitResponse(fc FailureClass) *http.Response {
 		ProtoMajor: 1,
 		ProtoMinor: 1,
 		Header: http.Header{
-			"Content-Type":            []string{"application/json"},
-			"X-Llm-Proxy-Error-Class": []string{string(fc)},
+			"Content-Type":             []string{"application/json"},
+			"X-Llm-Proxy-Error-Class":  []string{string(fc)},
+			proxylog.HeaderErrorSource: []string{proxylog.ErrorSourceUpstream},
 		},
 		Body:          io.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
@@ -1614,12 +1629,17 @@ func (t *Transport) rateLimitResponse(fc FailureClass) *http.Response {
 // buildDegradedBody returns a JSON error body containing the configured
 // degraded signal.  An empty signal falls back to DefaultDegradedSignal so
 // the body is never unmarked.
-func buildDegradedBody(provider, signal string) []byte {
+func buildDegradedBody(provider, signal string, upstream bool) []byte {
 	if signal == "" {
 		signal = DefaultDegradedSignal
 	}
 	msg := fmt.Sprintf("%s Provider %s is currently degraded or unavailable. Please try again later.",
 		signal, provider)
+	if upstream {
+		msg = proxylog.UpstreamMsg(msg)
+	} else {
+		msg = proxylog.ProxyMsg(msg)
+	}
 	body := map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": msg,

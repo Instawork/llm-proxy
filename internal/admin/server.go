@@ -7,6 +7,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/gorilla/mux"
 )
 
@@ -27,7 +28,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	}
 	auth, err := newAuthenticator(logger, adminCfg, deps.UserStore)
 	if err != nil {
-		logger.Error("admin dashboard disabled: auth setup failed", "error", err)
+		logger.Error(proxylog.ProxyMsg("admin dashboard disabled: auth setup failed"), "error", err)
 		return
 	}
 

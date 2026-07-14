@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
@@ -77,29 +78,28 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("Anthropic proxy error: %v", err)
+		proxylog.Upstream("anthropic reverse proxy transport error: %v", err)
 
 		// For streaming requests, we need to handle errors differently
 		if anthropicProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
-			log.Printf("Error occurred during streaming request")
+			proxylog.Upstream("anthropic streaming transport error: %v", err)
 
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceUpstream)
 				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprintf(w, "data: {\"error\": \"Proxy error: %v\"}\n\n", err)
+				fmt.Fprint(w, proxylog.UpstreamSSEDataLine("anthropic transport: %v", err))
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 			} else {
 				// Headers already sent, just log the error
-				log.Printf("Cannot send error response, headers already sent")
+				proxylog.Proxy("anthropic cannot send error response, headers already sent")
 			}
 		} else {
-			// Regular error handling for non-streaming requests
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "Anthropic proxy error: %v", err)
+			proxylog.UpstreamHTTPError(w, fmt.Sprintf("anthropic transport: %v", err), http.StatusBadGateway)
 		}
 	}
 
@@ -141,20 +141,20 @@ func (a *AnthropicProxy) checkStreamingInBody(req *http.Request) bool {
 		// Body was already cached, use GetBody to get a fresh reader
 		bodyReader, err := req.GetBody()
 		if err != nil {
-			log.Printf("Error getting cached request body for streaming check: %v", err)
+			proxylog.Proxy("anthropic streaming check: error getting cached request body: %v", err)
 			return false
 		}
 		defer bodyReader.Close()
 		bodyBytes, err = io.ReadAll(bodyReader)
 		if err != nil {
-			log.Printf("Error reading cached request body for streaming check: %v", err)
+			proxylog.Proxy("anthropic streaming check: error reading cached request body: %v", err)
 			return false
 		}
 	} else {
 		// Read the body for the first time
 		bodyBytes, err = io.ReadAll(req.Body)
 		if err != nil {
-			log.Printf("Error reading request body for streaming check: %v", err)
+			proxylog.Proxy("anthropic streaming check: error reading request body: %v", err)
 			return false
 		}
 
@@ -168,7 +168,7 @@ func (a *AnthropicProxy) checkStreamingInBody(req *http.Request) bool {
 	// Parse the JSON to check for stream field
 	var requestData map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
-		log.Printf("Error parsing request body JSON for streaming check: %v", err)
+		proxylog.Proxy("anthropic streaming check: error parsing request body JSON: %v", err)
 		return false
 	}
 
@@ -492,7 +492,7 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	// Read request body
 	bodyBytes, err := a.readRequestBodyForUserID(req)
 	if err != nil {
-		log.Printf("Error reading Anthropic request body for user ID extraction: %v", err)
+		proxylog.Proxy("anthropic user ID extraction: error reading request body: %v", err)
 		return ""
 	}
 
@@ -503,7 +503,7 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	// Parse JSON to extract metadata.user_id field
 	var data map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		log.Printf("Error parsing Anthropic request JSON for user ID extraction: %v", err)
+		proxylog.Proxy("anthropic user ID extraction: error parsing request JSON: %v", err)
 		return ""
 	}
 

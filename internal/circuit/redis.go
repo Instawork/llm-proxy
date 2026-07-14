@@ -10,6 +10,8 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 const (
@@ -202,7 +204,7 @@ func (s *RedisStore) GetState(ctx context.Context, key string) (State, error) {
 		// On Redis errors, fail open (treat as closed) to avoid taking down the
 		// service because of a Redis blip.
 		s.log.Warn(
-			"circuit.RedisStore: GetState failed open",
+			proxylog.ProxyMsg("circuit.RedisStore: GetState failed open"),
 			"key", key,
 			"error", err,
 			"ctx_err", ctx.Err(),
@@ -307,7 +309,7 @@ func (s *RedisStore) RecordTerminalFailure(ctx context.Context, key string) (Sta
 	if err != nil {
 		// On Redis error fail safe: return closed so we don't block traffic.
 		s.log.Warn(
-			"circuit.RedisStore: luaRecordFailure failed open",
+			proxylog.ProxyMsg("circuit.RedisStore: luaRecordFailure failed open"),
 			"key", key,
 			"script", "luaRecordFailure",
 			"redis_client", fmt.Sprintf("%p", s.rdb),
@@ -318,7 +320,7 @@ func (s *RedisStore) RecordTerminalFailure(ctx context.Context, key string) (Sta
 	}
 	if len(res) < 2 {
 		s.log.Warn(
-			"circuit.RedisStore: luaRecordFailure unexpected reply shape",
+			proxylog.ProxyMsg("circuit.RedisStore: luaRecordFailure unexpected reply shape"),
 			"key", key,
 			"reply_len", len(res),
 		)
@@ -393,7 +395,7 @@ func (s *RedisStore) ForceOpen(ctx context.Context, key string, cooldownSeconds 
 	pipe.Expire(ctx, s.failuresKey(key), fttl)
 	if _, err := pipe.Exec(ctx); err != nil {
 		s.log.Warn(
-			"circuit.RedisStore: ForceOpen failed (provider will NOT fast-fail account-wide)",
+			proxylog.ProxyMsg("circuit.RedisStore: ForceOpen failed (provider will NOT fast-fail account-wide)"),
 			"key", key,
 			"error", err,
 		)
@@ -521,7 +523,7 @@ func (s *RedisStore) RecordKeyOpenedForRollup(ctx context.Context, provider stri
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		s.log.Warn(
-			"circuit.RedisStore: RecordKeyOpenedForRollup failed (rollup signal will lag)",
+			proxylog.ProxyMsg("circuit.RedisStore: RecordKeyOpenedForRollup failed (rollup signal will lag)"),
 			"provider", provider,
 			"key", openedKey,
 			"error", err,
@@ -550,7 +552,7 @@ func (s *RedisStore) RollupOpen(ctx context.Context, provider string, threshold,
 		fmt.Sprintf("%f", cutoff), "+inf").Result()
 	if err != nil {
 		s.log.Warn(
-			"circuit.RedisStore: RollupOpen failed open",
+			proxylog.ProxyMsg("circuit.RedisStore: RollupOpen failed open"),
 			"provider", provider,
 			"error", err,
 			"ctx_err", ctx.Err(),
@@ -569,7 +571,7 @@ func (s *RedisStore) ClearRollupKey(ctx context.Context, provider string, opened
 	}
 	if err := s.rdb.ZRem(ctx, s.rollupKey(provider), openedKey).Err(); err != nil {
 		s.log.Warn(
-			"circuit.RedisStore: ClearRollupKey failed (rollup may lag)",
+			proxylog.ProxyMsg("circuit.RedisStore: ClearRollupKey failed (rollup may lag)"),
 			"provider", provider,
 			"key", openedKey,
 			"error", err,
@@ -596,7 +598,7 @@ func (s *RedisStore) RolledUpKeys(ctx context.Context, provider string, windowSe
 	}).Result()
 	if err != nil {
 		s.log.Warn(
-			"circuit.RedisStore: RolledUpKeys failed (rollup view will lag)",
+			proxylog.ProxyMsg("circuit.RedisStore: RolledUpKeys failed (rollup view will lag)"),
 			"provider", provider,
 			"error", err,
 		)

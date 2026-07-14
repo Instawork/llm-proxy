@@ -196,8 +196,11 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				UpstreamKind:  res.UpstreamKind,
 			}
 		} else if actualKey == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
-			return
+			actualKey = apikeys.ResolveActualKey(req.Provider, actualKey)
+			if actualKey == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})
+				return
+			}
 		}
 		key, err := h.deps.APIKeyStore.CreatePersonalKey(
 			r.Context(),

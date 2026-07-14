@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
@@ -79,29 +80,28 @@ func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
 
 	// Add error handler with streaming-specific error handling
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("OpenAI proxy error: %v", err)
+		proxylog.Upstream("openai reverse proxy transport error: %v", err)
 
 		// For streaming requests, we need to handle errors differently
 		if openAIProxy.IsStreamingRequest(r) {
 			// If we're in a streaming context, we might have already started writing
 			// the response, so we need to handle this gracefully
-			log.Printf("Error occurred during streaming request")
+			proxylog.Upstream("openai streaming transport error: %v", err)
 
 			// Try to write an error in SSE format if possible
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceUpstream)
 				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprintf(w, "data: {\"error\": \"Proxy error: %v\"}\n\n", err)
+				fmt.Fprint(w, proxylog.UpstreamSSEDataLine("openai transport: %v", err))
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 			} else {
 				// Headers already sent, just log the error
-				log.Printf("Cannot send error response, headers already sent")
+				proxylog.Proxy("openai cannot send error response, headers already sent")
 			}
 		} else {
-			// Regular error handling for non-streaming requests
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "OpenAI proxy error: %v", err)
+			proxylog.UpstreamHTTPError(w, fmt.Sprintf("openai transport: %v", err), http.StatusBadGateway)
 		}
 	}
 
@@ -148,20 +148,20 @@ func (o *OpenAIProxy) checkStreamingInBody(req *http.Request) bool {
 		// Body was already cached, use GetBody to get a fresh reader
 		bodyReader, err := req.GetBody()
 		if err != nil {
-			log.Printf("Error getting cached request body for streaming check: %v", err)
+			proxylog.Proxy("openai streaming check: error getting cached request body: %v", err)
 			return false
 		}
 		defer bodyReader.Close()
 		bodyBytes, err = io.ReadAll(bodyReader)
 		if err != nil {
-			log.Printf("Error reading cached request body for streaming check: %v", err)
+			proxylog.Proxy("openai streaming check: error reading cached request body: %v", err)
 			return false
 		}
 	} else {
 		// Read the body for the first time
 		bodyBytes, err = io.ReadAll(req.Body)
 		if err != nil {
-			log.Printf("Error reading request body for streaming check: %v", err)
+			proxylog.Proxy("openai streaming check: error reading request body: %v", err)
 			return false
 		}
 
@@ -175,7 +175,7 @@ func (o *OpenAIProxy) checkStreamingInBody(req *http.Request) bool {
 	// Parse the JSON to check for stream field
 	var requestData map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
-		log.Printf("Error parsing request body JSON for streaming check: %v", err)
+		proxylog.Proxy("openai streaming check: error parsing request body JSON: %v", err)
 		return false
 	}
 
@@ -526,7 +526,7 @@ func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, reque
 	var chunkData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
 		// Log error but continue processing other chunks
-		log.Printf("Warning: failed to parse Responses API streaming chunk: %v", err)
+		proxylog.Proxy("openai failed to parse Responses API streaming chunk: %v", err)
 		return nil, model, requestID, finishReason, thoughtTokens
 	}
 
@@ -696,7 +696,7 @@ func (o *OpenAIProxy) parseCompletionsStreamingChunk(jsonData string, model, req
 	var streamResponse OpenAIStreamResponse
 	if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 		// Log error but continue processing other chunks
-		log.Printf("Warning: failed to parse streaming chunk: %v", err)
+		proxylog.Proxy("openai failed to parse streaming chunk: %v", err)
 		return nil, model, requestID, finishReason
 	}
 
@@ -809,7 +809,7 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 	// Read request body
 	bodyBytes, err := o.readRequestBodyForUserID(req)
 	if err != nil {
-		log.Printf("Error reading OpenAI request body for user ID extraction: %v", err)
+		proxylog.Proxy("openai user ID extraction: error reading request body: %v", err)
 		return ""
 	}
 
@@ -820,7 +820,7 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 	// Parse JSON to extract user field
 	var data map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		log.Printf("Error parsing OpenAI request JSON for user ID extraction: %v", err)
+		proxylog.Proxy("openai user ID extraction: error parsing request JSON: %v", err)
 		return ""
 	}
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
 // HeaderModelRetired marks proxy-origin retired-model responses. The JSON body
@@ -40,6 +41,7 @@ func WriteRetiredModelResponse(w http.ResponseWriter, provider Provider, model s
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderModelRetired, modelRetiredErrorClass)
+	w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceProxy)
 	w.WriteHeader(status)
 	_, err = w.Write(body)
 	return err

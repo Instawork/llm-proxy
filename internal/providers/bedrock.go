@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	eventstream "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/gorilla/mux"
 )
@@ -133,19 +134,17 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("Bedrock proxy error: %v", err)
+		proxylog.Upstream("bedrock reverse proxy transport error: %v", err)
 		if bedrockProxy.IsStreamingRequest(r) {
 			if w.Header().Get("Content-Type") == "" {
-				// We cannot synthesise a real eventstream frame here without
-				// dragging in the encoder, but the status code and content-
-				// type are enough for clients to detect and fall back.
 				w.Header().Set("Content-Type", bedrockEventStreamMIME)
+				w.Header().Set(proxylog.HeaderErrorSource, proxylog.ErrorSourceUpstream)
 				w.WriteHeader(http.StatusBadGateway)
+				fmt.Fprint(w, proxylog.UpstreamPlain("bedrock transport: %v", err))
 			}
 			return
 		}
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, "Bedrock proxy error: %v", err)
+		proxylog.UpstreamHTTPError(w, fmt.Sprintf("bedrock transport: %v", err), http.StatusBadGateway)
 	}
 
 	return bedrockProxy
@@ -394,6 +393,7 @@ func (b *BedrockProxy) ValidateAPIKey(req *http.Request, _ APIKeyStore) error {
 // reflect the model dimension when we ever want to read it from the router.
 func (b *BedrockProxy) RegisterExtraRoutes(router *mux.Router) {
 	router.PathPrefix("/bedrock/model/").Handler(b.Proxy()).Methods("POST", "OPTIONS")
+	router.PathPrefix("/model/").Handler(b.Proxy()).Methods("POST", "OPTIONS")
 }
 
 // ExtractRequestModelAndMessages implements Provider.

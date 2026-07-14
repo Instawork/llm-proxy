@@ -823,6 +823,8 @@ providers:
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
             "claude-sonnet-4-5-bedrock",
             "claude-sonnet-4.5-bedrock",
+            "claude-sonnet-bedrock",
+            "claude-sonnet-bedrock-thinking",
           ]
         limits:
           tokens_per_minute: 80_000
@@ -845,6 +847,8 @@ providers:
             "anthropic.claude-haiku-4-5-20251001-v1:0",
             "claude-haiku-4-5-bedrock",
             "claude-haiku-4.5-bedrock",
+            "claude-haiku-bedrock",
+            "claude-haiku-bedrock-thinking",
           ]
         limits:
           tokens_per_minute: 100_000
@@ -863,6 +867,8 @@ providers:
             "anthropic.claude-opus-4-1-20250805-v1:0",
             "claude-opus-4-1-bedrock",
             "claude-opus-4.1-bedrock",
+            "claude-opus-bedrock",
+            "claude-opus-bedrock-thinking",
           ]
         limits:
           tokens_per_minute: 40_000
@@ -874,6 +880,118 @@ providers:
         pricing:
           input: 15.00
           output: 75.00
+      "us.anthropic.claude-sonnet-5":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-sonnet-5",
+            "claude-sonnet-5-bedrock",
+            "claude-sonnet-5-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        # Standard on-demand pricing ($3/$15, tiered above 200K). The launch
+        # intro rate ($2/$10 through 2026-08-31) is intentionally omitted so
+        # cost tracking never under-bills after the promo ends.
+        pricing:
+          - threshold: 200_000
+            input: 3.00
+            output: 15.00
+          - threshold: 0
+            input: 6.00
+            output: 22.50
+      "us.anthropic.claude-sonnet-4-6":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-sonnet-4-6",
+            "claude-sonnet-4-6-bedrock",
+            "claude-sonnet-4.6-bedrock",
+            "claude-sonnet-4-6-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          - threshold: 200_000
+            input: 3.00
+            output: 15.00
+          - threshold: 0
+            input: 6.00
+            output: 22.50
+      "us.anthropic.claude-opus-4-8":
+        enabled: true
+        aliases:
+          [
+            "anthropic.claude-opus-4-8",
+            "claude-opus-4-8-bedrock",
+            "claude-opus-4.8-bedrock",
+            "claude-opus-4-8-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 6.00
+          output: 30.00
+
+  # ---------------------------------------------------------------------------
+  # AWS BEDROCK MANTLE PROVIDER (OpenAI-compatible API + task-role SigV4)
+  # ---------------------------------------------------------------------------
+  # The proxy authenticates incoming Bearer credentials as llm-proxy keys and
+  # discards them before signing each outbound request with its AWS task role.
+  # No provider bearer token is stored or forwarded.
+  bedrock-mantle:
+    enabled: false # enabled by configs/{dev,staging,production}.yml
+    models:
+      # openai.gpt-5.4/5.5 do not support zero-data-retention (their allowed_modes
+      # omit "none"). With the account pinned to none they'd be blocked, so route
+      # them through a project pinned to "default" retention (data stays inside
+      # AWS, not shared with OpenAI). project_id is env-driven per account; unset
+      # -> no OpenAI-Project header -> account default applies.
+      "openai.gpt-5.4":
+        enabled: true
+        aliases: ["gpt-5.4-bedrock"]
+        project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
+        pricing:
+          input: 2.50
+          output: 15.00
+      "openai.gpt-5.5":
+        enabled: true
+        aliases: ["gpt-5.5-bedrock"]
+        project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
+        pricing:
+          input: 5.00
+          output: 30.00
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
+        enabled: true
+        aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
+        pricing:
+          - threshold: 200_000
+            input: 3.00
+            output: 15.00
+          - threshold: 0
+            input: 6.00
+            output: 22.50
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0":
+        enabled: true
+        aliases: ["claude-haiku-4-5", "anthropic.claude-haiku-4-5"]
+        pricing:
+          input: 1.00
+          output: 5.00
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER

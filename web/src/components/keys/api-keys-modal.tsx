@@ -4,6 +4,8 @@ import {
   modalTabClass,
   type KeyFormState,
   type KeyFormTab,
+  providerLabel,
+  providerNeedsUpstreamKey,
 } from "../../lib/key-form";
 import type { APIKey, Provider } from "../../types";
 
@@ -72,6 +74,7 @@ export default function ApiKeysModal({
     : treatAsPersonal
       ? "Create personal key"
       : "Create API key";
+  const needsUpstreamKey = providerNeedsUpstreamKey(form.provider);
 
   return (
     <dialog className="modal modal-open" open>
@@ -138,13 +141,18 @@ export default function ApiKeysModal({
                 >
                   {availableProviders.map((provider) => (
                     <option key={provider} value={provider}>
-                      {provider}
+                      {providerLabel(provider)}
                     </option>
                   ))}
                 </select>
                 {piiOffRequiresBedrock && !treatAsPersonal ? (
                   <span className="label-text-alt text-base-content/60">
                     PII redaction off requires the Bedrock provider.
+                  </span>
+                ) : null}
+                {!needsUpstreamKey ? (
+                  <span className="label-text-alt text-base-content/60">
+                    No provider API key needed — upstream calls authenticate with AWS SigV4.
                   </span>
                 ) : null}
               </label>
@@ -188,7 +196,14 @@ export default function ApiKeysModal({
                 </label>
               ) : null}
 
-              {!editingKey && providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
+              {!editingKey && !needsUpstreamKey ? (
+                <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
+                  This proxy key is only for caller identity, rate limits, and cost tracking.
+                  AWS credentials on the proxy sign outbound Bedrock requests (Converse and Mantle).
+                </div>
+              ) : null}
+
+              {!editingKey && needsUpstreamKey && providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
                 <details
                   className="rounded-lg border border-base-300 px-3 py-2"
                   open={manualKeyEntry}
@@ -216,7 +231,7 @@ export default function ApiKeysModal({
                 </details>
               ) : null}
 
-              {!editingKey && !providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
+              {!editingKey && needsUpstreamKey && !providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
                 <label className="form-control w-full">
                   <span className="label-text">Provider API key</span>
                   <input

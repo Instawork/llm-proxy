@@ -22,7 +22,7 @@ var byoPrefixProviders = []struct {
 
 func isSupportedProxyProvider(provider string) bool {
 	switch normalizeProvider(provider) {
-	case "openai", "anthropic", "gemini", "bedrock":
+	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
 		return true
 	default:
 		return false

@@ -30,6 +30,7 @@ import {
   keyFormFromRecord,
   KEY_PROVIDERS,
   piiFromFormValue,
+  providerNeedsUpstreamKey,
   rateLimitsFromForm,
   VIEWER_PROVIDERS,
   type KeyFormState,
@@ -436,7 +437,7 @@ export default function KeysPage() {
             );
             return;
           }
-          if (!form.actual_key.trim()) {
+          if (providerNeedsUpstreamKey(form.provider) && !form.actual_key.trim()) {
             push("Provider API key is required", "error");
             return;
           }
@@ -455,7 +456,7 @@ export default function KeysPage() {
           if (form.provider === "anthropic" && form.anthropic_tier) {
             body.tags = { tier: form.anthropic_tier };
           }
-        } else {
+        } else if (providerNeedsUpstreamKey(form.provider)) {
           body.actual_key = form.actual_key;
         }
         await createKey.mutateAsync(body);

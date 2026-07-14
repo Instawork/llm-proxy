@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
@@ -58,7 +59,7 @@ func TestIDGateMiddleware_BlocksGovID(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", rec.Code)
 	}
-	if rec.Body.String() != idGateBlockMessage+"\n" {
+	if rec.Body.String() != proxylog.ProxyMsg(idGateBlockMessage)+"\n" {
 		t.Fatalf("body = %q", rec.Body.String())
 	}
 	if cap.reqSeen != nil {

@@ -1,14 +1,19 @@
 package cost
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
+	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
 
 	configPkg "github.com/Instawork/llm-proxy/internal/config"
 )
+
+const dogstatsdResolveTimeout = 2 * time.Second
 
 // DatadogTransportConfig holds configuration for the Datadog transport
 type DatadogTransportConfig struct {
@@ -49,12 +54,17 @@ func NewDatadogTransport(cfg DatadogTransportConfig) (*DatadogTransport, error) 
 		logger = slog.Default()
 	}
 
-	// Create DogStatsD client
-	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
+	// Create DogStatsD client. Resolve with a bounded timeout so a missing
+	// agent hostname cannot block proxy startup on slow/broken DNS.
+	addr, err := resolveDogstatsdAddr(cfg.Host, cfg.Port)
+	if err != nil {
+		return nil, err
+	}
 	client, err := statsd.New(
 		addr,
 		statsd.WithNamespace(cfg.Namespace),
 		statsd.WithTags(cfg.Tags),
+		statsd.WithoutTelemetry(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DogStatsD client: %w", err)
@@ -68,6 +78,28 @@ func NewDatadogTransport(cfg DatadogTransportConfig) (*DatadogTransport, error) 
 	}
 
 	return transport, nil
+}
+
+func resolveDogstatsdAddr(host, port string) (string, error) {
+	if host == "" {
+		host = "localhost"
+	}
+	if port == "" {
+		port = "8125"
+	}
+	if net.ParseIP(host) != nil {
+		return net.JoinHostPort(host, port), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dogstatsdResolveTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return "", fmt.Errorf("resolve DogStatsD host %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("resolve DogStatsD host %q: no addresses", host)
+	}
+	return net.JoinHostPort(ips[0].String(), port), nil
 }
 
 // FromConfig creates a DatadogTransport from configuration
