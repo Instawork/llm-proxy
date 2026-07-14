@@ -25,13 +25,11 @@ func ProviderUsesAWSAuth(provider string) bool {
 }
 
 // ResolveActualKey returns the upstream credential to store. AWS-auth providers
-// accept an empty request actual_key and receive a placeholder.
+// always receive a placeholder — outbound auth is SigV4, so never persist a
+// caller-supplied actual_key for them.
 func ResolveActualKey(provider, actualKey string) string {
-	if actualKey != "" {
-		return actualKey
-	}
 	if ProviderUsesAWSAuth(provider) {
 		return AWSAuthProviderPlaceholderKey
 	}
-	return ""
+	return actualKey
 }

@@ -27,6 +27,15 @@ func (mantleKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (st
 	return "discarded-provider-token", bedrockMantleName, nil
 }
 
+func mustNewBedrockMantleProxy(t *testing.T, opts ...ProxyOptions) *BedrockMantleProxy {
+	t.Helper()
+	proxy, err := NewBedrockMantleProxy(opts...)
+	if err != nil {
+		t.Fatalf("NewBedrockMantleProxy: %v", err)
+	}
+	return proxy
+}
+
 func TestBedrockMantle_RewritesAnthropicMessagesRequest(t *testing.T) {
 	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}`)
 	proxy := newBedrockMantleProxy(
@@ -193,6 +202,7 @@ func TestBedrockMantle_KeepsBetaHeaderOffOpenAIStrip(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	req.Header.Set("Anthropic-Beta", "test-beta")
 	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
 		t.Fatalf("ValidateAPIKey: %v", err)
 	}
@@ -204,10 +214,13 @@ func TestBedrockMantle_KeepsBetaHeaderOffOpenAIStrip(t *testing.T) {
 	if got.URL.String() != "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses" {
 		t.Fatalf("upstream URL = %q", got.URL.String())
 	}
+	if got.Header.Get("Anthropic-Beta") != "test-beta" {
+		t.Fatalf("Anthropic-Beta unexpectedly stripped: %q", got.Header.Get("Anthropic-Beta"))
+	}
 }
 
 func TestBedrockMantle_IsStreamingRequestForMessages(t *testing.T) {
-	proxy := NewBedrockMantleProxy()
+	proxy := mustNewBedrockMantleProxy(t)
 	body := []byte(`{"model":"anthropic.claude-haiku-4-5","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/anthropic/v1/messages", bytes.NewReader(body))
 	if !proxy.IsStreamingRequest(req) {
@@ -218,7 +231,7 @@ func TestBedrockMantle_IsStreamingRequestForMessages(t *testing.T) {
 func TestBedrockMantle_AcceptsAnthropicXApiKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("x-api-key", "sk-iw-mantle")
-	if err := NewBedrockMantleProxy().ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+	if err := mustNewBedrockMantleProxy(t).ValidateAPIKey(req, mantleKeyStore{}); err != nil {
 		t.Fatalf("ValidateAPIKey: %v", err)
 	}
 	if req.Header.Get("x-api-key") != "" {
@@ -229,7 +242,7 @@ func TestBedrockMantle_AcceptsAnthropicXApiKey(t *testing.T) {
 func TestBedrockMantle_AcceptsBedrockProviderKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer sk-iw-bedrock")
-	if err := NewBedrockMantleProxy().ValidateAPIKey(req, bedrockProviderKeyStore{}); err != nil {
+	if err := mustNewBedrockMantleProxy(t).ValidateAPIKey(req, bedrockProviderKeyStore{}); err != nil {
 		t.Fatalf("ValidateAPIKey: %v", err)
 	}
 }
@@ -372,7 +385,7 @@ func TestBedrockMantle_ParseResponsesMetadataIncludesCostFields(t *testing.T) {
 			"output_tokens_details":{"reasoning_tokens":2}
 		}
 	}`
-	metadata, err := NewBedrockMantleProxy().ParseResponseMetadata(strings.NewReader(body), false)
+	metadata, err := mustNewBedrockMantleProxy(t).ParseResponseMetadata(strings.NewReader(body), false)
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
@@ -391,7 +404,7 @@ func TestBedrockMantle_ParseChatCompletionsMetadata(t *testing.T) {
 		"choices":[{"finish_reason":"stop"}],
 		"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}
 	}`
-	metadata, err := NewBedrockMantleProxy().ParseResponseMetadata(strings.NewReader(body), false)
+	metadata, err := mustNewBedrockMantleProxy(t).ParseResponseMetadata(strings.NewReader(body), false)
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
@@ -407,7 +420,7 @@ data: {"type":"response.done","response":{"id":"resp_1","model":"claude-sonnet-4
 
 data: [DONE]
 `
-	metadata, err := NewBedrockMantleProxy().ParseResponseMetadata(strings.NewReader(stream), true)
+	metadata, err := mustNewBedrockMantleProxy(t).ParseResponseMetadata(strings.NewReader(stream), true)
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
@@ -419,11 +432,63 @@ data: [DONE]
 	}
 }
 
+func TestBedrockMantle_ParseAnthropicStreamingUsage(t *testing.T) {
+	stream := `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"anthropic.claude-haiku-4-5","stop_reason":null,"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	metadata, err := mustNewBedrockMantleProxy(t).ParseResponseMetadata(strings.NewReader(stream), true)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if metadata.Provider != bedrockMantleName || metadata.Model != "anthropic.claude-haiku-4-5" {
+		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.InputTokens != 25 || metadata.OutputTokens != 16 || metadata.TotalTokens != 41 {
+		t.Fatalf("unexpected token aggregation: %+v", metadata)
+	}
+	if metadata.CacheReadInputTokens != 5 || metadata.CacheCreationInputTokens != 2 {
+		t.Fatalf("missing Anthropic cache fields: %+v", metadata)
+	}
+	if metadata.FinishReason != "end_turn" {
+		t.Fatalf("FinishReason = %q, want end_turn", metadata.FinishReason)
+	}
+}
+
 func TestStripMantleUnsupportedToolStrict(t *testing.T) {
 	in := []byte(`{"model":"anthropic.claude-haiku-4-5","tools":[{"name":"a","strict":true},{"type":"function","function":{"name":"b","strict":true}},{"type":"custom","custom":{"strict":true}}]}`)
 	out := stripMantleUnsupportedToolStrict(in)
 	if bytes.Contains(out, []byte(`"strict"`)) {
 		t.Fatalf("expected strict stripped, got %s", out)
+	}
+}
+
+func TestStripMantleUnsupportedToolStrict_PreservesLargeIntegers(t *testing.T) {
+	in := []byte(`{"model":"anthropic.claude-haiku-4-5","tools":[{"name":"a","strict":true,"input_schema":{"type":"object","properties":{"n":{"const":9007199254740993}}}}]}`)
+	out := stripMantleUnsupportedToolStrict(in)
+	if bytes.Contains(out, []byte(`"strict"`)) {
+		t.Fatalf("expected strict stripped, got %s", out)
+	}
+	if !bytes.Contains(out, []byte("9007199254740993")) {
+		t.Fatalf("large integer mutated/lost: %s", out)
+	}
+}
+
+func TestBedrockMantle_ExtractNestedResponsesInput(t *testing.T) {
+	body := []byte(`{"model":"openai.gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"nested hello"}]}]}`)
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
+	model, messages := (&BedrockMantleProxy{}).ExtractRequestModelAndMessages(req)
+	if model != "openai.gpt-5.4" {
+		t.Fatalf("model = %q", model)
+	}
+	if len(messages) != 1 || messages[0] != "nested hello" {
+		t.Fatalf("messages = %#v, want [nested hello]", messages)
 	}
 }
 

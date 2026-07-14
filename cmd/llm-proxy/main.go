@@ -1314,14 +1314,20 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	if mantleCfg, ok := yamlConfig.Providers["bedrock-mantle"]; ok && mantleCfg.Enabled {
 		mantleOpts := proxyOpts
 		mantleOpts.MantleModelProjects = buildMantleModelProjects(mantleCfg)
-		bedrockMantle = providers.NewBedrockMantleProxy(mantleOpts)
-		globalProviderManager.RegisterProvider(bedrockMantle)
-		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock-mantle")
-		if len(mantleOpts.MantleModelProjects) > 0 {
-			logger.Info("☁️  Bedrock Mantle project routing: ENABLED", "models", len(mantleOpts.MantleModelProjects))
+		var mantleErr error
+		bedrockMantle, mantleErr = providers.NewBedrockMantleProxy(mantleOpts)
+		if mantleErr != nil {
+			logger.Warn("☁️  Bedrock Mantle provider: UNAVAILABLE (AWS config failed; other providers still registered)", "error", mantleErr)
+			bedrockMantle = nil
+		} else {
+			globalProviderManager.RegisterProvider(bedrockMantle)
+			circuitBreakerProviders = append(circuitBreakerProviders, "bedrock-mantle")
+			if len(mantleOpts.MantleModelProjects) > 0 {
+				logger.Info("☁️  Bedrock Mantle project routing: ENABLED", "models", len(mantleOpts.MantleModelProjects))
+			}
+			mantleHealth := bedrockMantle.GetHealthStatus()
+			logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", mantleHealth["region"], "anthropic_region", mantleHealth["anthropic_region"])
 		}
-		mantleHealth := bedrockMantle.GetHealthStatus()
-		logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", mantleHealth["region"], "anthropic_region", mantleHealth["anthropic_region"])
 	} else {
 		logger.Info("☁️  Bedrock Mantle provider: DISABLED (set providers.bedrock-mantle.enabled: true to enable)")
 	}

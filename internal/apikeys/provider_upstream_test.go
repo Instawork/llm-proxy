@@ -25,6 +25,9 @@ func TestResolveActualKey(t *testing.T) {
 	if got := ResolveActualKey("bedrock-mantle", ""); got != AWSAuthProviderPlaceholderKey {
 		t.Fatalf("ResolveActualKey(bedrock-mantle, empty) = %q", got)
 	}
+	if got := ResolveActualKey("bedrock", "sk-caller-supplied"); got != AWSAuthProviderPlaceholderKey {
+		t.Fatalf("ResolveActualKey(bedrock, caller key) = %q, want placeholder", got)
+	}
 	if got := ResolveActualKey("openai", ""); got != "" {
 		t.Fatalf("ResolveActualKey(openai, empty) = %q, want empty", got)
 	}

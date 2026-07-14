@@ -53,6 +53,18 @@ func TestContentAdapter_Anthropic_SystemBlockText(t *testing.T) {
 	}
 }
 
+func TestContentAdapter_BedrockMantle_UsesUnionForAnthropicShape(t *testing.T) {
+	body := `{"system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":"hi"}]}`
+	var tasks []jsonScrubTask
+	var root any
+	_ = json.Unmarshal([]byte(body), &root)
+	collectJSONScrubTasks(root, nil, &tasks, AdapterForProvider("bedrock-mantle"))
+	texts := taskTexts(tasks)
+	if !containsAll(texts, "You are helpful", "hi") {
+		t.Fatalf("bedrock-mantle union should scrub Anthropic fields, tasks = %v", texts)
+	}
+}
+
 func TestContentAdapter_Bedrock_ConverseAndToolResult(t *testing.T) {
 	body := `{"messages":[{"role":"user","content":[{"text":"book shift"}]}],"system":[{"text":"sys prompt"}]}`
 	var tasks []jsonScrubTask

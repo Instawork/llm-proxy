@@ -28,7 +28,10 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 	anthropicProvider := providers.NewAnthropicProxy()
 	geminiProvider := providers.NewGeminiProxy()
 	bedrockProvider := providers.NewBedrockProxy()
-	bedrockMantleProvider := providers.NewBedrockMantleProxy()
+	bedrockMantleProvider, err := providers.NewBedrockMantleProxy()
+	if err != nil {
+		t.Fatalf("NewBedrockMantleProxy: %v", err)
+	}
 
 	extract := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider)
 
@@ -118,12 +121,16 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 // reaches the circuit transport with a nil URL must produce "" and
 // not crash, since model attribution is best-effort.
 func TestCircuitModelExtractor_NilSafe(t *testing.T) {
+	bedrockMantleProvider, err := providers.NewBedrockMantleProxy()
+	if err != nil {
+		t.Fatalf("NewBedrockMantleProxy: %v", err)
+	}
 	extract := circuitModelExtractor(
 		providers.NewOpenAIProxy(),
 		providers.NewAnthropicProxy(),
 		providers.NewGeminiProxy(),
 		providers.NewBedrockProxy(),
-		providers.NewBedrockMantleProxy(),
+		bedrockMantleProvider,
 	)
 	if got := extract(nil); got != "" {
 		t.Fatalf("nil request: want \"\", got %q", got)

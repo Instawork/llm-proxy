@@ -36,6 +36,7 @@ func TestBuildMantleModelProjects_ExpandsEnvAndAliases(t *testing.T) {
 }
 
 func TestBuildMantleModelProjects_NilWhenNoneConfigured(t *testing.T) {
+	t.Setenv("LLM_PROXY_UNSET_PROJECT_ID", "")
 	cfg := config.ProviderConfig{
 		Models: map[string]config.ModelConfig{
 			"openai.gpt-5.5": {ProjectID: "${LLM_PROXY_UNSET_PROJECT_ID}"}, // expands to ""

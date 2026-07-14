@@ -59,7 +59,9 @@ type BedrockMantleProxy struct {
 // BEDROCK_AWS_PROFILE or AWS_PROFILE is set, that shared config profile is
 // used instead — docker-compose sets BEDROCK_AWS_PROFILE so DynamoDB Local
 // static keys (AWS_ACCESS_KEY_ID=local) do not override real SigV4 creds.
-func NewBedrockMantleProxy(opts ...ProxyOptions) *BedrockMantleProxy {
+// AWS config load failures are returned so callers can disable Mantle without
+// taking down other providers.
+func NewBedrockMantleProxy(opts ...ProxyOptions) (*BedrockMantleProxy, error) {
 	var opt ProxyOptions
 	if len(opts) > 0 {
 		opt = opts[0]
@@ -77,9 +79,9 @@ func NewBedrockMantleProxy(opts ...ProxyOptions) *BedrockMantleProxy {
 	}
 	cfg, err := loadBedrockMantleAWSConfig(context.Background(), region)
 	if err != nil {
-		panic(fmt.Sprintf("load AWS config for Bedrock Mantle: %v", err))
+		return nil, fmt.Errorf("load AWS config for Bedrock Mantle: %w", err)
 	}
-	return newBedrockMantleProxy(region, cfg.Credentials, opt)
+	return newBedrockMantleProxy(region, cfg.Credentials, opt), nil
 }
 
 func loadBedrockMantleAWSConfig(ctx context.Context, region string) (aws.Config, error) {
@@ -268,27 +270,16 @@ func stripMantleUnsupportedToolStrict(payload []byte) []byte {
 	if !ok {
 		return payload
 	}
-	var tools []map[string]any
+	var tools []json.RawMessage
 	if json.Unmarshal(toolsRaw, &tools) != nil {
 		return payload
 	}
 	changed := false
 	for i := range tools {
-		if _, ok := tools[i]["strict"]; ok {
-			delete(tools[i], "strict")
+		stripped, didChange := stripStrictFromToolObject(tools[i])
+		if didChange {
+			tools[i] = stripped
 			changed = true
-		}
-		if fn, ok := tools[i]["function"].(map[string]any); ok {
-			if _, ok := fn["strict"]; ok {
-				delete(fn, "strict")
-				changed = true
-			}
-		}
-		if custom, ok := tools[i]["custom"].(map[string]any); ok {
-			if _, ok := custom["strict"]; ok {
-				delete(custom, "strict")
-				changed = true
-			}
 		}
 	}
 	if !changed {
@@ -304,6 +295,46 @@ func stripMantleUnsupportedToolStrict(payload []byte) []byte {
 		return payload
 	}
 	return out
+}
+
+func stripStrictFromToolObject(toolRaw json.RawMessage) (json.RawMessage, bool) {
+	var tool map[string]json.RawMessage
+	if json.Unmarshal(toolRaw, &tool) != nil {
+		return toolRaw, false
+	}
+	changed := false
+	if _, ok := tool["strict"]; ok {
+		delete(tool, "strict")
+		changed = true
+	}
+	for _, nestKey := range []string{"function", "custom"} {
+		nestedRaw, ok := tool[nestKey]
+		if !ok {
+			continue
+		}
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(nestedRaw, &nested) != nil {
+			continue
+		}
+		if _, ok := nested["strict"]; !ok {
+			continue
+		}
+		delete(nested, "strict")
+		newNested, err := json.Marshal(nested)
+		if err != nil {
+			continue
+		}
+		tool[nestKey] = newNested
+		changed = true
+	}
+	if !changed {
+		return toolRaw, false
+	}
+	out, err := json.Marshal(tool)
+	if err != nil {
+		return toolRaw, false
+	}
+	return out, true
 }
 
 func restoreMantleRequestBody(req *http.Request, payload []byte) {
@@ -435,7 +466,7 @@ func (b *BedrockMantleProxy) UserIDFromRequest(req *http.Request) string {
 func (b *BedrockMantleProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
 	key := mantleProxyKeyFromRequest(req)
 	if key == "" {
-		return fmt.Errorf("Bearer proxy API key is required")
+		return fmt.Errorf("bearer proxy API key is required")
 	}
 	_, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), key)
 	if err != nil {
@@ -482,28 +513,55 @@ func (b *BedrockMantleProxy) ExtractRequestModelAndMessages(req *http.Request) (
 	}
 	var messages []string
 	appendText := func(raw json.RawMessage) {
-		var text string
-		if json.Unmarshal(raw, &text) == nil && text != "" {
-			messages = append(messages, text)
-			return
-		}
-		var parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(raw, &parts) == nil {
-			for _, part := range parts {
-				if (part.Type == "text" || part.Type == "input_text") && part.Text != "" {
-					messages = append(messages, part.Text)
-				}
-			}
-		}
+		appendMantleContentText(raw, &messages)
 	}
 	appendText(data.Input)
 	for _, message := range data.Messages {
 		appendText(message.Content)
 	}
 	return data.Model, messages
+}
+
+// appendMantleContentText walks OpenAI Responses / Chat / Anthropic content
+// shapes: a bare string, a flat text-part array, or nested message objects
+// whose text lives under content / input[].content.
+func appendMantleContentText(raw json.RawMessage, messages *[]string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if text != "" {
+			*messages = append(*messages, text)
+		}
+		return
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) == nil {
+		for _, part := range parts {
+			appendMantleContentText(part, messages)
+		}
+		return
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return
+	}
+	if t, ok := obj["type"]; ok {
+		var typeName string
+		if json.Unmarshal(t, &typeName) == nil && (typeName == "text" || typeName == "input_text") {
+			if textRaw, ok := obj["text"]; ok {
+				var partText string
+				if json.Unmarshal(textRaw, &partText) == nil && partText != "" {
+					*messages = append(*messages, partText)
+				}
+			}
+			return
+		}
+	}
+	if content, ok := obj["content"]; ok {
+		appendMantleContentText(content, messages)
+	}
 }
 
 func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error) {
@@ -532,6 +590,49 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 }
 
 func parseMantleStream(responseBody io.Reader) (*LLMResponseMetadata, error) {
+	data, err := io.ReadAll(responseBody)
+	if err != nil {
+		return nil, err
+	}
+	if mantleStreamLooksAnthropic(data) {
+		metadata, err := (&AnthropicProxy{}).ParseResponseMetadata(bytes.NewReader(data), true)
+		if metadata != nil {
+			metadata.Provider = bedrockMantleName
+		}
+		return metadata, err
+	}
+	return parseMantleOpenAIStream(bytes.NewReader(data))
+}
+
+func mantleStreamLooksAnthropic(data []byte) bool {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var tip struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(payload), &tip) != nil {
+			continue
+		}
+		switch tip.Type {
+		case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop":
+			return true
+		case "response.created", "response.completed", "response.done", "response.failed", "response.in_progress":
+			return false
+		}
+	}
+	return false
+}
+
+func parseMantleOpenAIStream(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	scanner := bufio.NewScanner(responseBody)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	var partial *LLMResponseMetadata
