@@ -15,8 +15,8 @@ features:
           table_name: "llm-proxy-cost-tracking"
           region: "us-west-2"
   api_key_management:
-    enabled: false
-    # table_name: "llm-proxy-api-keys-staging"
+    enabled: true
+    table_name: "llm-proxy-api-keys-staging"
     region: "us-west-2"
     # New keys are minted as "sk-<base>-<random>"; legacy "<base>-" / "<base>_" / "<base>:" keys still validate.
     key_prefix: "iw"
