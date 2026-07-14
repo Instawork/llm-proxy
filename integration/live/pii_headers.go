@@ -5,7 +5,8 @@ import (
 	"strconv"
 )
 
-// PIIMaskLeaked parses X-LLM-PII-Leaked from response headers or trailers.
+// PIIMaskLeaked parses X-LLM-PII-Leaked from response headers (preferred) or
+// legacy trailers.
 // ok is false when the metric was not present.
 func PIIMaskLeaked(headers, trailer http.Header) (leaked int, ok bool) {
 	if headers != nil {

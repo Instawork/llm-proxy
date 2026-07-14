@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -106,28 +107,12 @@ func writePIIResponseHeaders(w http.ResponseWriter, ctx context.Context) {
 	writePIIResponseHeadersRestoredLeaked(w, ctx)
 }
 
-func announcePIITrailers(w http.ResponseWriter) {
-	w.Header().Add("Trailer", "X-LLM-PII-Restored")
-	w.Header().Add("Trailer", "X-LLM-PII-Leaked")
-}
-
-func writePIIResponseTrailers(w http.ResponseWriter, ctx context.Context) error {
-	h := piiSummaryHolderFromContext(ctx)
-	if h == nil || h.Outcome != PIIOutcomeOK {
-		return nil
-	}
-	// Trailer keys were predeclared in announcePIITrailers; values are sent after
-	// the body per net/http.ResponseWriter contract.
-	w.Header().Set("X-LLM-PII-Restored", strconv.Itoa(h.Restored))
-	w.Header().Set("X-LLM-PII-Leaked", strconv.Itoa(h.Leaked))
-	return nil
-}
-
-// piiDeferHeadersResponseWriter delays committing response headers until the
-// first Write. ReverseProxy calls WriteHeader before copying the body, which
-// would flush headers before PII restore runs. Restored/Leaked are sent as HTTP
-// trailers after the body so bytes can stream through without buffering.
-type piiDeferHeadersResponseWriter struct {
+// piiStreamHeaderResponseWriter delays committing response headers until the
+// first Write/Flush. Streaming cannot set Restored/Leaked as normal headers
+// (unknown until the body ends) and must not use trailers (Cloudflare 502 /
+// broken stream on Trailer-bearing responses through a Cloudflare proxy).
+// Early PII headers are flushed; Restored/Leaked are log-only.
+type piiStreamHeaderResponseWriter struct {
 	http.ResponseWriter
 	ctx        context.Context
 	statusCode int
@@ -135,17 +120,16 @@ type piiDeferHeadersResponseWriter struct {
 	once       sync.Once
 }
 
-func (pw *piiDeferHeadersResponseWriter) WriteHeader(statusCode int) {
+func (pw *piiStreamHeaderResponseWriter) WriteHeader(statusCode int) {
 	if pw.headerSent {
 		return
 	}
 	pw.statusCode = statusCode
 }
 
-func (pw *piiDeferHeadersResponseWriter) flushHeaders() {
+func (pw *piiStreamHeaderResponseWriter) flushHeaders() {
 	pw.once.Do(func() {
 		writePIIResponseHeadersPartial(pw.ResponseWriter, pw.ctx)
-		announcePIITrailers(pw.ResponseWriter)
 		if pw.statusCode == 0 {
 			pw.statusCode = http.StatusOK
 		}
@@ -154,14 +138,49 @@ func (pw *piiDeferHeadersResponseWriter) flushHeaders() {
 	})
 }
 
-func (pw *piiDeferHeadersResponseWriter) Write(b []byte) (int, error) {
+func (pw *piiStreamHeaderResponseWriter) Write(b []byte) (int, error) {
 	pw.flushHeaders()
 	return pw.ResponseWriter.Write(b)
 }
 
-func (pw *piiDeferHeadersResponseWriter) Flush() {
+func (pw *piiStreamHeaderResponseWriter) Flush() {
 	pw.flushHeaders()
 	if f, ok := pw.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// piiBufferResponseWriter buffers a non-streaming response so Restored/Leaked
+// can be written as normal headers before any bytes reach the client.
+// httputil.ReverseProxy copies the origin body with io.Copy and commits
+// headers on the first Write — without this buffer we would need trailers,
+// which Cloudflare cannot proxy (see PIIResponseRestoreMiddleware).
+type piiBufferResponseWriter struct {
+	http.ResponseWriter
+	ctx        context.Context
+	statusCode int
+	buf        bytes.Buffer
+}
+
+func (pw *piiBufferResponseWriter) WriteHeader(statusCode int) {
+	if pw.statusCode == 0 {
+		pw.statusCode = statusCode
+	}
+}
+
+func (pw *piiBufferResponseWriter) Write(b []byte) (int, error) {
+	return pw.buf.Write(b)
+}
+
+func (pw *piiBufferResponseWriter) Flush() {}
+
+func (pw *piiBufferResponseWriter) commit() error {
+	writePIIResponseHeaders(pw.ResponseWriter, pw.ctx)
+	code := pw.statusCode
+	if code == 0 {
+		code = http.StatusOK
+	}
+	pw.ResponseWriter.WriteHeader(code)
+	_, err := pw.ResponseWriter.Write(pw.buf.Bytes())
+	return err
 }

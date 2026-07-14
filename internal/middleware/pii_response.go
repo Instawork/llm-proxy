@@ -23,6 +23,22 @@ func PIIRegistry(ctx interface{ Value(any) any }) (*redact.Registry, bool) {
 // PIIResponseRestoreMiddleware restores MASK-tier placeholders in upstream
 // responses before they reach the client. SEAL placeholders and REDACT
 // markers pass through unchanged.
+//
+// Why we do not use HTTP trailers for X-LLM-PII-Restored / X-LLM-PII-Leaked:
+// this service is commonly reached through Cloudflare (orange-cloud DNS).
+// Cloudflare's edge does not reliably proxy response trailers. With
+// Accept-Encoding: gzip (httpx default) a Trailer-bearing response becomes a
+// Cloudflare-branded 502 HTML page even when origin returned 200 JSON;
+// without gzip, clients often see incomplete chunked reads or HTTP/2
+// INTERNAL_ERROR after the body. So Restored/Leaked must not be announced
+// via Trailer.
+//
+// Non-streaming: buffer the restored body, then emit Restored/Leaked as
+// normal response headers before writing bytes.
+// Streaming: Restored/Leaked are only known after the body ends, and we
+// cannot use trailers — flush early PII headers (Detected/Masked/…) and omit
+// Restored/Leaked on the wire (still finalized for logs). Chunks still flush
+// through immediately.
 func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,38 +49,67 @@ func PIIResponseRestoreMiddleware(providerManager *providers.ProviderManager) fu
 			}
 
 			isStreaming := providerManager.IsStreamingRequest(r)
-			deferWriter := &piiDeferHeadersResponseWriter{
-				ResponseWriter: w,
-				ctx:            r.Context(),
-			}
-			restoreWriter := &piiRestoreResponseWriter{
-				ResponseWriter: deferWriter,
-				registry:       reg,
-				streaming:      isStreaming,
-			}
-			next.ServeHTTP(restoreWriter, r)
-
 			if isStreaming {
-				if tail := reg.FlushCarry(restoreWriter.carry); len(tail) > 0 {
-					_, _ = restoreWriter.Write(tail)
-				}
+				servePIIStreamingRestore(w, r, next, reg)
+				return
 			}
-			finalizePIIRestored(r.Context(), reg)
-			finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
-			if err := writePIIResponseTrailers(deferWriter, r.Context()); err != nil {
-				proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: failed to set PII trailers",
-					slog.String("error", err.Error()),
-					slog.String("path", r.URL.Path))
-			}
-			if h := piiSummaryHolderFromContext(r.Context()); h != nil && h.Leaked > 0 {
-				proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: MASK placeholders leaked in response",
-					slog.Int("leaked", h.Leaked),
-					slog.Int("restored", h.Restored),
-					slog.Bool("streaming", isStreaming),
-					slog.String("path", r.URL.Path))
-			}
+			servePIIBufferedRestore(w, r, next, reg)
 		})
 	}
+}
+
+func servePIIStreamingRestore(w http.ResponseWriter, r *http.Request, next http.Handler, reg *redact.Registry) {
+	headerWriter := &piiStreamHeaderResponseWriter{
+		ResponseWriter: w,
+		ctx:            r.Context(),
+	}
+	restoreWriter := &piiRestoreResponseWriter{
+		ResponseWriter: headerWriter,
+		registry:       reg,
+		streaming:      true,
+	}
+	next.ServeHTTP(restoreWriter, r)
+
+	if tail := reg.FlushCarry(restoreWriter.carry); len(tail) > 0 {
+		_, _ = restoreWriter.Write(tail)
+	}
+	finalizePIIRestored(r.Context(), reg)
+	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
+	logPIILeakIfNeeded(r, true)
+}
+
+func servePIIBufferedRestore(w http.ResponseWriter, r *http.Request, next http.Handler, reg *redact.Registry) {
+	bufWriter := &piiBufferResponseWriter{
+		ResponseWriter: w,
+		ctx:            r.Context(),
+	}
+	restoreWriter := &piiRestoreResponseWriter{
+		ResponseWriter: bufWriter,
+		registry:       reg,
+		streaming:      false,
+	}
+	next.ServeHTTP(restoreWriter, r)
+
+	finalizePIIRestored(r.Context(), reg)
+	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
+	if err := bufWriter.commit(); err != nil {
+		proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: failed to commit buffered response",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path))
+	}
+	logPIILeakIfNeeded(r, false)
+}
+
+func logPIILeakIfNeeded(r *http.Request, streaming bool) {
+	h := piiSummaryHolderFromContext(r.Context())
+	if h == nil || h.Leaked <= 0 {
+		return
+	}
+	proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: MASK placeholders leaked in response",
+		slog.Int("leaked", h.Leaked),
+		slog.Int("restored", h.Restored),
+		slog.Bool("streaming", streaming),
+		slog.String("path", r.URL.Path))
 }
 
 type piiRestoreResponseWriter struct {

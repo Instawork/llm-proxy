@@ -106,7 +106,7 @@ func TestPIIResponseRestoreMiddleware_RestoresInPlace(t *testing.T) {
 	}
 }
 
-func TestPIIResponseRestoreMiddleware_StreamingPIITrailers(t *testing.T) {
+func TestPIIResponseRestoreMiddleware_StreamingOmitsRestoredLeakedHeaders(t *testing.T) {
 	reg := redact.NewRegistry()
 	ph := reg.Placeholder("EMAIL_ADDRESS", "stream@example.com")
 	pm := providers.NewProviderManager()
@@ -123,11 +123,46 @@ func TestPIIResponseRestoreMiddleware_StreamingPIITrailers(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, req)
 
-	if got := piiMetricFromResponse(rec, "X-LLM-PII-Restored"); got != "1" {
-		t.Fatalf("restored trailer = %q, want 1", got)
+	// Restored/Leaked are only known after the stream ends; sending them as
+	// trailers breaks Cloudflare. Streaming responses expose the early PII
+	// headers but omit Restored/Leaked.
+	if got := rec.Header().Get("Trailer"); got != "" {
+		t.Fatalf("Trailer header = %q, want empty (Cloudflare-unsafe)", got)
+	}
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Restored"); got != "" {
+		t.Fatalf("restored = %q, want empty on streaming responses", got)
+	}
+	if got := piiMetricFromResponse(rec, "X-LLM-PII-Detected"); got != "1" {
+		t.Fatalf("detected = %q, want 1", got)
 	}
 	if !strings.Contains(rec.Body.String(), "stream@example.com") {
 		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
+func TestPIIResponseRestoreMiddleware_NonStreamingRestoredInHeaders(t *testing.T) {
+	reg := redact.NewRegistry()
+	ph := reg.Placeholder("EMAIL_ADDRESS", "header@example.com")
+	pm := providers.NewProviderManager()
+
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"text":"` + ph + `"}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	summary := newPIISummary(PIIOutcomeOK, map[string]int{"EMAIL_ADDRESS": 1})
+	req = req.WithContext(attachPIISummary(withPIIRegistry(req.Context(), reg), summary))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Trailer"); got != "" {
+		t.Fatalf("Trailer header = %q, want empty", got)
+	}
+	if got := rec.Header().Get("X-LLM-PII-Restored"); got != "1" {
+		t.Fatalf("restored header = %q, want 1", got)
+	}
+	if got := rec.Result().Trailer.Get("X-LLM-PII-Restored"); got != "" {
+		t.Fatalf("restored trailer = %q, want empty", got)
 	}
 }
 
