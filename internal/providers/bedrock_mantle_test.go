@@ -247,6 +247,71 @@ func TestBedrockMantle_AcceptsBedrockProviderKey(t *testing.T) {
 	}
 }
 
+func TestBedrockMantle_TaskSigV4AuthAllowsMissingKey(t *testing.T) {
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleTaskSigV4Auth: true},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey with empty key: %v", err)
+	}
+}
+
+func TestBedrockMantle_TaskSigV4AuthAllowsPlaceholderKey(t *testing.T) {
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleTaskSigV4Auth: true},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer bedrock-sidecar")
+	if err := proxy.ValidateAPIKey(req, passthroughKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey with placeholder: %v", err)
+	}
+	if req.Header.Get("Authorization") != "" {
+		t.Fatal("placeholder Authorization should be stripped before SigV4")
+	}
+}
+
+func TestBedrockMantle_TaskSigV4AuthStillValidatesProxyKeys(t *testing.T) {
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleTaskSigV4Auth: true},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey with Mantle proxy key: %v", err)
+	}
+}
+
+func TestBedrockMantle_TaskSigV4AuthRejectsWrongProviderProxyKey(t *testing.T) {
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleTaskSigV4Auth: true},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer sk-iw-openai")
+	if err := proxy.ValidateAPIKey(req, openaiProxyKeyStore{}); err == nil {
+		t.Fatal("expected wrong-provider iw-* key to fail")
+	}
+}
+
+func TestBedrockMantle_HealthAuthReflectsTaskSigV4(t *testing.T) {
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{MantleTaskSigV4Auth: true},
+	)
+	if got := proxy.GetHealthStatus()["auth"]; got != "task_sigv4" {
+		t.Fatalf("auth=%v, want task_sigv4", got)
+	}
+}
+
 type bedrockProviderKeyStore struct{}
 
 func (bedrockProviderKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (string, string, error) {
@@ -254,6 +319,21 @@ func (bedrockProviderKeyStore) ValidateAndGetActualKey(_ context.Context, key st
 		return "", "", io.EOF
 	}
 	return "unused", "bedrock", nil
+}
+
+type passthroughKeyStore struct{}
+
+func (passthroughKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (string, string, error) {
+	return key, "", nil
+}
+
+type openaiProxyKeyStore struct{}
+
+func (openaiProxyKeyStore) ValidateAndGetActualKey(_ context.Context, key string) (string, string, error) {
+	if key != "sk-iw-openai" {
+		return "", "", io.EOF
+	}
+	return "sk-openai", "openai", nil
 }
 
 func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {

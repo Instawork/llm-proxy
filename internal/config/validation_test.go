@@ -61,6 +61,31 @@ func TestValidate_NoProvidersErrors(t *testing.T) {
 	assert.Error(t, c.Validate())
 }
 
+func TestValidate_ProviderAuthTaskSigV4(t *testing.T) {
+	c := &YAMLConfig{
+		Providers: map[string]ProviderConfig{
+			"bedrock-mantle": {Enabled: true, Auth: ProviderAuthTaskSigV4},
+		},
+	}
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "history.role=sidecar")
+
+	c.Features.History.Role = "sidecar"
+	require.NoError(t, c.Validate())
+
+	c.Providers["openai"] = ProviderConfig{Enabled: true, Auth: ProviderAuthTaskSigV4}
+	err = c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only supported for bedrock-mantle")
+
+	delete(c.Providers, "openai")
+	c.Providers["bedrock-mantle"] = ProviderConfig{Enabled: true, Auth: "nope"}
+	err = c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown value")
+}
+
 func TestValidateRateLimiting_AllBranches(t *testing.T) {
 	cases := []struct {
 		name string

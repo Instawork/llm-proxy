@@ -13,8 +13,17 @@
 # admin_dashboard block below, the rollups sub-block must be restated here. The
 # standalone dashboard then reflects all sidecar traffic; we just don't serve the
 # UI from here.
+#
+# Bedrock Mantle upstream auth is task-role SigV4. On the co-located sidecar we
+# trust localhost/task networking, so callers need not present an iw-* Bedrock
+# key (empty or a non-iw placeholder is accepted). Standalone llm-proxy keeps
+# requiring a registered Bedrock-family proxy key.
 
 enabled: true
+
+providers:
+  bedrock-mantle:
+    auth: task_sigv4
 
 features:
   byo_keys:

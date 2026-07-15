@@ -52,6 +52,10 @@ type BedrockMantleProxy struct {
 	// as the OpenAI-Project header. Empty entries (or an absent model) leave the
 	// account-level data-retention policy in force. Read-only after construction.
 	modelProjects map[string]string
+	// taskSigV4Auth allows missing / non-iw caller credentials on trusted
+	// sidecars (providers.bedrock-mantle.auth=task_sigv4). Upstream auth is
+	// still SigV4 from the task role.
+	taskSigV4Auth bool
 }
 
 // NewBedrockMantleProxy creates a Bedrock Mantle proxy using the AWS default
@@ -114,7 +118,14 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	mantle := &BedrockMantleProxy{proxy: proxy, region: region, baseURL: baseURL, anthropicRegion: anthropicRegion, modelProjects: opt.MantleModelProjects}
+	mantle := &BedrockMantleProxy{
+		proxy:           proxy,
+		region:          region,
+		baseURL:         baseURL,
+		anthropicRegion: anthropicRegion,
+		modelProjects:   opt.MantleModelProjects,
+		taskSigV4Auth:   opt.MantleTaskSigV4Auth,
+	}
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/"+bedrockMantleName)
@@ -430,6 +441,10 @@ func (b *BedrockMantleProxy) WrapTransport(fn func(http.RoundTripper) http.Round
 }
 
 func (b *BedrockMantleProxy) GetHealthStatus() map[string]interface{} {
+	auth := "proxy_api_key_and_task_sigv4"
+	if b.taskSigV4Auth {
+		auth = "task_sigv4"
+	}
 	return map[string]interface{}{
 		"provider":          bedrockMantleName,
 		"status":            "healthy",
@@ -437,7 +452,7 @@ func (b *BedrockMantleProxy) GetHealthStatus() map[string]interface{} {
 		"region":            b.region,
 		"anthropic_region":  b.anthropicRegion,
 		"streaming_support": true,
-		"auth":              "proxy_api_key_and_task_sigv4",
+		"auth":              auth,
 	}
 }
 
@@ -463,20 +478,33 @@ func (b *BedrockMantleProxy) UserIDFromRequest(req *http.Request) string {
 // (langchain_anthropic / the Anthropic SDK) send “x-api-key“. Both are
 // accepted and stripped before SigV4 signing — Mantle upstream auth is AWS
 // credentials only.
+//
+// When taskSigV4Auth is set (sidecar profile), an empty credential or a
+// non-iw placeholder is also accepted: the co-located app is trusted, and
+// the proxy signs upstream with the task role.
 func (b *BedrockMantleProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
 	key := mantleProxyKeyFromRequest(req)
 	if key == "" {
+		if b.taskSigV4Auth {
+			return nil
+		}
 		return fmt.Errorf("bearer proxy API key is required")
 	}
 	_, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), key)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}
-	if !apikeys.IsBedrockFamilyProvider(provider) {
-		return fmt.Errorf("API key is for provider %s, not a Bedrock proxy key", provider)
+	if apikeys.IsBedrockFamilyProvider(provider) {
+		mantleStripProxyAuthHeaders(req)
+		return nil
 	}
-	mantleStripProxyAuthHeaders(req)
-	return nil
+	// Sidecar placeholder / non-proxy credential: strip and proceed. Real iw-*
+	// keys for the wrong provider still fail so misconfigured keys are loud.
+	if b.taskSigV4Auth && !apikeys.HasKeyPrefix(key) {
+		mantleStripProxyAuthHeaders(req)
+		return nil
+	}
+	return fmt.Errorf("API key is for provider %s, not a Bedrock proxy key", provider)
 }
 
 func mantleProxyKeyFromRequest(req *http.Request) string {
