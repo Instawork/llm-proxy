@@ -143,6 +143,12 @@ type ProxyOptions struct {
 	// region (public constructor: BEDROCK_MANTLE_ANTHROPIC_REGION env or
 	// us-east-1). Consumed only by the Bedrock Mantle proxy.
 	MantleAnthropicRegion string
+
+	// MantleTaskSigV4Auth allows Bedrock Mantle callers with no iw-* key (or a
+	// non-proxy placeholder) when the sidecar trusts the local network and
+	// authenticates upstream with the task role. Standalone proxies leave this
+	// false so Mantle still requires a registered Bedrock-family proxy key.
+	MantleTaskSigV4Auth bool
 }
 
 // ProviderManager manages multiple providers

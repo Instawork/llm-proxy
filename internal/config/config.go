@@ -742,10 +742,25 @@ func redactedRedisURL(u string) string {
 	return parsed.String()
 }
 
+// Provider auth modes for providers that support alternatives to proxy keys.
+const (
+	// ProviderAuthProxyAPIKey is the default: callers must present an iw-* key.
+	ProviderAuthProxyAPIKey = "proxy_api_key"
+	// ProviderAuthTaskSigV4 skips inbound proxy-key auth when the caller sends
+	// no key (or a non-iw placeholder). Upstream auth remains task-role SigV4.
+	// Only valid for bedrock-mantle on sidecar deployments (history.role=sidecar).
+	ProviderAuthTaskSigV4 = "task_sigv4"
+)
+
 // ProviderConfig represents configuration for a specific provider
 type ProviderConfig struct {
 	Enabled bool                   `yaml:"enabled"`
 	Models  map[string]ModelConfig `yaml:"models"`
+	// Auth selects caller authentication for providers that support more than
+	// the default proxy-key path. Empty / "proxy_api_key" require an iw-* key.
+	// "task_sigv4" (bedrock-mantle + sidecar only) trusts the local network and
+	// authenticates upstream with the task role.
+	Auth string `yaml:"auth,omitempty"`
 }
 
 // ModelConfig represents configuration for a specific model
@@ -1145,6 +1160,31 @@ func (c *YAMLConfig) Validate() error {
 		return fmt.Errorf("invalid retired_models configuration: %w", err)
 	}
 
+	if err := c.validateProviderAuth(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *YAMLConfig) validateProviderAuth() error {
+	for name, provider := range c.Providers {
+		auth := strings.TrimSpace(provider.Auth)
+		switch auth {
+		case "", ProviderAuthProxyAPIKey:
+			continue
+		case ProviderAuthTaskSigV4:
+			if name != "bedrock-mantle" {
+				return fmt.Errorf("providers.%s.auth=%s is only supported for bedrock-mantle", name, ProviderAuthTaskSigV4)
+			}
+			if c.Features.History.Role != "sidecar" {
+				return fmt.Errorf("providers.bedrock-mantle.auth=%s requires features.history.role=sidecar", ProviderAuthTaskSigV4)
+			}
+		default:
+			return fmt.Errorf("providers.%s.auth: unknown value %q (want %s or %s)",
+				name, auth, ProviderAuthProxyAPIKey, ProviderAuthTaskSigV4)
+		}
+	}
 	return nil
 }
 

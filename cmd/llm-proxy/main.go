@@ -1314,6 +1314,7 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	if mantleCfg, ok := yamlConfig.Providers["bedrock-mantle"]; ok && mantleCfg.Enabled {
 		mantleOpts := proxyOpts
 		mantleOpts.MantleModelProjects = buildMantleModelProjects(mantleCfg)
+		mantleOpts.MantleTaskSigV4Auth = strings.EqualFold(strings.TrimSpace(mantleCfg.Auth), config.ProviderAuthTaskSigV4)
 		var mantleErr error
 		bedrockMantle, mantleErr = providers.NewBedrockMantleProxy(mantleOpts)
 		if mantleErr != nil {
@@ -1326,7 +1327,7 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 				logger.Info("☁️  Bedrock Mantle project routing: ENABLED", "models", len(mantleOpts.MantleModelProjects))
 			}
 			mantleHealth := bedrockMantle.GetHealthStatus()
-			logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", mantleHealth["region"], "anthropic_region", mantleHealth["anthropic_region"])
+			logger.Info("☁️  Bedrock Mantle provider: ENABLED", "region", mantleHealth["region"], "anthropic_region", mantleHealth["anthropic_region"], "auth", mantleHealth["auth"])
 		}
 	} else {
 		logger.Info("☁️  Bedrock Mantle provider: DISABLED (set providers.bedrock-mantle.enabled: true to enable)")

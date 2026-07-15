@@ -447,6 +447,12 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 		"sidecar profile must disable the admin dashboard")
 	assert.Equal(t, "none", cfg.Features.History.Backend,
 		"sidecar profile must disable row-history writes")
+	assert.Equal(t, "sidecar", cfg.Features.History.Role,
+		"sidecar profile must set history.role=sidecar")
 	assert.True(t, cfg.Features.BYOKeys.Enabled,
 		"sidecar profile must allow BYO provider keys")
+	assert.True(t, cfg.Providers["bedrock-mantle"].Enabled,
+		"production Mantle enablement must survive the sidecar profile overlay")
+	assert.Equal(t, ProviderAuthTaskSigV4, cfg.Providers["bedrock-mantle"].Auth,
+		"sidecar profile must set bedrock-mantle.auth=task_sigv4")
 }
