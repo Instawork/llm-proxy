@@ -17,6 +17,11 @@ export function keyDetailPath(key: string): string {
   return `/keys/${encodeKeyRouteParam(maskKeyId(key))}`;
 }
 
+/** Share-style setup / how-to-use page for a proxy key. */
+export function keySetupPath(key: string): string {
+  return `${keyDetailPath(key)}/setup`;
+}
+
 /** Whether a URL segment is a full proxy key or a masked dashboard id. */
 export function isKeyRouteParam(value: string | undefined): boolean {
   if (!value) return false;

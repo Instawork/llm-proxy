@@ -31,9 +31,7 @@ export function MaskedKey({
       >
         {revealed ? "Hide" : "Reveal"}
       </button>
-      {revealed ? (
-        <CopyButton value={value} label="Copy" className="btn btn-ghost btn-xs shrink-0 gap-1" />
-      ) : null}
+      <CopyButton value={value} label="Copy" className="btn btn-ghost btn-xs shrink-0 gap-1" />
     </div>
   );
 }

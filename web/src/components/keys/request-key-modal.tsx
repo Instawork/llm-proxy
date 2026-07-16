@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { RequestKeyTabIcon } from "../ui/key-tab-icons";
+import { ProviderBadge, ProviderSelect } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { dailyCostLimitFormDollars } from "../../lib/format";
 import { keyDetailPath } from "../../lib/key-routes";
@@ -106,17 +107,12 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
         <form className="space-y-6 px-6 py-6" onSubmit={onSubmit}>
           <label className="form-control w-full gap-2 pb-1">
             <span className="label-text font-semibold">Provider</span>
-            <select
+            <ProviderSelect
               className="select select-bordered h-11 w-full"
               value={provider}
-              onChange={(e) => setProvider(e.target.value as Provider)}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setProvider(value as Provider)}
+              options={PROVIDERS}
+            />
           </label>
 
           <div className="space-y-3 pt-1">
@@ -214,7 +210,9 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
                 <tbody>
                   {myRequests.map((req) => (
                     <tr key={req.id}>
-                      <td>{req.provider}</td>
+                      <td>
+                        <ProviderBadge provider={req.provider} />
+                      </td>
                       <td>
                         <StatusBadge status={req.status} />
                       </td>

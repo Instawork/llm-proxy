@@ -4,10 +4,10 @@ import {
   modalTabClass,
   type KeyFormState,
   type KeyFormTab,
-  providerLabel,
   providerNeedsUpstreamKey,
 } from "../../lib/key-form";
 import type { APIKey, Provider } from "../../types";
+import { ProviderLabel, ProviderSelect } from "../ui/page-header";
 
 type ApiKeysModalProps = {
   open: boolean;
@@ -106,7 +106,7 @@ export default function ApiKeysModal({
           </div>
         ) : null}
 
-        <form className="mt-4 space-y-4" onSubmit={onSubmit}>
+        <form className="mt-4 space-y-5" onSubmit={onSubmit}>
           {tab === "general" ? (
             <>
               {!editingKey && !isViewer ? (
@@ -126,53 +126,55 @@ export default function ApiKeysModal({
                 </label>
               ) : null}
 
-              <label className="form-control w-full">
-                <span className="label-text">Provider</span>
-                <select
-                  className="select select-bordered w-full"
-                  disabled={Boolean(editingKey)}
-                  value={form.provider}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      provider: event.target.value as Provider,
-                    }))
-                  }
-                >
-                  {availableProviders.map((provider) => (
-                    <option key={provider} value={provider}>
-                      {providerLabel(provider)}
-                    </option>
-                  ))}
-                </select>
+              <div className="space-y-2">
+                <label className="form-control w-full">
+                  <span className="label-text mb-1.5">Provider</span>
+                  <ProviderSelect
+                    disabled={Boolean(editingKey)}
+                    value={form.provider}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        provider: value as Provider,
+                      }))
+                    }
+                    options={availableProviders}
+                  />
+                </label>
                 {piiOffRequiresBedrock && !treatAsPersonal ? (
-                  <span className="label-text-alt text-base-content/60">
+                  <p className="text-xs text-base-content/60">
                     PII redaction off requires the Bedrock provider.
-                  </span>
+                  </p>
                 ) : null}
                 {!needsUpstreamKey ? (
-                  <span className="label-text-alt text-base-content/60">
-                    No provider API key needed — upstream calls authenticate with AWS SigV4.
-                  </span>
+                  <p className="text-xs text-base-content/60">
+                    Proxy key still required · no AWS/Bedrock API key to paste (upstream uses
+                    SigV4).
+                  </p>
                 ) : null}
-              </label>
+              </div>
 
               {!editingKey && useAutoProvision ? (
-                <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-base-content/80">
-                  Upstream key will be created automatically for {form.provider}.
+                <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-base-content/80">
+                  Upstream key will be created automatically for{" "}
+                  <ProviderLabel provider={form.provider} />.
                 </div>
               ) : null}
 
-              {!editingKey && (provisionedKeysOnly || treatAsPersonal) && !providerAutoProvision ? (
-                <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-                  Automatic key provisioning is not available for {form.provider}. Choose another
-                  provider or contact an administrator.
+              {!editingKey &&
+              (provisionedKeysOnly || treatAsPersonal) &&
+              !providerAutoProvision &&
+              needsUpstreamKey ? (
+                <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                  Automatic key provisioning is not available for{" "}
+                  <ProviderLabel provider={form.provider} />. Choose another provider or contact an
+                  administrator.
                 </div>
               ) : null}
 
               {!treatAsPersonal && showAnthropicTierSelect ? (
                 <label className="form-control w-full">
-                  <span className="label-text">Anthropic tier</span>
+                  <span className="label-text mb-1.5">Anthropic tier</span>
                   <select
                     className="select select-bordered w-full"
                     value={form.anthropic_tier}
@@ -189,7 +191,7 @@ export default function ApiKeysModal({
                       </option>
                     ))}
                   </select>
-                  <span className="label-text-alt text-base-content/60">
+                  <span className="label-text-alt mt-2 block text-base-content/60">
                     metered = tight limits; elevated = trusted workloads; unrestricted =
                     administrators only.
                   </span>
@@ -197,9 +199,15 @@ export default function ApiKeysModal({
               ) : null}
 
               {!editingKey && !needsUpstreamKey ? (
-                <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
-                  This proxy key is only for caller identity, rate limits, and cost tracking.
-                  AWS credentials on the proxy sign outbound Bedrock requests (Converse and Mantle).
+                <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-4 py-3.5 text-sm text-base-content/80">
+                  <p className="font-medium text-base-content">
+                    You still create an llm-proxy key (<code className="text-xs">sk-iw-*</code>).
+                  </p>
+                  <p className="mt-2 leading-relaxed">
+                    Put it in your app as the Bedrock key for caller identity, rate limits, and
+                    cost tracking. Outbound Bedrock requests (Converse and Mantle) are signed with
+                    AWS SigV4 by the proxy — you never paste an AWS access key here.
+                  </p>
                 </div>
               ) : null}
 
@@ -251,7 +259,7 @@ export default function ApiKeysModal({
               ) : null}
 
               <label className="form-control w-full">
-                <span className="label-text">Name</span>
+                <span className="label-text mb-1.5">Name</span>
                 <textarea
                   className="textarea textarea-bordered w-full"
                   rows={2}
@@ -328,7 +336,10 @@ export default function ApiKeysModal({
               className="btn btn-primary"
               disabled={
                 saving ||
-                (!editingKey && (provisionedKeysOnly || treatAsPersonal) && !useAutoProvision)
+                (!editingKey &&
+                  (provisionedKeysOnly || treatAsPersonal) &&
+                  !useAutoProvision &&
+                  needsUpstreamKey)
               }
             >
               {saving ? <span className="loading loading-spinner loading-sm" /> : null}

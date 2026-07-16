@@ -4,6 +4,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import KeyLink from "../ui/key-link";
 import DataTable from "../ui/data-table";
 import { SectionPanel, type DataSource } from "../ui/data-source";
+import { ProviderBadge } from "../ui/provider-badge";
 import type { RangeKey } from "../../lib/daily-history";
 import { usageDisplayRows, type UsageDisplayRow, type UsageRow } from "../../lib/group-rows";
 import { formatCount } from "../../lib/format";
@@ -42,6 +43,9 @@ export default function UsageTable({ title, rows, keys, linkKeys = false, source
           const data = row.original;
           if (data.isOthers) {
             return <span className="italic text-base-content/60">{data.label}</span>;
+          }
+          if (labelHeader === "Provider") {
+            return <ProviderBadge provider={data.label} />;
           }
           return linkKeys ? (
             <KeyLink keys={keys} scope={data.scope} label={data.label} />

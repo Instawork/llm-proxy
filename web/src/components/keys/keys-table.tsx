@@ -1,16 +1,26 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import KeyLink from "../ui/key-link";
+import { MaskedKey } from "../ui/masked-key";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { formatKeySpendCap } from "../../lib/format";
+import { keySetupPath } from "../../lib/key-routes";
 import type { APIKey, PiiRedactSetting, Provider } from "../../types";
 
 function piiLabel(value?: PiiRedactSetting): string {
   if (value === true) return "On";
   if (value === false) return "Off";
   return "Inherit";
+}
+
+function formatCreatedAt(value?: string): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 interface KeysTableProps {
@@ -21,7 +31,6 @@ interface KeysTableProps {
   canDelete?: boolean;
   viewerMode?: boolean;
   sharingKey?: string | null;
-  maskKey: (key: string) => string;
   formatRateLimits: (record: APIKey) => string;
 }
 
@@ -33,7 +42,6 @@ export default function KeysTable({
   canDelete = true,
   viewerMode = false,
   sharingKey,
-  maskKey,
   formatRateLimits,
 }: KeysTableProps) {
   const columns = useMemo<ColumnDef<APIKey, unknown>[]>(() => {
@@ -53,10 +61,8 @@ export default function KeysTable({
       {
         id: "key",
         accessorKey: "key",
-        header: "Key",
-        cell: ({ row }) => (
-          <span className="font-mono text-xs text-base-content/80">{maskKey(row.original.key)}</span>
-        ),
+        header: viewerMode ? "Proxy key" : "Key",
+        cell: ({ row }) => <MaskedKey value={row.original.key} />,
       },
       {
         id: "provider",
@@ -103,8 +109,17 @@ export default function KeysTable({
       );
     }
 
-
     cols.push(
+      {
+        id: "created_at",
+        accessorKey: "created_at",
+        header: "Created",
+        cell: ({ getValue }) => (
+          <span className="whitespace-nowrap text-xs text-base-content/70">
+            {formatCreatedAt(getValue<string>())}
+          </span>
+        ),
+      },
       {
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
@@ -112,21 +127,29 @@ export default function KeysTable({
         meta: { alignRight: true },
         cell: ({ row }) => (
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              disabled={sharingKey === row.original.key}
-              onClick={() => onShare(row.original)}
-            >
-              {sharingKey === row.original.key ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                "Share"
-              )}
-            </button>
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => onEdit(row.original)}>
-              Edit
-            </button>
+            {viewerMode ? (
+              <Link to={keySetupPath(row.original.key)} className="btn btn-ghost btn-xs">
+                How to use
+              </Link>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={sharingKey === row.original.key}
+                  onClick={() => onShare(row.original)}
+                >
+                  {sharingKey === row.original.key ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    "Share"
+                  )}
+                </button>
+                <button type="button" className="btn btn-ghost btn-xs" onClick={() => onEdit(row.original)}>
+                  Edit
+                </button>
+              </>
+            )}
             {canDelete ? (
               <button
                 type="button"
@@ -142,7 +165,7 @@ export default function KeysTable({
     );
 
     return cols;
-  }, [keys, maskKey, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey, viewerMode]);
+  }, [keys, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey, viewerMode]);
 
   return (
     <DataTable

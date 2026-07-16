@@ -1,6 +1,7 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 
 import { CopyButton } from "../ui/copy-button";
+import { ProviderLabel } from "../ui/provider-badge";
 import { assistantPrompt, codeExamples, scrubProxyKeyFromText } from "../../lib/code-examples";
 import type { Provider } from "../../types";
 import { N8nSetupGuidePanel } from "./n8n-setup-guide";
@@ -50,9 +51,14 @@ export function ProxyKeyUsagePanel({ provider, baseUrl, proxyKey, embedded = fal
         <div className={embedded ? "space-y-1" : "border-b border-base-300/70 px-6 py-4"}>
           <h2 className={embedded ? "text-sm font-semibold" : "font-semibold"}>Drop-in usage</h2>
           <p className="text-sm text-base-content/60">
-            {isN8nTab
-              ? "Point n8n at the proxy with a custom credential host — same models, same request shape."
-              : `Point your existing ${provider} SDK at the proxy — same models, same request shape.`}
+            {isN8nTab ? (
+              "Point n8n at the proxy with a custom credential host — same models, same request shape."
+            ) : (
+              <>
+                Point your existing <ProviderLabel provider={provider} /> SDK at the proxy — same
+                models, same request shape.
+              </>
+            )}
           </p>
         </div>
 

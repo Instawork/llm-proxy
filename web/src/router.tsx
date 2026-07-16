@@ -11,6 +11,7 @@ import CircuitPage from "./pages/circuit";
 import ConfigPage from "./pages/config";
 import CostPage from "./pages/cost";
 import KeyDetailPage from "./pages/keys/detail";
+import KeySetupPage from "./pages/keys/setup";
 import KeysPage from "./pages/keys";
 import LoginPage from "./pages/login";
 import ModelStatusPage from "./pages/model-status";
@@ -100,6 +101,14 @@ export default function Router() {
             element={shell(
               <RequireRole minRole="admin">
                 <ConfigPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/keys/:key/setup"
+            element={shell(
+              <RequireRole minRole="viewer">
+                <KeySetupPage />
               </RequireRole>,
             )}
           />

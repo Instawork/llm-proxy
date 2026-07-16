@@ -111,7 +111,9 @@ export default function SharePage() {
               </code>
               <CopyButton value={data.base_url} label="Copy" className="btn btn-sm btn-ghost gap-2" />
             </Field>
-            <Field label="Provider" mono={false} value={data.provider} />
+            <Field label="Provider" mono={false}>
+              <ProviderBadge provider={data.provider} />
+            </Field>
           </div>
 
           {data.description ? (

@@ -165,7 +165,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 		actualKey := strings.TrimSpace(req.ActualKey)
 		var meta apikeys.KeyCreateMeta
-		if req.AutoProvision {
+		if req.AutoProvision && !apikeys.ProviderUsesAWSAuth(req.Provider) {
 			if h.deps.KeyProvisioner == nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "key provisioning is not configured"})
 				return
@@ -195,7 +195,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				UpstreamKeyID: res.UpstreamID,
 				UpstreamKind:  res.UpstreamKind,
 			}
-		} else if actualKey == "" {
+		} else {
 			actualKey = apikeys.ResolveActualKey(req.Provider, actualKey)
 			if actualKey == "" {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "actual_key is required unless auto_provision is true"})

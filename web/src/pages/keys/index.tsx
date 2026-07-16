@@ -1,6 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import BulkGeneratePanel, {
+  ProviderCoveragePills,
+  type BulkProviderRow,
+} from "../../components/keys/bulk-generate-panel";
 import KeyRequestsPanel from "../../components/keys/key-requests-panel";
 import ApiKeysModal from "../../components/keys/api-keys-modal";
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
@@ -17,6 +21,7 @@ import PageHeader, {
   EmptyState,
   ErrorAlert,
   LoadingBlock,
+  ProviderSelect,
 } from "../../components/ui/page-header";
 import { CopyButton } from "../../components/ui/copy-button";
 import { maskKey } from "../../components/ui/masked-key";
@@ -166,7 +171,7 @@ export default function KeysPage() {
   const [bulkGenerating, setBulkGenerating] = useState(false);
 
   const filter = providerFilter || undefined;
-  const { data: keys = [], isLoading, error } = useKeys(filter);
+  const { data: keys = [], isLoading, error } = useKeys();
   const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
   const updateKey = useUpdateKey();
@@ -253,13 +258,15 @@ export default function KeysPage() {
     }
     if ((isViewer || personalMode) && provisioning?.enabled) {
       return providers.filter(
-        (p) => provisioning.providers?.[p]?.auto_provision,
+        (p) => !providerNeedsUpstreamKey(p) || provisioning.providers?.[p]?.auto_provision,
       );
     }
     if (!provisionedKeysOnly || !provisioning?.enabled) {
       return providers;
     }
-    return providers.filter((p) => provisioning.providers?.[p]?.auto_provision);
+    return providers.filter(
+      (p) => !providerNeedsUpstreamKey(p) || provisioning.providers?.[p]?.auto_provision,
+    );
   }, [
     isViewer,
     personalMode,
@@ -281,28 +288,70 @@ export default function KeysPage() {
     return availableProviders.filter((provider) => !owned.has(provider));
   }, [provisionedKeysOnly, keys, availableProviders]);
 
+  // Any VIEWER_PROVIDERS entry without a personal key — so the generate
+  // button comes back when a new personal provider (e.g. bedrock) is added.
   const missingPersonalProvidersForBulk = useMemo(() => {
-    if (!provisioning?.enabled) {
-      return [];
-    }
-    return VIEWER_PROVIDERS.filter(
-      (provider) =>
-        provisioning.providers?.[provider]?.auto_provision &&
-        !myPersonalProviders.has(provider),
-    );
-  }, [provisioning, myPersonalProviders]);
+    // Viewers only see their own keys; treat every owned provider as filled
+    // even if the personal tag is missing on older records.
+    const owned = isViewer
+      ? new Set(keys.map((k) => k.provider))
+      : myPersonalProviders;
+    return VIEWER_PROVIDERS.filter((provider) => {
+      if (owned.has(provider)) {
+        return false;
+      }
+      if (!providerNeedsUpstreamKey(provider)) {
+        return true;
+      }
+      return Boolean(provisioning?.enabled && provisioning.providers?.[provider]?.auto_provision);
+    });
+  }, [provisioning, myPersonalProviders, isViewer, keys]);
 
-  const bulkTargetProviders = isViewer
-    ? missingProvidersForBulk
-    : isAdmin
-      ? missingPersonalProvidersForBulk
-      : missingProvidersForBulk;
+  const bulkTargetProviders = bulkCreatesPersonalKeys
+    ? missingPersonalProvidersForBulk
+    : missingProvidersForBulk;
+
+  const bulkProviderStatuses = useMemo((): BulkProviderRow[] => {
+    const missingSet = new Set(bulkTargetProviders);
+    if (bulkCreatesPersonalKeys) {
+      const owned = isViewer
+        ? new Set(keys.map((k) => k.provider))
+        : myPersonalProviders;
+      return VIEWER_PROVIDERS.map((provider) => {
+        if (owned.has(provider)) {
+          return { provider, status: "ready" as const };
+        }
+        if (missingSet.has(provider)) {
+          return { provider, status: "missing" as const };
+        }
+        return { provider, status: "unavailable" as const };
+      });
+    }
+    const owned = new Set(keys.map((k) => k.provider));
+    return KEY_PROVIDERS.map((provider) => {
+      if (owned.has(provider)) {
+        return { provider, status: "ready" as const };
+      }
+      if (missingSet.has(provider)) {
+        return { provider, status: "missing" as const };
+      }
+      return { provider, status: "unavailable" as const };
+    });
+  }, [
+    bulkTargetProviders,
+    bulkCreatesPersonalKeys,
+    isViewer,
+    keys,
+    myPersonalProviders,
+  ]);
 
   const showBulkGenerate =
     bulkTargetProviders.length > 0 &&
     (canBulkGeneratePersonalKeys || canBulkGenerateOrgKeys);
   const bulkGenerateLabel = bulkCreatesPersonalKeys
-    ? "Generate Personal Keys"
+    ? missingPersonalProvidersForBulk.length === VIEWER_PROVIDERS.length
+      ? "Generate Personal Keys"
+      : "Generate Missing Keys"
     : "Generate Missing Keys";
 
   const providerAutoProvision = Boolean(
@@ -411,7 +460,7 @@ export default function KeysPage() {
           push("Key updated", "success");
         }
       } else if (treatAsPersonal) {
-        if (!useAutoProvision) {
+        if (providerNeedsUpstreamKey(form.provider) && !useAutoProvision) {
           push(
             "Automatic key provisioning is not available for this provider",
             "error",
@@ -421,8 +470,10 @@ export default function KeysPage() {
         const body: CreateAPIKeyRequest = {
           provider: form.provider,
           description: form.description,
-          auto_provision: true,
         };
+        if (useAutoProvision) {
+          body.auto_provision = true;
+        }
         if (!isViewer) {
           body.personal = true;
         }
@@ -490,12 +541,15 @@ export default function KeysPage() {
       for (const provider of bulkTargetProviders) {
         try {
           if (bulkCreatesPersonalKeys) {
-            await createKey.mutateAsync({
+            const body: CreateAPIKeyRequest = {
               provider,
               description: bulkKeyDescription,
-              auto_provision: true,
               ...(isAdmin ? { personal: true } : {}),
-            });
+            };
+            if (providerNeedsUpstreamKey(provider)) {
+              body.auto_provision = true;
+            }
+            await createKey.mutateAsync(body);
           } else if (isEditor) {
             const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
               costLimitsFromForm(defaultKeyForm);
@@ -552,7 +606,12 @@ export default function KeysPage() {
   const saving = createKey.isPending || updateKey.isPending;
   const bulkGenerateBusy = bulkGenerating || createKey.isPending;
 
-  const visibleKeys = useMemo(() => keys, [keys]);
+  const visibleKeys = useMemo(() => {
+    if (!filter) {
+      return keys;
+    }
+    return keys.filter((key) => key.provider === filter);
+  }, [keys, filter]);
 
   return (
     <div className="space-y-6">
@@ -561,28 +620,34 @@ export default function KeysPage() {
         description={
           isViewer
             ? viewerMonthlyCents > 0
-              ? `Personal proxy keys (one per provider). Monthly spend is capped at ${viewerMonthlyLimitLabel}.`
-              : "Personal proxy keys (one per provider). Monthly spend is unlimited."
+              ? `LLM Proxy credentials (sk-iw-*), one per upstream route. Monthly spend capped at ${viewerMonthlyLimitLabel}.`
+              : "LLM Proxy credentials (sk-iw-*), one per upstream route. Monthly spend is unlimited."
             : keyStatsDescription(hasCostRedis, hasPiiRedis)
         }
         actions={
           tab === "keys" ? (
             <>
               {!isViewer ? (
-                <select
+                <ProviderSelect
                   className="select select-bordered select-sm"
                   value={providerFilter}
-                  onChange={(event) =>
-                    setProviderFilter(event.target.value as Provider | "")
-                  }
+                  onChange={(value) => setProviderFilter(value as Provider | "")}
+                  options={[...PROVIDERS]}
+                  emptyLabel="All providers"
+                />
+              ) : null}
+              {showBulkGenerate ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={bulkGenerateBusy}
+                  onClick={onBulkGeneratePersonalKeys}
                 >
-                  <option value="">All providers</option>
-                  {PROVIDERS.map((provider) => (
-                    <option key={provider} value={provider}>
-                      {provider}
-                    </option>
-                  ))}
-                </select>
+                  {bulkGenerateBusy ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : null}
+                  {bulkGenerateLabel}
+                </button>
               ) : null}
               {!isViewer ? (
                 <button
@@ -597,7 +662,7 @@ export default function KeysPage() {
               {canRequestServiceKey ? (
                 <button
                   type="button"
-                  className={`btn btn-sm gap-2 ${isViewer ? "btn-primary" : "btn-outline"}`}
+                  className={`btn btn-sm gap-2 ${isViewer && !showBulkGenerate ? "btn-primary" : "btn-outline"}`}
                   onClick={() => setRequestKeyModalOpen(true)}
                 >
                   <RequestKeyTabIcon />
@@ -664,10 +729,8 @@ export default function KeysPage() {
               <span className="font-semibold text-warning-content">
                 Personal keys are for local testing only.
               </span>{" "}
-              <span className="font-semibold text-error">
-                Do not deploy with them.
-              </span>{" "}
-              Request an org-wide key with a specific use case; admins will name and provision it.
+              <span className="font-semibold text-error">Do not deploy with them.</span> Request an
+              org-wide key with a specific use case; admins will name and provision it.
             </div>
             <button
               type="button"
@@ -722,24 +785,13 @@ export default function KeysPage() {
           ) : null}
 
           {showBulkGenerate && visibleKeys.length > 0 ? (
-            <div className="glass-panel flex flex-col items-center gap-3 px-6 py-8 text-center sm:items-start sm:text-left">
-              <button
-                type="button"
-                className="btn btn-primary btn-lg min-h-16 w-full px-8 text-lg sm:w-auto"
-                disabled={bulkGenerateBusy}
-                onClick={onBulkGeneratePersonalKeys}
-              >
-                {bulkGenerateBusy ? (
-                  <span className="loading loading-spinner loading-md" />
-                ) : null}
-                {bulkGenerateLabel}
-              </button>
-              <p className="max-w-2xl text-sm text-base-content/60">
-                {bulkCreatesPersonalKeys
-                  ? `Creates one auto-provisioned personal key for each provider you do not have yet (${bulkTargetProviders.join(", ")}).`
-                  : `Creates one auto-provisioned org key for each provider without a key yet (${bulkTargetProviders.join(", ")}).`}
-              </p>
-            </div>
+            <BulkGeneratePanel
+              providers={bulkProviderStatuses}
+              missingCount={bulkTargetProviders.length}
+              busy={bulkGenerateBusy}
+              personal={bulkCreatesPersonalKeys}
+              onGenerate={onBulkGeneratePersonalKeys}
+            />
           ) : null}
 
           <div className="glass-panel overflow-hidden">
@@ -749,22 +801,27 @@ export default function KeysPage() {
               <EmptyState
                 message={
                   isViewer
-                    ? "No personal keys yet. Generate one proxy key per provider to route LLM requests."
+                    ? "No personal llm-proxy keys yet. Generate one sk-iw-* key per upstream route to call models through the proxy."
                     : "No API keys yet. Create a proxy key to route provider requests through iw: keys."
                 }
                 action={
                   showBulkGenerate ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-lg min-h-16 w-full max-w-md px-8 text-lg"
-                      disabled={bulkGenerateBusy}
-                      onClick={onBulkGeneratePersonalKeys}
-                    >
-                      {bulkGenerateBusy ? (
-                        <span className="loading loading-spinner loading-md" />
-                      ) : null}
-                      {bulkGenerateLabel}
-                    </button>
+                    <div className="flex w-full max-w-xl flex-col items-stretch gap-4">
+                      <div className="flex justify-center">
+                        <ProviderCoveragePills providers={bulkProviderStatuses} />
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-lg min-h-14 w-full px-8 text-lg"
+                        disabled={bulkGenerateBusy}
+                        onClick={onBulkGeneratePersonalKeys}
+                      >
+                        {bulkGenerateBusy ? (
+                          <span className="loading loading-spinner loading-md" />
+                        ) : null}
+                        {bulkGenerateLabel}
+                      </button>
+                    </div>
                   ) : !isViewer && canCreateKey ? (
                     <button
                       type="button"
@@ -785,7 +842,6 @@ export default function KeysPage() {
                 canDelete={canDeleteKeys}
                 viewerMode={isViewer}
                 sharingKey={sharingKey}
-                maskKey={maskKey}
                 formatRateLimits={formatRateLimits}
               />
             )}

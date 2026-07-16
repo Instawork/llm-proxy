@@ -14,6 +14,7 @@ var viewerPersonalProviders = map[string]struct{}{
 	"openai":    {},
 	"anthropic": {},
 	"gemini":    {},
+	"bedrock":   {},
 }
 
 func isViewerPersonalProvider(provider string) bool {
@@ -50,6 +51,11 @@ func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) err
 	if !requiresProvisionedKey(role) {
 		return nil
 	}
+	// Bedrock personal/org keys have no upstream provider secret — outbound
+	// auth is AWS SigV4 on the proxy.
+	if apikeys.ProviderUsesAWSAuth(req.Provider) {
+		return nil
+	}
 	if strings.TrimSpace(req.ActualKey) != "" {
 		return fmt.Errorf("manual provider keys are not allowed for your role; use auto_provision")
 	}
@@ -62,7 +68,7 @@ func validateProvisionedKeyOnly(role adminusers.Role, req *CreateKeyRequest) err
 func (h *handler) validatePersonalCreate(r *http.Request, req *CreateKeyRequest, userEmail string) error {
 	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
 	if !isViewerPersonalProvider(req.Provider) {
-		return fmt.Errorf("personal keys may only be created for openai, anthropic, or gemini")
+		return fmt.Errorf("personal keys may only be created for openai, anthropic, gemini, or bedrock")
 	}
 	if err := validateProvisionedKeyOnly(adminusers.RoleViewer, req); err != nil {
 		return err

@@ -3,7 +3,7 @@ import { costLimitFormFromKey } from "./format";
 import type { APIKey, PiiRedactSetting, Provider } from "../types";
 
 export const KEY_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
-export const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini"];
+export const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 
 export const BEDROCK_AWS_AUTH_PROVIDERS: Provider[] = ["bedrock"];
 

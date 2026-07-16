@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { relativeTime } from "../../lib/format";
 
+export { ProviderBadge, ProviderIcon, ProviderLabel, ProviderSelect } from "./provider-badge";
+
 interface PageHeaderProps {
   title: React.ReactNode;
   description?: string;
@@ -36,10 +38,6 @@ export function StatusBadge({
       {active ? activeLabel : inactiveLabel}
     </span>
   );
-}
-
-export function ProviderBadge({ provider }: { provider: string }) {
-  return <span className="badge badge-sm badge-outline badge-primary">{provider}</span>;
 }
 
 interface LiveIndicatorProps {

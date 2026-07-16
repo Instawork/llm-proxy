@@ -393,7 +393,7 @@ Proxy base URL: ${baseUrl}
 Proxy API key placeholder: ${PROMPT_KEY_PLACEHOLDER}
 
 Important — the real proxy key is NOT in this prompt. Before I can run anything, tell me to open the \
-LLM Proxy share page, copy my API key from the "API key" field, and paste it into ${envKeyName} \
+LLM Proxy "How to use" (or share) page, copy my API key from the "Proxy API key" field, and paste it into ${envKeyName} \
 (or replace ${PROMPT_KEY_PLACEHOLDER} wherever you wire the client). Do not invent or guess a key.
 
 Requirements:

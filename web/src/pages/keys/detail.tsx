@@ -37,7 +37,7 @@ import {
   keyCostLimitPeriod,
   maskKeyId,
 } from "../../lib/format";
-import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey, keyDetailPath } from "../../lib/key-routes";
+import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey, keyDetailPath, keySetupPath } from "../../lib/key-routes";
 import { dismissKeySetup, isKeySetupDismissed } from "../../lib/key-setup-dismiss";
 import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
 import type { KeyStatsSource } from "../../types";
@@ -285,11 +285,18 @@ export default function KeyDetailPage() {
           notFound
             ? "This key is not registered (it may have been deleted)."
             : isViewer
-              ? "Your personal proxy key."
+              ? "LLM Proxy credential (sk-iw-*) — not a vendor API key."
               : masked
         }
         actions={
-          <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
+          <div className="flex flex-wrap items-center gap-2">
+            {isViewer && keyRecord && !notFound ? (
+              <Link to={keySetupPath(keyRecord.key)} className="btn btn-primary btn-sm">
+                How to use
+              </Link>
+            ) : null}
+            <LiveIndicator updatedAt={liveUpdatedAt} fetching={liveFetching} onRefresh={refreshAll} />
+          </div>
         }
       />
 

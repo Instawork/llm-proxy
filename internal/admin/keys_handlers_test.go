@@ -468,6 +468,61 @@ func TestAdminCreatePersonalKey(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, dupRec.Code)
 }
 
+func TestAdminCreatePersonalBedrockKey(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	h.deps.YAMLConfig.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents = 1000
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:    "bedrock",
+		Description: "my bedrock personal key",
+		Personal:    true,
+	})
+	createReq := authenticatedRequestAs(t, h, "admin@example.com", http.MethodPost, "/admin/api/keys", body)
+	createRec := httptest.NewRecorder()
+	h.handleCreateKey(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+
+	var created KeyResponse
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
+	assert.Equal(t, "bedrock", created.Provider)
+	assert.Equal(t, int64(1000), created.MonthlyCostLimit)
+	assert.Equal(t, "admin@example.com", created.OwnerEmail)
+	assert.Equal(t, int64(0), created.DailyCostLimit)
+
+	// auto_provision is ignored for AWS-auth providers (no upstream secret).
+	bodyAuto, _ := json.Marshal(CreateKeyRequest{
+		Provider:      "bedrock",
+		Description:   "dup with auto_provision",
+		AutoProvision: true,
+		Personal:      true,
+	})
+	dupReq := authenticatedRequestAs(t, h, "admin@example.com", http.MethodPost, "/admin/api/keys", bodyAuto)
+	dupRec := httptest.NewRecorder()
+	h.handleCreateKey(dupRec, dupReq)
+	assert.Equal(t, http.StatusConflict, dupRec.Code)
+}
+
+func TestViewerCreatePersonalBedrockKey(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:    "bedrock",
+		Description: "viewer bedrock",
+	})
+	createReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/keys", body)
+	createRec := httptest.NewRecorder()
+	h.handleCreateKey(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
+
+	var created KeyResponse
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
+	assert.Equal(t, "bedrock", created.Provider)
+	assert.Equal(t, "viewer@example.com", created.OwnerEmail)
+}
+
 func TestEditorCreateKeyRequiresAutoProvision(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	ctx := context.Background()

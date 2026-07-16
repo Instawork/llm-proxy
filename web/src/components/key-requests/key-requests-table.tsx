@@ -3,6 +3,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Link } from "react-router-dom";
 
 import DataTable from "../ui/data-table";
+import { ProviderBadge } from "../ui/page-header";
 import { keyDetailPath } from "../../lib/key-routes";
 import type { KeyRequestRecord } from "../../types";
 
@@ -47,6 +48,7 @@ export default function KeyRequestsTable({
         id: "provider",
         accessorKey: "provider",
         header: "Provider",
+        cell: ({ getValue }) => <ProviderBadge provider={getValue<string>()} />,
       },
       {
         id: "description",

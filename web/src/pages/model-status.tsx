@@ -11,7 +11,7 @@ import {
   SectionPanel,
   trendChartSource,
 } from "../components/ui/data-source";
-import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock } from "../components/ui/page-header";
+import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
 import { useModelStatus } from "../hooks/queries";
 import { LIVE_TREND_CHART_SUBTITLE, useHistory } from "../hooks/use-history";
 import {
@@ -108,7 +108,10 @@ function trafficColumns(showReplacement: boolean, showRetiredDate: boolean): Col
       id: "provider",
       accessorKey: "provider",
       header: "Provider",
-      cell: ({ getValue }) => <span className="font-medium capitalize">{getValue<string>()}</span>,
+      cell: ({ getValue }) => {
+        const provider = getValue<string>();
+        return provider ? <ProviderBadge provider={provider} /> : "—";
+      },
     },
     {
       id: "model",

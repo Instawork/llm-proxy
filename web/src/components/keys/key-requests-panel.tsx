@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 import KeyRequestsTable from "../key-requests/key-requests-table";
-import { ErrorAlert, LoadingBlock } from "../ui/page-header";
+import { ErrorAlert, LoadingBlock, ProviderLabel } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { APIClientError } from "../../client";
 import { useKeyRequests, useReviewKeyRequest } from "../../hooks/queries";
@@ -106,7 +106,8 @@ export default function KeyRequestsPanel() {
           <div className="modal-box">
             <h3 className="text-lg font-semibold">Reject key request</h3>
             <p className="mt-2 text-sm text-base-content/70">
-              {rejectTarget.requester_email} — {rejectTarget.provider}
+              {rejectTarget.requester_email} —{" "}
+              <ProviderLabel provider={rejectTarget.provider} />
             </p>
             <label className="form-control mt-4 w-full">
               <span className="label-text">Reason (optional)</span>
