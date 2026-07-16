@@ -388,6 +388,79 @@ func TestBedrockMantle_RewritesStripsAndSignsRequest(t *testing.T) {
 	}
 }
 
+func TestBedrockMantle_StripsCloudflareAndClientHopHeadersBeforeSigning(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-5","input":"hello"}`)
+	proxy := newBedrockMantleProxy(
+		"us-west-2",
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+		ProxyOptions{},
+	)
+	signerTransport := proxy.proxy.Transport.(*sigV4Transport)
+	var got *http.Request
+	signerTransport.inner = mantleRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		got = req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://proxy/bedrock-mantle/openai/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	// Headers Cloudflare / OpenAI SDKs inject in front of llm.instawork.com.
+	req.Header.Set("CDN-Loop", "cloudflare; loops=1")
+	req.Header.Set("CF-Connecting-IP", "73.143.211.71")
+	req.Header.Set("CF-IPCountry", "US")
+	req.Header.Set("CF-Ray", "a1c2110829e6aff6-SEA")
+	req.Header.Set("CF-Visitor", `{"scheme":"https"}`)
+	req.Header.Set("Cookie", "__cf_bm=example")
+	req.Header.Set("X-Bot-Score", "1")
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.Header.Set("X-Forwarded-Port", "3600")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Stainless-Lang", "python")
+	req.Header.Set("X-Stainless-Package-Version", "2.37.0")
+	req.Header.Set("X-Stainless-Runtime", "CPython")
+	if err := proxy.ValidateAPIKey(req, mantleKeyStore{}); err != nil {
+		t.Fatalf("ValidateAPIKey: %v", err)
+	}
+	proxy.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+	if got == nil {
+		t.Fatal("upstream transport was not called")
+	}
+
+	forbidden := []string{
+		"CDN-Loop", "CF-Connecting-IP", "CF-IPCountry", "CF-Ray", "CF-Visitor",
+		"Cookie", "X-Bot-Score", "X-Forwarded-For", "X-Forwarded-Port",
+		"X-Forwarded-Proto", "X-Stainless-Lang", "X-Stainless-Package-Version",
+		"X-Stainless-Runtime",
+	}
+	for _, name := range forbidden {
+		if got.Header.Get(name) != "" {
+			t.Fatalf("%s must be stripped before upstream, got %q", name, got.Header.Get(name))
+		}
+	}
+	auth := strings.ToLower(got.Header.Get("Authorization"))
+	for _, needle := range []string{
+		"cdn-loop", "cf-ray", "cf-connecting-ip", "cookie", "x-bot-score",
+		"x-forwarded-for", "x-forwarded-port", "x-forwarded-proto", "x-stainless-",
+	} {
+		if strings.Contains(auth, needle) {
+			t.Fatalf("SignedHeaders must not include %q: %s", needle, got.Header.Get("Authorization"))
+		}
+	}
+	if got.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("Content-Type should be preserved, got %q", got.Header.Get("Content-Type"))
+	}
+	if !strings.Contains(got.Header.Get("Authorization"), "AWS4-HMAC-SHA256") {
+		t.Fatalf("request was not SigV4-signed: %q", got.Header.Get("Authorization"))
+	}
+}
+
 func mantleUpstreamHeader(t *testing.T, opt ProxyOptions, model, callerProject string) http.Header {
 	t.Helper()
 	proxy := newBedrockMantleProxy(
