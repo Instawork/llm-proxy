@@ -45,6 +45,9 @@ services:
       - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-http://dynamodb:8000}
       # Bedrock Mantle SigV4 uses ~/.aws profile creds, not the DynamoDB Local keys above.
       - BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
+      # us-west-2 Mantle project with data_retention.mode=default (account ZDR
+      # otherwise blocks openai.gpt-5.4/5.5). Override or leave empty for other accounts.
+      - LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID=${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID:-proj_ntg46rjkspf6j5olbzw4}
       # Override the YAML default analyzer_url for the docker-compose
       # network. The sidecar service hostname `presidio` resolves only
       # over this network; production ECS task definitions point at
