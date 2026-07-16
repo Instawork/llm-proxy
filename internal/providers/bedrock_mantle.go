@@ -159,9 +159,10 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		req.Header.Del("X-Amz-Date")
 		req.Header.Del("X-Amz-Content-Sha256")
 		req.Header.Del("X-Amz-Security-Token")
-		// AWS's edge appends the client address to X-Forwarded-For. Do not
-		// include a mutable forwarding header in the SigV4 canonical request.
-		req.Header.Del("X-Forwarded-For")
+		// Drop CDN/client hop headers before SigV4. Cloudflare (in front of
+		// llm.instawork.com) and OpenAI SDKs inject headers that must not be
+		// forwarded or signed — otherwise Mantle returns 401 InvalidSignature.
+		stripMantleClientHopHeaders(req)
 		if opt.DisableGzip {
 			req.Header.Del("Accept-Encoding")
 		}
@@ -239,9 +240,9 @@ type sigV4Transport struct {
 }
 
 func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// ReverseProxy adds this after Director. AWS may append it at its edge,
-	// invalidating any signature that includes the header.
-	req.Header.Del("X-Forwarded-For")
+	// ReverseProxy may re-add X-Forwarded-For after Director; strip hop headers
+	// again immediately before signing so they never enter the canonical request.
+	stripMantleClientHopHeaders(req)
 	payload, err := readAndRestoreMantleBody(req)
 	if err != nil {
 		return nil, fmt.Errorf("read Bedrock Mantle request body: %w", err)
@@ -517,6 +518,47 @@ func mantleProxyKeyFromRequest(req *http.Request) string {
 func mantleStripProxyAuthHeaders(req *http.Request) {
 	req.Header.Del("Authorization")
 	req.Header.Del("x-api-key")
+}
+
+// mantleClientHopHeaderNames are exact header names (canonical MIME keys) that
+// must not be forwarded to Bedrock Mantle or included in SigV4 SignedHeaders.
+var mantleClientHopHeaderNames = []string{
+	"Cookie",
+	"Set-Cookie",
+	"Connection",
+	"Keep-Alive",
+	"Proxy-Connection",
+	"Transfer-Encoding",
+	"Upgrade",
+	"Te",
+	"Trailer",
+	"Via",
+	"CDN-Loop",
+	"Priority",
+	"True-Client-IP",
+	"X-Forwarded-For",
+	"X-Forwarded-Port",
+	"X-Forwarded-Proto",
+	"X-Forwarded-Host",
+	"X-Real-IP",
+	"X-Bot-Score",
+}
+
+// stripMantleClientHopHeaders removes Cloudflare, forwarding, and SDK telemetry
+// headers so the AWS SigV4 signer only covers Mantle-relevant headers.
+func stripMantleClientHopHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	for _, name := range mantleClientHopHeaderNames {
+		req.Header.Del(name)
+	}
+	for name := range req.Header {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "cf-") || strings.HasPrefix(lower, "x-stainless-") {
+			req.Header.Del(name)
+		}
+	}
 }
 
 func (b *BedrockMantleProxy) RegisterExtraRoutes(_ *mux.Router) {}
