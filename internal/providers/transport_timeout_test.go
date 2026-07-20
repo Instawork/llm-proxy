@@ -4,20 +4,29 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/stretchr/testify/require"
 )
+
+func TestEffectiveResponseHeaderTimeout(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, DefaultResponseHeaderTimeout, effectiveResponseHeaderTimeout(0))
+	require.Equal(t, DefaultResponseHeaderTimeout, effectiveResponseHeaderTimeout(-time.Second))
+	require.Equal(t, 90*time.Second, effectiveResponseHeaderTimeout(90*time.Second))
+}
 
 func TestNewProxyTransportResponseHeaderTimeout(t *testing.T) {
 	t.Parallel()
 
 	tr := newProxyTransport(false, 0)
-	if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
-		t.Fatalf("zero timeout: got %v, want %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
-	}
+	require.Equal(t, DefaultResponseHeaderTimeout, tr.ResponseHeaderTimeout)
+	require.False(t, tr.DisableCompression)
 
-	tr = newProxyTransport(false, 2*time.Minute)
-	if tr.ResponseHeaderTimeout != 2*time.Minute {
-		t.Fatalf("explicit timeout: got %v, want 2m", tr.ResponseHeaderTimeout)
-	}
+	tr = newProxyTransport(true, 2*time.Minute)
+	require.Equal(t, 2*time.Minute, tr.ResponseHeaderTimeout)
+	require.True(t, tr.DisableCompression)
 }
 
 func TestProviderConstructorsHonorResponseHeaderTimeout(t *testing.T) {
@@ -28,28 +37,46 @@ func TestProviderConstructorsHonorResponseHeaderTimeout(t *testing.T) {
 
 	cases := []struct {
 		name string
-		get  func() *http.Transport
+		get  func(t *testing.T) *http.Transport
 	}{
-		{"openai", func() *http.Transport {
-			return NewOpenAIProxy(opt).proxy.Transport.(*http.Transport)
+		{"openai", func(t *testing.T) *http.Transport {
+			tr, ok := NewOpenAIProxy(opt).proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
 		}},
-		{"anthropic", func() *http.Transport {
-			return NewAnthropicProxy(opt).proxy.Transport.(*http.Transport)
+		{"anthropic", func(t *testing.T) *http.Transport {
+			tr, ok := NewAnthropicProxy(opt).proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
 		}},
-		{"gemini", func() *http.Transport {
-			return NewGeminiProxy(opt).proxy.Transport.(*http.Transport)
+		{"gemini", func(t *testing.T) *http.Transport {
+			tr, ok := NewGeminiProxy(opt).proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
 		}},
-		{"bedrock", func() *http.Transport {
-			return NewBedrockProxy(opt).proxy.Transport.(*http.Transport)
+		{"bedrock", func(t *testing.T) *http.Transport {
+			tr, ok := NewBedrockProxy(opt).proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
+		{"bedrock-mantle", func(t *testing.T) *http.Transport {
+			proxy := newBedrockMantleProxy(
+				"us-west-2",
+				credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+				opt,
+			)
+			signer, ok := proxy.proxy.Transport.(*sigV4Transport)
+			require.True(t, ok)
+			tr, ok := signer.inner.(*http.Transport)
+			require.True(t, ok)
+			return tr
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tr := tc.get()
-			if tr.ResponseHeaderTimeout != want {
-				t.Fatalf("got %v, want %v", tr.ResponseHeaderTimeout, want)
-			}
+			tr := tc.get(t)
+			require.Equal(t, want, tr.ResponseHeaderTimeout)
 		})
 	}
 }
@@ -57,12 +84,61 @@ func TestProviderConstructorsHonorResponseHeaderTimeout(t *testing.T) {
 func TestProviderConstructorsDefaultResponseHeaderTimeout(t *testing.T) {
 	t.Parallel()
 
-	tr := NewOpenAIProxy().proxy.Transport.(*http.Transport)
-	if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
-		t.Fatalf("got %v, want %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
+	cases := []struct {
+		name string
+		get  func(t *testing.T) *http.Transport
+	}{
+		{"openai", func(t *testing.T) *http.Transport {
+			tr, ok := NewOpenAIProxy().proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
+		{"anthropic", func(t *testing.T) *http.Transport {
+			tr, ok := NewAnthropicProxy().proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
+		{"gemini", func(t *testing.T) *http.Transport {
+			tr, ok := NewGeminiProxy().proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
+		{"bedrock", func(t *testing.T) *http.Transport {
+			tr, ok := NewBedrockProxy().proxy.Transport.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
+		{"bedrock-mantle", func(t *testing.T) *http.Transport {
+			proxy := newBedrockMantleProxy(
+				"us-west-2",
+				credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"),
+				ProxyOptions{},
+			)
+			signer, ok := proxy.proxy.Transport.(*sigV4Transport)
+			require.True(t, ok)
+			tr, ok := signer.inner.(*http.Transport)
+			require.True(t, ok)
+			return tr
+		}},
 	}
-	tr = NewGeminiProxy().proxy.Transport.(*http.Transport)
-	if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
-		t.Fatalf("gemini default got %v, want %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tr := tc.get(t)
+			require.Equal(t, DefaultResponseHeaderTimeout, tr.ResponseHeaderTimeout)
+		})
 	}
+}
+
+func TestProxyOptionsDisableGzipIndependentOfTimeout(t *testing.T) {
+	t.Parallel()
+
+	opt := ProxyOptions{
+		DisableGzip:           true,
+		ResponseHeaderTimeout: 90 * time.Second,
+	}
+	tr, ok := NewOpenAIProxy(opt).proxy.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.True(t, tr.DisableCompression)
+	require.Equal(t, 90*time.Second, tr.ResponseHeaderTimeout)
 }
