@@ -59,11 +59,10 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 	originalDirector := proxy.Director
 	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector, opt.DisableGzip)
 
-	// Customize the transport for optimal streaming performance.
-	// Gemini can be significantly slower to return response headers than other providers,
-	// so give it a dedicated transport with a longer ResponseHeaderTimeout to avoid
-	// premature 502s that trigger repeated retries in the client.
-	proxy.Transport = newGeminiProxyTransport(opt.DisableGzip)
+	// Customize the transport for optimal streaming performance. Gemini historically
+	// needed a longer ResponseHeaderTimeout than other providers; the shared default
+	// is now 5m and can be overridden via providers.gemini.response_header_timeout_seconds.
+	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {

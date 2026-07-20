@@ -56,7 +56,7 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
-	proxy.Transport = newProxyTransport(opt.DisableGzip)
+	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)
 
 	// Add custom response modifier for streaming support
 	proxy.ModifyResponse = func(resp *http.Response) error {

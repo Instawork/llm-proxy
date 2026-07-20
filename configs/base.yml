@@ -92,6 +92,15 @@ features:
   # client_gzip:
   #   enabled: false
   # ---------------------------------------------------------------------------
+  # Upstream provider HTTP transport
+  # ---------------------------------------------------------------------------
+  # How long the proxy waits for the first response header from an LLM provider
+  # before returning 502. Must stay <= Cloudflare origin read timeout and the
+  # dedicated ALB idle_timeout (typically 300s when aligned). Override per
+  # provider with providers.<name>.response_header_timeout_seconds.
+  upstream:
+    response_header_timeout_seconds: 300
+  # ---------------------------------------------------------------------------
   # Government ID gate (OCR sidecar + Presidio on embedded chat images)
   # ---------------------------------------------------------------------------
   id_gate:
@@ -257,6 +266,8 @@ retired_models:
 providers:
   openai:
     enabled: true
+    # Optional per-provider override of features.upstream.response_header_timeout_seconds:
+    # response_header_timeout_seconds: 300
     default_limits:
       tokens_per_minute: 450_000
       requests_per_minute: 5_000

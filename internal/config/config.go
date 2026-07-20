@@ -8,9 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// DefaultResponseHeaderTimeoutSeconds is how long the proxy waits for the
+// first response header from an upstream LLM provider before returning 502.
+// Kept at 5 minutes so non-streaming Responses / thinking-model TTFT can
+// complete under Cloudflare's origin read timeout and the dedicated ALB
+// idle_timeout (both typically 300s when aligned).
+const DefaultResponseHeaderTimeoutSeconds = 300
 
 // formatNumber formats a number with commas for better readability
 func formatNumber(n int64) string {
@@ -71,6 +79,16 @@ type FeaturesConfig struct {
 	AdminDashboard   AdminDashboardConfig   `yaml:"admin_dashboard"`
 	History          HistoryConfig          `yaml:"history"`
 	ClientGzip       ClientGzipConfig       `yaml:"client_gzip"`
+	Upstream         UpstreamConfig         `yaml:"upstream"`
+}
+
+// UpstreamConfig configures outbound HTTP behaviour toward LLM providers.
+type UpstreamConfig struct {
+	// ResponseHeaderTimeoutSeconds is the default how long the proxy waits for
+	// the first response byte/header from any provider. Zero uses
+	// DefaultResponseHeaderTimeoutSeconds. Per-provider overrides live on
+	// ProviderConfig.ResponseHeaderTimeoutSeconds.
+	ResponseHeaderTimeoutSeconds int `yaml:"response_header_timeout_seconds"`
 }
 
 // ClientGzipConfig optionally gzip-compresses non-streaming responses to
@@ -761,6 +779,9 @@ type ProviderConfig struct {
 	// "task_sigv4" (bedrock-mantle + sidecar only) trusts the local network and
 	// authenticates upstream with the task role.
 	Auth string `yaml:"auth,omitempty"`
+	// ResponseHeaderTimeoutSeconds overrides features.upstream.response_header_timeout_seconds
+	// for this provider only. Zero inherits the global default.
+	ResponseHeaderTimeoutSeconds int `yaml:"response_header_timeout_seconds,omitempty"`
 }
 
 // ModelConfig represents configuration for a specific model
@@ -1164,7 +1185,45 @@ func (c *YAMLConfig) Validate() error {
 		return err
 	}
 
+	if err := c.validateUpstreamConfig(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (c *YAMLConfig) validateUpstreamConfig() error {
+	if c.Features.Upstream.ResponseHeaderTimeoutSeconds < 0 {
+		return fmt.Errorf("invalid upstream configuration: response_header_timeout_seconds cannot be negative")
+	}
+	for name, provider := range c.Providers {
+		if provider.ResponseHeaderTimeoutSeconds < 0 {
+			return fmt.Errorf("invalid providers.%s configuration: response_header_timeout_seconds cannot be negative", name)
+		}
+	}
+	return nil
+}
+
+// DefaultResponseHeaderTimeout returns the global upstream response-header
+// timeout, falling back to DefaultResponseHeaderTimeoutSeconds when unset.
+func (c *YAMLConfig) DefaultResponseHeaderTimeout() time.Duration {
+	sec := DefaultResponseHeaderTimeoutSeconds
+	if c != nil && c.Features.Upstream.ResponseHeaderTimeoutSeconds > 0 {
+		sec = c.Features.Upstream.ResponseHeaderTimeoutSeconds
+	}
+	return time.Duration(sec) * time.Second
+}
+
+// ResponseHeaderTimeoutFor returns the effective response-header timeout for
+// provider. A positive providers.<name>.response_header_timeout_seconds wins;
+// otherwise the global upstream default is used.
+func (c *YAMLConfig) ResponseHeaderTimeoutFor(provider string) time.Duration {
+	if c != nil {
+		if p, ok := c.Providers[provider]; ok && p.ResponseHeaderTimeoutSeconds > 0 {
+			return time.Duration(p.ResponseHeaderTimeoutSeconds) * time.Second
+		}
+	}
+	return c.DefaultResponseHeaderTimeout()
 }
 
 func (c *YAMLConfig) validateProviderAuth() error {

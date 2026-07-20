@@ -170,7 +170,7 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 	}
 	proxy.Transport = &sigV4Transport{
 		credentials:   credentials,
-		inner:         newProxyTransport(opt.DisableGzip),
+		inner:         newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout),
 		region:        region,
 		regionForPath: mantle.regionForPath,
 		service:       bedrockMantleService,

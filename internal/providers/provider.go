@@ -128,6 +128,11 @@ type ProxyOptions struct {
 	// visible in logs.  Defaults to false (gzip enabled).
 	DisableGzip bool
 
+	// ResponseHeaderTimeout is how long the outbound transport waits for the
+	// first response header from the upstream provider before failing with
+	// 502. Zero falls back to DefaultResponseHeaderTimeout (5 minutes).
+	ResponseHeaderTimeout time.Duration
+
 	// MantleModelProjects maps a Bedrock Mantle model id (or alias) to the
 	// Bedrock project id that should handle it. When a request's model matches,
 	// the Mantle proxy sets the OpenAI-Project header so Mantle resolves
@@ -149,6 +154,17 @@ type ProxyOptions struct {
 	// authenticates upstream with the task role. Standalone proxies leave this
 	// false so Mantle still requires a registered Bedrock-family proxy key.
 	MantleTaskSigV4Auth bool
+}
+
+// DefaultResponseHeaderTimeout is the fallback when ProxyOptions leaves
+// ResponseHeaderTimeout unset. Matches config.DefaultResponseHeaderTimeoutSeconds.
+const DefaultResponseHeaderTimeout = 5 * time.Minute
+
+func effectiveResponseHeaderTimeout(d time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return DefaultResponseHeaderTimeout
 }
 
 // ProviderManager manages multiple providers
@@ -290,8 +306,9 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 // proxying LLM requests.  When disableGzip is true, DisableCompression is set
 // so Go's transport never auto-decompresses upstream gzip responses — useful
 // alongside Accept-Encoding stripping in CreateGenericDirector for debug builds.
-// Defaults to false (gzip allowed).
-func newProxyTransport(disableGzip bool) *http.Transport {
+// Defaults to false (gzip allowed). responseHeaderTimeout of zero uses
+// DefaultResponseHeaderTimeout (5 minutes).
+func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *http.Transport {
 	// These settings are based on http.DefaultTransport, but customized for the proxy.
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -305,21 +322,12 @@ func newProxyTransport(disableGzip bool) *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		// A generous timeout for the response header, as some LLM providers
-		// may take a while to start streaming a response.
-		ResponseHeaderTimeout: 3 * time.Minute,
+		// (thinking models, non-streaming Responses) may take a while to start
+		// returning a response. Keep this <= Cloudflare origin read timeout
+		// and the dedicated ALB idle_timeout (typically 300s when aligned).
+		ResponseHeaderTimeout: effectiveResponseHeaderTimeout(responseHeaderTimeout),
 		DisableCompression:    disableGzip,
 	}
-}
-
-// newGeminiProxyTransport creates a transport specifically for Gemini requests.
-// Gemini models (especially larger ones) can take significantly longer to start
-// returning response headers than other providers, so we use a longer
-// ResponseHeaderTimeout to avoid premature 502s that the google-genai client
-// would then retry multiple times, leading to very long total request durations.
-func newGeminiProxyTransport(disableGzip bool) *http.Transport {
-	t := newProxyTransport(disableGzip)
-	t.ResponseHeaderTimeout = 5 * time.Minute
-	return t
 }
 
 // DecompressResponseIfNeeded checks if the response is gzip compressed and decompresses it.

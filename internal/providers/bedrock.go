@@ -120,7 +120,7 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 		}
 	}
 
-	proxy.Transport = newProxyTransport(opt.DisableGzip)
+	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if bedrockProxy.isStreamingResponse(resp) {
