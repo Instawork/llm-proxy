@@ -1289,22 +1289,32 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	bedrock *providers.BedrockProxy,
 	bedrockMantle *providers.BedrockMantleProxy,
 ) {
-	proxyOpts := providers.ProxyOptions{DisableGzip: disableGzip}
+	baseOpts := providers.ProxyOptions{DisableGzip: disableGzip}
 	if disableGzip {
 		logProxyWarn("Gzip disabled: Accept-Encoding stripped and transport compression off (debug mode)")
 	}
+	logger.Info("Upstream response header timeout",
+		"default", yamlConfig.DefaultResponseHeaderTimeout().String())
 
-	openAI = providers.NewOpenAIProxy(proxyOpts)
+	openAIOpts := baseOpts
+	openAIOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("openai")
+	openAI = providers.NewOpenAIProxy(openAIOpts)
 	globalProviderManager.RegisterProvider(openAI)
 
-	anthropic = providers.NewAnthropicProxy(proxyOpts)
+	anthropicOpts := baseOpts
+	anthropicOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("anthropic")
+	anthropic = providers.NewAnthropicProxy(anthropicOpts)
 	globalProviderManager.RegisterProvider(anthropic)
 
-	gemini = providers.NewGeminiProxy(proxyOpts)
+	geminiOpts := baseOpts
+	geminiOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("gemini")
+	gemini = providers.NewGeminiProxy(geminiOpts)
 	globalProviderManager.RegisterProvider(gemini)
 
 	if bedrockCfg, ok := yamlConfig.Providers["bedrock"]; ok && bedrockCfg.Enabled {
-		bedrock = providers.NewBedrockProxy(proxyOpts)
+		bedrockOpts := baseOpts
+		bedrockOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("bedrock")
+		bedrock = providers.NewBedrockProxy(bedrockOpts)
 		globalProviderManager.RegisterProvider(bedrock)
 		circuitBreakerProviders = append(circuitBreakerProviders, "bedrock")
 		logger.Info("☁️  Bedrock provider: ENABLED", "region", bedrock.Region())
@@ -1312,7 +1322,8 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 		logger.Info("☁️  Bedrock provider: DISABLED (set providers.bedrock.enabled: true to enable)")
 	}
 	if mantleCfg, ok := yamlConfig.Providers["bedrock-mantle"]; ok && mantleCfg.Enabled {
-		mantleOpts := proxyOpts
+		mantleOpts := baseOpts
+		mantleOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("bedrock-mantle")
 		mantleOpts.MantleModelProjects = buildMantleModelProjects(mantleCfg)
 		mantleOpts.MantleTaskSigV4Auth = strings.EqualFold(strings.TrimSpace(mantleCfg.Auth), config.ProviderAuthTaskSigV4)
 		var mantleErr error
