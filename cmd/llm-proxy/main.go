@@ -1490,6 +1490,10 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	// Add middleware (order matters for streaming)
+	// Abort logging must be outermost so it observes http.ErrAbortHandler
+	// panics raised anywhere below (ReverseProxy body-copy failures that
+	// otherwise reset the connection with zero log output).
+	r.Use(middleware.AbortLoggingMiddleware())
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 
 	if yamlConfig.Features.ClientGzip.Enabled {
@@ -1871,13 +1875,20 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
 	// streams; per-request deadlines are still enforced by upstream provider
 	// transports and per-handler context.WithTimeout helpers.
+	//
+	// IdleTimeout must be strictly GREATER than the ALB idle timeout (300s).
+	// When they are equal, the server closes idle keep-alive connections at
+	// the same moment the ALB reuses them, and the resulting RST surfaces to
+	// clients as intermittent ALB-generated 502s (HTTPCode_ELB_502_Count with
+	// zero target 5xx). Per AWS guidance the target's keep-alive idle timeout
+	// must outlive the load balancer's so the ALB always closes first.
 	server := &http.Server{
 		Addr:              "0.0.0.0:" + port,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      0, // streaming: rely on per-handler ctx deadlines
-		IdleTimeout:       300 * time.Second,
+		IdleTimeout:       400 * time.Second,
 	}
 
 	// Set up graceful shutdown
