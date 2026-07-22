@@ -130,6 +130,14 @@ func (g *GeminiProxy) IsStreamingRequest(req *http.Request) bool {
 		return true
 	}
 
+	// The OpenAI-compatibility endpoint signals streaming via "stream": true
+	// in the JSON body, like OpenAI proper. Scoped to /chat/completions so
+	// native Gemini requests (including large media uploads) are never
+	// body-inspected.
+	if req.Method == "POST" && isChatCompletionsPath(req.URL.Path) {
+		return requestBodyHasStreamTrue(req, "gemini")
+	}
+
 	// For Gemini generateContent endpoints, rely on explicit streaming indicators
 	// via the URL path (streamGenerateContent) rather than inspecting the body.
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, ":generateContent") ||
@@ -248,6 +256,14 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// Gemini's OpenAI-compatibility endpoint (/v1beta/openai/chat/completions)
+	// returns OpenAI-shaped JSON ("choices" + usage.prompt_tokens). Parsing
+	// it as native Gemini silently yields zero token counts, which disables
+	// cost tracking and cost-limit enforcement for that traffic.
+	if looksLikeOpenAIChatJSON(bodyBytes) {
+		return parseOpenAICompatMetadata(bodyBytes, false, "gemini")
+	}
+
 	var response GeminiResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse Gemini response: %w", err)
@@ -292,7 +308,26 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		defer gzipReader.Close()
 	}
 
-	scanner := bufio.NewScanner(decompressedReader)
+	// The OpenAI-compatibility endpoint streams OpenAI-style
+	// chat.completion.chunk events, not Gemini candidate chunks. Peek at the
+	// head to classify the stream; only compat streams are then read in full
+	// (the OpenAI parser needs the final usage chunk), so the native path
+	// keeps decompressing incrementally instead of materializing the whole
+	// decompressed body.
+	buffered := bufio.NewReaderSize(decompressedReader, compatStreamSniffLen)
+	head, err := buffered.Peek(compatStreamSniffLen)
+	if err != nil && err != io.EOF && len(head) == 0 {
+		return nil, fmt.Errorf("failed to read streaming response: %w", err)
+	}
+	if looksLikeOpenAIChatStream(head) {
+		data, err := io.ReadAll(buffered)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read streaming response: %w", err)
+		}
+		return parseOpenAICompatMetadata(data, true, "gemini")
+	}
+
+	scanner := bufio.NewScanner(buffered)
 	// Allow lines up to 2 MB — large Gemini SSE JSON chunks (e.g. with grounded
 	// citations or long thinking traces) can exceed the default 64 KB.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
