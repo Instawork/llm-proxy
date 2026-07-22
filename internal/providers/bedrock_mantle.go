@@ -197,7 +197,7 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 			}
 			return
 		}
-		proxylog.UpstreamHTTPError(w, fmt.Sprintf("bedrock-mantle transport: %v", err), http.StatusBadGateway)
+		proxylog.WriteUpstreamJSONError(w, http.StatusBadGateway, fmt.Sprintf("bedrock-mantle transport: %v", err))
 	}
 	return mantle
 }

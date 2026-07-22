@@ -101,7 +101,7 @@ func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
 				proxylog.Proxy("openai cannot send error response, headers already sent")
 			}
 		} else {
-			proxylog.UpstreamHTTPError(w, fmt.Sprintf("openai transport: %v", err), http.StatusBadGateway)
+			proxylog.WriteUpstreamJSONError(w, http.StatusBadGateway, fmt.Sprintf("openai transport: %v", err))
 		}
 	}
 

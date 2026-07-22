@@ -144,7 +144,7 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 			}
 			return
 		}
-		proxylog.UpstreamHTTPError(w, fmt.Sprintf("bedrock transport: %v", err), http.StatusBadGateway)
+		proxylog.WriteUpstreamJSONError(w, http.StatusBadGateway, fmt.Sprintf("bedrock transport: %v", err))
 	}
 
 	return bedrockProxy

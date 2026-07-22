@@ -105,7 +105,7 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 				proxylog.Proxy("gemini cannot send error response, headers already sent")
 			}
 		} else {
-			proxylog.UpstreamHTTPError(w, fmt.Sprintf("gemini transport: %v", err), http.StatusBadGateway)
+			proxylog.WriteUpstreamJSONError(w, http.StatusBadGateway, fmt.Sprintf("gemini transport: %v", err))
 		}
 	}
 

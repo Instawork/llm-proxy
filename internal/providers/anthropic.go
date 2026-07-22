@@ -99,7 +99,7 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 				proxylog.Proxy("anthropic cannot send error response, headers already sent")
 			}
 		} else {
-			proxylog.UpstreamHTTPError(w, fmt.Sprintf("anthropic transport: %v", err), http.StatusBadGateway)
+			proxylog.WriteUpstreamJSONError(w, http.StatusBadGateway, fmt.Sprintf("anthropic transport: %v", err))
 		}
 	}
 

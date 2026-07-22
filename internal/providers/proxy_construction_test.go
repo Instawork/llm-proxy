@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -128,8 +129,22 @@ func TestOpenAIProxy_ErrorHandler_Streaming(t *testing.T) {
 func TestOpenAIProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewOpenAIProxy(), "/openai/v1/chat/completions", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
-	assert.Contains(t, rr.Body.String(), "openai transport")
+	assertJSONTransportError(t, rr, "openai transport")
+}
+
+// assertJSONTransportError verifies the non-streaming ErrorHandler body is
+// the {"error":"[UPSTREAM] <provider> transport: ..."} JSON shape (so API
+// clients like n8n can surface a readable message) rather than plain text.
+func assertJSONTransportError(t *testing.T, rr *httptest.ResponseRecorder, wantFragment string) {
+	t.Helper()
+	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
+	assert.Contains(t, rr.Header().Get("X-Llm-Proxy-Error-Source"), "upstream")
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	assert.Contains(t, body.Error, "[UPSTREAM]")
+	assert.Contains(t, body.Error, wantFragment)
 }
 
 func TestAnthropicProxy_ErrorHandler_Streaming(t *testing.T) {
@@ -141,8 +156,7 @@ func TestAnthropicProxy_ErrorHandler_Streaming(t *testing.T) {
 func TestAnthropicProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewAnthropicProxy(), "/anthropic/v1/messages", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
-	assert.Contains(t, rr.Body.String(), "anthropic transport")
+	assertJSONTransportError(t, rr, "anthropic transport")
 }
 
 func TestGeminiProxy_ErrorHandler_Streaming(t *testing.T) {
@@ -154,8 +168,7 @@ func TestGeminiProxy_ErrorHandler_Streaming(t *testing.T) {
 func TestGeminiProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewGeminiProxy(), "/gemini/v1/models/gemini-pro:generateContent", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
-	assert.Contains(t, rr.Body.String(), "gemini transport")
+	assertJSONTransportError(t, rr, "gemini transport")
 }
 
 func TestBedrockProxy_ErrorHandler_Streaming(t *testing.T) {
@@ -169,8 +182,7 @@ func TestBedrockProxy_ErrorHandler_Streaming(t *testing.T) {
 func TestBedrockProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	rr := runErrorHandler(t, NewBedrockProxy(), "/bedrock/model/anthropic.claude-3-sonnet/converse", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
-	assert.Contains(t, rr.Body.String(), "bedrock transport")
+	assertJSONTransportError(t, rr, "bedrock transport")
 }
 
 func TestBedrockMantleProxy_ErrorHandler_Streaming(t *testing.T) {
@@ -193,8 +205,7 @@ func TestBedrockMantleProxy_ErrorHandler_NonStreaming(t *testing.T) {
 	)
 	rr := runErrorHandler(t, mantle, "/bedrock-mantle/anthropic/v1/messages", "")
 	assert.Equal(t, http.StatusBadGateway, rr.Code)
-	assert.Contains(t, rr.Body.String(), "[UPSTREAM]")
-	assert.Contains(t, rr.Body.String(), "bedrock-mantle transport")
+	assertJSONTransportError(t, rr, "bedrock-mantle transport")
 }
 
 func TestProvider_ModifyResponse_SSEHeaders(t *testing.T) {
