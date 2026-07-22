@@ -63,7 +63,9 @@ type CostRecord struct {
 	Timestamp time.Time `json:"timestamp"`
 	RequestID string    `json:"request_id,omitempty"`
 	UserID    string    `json:"user_id,omitempty"`
-	IPAddress string    `json:"ip_address,omitempty"`
+	// KeyID is the masked proxy API key id (never the raw secret).
+	KeyID     string `json:"key_id,omitempty"`
+	IPAddress string `json:"ip_address,omitempty"`
 
 	// Request details
 	Provider    string `json:"provider"`
@@ -555,6 +557,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		Timestamp:    time.Now(),
 		RequestID:    metadata.RequestID,
 		UserID:       userID,
+		KeyID:        keyID,
 		IPAddress:    ipAddress,
 		Provider:     metadata.Provider,
 		Model:        metadata.Model,

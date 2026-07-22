@@ -127,6 +127,7 @@ func TestDatadogTransport_NewAndWriteRecord_Defaults(t *testing.T) {
 		Endpoint:     "/v1/chat",
 		IsStreaming:  true,
 		UserID:       "user-1",
+		KeyID:        "iw:0123456789ab…deadbeef",
 		FinishReason: "stop",
 		InputTokens:  10,
 		OutputTokens: 20,
@@ -136,6 +137,9 @@ func TestDatadogTransport_NewAndWriteRecord_Defaults(t *testing.T) {
 		TotalCost:    0.003,
 	}
 	assert.NoError(t, tr.WriteRecord(rec))
+
+	assert.Equal(t, "iw:0123456789ab...deadbeef", dogstatsdKeyIDTagValue(rec.KeyID))
+	assert.Equal(t, "iw:short", dogstatsdKeyIDTagValue("iw:short"))
 
 	// also exercise zero defaults branch via empty cfg
 	tr2, err := NewDatadogTransport(DatadogTransportConfig{})

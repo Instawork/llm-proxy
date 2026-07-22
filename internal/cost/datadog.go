@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
@@ -173,10 +174,16 @@ func NewDatadogTransportFromConfig(transportConfig interface{}, logger *slog.Log
 	return dt.FromConfig(transportConfig, logger)
 }
 
+// dogstatsdKeyIDTagValue makes a masked key id safe for DogStatsD tag values.
+// Masked ids use a unicode ellipsis; Datadog tag grammar prefers ASCII.
+func dogstatsdKeyIDTagValue(keyID string) string {
+	return strings.ReplaceAll(keyID, "…", "...")
+}
+
 // WriteRecord writes a cost record to Datadog as metrics
 func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 	// Create metric tags from the record
-	tags := make([]string, 0, len(dt.tags)+6)
+	tags := make([]string, 0, len(dt.tags)+7)
 	tags = append(tags, dt.tags...)
 	tags = append(
 		tags,
@@ -188,6 +195,10 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 
 	if record.UserID != "" {
 		tags = append(tags, fmt.Sprintf("user_id:%s", record.UserID))
+	}
+
+	if record.KeyID != "" {
+		tags = append(tags, fmt.Sprintf("key_id:%s", dogstatsdKeyIDTagValue(record.KeyID)))
 	}
 
 	if record.FinishReason != "" {

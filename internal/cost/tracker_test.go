@@ -61,7 +61,7 @@ func TestCostTracker_TrackRequest_Sync(t *testing.T) {
 		OutputTokens: 50,
 	}
 
-	err := ct.TrackRequest(meta, "user1", "127.0.0.1", "/v1/chat", "")
+	err := ct.TrackRequest(meta, "user1", "127.0.0.1", "/v1/chat", "iw:0123456789ab…deadbeef")
 	assert.NoError(t, err)
 
 	records := mock.Records()
@@ -69,6 +69,7 @@ func TestCostTracker_TrackRequest_Sync(t *testing.T) {
 	assert.Equal(t, "openai", records[0].Provider)
 	assert.Equal(t, "gpt-4o", records[0].Model)
 	assert.Equal(t, "user1", records[0].UserID)
+	assert.Equal(t, "iw:0123456789ab…deadbeef", records[0].KeyID)
 	assert.Equal(t, 100, records[0].InputTokens)
 	assert.Equal(t, 50, records[0].OutputTokens)
 	// cost = 100 * 0.01/1000 + 50 * 0.02/1000 = 0.001 + 0.001 = 0.0001
