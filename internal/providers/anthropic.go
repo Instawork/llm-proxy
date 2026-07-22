@@ -122,63 +122,7 @@ func (a *AnthropicProxy) IsStreamingRequest(req *http.Request) bool {
 	// /messages is the native endpoint; /chat/completions is the
 	// OpenAI-compatibility endpoint (same "stream": true body contract).
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/messages") || isChatCompletionsPath(req.URL.Path)) {
-		return a.checkStreamingInBody(req)
-	}
-
-	return false
-}
-
-// checkStreamingInBody reads the request body to check for "stream": true
-// Anthropic uses the same streaming pattern as OpenAI
-func (a *AnthropicProxy) checkStreamingInBody(req *http.Request) bool {
-	if req.Body == nil {
-		return false
-	}
-
-	// Use GetBody if available (body was already read and cached)
-	var bodyBytes []byte
-	var err error
-
-	if req.GetBody != nil {
-		// Body was already cached, use GetBody to get a fresh reader
-		bodyReader, err := req.GetBody()
-		if err != nil {
-			proxylog.Proxy("anthropic streaming check: error getting cached request body: %v", err)
-			return false
-		}
-		defer bodyReader.Close()
-		bodyBytes, err = io.ReadAll(bodyReader)
-		if err != nil {
-			proxylog.Proxy("anthropic streaming check: error reading cached request body: %v", err)
-			return false
-		}
-	} else {
-		// Read the body for the first time
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			proxylog.Proxy("anthropic streaming check: error reading request body: %v", err)
-			return false
-		}
-
-		// Restore the body and create GetBody for future use
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
-		}
-	}
-
-	// Parse the JSON to check for stream field
-	var requestData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
-		proxylog.Proxy("anthropic streaming check: error parsing request body JSON: %v", err)
-		return false
-	}
-
-	// Check if stream is set to true
-	if streamValue, exists := requestData["stream"]; exists {
-		if streamBool, ok := streamValue.(bool); ok {
-			return streamBool
-		}
+		return requestBodyHasStreamTrue(req, "anthropic")
 	}
 
 	return false
@@ -274,16 +218,34 @@ type AnthropicDelta struct {
 	StopSequence *string `json:"stop_sequence,omitempty"`
 }
 
-// ParseResponseMetadata extracts tokens and model information from Anthropic responses
+// ParseResponseMetadata extracts tokens and model information from Anthropic responses.
 func (a *AnthropicProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error) {
-	if isStreaming {
-		return a.parseStreamingResponse(responseBody)
-	}
-	return a.parseNonStreamingResponse(responseBody)
+	return parseAnthropicFormatMetadata(responseBody, isStreaming, "anthropic")
 }
 
-// parseNonStreamingResponse handles standard Anthropic JSON responses
-func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+// parseAnthropicFormatMetadata parses an Anthropic-format body (streaming or
+// non-streaming, including OpenAI-compat bodies served on Anthropic's
+// /chat/completions endpoint) and attributes the result to provider.
+//
+// This is the shared entry point for Anthropic-shaped responses: AnthropicProxy
+// uses it for native traffic, and Bedrock Mantle calls it for Anthropic-style
+// streams so it does not depend on constructing a concrete AnthropicProxy.
+func parseAnthropicFormatMetadata(responseBody io.Reader, isStreaming bool, provider string) (*LLMResponseMetadata, error) {
+	var metadata *LLMResponseMetadata
+	var err error
+	if isStreaming {
+		metadata, err = parseAnthropicStreamingResponse(responseBody)
+	} else {
+		metadata, err = parseAnthropicNonStreamingResponse(responseBody)
+	}
+	if metadata != nil {
+		metadata.Provider = provider
+	}
+	return metadata, err
+}
+
+// parseAnthropicNonStreamingResponse handles standard Anthropic JSON responses
+func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {
@@ -333,8 +295,8 @@ func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLM
 	return metadata, nil
 }
 
-// parseStreamingResponse handles Anthropic server-sent events
-func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+// parseAnthropicStreamingResponse handles Anthropic server-sent events
+func parseAnthropicStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {

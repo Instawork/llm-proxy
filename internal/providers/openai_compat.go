@@ -90,9 +90,10 @@ func isChatCompletionsPath(path string) bool {
 }
 
 // requestBodyHasStreamTrue reads (and restores) the request body and reports
-// whether it contains "stream": true. Used by providers whose native
-// streaming detection is path-based but whose OpenAI-compatibility endpoint
-// signals streaming in the JSON body, like OpenAI proper.
+// whether it contains "stream": true. This is the shared body-based streaming
+// check for every provider whose API signals streaming in the request JSON
+// (OpenAI, Anthropic, Bedrock Mantle, and the Gemini/Anthropic
+// OpenAI-compatibility endpoints).
 func requestBodyHasStreamTrue(req *http.Request, providerName string) bool {
 	if req.Body == nil {
 		return false

@@ -427,10 +427,7 @@ func (b *BedrockMantleProxy) IsStreamingRequest(req *http.Request) bool {
 	if strings.Contains(req.URL.Path, "/messages") ||
 		strings.Contains(req.URL.Path, "/responses") ||
 		strings.Contains(req.URL.Path, "/completions") {
-		if strings.Contains(req.URL.Path, "/messages") {
-			return (&AnthropicProxy{}).checkStreamingInBody(req)
-		}
-		return (&OpenAIProxy{}).checkStreamingInBody(req)
+		return requestBodyHasStreamTrue(req, bedrockMantleName)
 	}
 	return false
 }
@@ -661,11 +658,7 @@ func parseMantleStream(responseBody io.Reader) (*LLMResponseMetadata, error) {
 		return nil, err
 	}
 	if mantleStreamLooksAnthropic(data) {
-		metadata, err := (&AnthropicProxy{}).ParseResponseMetadata(bytes.NewReader(data), true)
-		if metadata != nil {
-			metadata.Provider = bedrockMantleName
-		}
-		return metadata, err
+		return parseAnthropicFormatMetadata(bytes.NewReader(data), true, bedrockMantleName)
 	}
 	return parseMantleOpenAIStream(bytes.NewReader(data))
 }
