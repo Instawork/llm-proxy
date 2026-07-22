@@ -77,6 +77,14 @@ type abortTrackingWriter struct {
 }
 
 func (w *abortTrackingWriter) WriteHeader(code int) {
+	// 1xx informational responses (100 Continue, 103 Early Hints — which
+	// ReverseProxy forwards via WriteHeader) are non-terminal: net/http lets
+	// the handler call WriteHeader again with the final status, so don't
+	// latch tracking state on them.
+	if code >= 100 && code < 200 {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if !w.wroteHeader {
 		w.status = code
 		w.wroteHeader = true
@@ -97,6 +105,13 @@ func (w *abortTrackingWriter) Write(b []byte) (int, error) {
 }
 
 func (w *abortTrackingWriter) Flush() {
+	// Flush commits an implicit 200 in net/http when WriteHeader hasn't been
+	// called yet; mirror that so abort logs never claim headers_sent=false
+	// after headers already reached the client.
+	if !w.wroteHeader {
+		w.status = http.StatusOK
+		w.wroteHeader = true
+	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}

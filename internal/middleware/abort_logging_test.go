@@ -142,3 +142,37 @@ func TestAbortTrackingWriter_ForwardsFlush(t *testing.T) {
 		t.Error("expected Flush to be forwarded to the underlying writer")
 	}
 }
+
+// TestAbortTrackingWriter_InformationalHeadersNonTerminal verifies that 1xx
+// responses (e.g. 103 Early Hints, which ReverseProxy forwards) do not latch
+// the tracked status — the later final WriteHeader wins.
+func TestAbortTrackingWriter_InformationalHeadersNonTerminal(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := &abortTrackingWriter{ResponseWriter: rec}
+
+	w.WriteHeader(http.StatusEarlyHints)
+	if w.wroteHeader {
+		t.Error("1xx must not mark headers as terminally written")
+	}
+	w.WriteHeader(http.StatusAccepted)
+	if w.status != http.StatusAccepted || !w.wroteHeader {
+		t.Errorf("expected final status 202 tracked, got status=%d wroteHeader=%v", w.status, w.wroteHeader)
+	}
+}
+
+// TestAbortTrackingWriter_FlushCommitsImplicit200 verifies a flush-only
+// response is tracked as headers committed with the implicit 200 that
+// net/http sends, so abort logs never report headers_sent=false after the
+// client already received headers.
+func TestAbortTrackingWriter_FlushCommitsImplicit200(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := &abortTrackingWriter{ResponseWriter: rec}
+
+	w.Flush()
+	if !w.wroteHeader || w.status != http.StatusOK {
+		t.Errorf("expected flush to commit implicit 200, got status=%d wroteHeader=%v", w.status, w.wroteHeader)
+	}
+	if !rec.Flushed {
+		t.Error("expected Flush to be forwarded to the underlying writer")
+	}
+}
