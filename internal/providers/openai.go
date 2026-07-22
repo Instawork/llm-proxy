@@ -328,34 +328,50 @@ type OpenAIResponsesEvent struct {
 	Status    string                 `json:"status,omitempty"`
 }
 
-// ParseResponseMetadata extracts tokens and model information from OpenAI responses
+// ParseResponseMetadata extracts tokens and model information from OpenAI responses.
 func (o *OpenAIProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming bool) (*LLMResponseMetadata, error) {
-	// Create a buffer to read the response body
+	return parseOpenAIFormatMetadata(responseBody, isStreaming, "openai")
+}
+
+// parseOpenAIFormatMetadata parses an OpenAI Chat Completions or Responses API
+// body (streaming or non-streaming) and attributes the result to provider.
+//
+// This is the shared entry point for OpenAI-shaped responses. OpenAIProxy
+// uses it for native traffic; Anthropic/Gemini/Bedrock Mantle OpenAI-
+// compatibility endpoints call it when they detect a choices-based body so
+// they do not depend on constructing a concrete OpenAIProxy.
+func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provider string) (*LLMResponseMetadata, error) {
 	bodyBytes, err := io.ReadAll(responseBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// For streaming responses, use unified parsing
-	if isStreaming {
-		reader := bytes.NewReader(bodyBytes)
-		return o.parseUnifiedStreamingResponse(reader)
-	}
+	// The chat/completions and Responses parsers are methods on OpenAIProxy
+	// for historical grouping; they are stateless and do not use receiver
+	// fields. Route through a zero-value receiver so the format knowledge
+	// stays in one place.
+	parser := &OpenAIProxy{}
 
-	// For non-streaming, check the structure
-	// Responses API has "output" field while Chat Completions has "choices"
-	var checkResponse map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &checkResponse); err == nil {
-		if _, hasOutput := checkResponse["output"]; hasOutput {
-			// This is a Responses API response
-			reader := bytes.NewReader(bodyBytes)
-			return o.parseResponsesNonStreamingResponse(reader)
+	var metadata *LLMResponseMetadata
+	if isStreaming {
+		metadata, err = parser.parseUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
+	} else {
+		// Responses API has "output"; Chat Completions has "choices".
+		var checkResponse map[string]interface{}
+		if json.Unmarshal(bodyBytes, &checkResponse) == nil {
+			if _, hasOutput := checkResponse["output"]; hasOutput {
+				metadata, err = parser.parseResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
+			} else {
+				metadata, err = parser.parseNonStreamingResponse(bytes.NewReader(bodyBytes))
+			}
+		} else {
+			metadata, err = parser.parseNonStreamingResponse(bytes.NewReader(bodyBytes))
 		}
 	}
-
-	// Traditional Chat Completions API response
-	reader := bytes.NewReader(bodyBytes)
-	return o.parseNonStreamingResponse(reader)
+	if metadata != nil {
+		metadata.Provider = provider
+	}
+	return metadata, err
 }
 
 // parseNonStreamingResponse handles standard OpenAI JSON responses

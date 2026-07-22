@@ -11,15 +11,17 @@ import (
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
-// This file holds the shared OpenAI-compatibility detection used by the
-// Anthropic and Gemini providers. Both vendors expose an OpenAI-style
-// /chat/completions endpoint (Anthropic: /v1/chat/completions, Gemini:
-// /v1beta/openai/chat/completions) whose responses are OpenAI-shaped
-// ("choices" + usage.prompt_tokens) rather than the vendor's native format.
-// Without delegation the native parsers unmarshal those bodies into zero
-// token counts, which silently disables cost tracking, admin spend stats,
-// and per-key cost-limit enforcement for that traffic (this is exactly what
-// happened with Opik traffic on the Anthropic compat endpoint).
+// This file holds OpenAI-compatibility detection used by Anthropic and Gemini.
+// Both vendors expose an OpenAI-style /chat/completions endpoint (Anthropic:
+// /v1/chat/completions, Gemini: /v1beta/openai/chat/completions) whose
+// responses are OpenAI-shaped ("choices" + usage.prompt_tokens) rather than
+// the vendor's native format. When detected, parsing goes through
+// parseOpenAIFormatMetadata (the shared OpenAI-format parser), attributed to
+// the owning provider. Without that, the native parsers unmarshal those
+// bodies into zero token counts, which silently disables cost tracking,
+// admin spend stats, and per-key cost-limit enforcement for that traffic
+// (this is exactly what happened with Opik traffic on the Anthropic compat
+// endpoint).
 
 // looksLikeOpenAIChatJSON reports whether a (decompressed) non-streaming JSON
 // body is OpenAI-shaped: a top-level "choices" array. Native Anthropic bodies
@@ -73,16 +75,12 @@ func looksLikeOpenAIChatStream(data []byte) bool {
 	return false
 }
 
-// parseOpenAICompatMetadata delegates an OpenAI-shaped body to the OpenAI
-// parser and re-tags the resulting metadata with the owning provider's name
-// so cost records, pricing lookups, and stats stay attributed to the vendor
-// that actually served the request.
+// parseOpenAICompatMetadata parses an OpenAI-shaped body via the shared
+// OpenAI-format parser and attributes the result to the owning provider so
+// cost records, pricing lookups, and stats stay on the vendor that actually
+// served the request.
 func parseOpenAICompatMetadata(body []byte, isStreaming bool, provider string) (*LLMResponseMetadata, error) {
-	metadata, err := (&OpenAIProxy{}).ParseResponseMetadata(bytes.NewReader(body), isStreaming)
-	if metadata != nil {
-		metadata.Provider = provider
-	}
-	return metadata, err
+	return parseOpenAIFormatMetadata(bytes.NewReader(body), isStreaming, provider)
 }
 
 // isChatCompletionsPath reports whether the request path targets an

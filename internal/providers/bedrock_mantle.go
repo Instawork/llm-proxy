@@ -650,11 +650,7 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 		Choices json.RawMessage `json:"choices"`
 	}
 	if json.Unmarshal(body, &responseType) == nil && responseType.Choices != nil {
-		metadata, err := (&OpenAIProxy{}).ParseResponseMetadata(bytes.NewReader(body), false)
-		if metadata != nil {
-			metadata.Provider = bedrockMantleName
-		}
-		return metadata, err
+		return parseOpenAIFormatMetadata(bytes.NewReader(body), false, bedrockMantleName)
 	}
 	return parseMantleMetadata(body, false)
 }
