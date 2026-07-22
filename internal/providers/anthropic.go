@@ -119,7 +119,9 @@ func (a *AnthropicProxy) IsStreamingRequest(req *http.Request) bool {
 		return true
 	}
 
-	if req.Method == "POST" && strings.Contains(req.URL.Path, "/messages") {
+	// /messages is the native endpoint; /chat/completions is the
+	// OpenAI-compatibility endpoint (same "stream": true body contract).
+	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/messages") || isChatCompletionsPath(req.URL.Path)) {
 		return a.checkStreamingInBody(req)
 	}
 
@@ -304,6 +306,14 @@ func (a *AnthropicProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLM
 	log.Printf("🔍 Debug: Response body preview: %s",
 		redact.LogPreview(context.Background(), string(bodyBytes), 100))
 
+	// Anthropic's OpenAI-compatibility endpoint (/v1/chat/completions)
+	// returns OpenAI-shaped JSON ("choices" + usage.prompt_tokens). Parsing
+	// it as native Anthropic silently yields zero token counts, which
+	// disables cost tracking and cost-limit enforcement for that traffic.
+	if looksLikeOpenAIChatJSON(bodyBytes) {
+		return parseOpenAICompatMetadata(bodyBytes, false, "anthropic")
+	}
+
 	var response AnthropicResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse Anthropic response: %w", err)
@@ -336,7 +346,17 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 		defer gzipReader.Close()
 	}
 
-	scanner := bufio.NewScanner(decompressedReader)
+	// The OpenAI-compatibility endpoint streams OpenAI-style
+	// chat.completion.chunk events, not Anthropic message_* events.
+	data, err := io.ReadAll(decompressedReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read streaming response: %w", err)
+	}
+	if looksLikeOpenAIChatStream(data) {
+		return parseOpenAICompatMetadata(data, true, "anthropic")
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	// Allow lines up to 2 MB — large tool call / thinking deltas can be wide.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
