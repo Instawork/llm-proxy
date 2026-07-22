@@ -347,16 +347,25 @@ func (a *AnthropicProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRes
 	}
 
 	// The OpenAI-compatibility endpoint streams OpenAI-style
-	// chat.completion.chunk events, not Anthropic message_* events.
-	data, err := io.ReadAll(decompressedReader)
-	if err != nil {
+	// chat.completion.chunk events, not Anthropic message_* events. Peek at
+	// the head to classify the stream; only compat streams are then read in
+	// full (the OpenAI parser needs the final usage chunk), so the native
+	// path keeps decompressing incrementally instead of materializing the
+	// whole decompressed body.
+	buffered := bufio.NewReaderSize(decompressedReader, compatStreamSniffLen)
+	head, err := buffered.Peek(compatStreamSniffLen)
+	if err != nil && err != io.EOF && len(head) == 0 {
 		return nil, fmt.Errorf("failed to read streaming response: %w", err)
 	}
-	if looksLikeOpenAIChatStream(data) {
+	if looksLikeOpenAIChatStream(head) {
+		data, err := io.ReadAll(buffered)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read streaming response: %w", err)
+		}
 		return parseOpenAICompatMetadata(data, true, "anthropic")
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := bufio.NewScanner(buffered)
 	// Allow lines up to 2 MB — large tool call / thinking deltas can be wide.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 

@@ -32,11 +32,20 @@ func looksLikeOpenAIChatJSON(body []byte) bool {
 	return json.Unmarshal(body, &shape) == nil && shape.Choices != nil
 }
 
+// compatStreamSniffLen is how many leading bytes of an SSE stream
+// looksLikeOpenAIChatStream needs. The very first data line of an
+// OpenAI-compat stream is a small role/content delta carrying the "object"
+// discriminator, so a bufio.Reader Peek of this size classifies the stream
+// without materializing the full decompressed body.
+const compatStreamSniffLen = 16 * 1024
+
 // looksLikeOpenAIChatStream reports whether SSE bytes carry OpenAI-style
 // chat.completion chunks. It inspects the first few data lines for a
 // top-level "object" beginning with "chat.completion". Native Anthropic
 // streams carry "type" events (message_start, ...) and native Gemini streams
-// carry "candidates", neither of which sets "object".
+// carry "candidates", neither of which sets "object". A trailing partial
+// line (from a truncated Peek window) simply fails to unmarshal and is
+// skipped.
 func looksLikeOpenAIChatStream(data []byte) bool {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
