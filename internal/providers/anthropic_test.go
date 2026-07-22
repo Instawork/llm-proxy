@@ -150,8 +150,6 @@ data: {"type": "message_stop"}
 
 // TestAnthropicGzipDecompression tests the gzip decompression functionality
 func TestAnthropicGzipDecompression(t *testing.T) {
-	proxy := NewAnthropicProxy()
-
 	// Create a sample JSON response
 	originalResponse := `{
 		"id": "msg_01XFDUDYJgAACzvnptvVoYEL",
@@ -167,7 +165,7 @@ func TestAnthropicGzipDecompression(t *testing.T) {
 	// Test 1: Uncompressed response should work as before
 	t.Run("uncompressed", func(t *testing.T) {
 		reader := strings.NewReader(originalResponse)
-		metadata, err := proxy.parseNonStreamingResponse(reader)
+		metadata, err := parseAnthropicNonStreamingResponse(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse uncompressed response: %v", err)
 		}
@@ -199,7 +197,7 @@ func TestAnthropicGzipDecompression(t *testing.T) {
 
 		// Parse the compressed response
 		reader := bytes.NewReader(compressedBuf.Bytes())
-		metadata, err := proxy.parseNonStreamingResponse(reader)
+		metadata, err := parseAnthropicNonStreamingResponse(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse gzip compressed response: %v", err)
 		}

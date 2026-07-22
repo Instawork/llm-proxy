@@ -247,8 +247,6 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 
 // TestOpenAIGzipDecompression tests the gzip decompression functionality
 func TestOpenAIGzipDecompression(t *testing.T) {
-	proxy := NewOpenAIProxy()
-
 	// Create a sample JSON response
 	originalResponse := `{
 		"id": "chatcmpl-9qKIpEXfmqkMbaMUhPCpnhWh3VRdU",
@@ -275,7 +273,7 @@ func TestOpenAIGzipDecompression(t *testing.T) {
 	// Test 1: Uncompressed response should work as before
 	t.Run("uncompressed", func(t *testing.T) {
 		reader := strings.NewReader(originalResponse)
-		metadata, err := proxy.parseNonStreamingResponse(reader)
+		metadata, err := parseOpenAINonStreamingResponse(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse uncompressed response: %v", err)
 		}
@@ -310,7 +308,7 @@ func TestOpenAIGzipDecompression(t *testing.T) {
 
 		// Parse the compressed response
 		reader := bytes.NewReader(compressedBuf.Bytes())
-		metadata, err := proxy.parseNonStreamingResponse(reader)
+		metadata, err := parseOpenAINonStreamingResponse(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse gzip compressed response: %v", err)
 		}

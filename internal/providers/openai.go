@@ -128,62 +128,7 @@ func (o *OpenAIProxy) IsStreamingRequest(req *http.Request) bool {
 	if req.Method == "POST" && (strings.Contains(req.URL.Path, "/chat/completions") ||
 		strings.Contains(req.URL.Path, "/completions") ||
 		strings.Contains(req.URL.Path, "/responses")) {
-		return o.checkStreamingInBody(req)
-	}
-
-	return false
-}
-
-// checkStreamingInBody reads the request body to check for "stream": true
-func (o *OpenAIProxy) checkStreamingInBody(req *http.Request) bool {
-	if req.Body == nil {
-		return false
-	}
-
-	// Use GetBody if available (body was already read and cached)
-	var bodyBytes []byte
-	var err error
-
-	if req.GetBody != nil {
-		// Body was already cached, use GetBody to get a fresh reader
-		bodyReader, err := req.GetBody()
-		if err != nil {
-			proxylog.Proxy("openai streaming check: error getting cached request body: %v", err)
-			return false
-		}
-		defer bodyReader.Close()
-		bodyBytes, err = io.ReadAll(bodyReader)
-		if err != nil {
-			proxylog.Proxy("openai streaming check: error reading cached request body: %v", err)
-			return false
-		}
-	} else {
-		// Read the body for the first time
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			proxylog.Proxy("openai streaming check: error reading request body: %v", err)
-			return false
-		}
-
-		// Restore the body and create GetBody for future use
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
-		}
-	}
-
-	// Parse the JSON to check for stream field
-	var requestData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
-		proxylog.Proxy("openai streaming check: error parsing request body JSON: %v", err)
-		return false
-	}
-
-	// Check if stream is set to true
-	if streamValue, exists := requestData["stream"]; exists {
-		if streamBool, ok := streamValue.(bool); ok {
-			return streamBool
-		}
+		return requestBodyHasStreamTrue(req, "openai")
 	}
 
 	return false
@@ -346,26 +291,20 @@ func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provide
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// The chat/completions and Responses parsers are methods on OpenAIProxy
-	// for historical grouping; they are stateless and do not use receiver
-	// fields. Route through a zero-value receiver so the format knowledge
-	// stays in one place.
-	parser := &OpenAIProxy{}
-
 	var metadata *LLMResponseMetadata
 	if isStreaming {
-		metadata, err = parser.parseUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
+		metadata, err = parseOpenAIUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
 	} else {
 		// Responses API has "output"; Chat Completions has "choices".
 		var checkResponse map[string]interface{}
 		if json.Unmarshal(bodyBytes, &checkResponse) == nil {
 			if _, hasOutput := checkResponse["output"]; hasOutput {
-				metadata, err = parser.parseResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
+				metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
 			} else {
-				metadata, err = parser.parseNonStreamingResponse(bytes.NewReader(bodyBytes))
+				metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
 			}
 		} else {
-			metadata, err = parser.parseNonStreamingResponse(bytes.NewReader(bodyBytes))
+			metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
 		}
 	}
 	if metadata != nil {
@@ -374,8 +313,8 @@ func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provide
 	return metadata, err
 }
 
-// parseNonStreamingResponse handles standard OpenAI JSON responses
-func (o *OpenAIProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+// parseOpenAINonStreamingResponse handles standard OpenAI JSON responses
+func parseOpenAINonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {
@@ -422,9 +361,9 @@ func (o *OpenAIProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 	return metadata, nil
 }
 
-// parseUnifiedStreamingResponse handles both Responses API and Chat Completions API streaming responses
+// parseOpenAIUnifiedStreamingResponse handles both Responses API and Chat Completions API streaming responses
 // by determining the API type on the first data line and processing accordingly
-func (o *OpenAIProxy) parseUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {
@@ -473,14 +412,14 @@ func (o *OpenAIProxy) parseUnifiedStreamingResponse(responseBody io.Reader) (*LL
 
 		// Determine API type on the first data line if not already determined
 		if apiType == "" {
-			apiType = o.detectAPIType(jsonData)
+			apiType = detectOpenAIAPIType(jsonData)
 		}
 
 		// Process based on determined API type
 		if apiType == "responses" {
-			metadata, model, requestID, finishReason, thoughtTokens = o.parseResponsesStreamingChunk(jsonData, model, requestID, finishReason, thoughtTokens)
+			metadata, model, requestID, finishReason, thoughtTokens = parseOpenAIResponsesStreamingChunk(jsonData, model, requestID, finishReason, thoughtTokens)
 		} else {
-			metadata, model, requestID, finishReason = o.parseCompletionsStreamingChunk(jsonData, model, requestID, finishReason)
+			metadata, model, requestID, finishReason = parseOpenAICompletionsStreamingChunk(jsonData, model, requestID, finishReason)
 		}
 	}
 
@@ -515,8 +454,8 @@ func (o *OpenAIProxy) parseUnifiedStreamingResponse(responseBody io.Reader) (*LL
 	return nil, fmt.Errorf("no usage information found in streaming response")
 }
 
-// detectAPIType determines whether the streaming response is from Responses API or Chat Completions API
-func (o *OpenAIProxy) detectAPIType(jsonData string) string {
+// detectOpenAIAPIType determines whether the streaming response is from Responses API or Chat Completions API
+func detectOpenAIAPIType(jsonData string) string {
 	var checkData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonData), &checkData); err == nil {
 		// Responses API streaming has "type" field (e.g., "response.output_text.delta")
@@ -536,8 +475,8 @@ func (o *OpenAIProxy) detectAPIType(jsonData string) string {
 	return ""
 }
 
-// parseResponsesStreamingChunk processes a single streaming chunk from the Responses API
-func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
+// parseOpenAIResponsesStreamingChunk processes a single streaming chunk from the Responses API
+func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
 	// Try to parse the chunk - could be an event or a delta
 	var chunkData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
@@ -707,8 +646,8 @@ func (o *OpenAIProxy) parseResponsesStreamingChunk(jsonData string, model, reque
 	return metadata, model, requestID, finishReason, thoughtTokens
 }
 
-// parseCompletionsStreamingChunk processes a single streaming chunk from the Chat Completions API
-func (o *OpenAIProxy) parseCompletionsStreamingChunk(jsonData string, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
+// parseOpenAICompletionsStreamingChunk processes a single streaming chunk from the Chat Completions API
+func parseOpenAICompletionsStreamingChunk(jsonData string, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
 	var streamResponse OpenAIStreamResponse
 	if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
 		// Log error but continue processing other chunks
@@ -753,8 +692,8 @@ func (o *OpenAIProxy) parseCompletionsStreamingChunk(jsonData string, model, req
 	return metadata, model, requestID, finishReason
 }
 
-// parseResponsesNonStreamingResponse handles Responses API non-streaming responses
-func (o *OpenAIProxy) parseResponsesNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
+// parseOpenAIResponsesNonStreamingResponse handles Responses API non-streaming responses
+func parseOpenAIResponsesNonStreamingResponse(responseBody io.Reader) (*LLMResponseMetadata, error) {
 	// Handle potential gzip compression
 	decompressedReader, err := DecompressResponseIfNeeded(responseBody)
 	if err != nil {
