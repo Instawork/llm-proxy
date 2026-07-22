@@ -230,7 +230,12 @@ func (env *costTrackingEnv) requireCostTracked(t *testing.T, baseline int, wantP
 		"no cost record written for provider %s — token parsing likely returned zero tokens", wantProvider)
 
 	assert.Greater(t, got.InputTokens, 0, "input tokens missing from cost record")
-	assert.Greater(t, got.OutputTokens, 0, "output tokens missing from cost record")
+	// Gemini OpenAI-compat (and other thinking models) can report completion_tokens=0
+	// when the max_tokens budget is consumed by thought tokens, while still setting
+	// total_tokens > prompt_tokens. Treat that gap as billable output for this gate.
+	assert.True(t, got.OutputTokens > 0 || got.TotalTokens > got.InputTokens,
+		"output tokens missing from cost record (output=%d total=%d input=%d)",
+		got.OutputTokens, got.TotalTokens, got.InputTokens)
 	assert.Greater(t, got.TotalCost, 0.0,
 		"cost record has zero USD — no pricing matched model %q for provider %s", got.Model, wantProvider)
 
@@ -379,12 +384,18 @@ func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
 	masked := middleware.MaskKeyID(created.PK)
 	headers := map[string]string{"Authorization": "Bearer " + created.PK}
 
+	// gemini-2.5-flash thinking can consume a small max_tokens budget entirely,
+	// leaving completion_tokens=0 (and sometimes an empty stream with no usage
+	// chunk). Leave headroom so the OpenAI-compat path still emits visible
+	// completion tokens + include_usage for cost tracking.
+	const geminiCompatMaxTokens = 256
+
 	t.Run("NonStreaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
 			map[string]interface{}{
 				"model":      "gemini-2.5-flash",
-				"max_tokens": 32,
+				"max_tokens": geminiCompatMaxTokens,
 				"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
 			})
 
@@ -397,7 +408,7 @@ func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
 			map[string]interface{}{
 				"model":          "gemini-2.5-flash",
-				"max_tokens":     32,
+				"max_tokens":     geminiCompatMaxTokens,
 				"stream":         true,
 				"stream_options": map[string]bool{"include_usage": true},
 				"messages":       []map[string]string{{"role": "user", "content": "Say hi in one word."}},
