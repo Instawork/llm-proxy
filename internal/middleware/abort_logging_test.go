@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,6 +76,53 @@ func TestAbortLoggingMiddleware_AbortBeforeHeaders(t *testing.T) {
 	if !strings.Contains(logOutput, "bytes_written=0") {
 		t.Errorf("expected bytes_written=0 in abort log, got: %s", logOutput)
 	}
+}
+
+// TestAbortLoggingMiddleware_LogsContextState verifies the abort line
+// carries the request-context error and cause, distinguishing "inbound
+// connection died (context canceled)" from "upstream body read failed with a
+// live client" (empty ctx_err).
+func TestAbortLoggingMiddleware_LogsContextState(t *testing.T) {
+	handler := AbortLoggingMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+
+	t.Run("live context logs empty ctx_err", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/gemini/v1beta/models/x:generateContent", nil)
+		rec := httptest.NewRecorder()
+
+		logOutput := captureSlogOutput(func() {
+			defer func() { _ = recover() }()
+			handler.ServeHTTP(rec, req)
+		})
+
+		if !strings.Contains(logOutput, "ctx_err=") {
+			t.Errorf("expected ctx_err attribute in abort log, got: %s", logOutput)
+		}
+		if strings.Contains(logOutput, "context canceled") {
+			t.Errorf("expected empty ctx_err for live context, got: %s", logOutput)
+		}
+	})
+
+	t.Run("canceled context logs cause", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(errors.New("client hung up"))
+
+		req := httptest.NewRequest("POST", "/gemini/v1beta/models/x:generateContent", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		logOutput := captureSlogOutput(func() {
+			defer func() { _ = recover() }()
+			handler.ServeHTTP(rec, req)
+		})
+
+		if !strings.Contains(logOutput, "context canceled") {
+			t.Errorf("expected ctx_err=context canceled in abort log, got: %s", logOutput)
+		}
+		if !strings.Contains(logOutput, "client hung up") {
+			t.Errorf("expected ctx_cause with cancel cause in abort log, got: %s", logOutput)
+		}
+	})
 }
 
 // TestAbortLoggingMiddleware_OtherPanicsPassThrough verifies that non-abort
