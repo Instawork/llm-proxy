@@ -357,6 +357,12 @@ func maxInt(a, b int) int {
 }
 
 func exceededMetric(c *counters, lim limits, addTokens int) string {
+	// Prefer requests over tokens when both are exceeded, matching exceeds()
+	// check order and redis.luaCheckAndReserve so X-RateLimit-* headers
+	// agree across backends.
+	if lim.reqPerWindow > 0 && c.Requests+1 > lim.reqPerWindow {
+		return "requests"
+	}
 	if lim.tokPerWindow > 0 && c.Tokens+addTokens > lim.tokPerWindow {
 		return "tokens"
 	}

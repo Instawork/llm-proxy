@@ -57,6 +57,26 @@ func TestMemoryLimiterTokensPerMinute(t *testing.T) {
 	}
 }
 
+func TestMemoryLimiterBothLimitsExceededPrefersRequestsMetric(t *testing.T) {
+	// When a denial trips both RPM and TPM, report "requests" so headers
+	// match redis.luaCheckAndReserve (requests checked first).
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits.RequestsPerMinute = 1
+	cfg.Features.RateLimiting.Limits.TokensPerMinute = 10
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{Provider: "openai", Model: "gpt-4o", UserID: "u-both"}
+	now := time.Now()
+
+	if res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 10, now); !res.Allowed {
+		t.Fatalf("first should be allowed")
+	}
+	res, err := lim.CheckAndReserve(context.Background(), "2", scope, 10, now)
+	require.NoError(t, err)
+	require.False(t, res.Allowed)
+	require.NotNil(t, res.Details)
+	assert.Equal(t, "requests", res.Details.Metric)
+}
+
 func TestMemoryLimiterDailyWindow(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Features.RateLimiting.Limits.RequestsPerMinute = 1000
