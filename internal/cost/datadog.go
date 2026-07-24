@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"strings"
 	"time"
@@ -28,10 +27,11 @@ type DatadogTransportConfig struct {
 
 // DatadogTransport implements Transport interface for Datadog-based cost tracking
 type DatadogTransport struct {
-	client    *statsd.Client
-	namespace string
-	tags      []string
-	logger    *slog.Logger
+	client     *statsd.Client
+	namespace  string
+	tags       []string
+	sampleRate float64
+	logger     *slog.Logger
 }
 
 // NewDatadogTransport creates a new Datadog-based transport
@@ -72,10 +72,11 @@ func NewDatadogTransport(cfg DatadogTransportConfig) (*DatadogTransport, error) 
 	}
 
 	transport := &DatadogTransport{
-		client:    client,
-		namespace: cfg.Namespace,
-		tags:      cfg.Tags,
-		logger:    logger,
+		client:     client,
+		namespace:  cfg.Namespace,
+		tags:       cfg.Tags,
+		sampleRate: cfg.SampleRate,
+		logger:     logger,
 	}
 
 	return transport, nil
@@ -206,37 +207,40 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 	}
 
 	// Send token metrics
-	if err := dt.client.Distribution("tokens.input", float64(record.InputTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.input", float64(record.InputTokens), tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send input tokens metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Distribution("tokens.output", float64(record.OutputTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.output", float64(record.OutputTokens), tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send output tokens metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Distribution("tokens.total", float64(record.TotalTokens), tags, 1.0); err != nil {
+	if err := dt.client.Distribution("tokens.total", float64(record.TotalTokens), tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send total tokens metric to Datadog", "error", err)
 	}
 
-	// Send cost metrics (convert to cents to avoid floating point precision issues in Datadog)
-	inputCostCents := float64(math.Ceil(record.InputCost * 100))
-	outputCostCents := float64(math.Ceil(record.OutputCost * 100))
-	totalCostCents := float64(math.Ceil(record.TotalCost * 100))
+	// Send cost metrics (convert to cents to avoid floating point precision
+	// issues in Datadog). Keep fractional cents: rounding each record up to a
+	// whole cent overstates aggregate spend by orders of magnitude for
+	// high-volume sub-cent requests (a $0.0001 call would report as 1 cent).
+	inputCostCents := record.InputCost * 100
+	outputCostCents := record.OutputCost * 100
+	totalCostCents := record.TotalCost * 100
 
-	if err := dt.client.Distribution("cost.input_cents", inputCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.input_cents", inputCostCents, tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send input cost metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Distribution("cost.output_cents", outputCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.output_cents", outputCostCents, tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send output cost metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Distribution("cost.total_cents", totalCostCents, tags, 1.0); err != nil {
+	if err := dt.client.Distribution("cost.total_cents", totalCostCents, tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send total cost metric to Datadog", "error", err)
 	}
 
 	// Send request count metric
-	if err := dt.client.Incr("requests.count", tags, 1.0); err != nil {
+	if err := dt.client.Incr("requests.count", tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send request count metric to Datadog", "error", err)
 	}
 

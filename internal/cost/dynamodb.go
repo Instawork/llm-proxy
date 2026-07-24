@@ -55,6 +55,7 @@ type DynamoDBCostRecord struct {
 	Timestamp    int64   `dynamodbav:"timestamp"` // Unix timestamp for easier queries
 	RequestID    string  `dynamodbav:"request_id,omitempty"`
 	UserID       string  `dynamodbav:"user_id,omitempty"`
+	KeyID        string  `dynamodbav:"key_id,omitempty"`
 	IPAddress    string  `dynamodbav:"ip_address,omitempty"`
 	Provider     string  `dynamodbav:"provider"`
 	Model        string  `dynamodbav:"model"`
@@ -288,8 +289,12 @@ func (dt *DynamoDBTransport) WriteRecord(record *CostRecord) error {
 
 // toDynamoDBRecord converts a CostRecord to DynamoDBCostRecord
 func (dt *DynamoDBTransport) toDynamoDBRecord(record *CostRecord) *DynamoDBCostRecord {
-	dateStr := record.Timestamp.Format("2006-01-02")
-	timestampStr := record.Timestamp.Format("2006-01-02T15:04:05.000Z")
+	// Convert to UTC before formatting: the "Z" in the layout is a literal,
+	// so formatting a local-time value would stamp local wall-clock time as
+	// UTC and bucket the partition key by local day instead of UTC day.
+	ts := record.Timestamp.UTC()
+	dateStr := ts.Format("2006-01-02")
+	timestampStr := ts.Format("2006-01-02T15:04:05.000Z")
 
 	return &DynamoDBCostRecord{
 		PK:           fmt.Sprintf("COST#%s", dateStr),
@@ -304,6 +309,7 @@ func (dt *DynamoDBTransport) toDynamoDBRecord(record *CostRecord) *DynamoDBCostR
 		Timestamp:    record.Timestamp.Unix(),
 		RequestID:    record.RequestID,
 		UserID:       record.UserID,
+		KeyID:        record.KeyID,
 		IPAddress:    record.IPAddress,
 		Provider:     record.Provider,
 		Model:        record.Model,

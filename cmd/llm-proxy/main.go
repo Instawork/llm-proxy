@@ -213,7 +213,7 @@ func init() {
 				// Format time with consistent RFC3339 format for better log parsing
 				// This is more precise and timezone-aware than the basic AWS format
 				if a.Key == slog.TimeKey && len(groups) == 0 {
-					return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05,"))
+					return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05,000"))
 				}
 				return a
 			},
@@ -249,6 +249,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 
 	// Create all configured transports
 	var transports []cost.Transport
+	var transportTypes []string
 	var failedTransports []string
 
 	for i, transportConfig := range transportConfigs {
@@ -317,6 +318,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 
 		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
 		transports = append(transports, transport)
+		transportTypes = append(transportTypes, transportConfig.Type)
 	}
 
 	// Check if we have at least one working transport
@@ -332,19 +334,12 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		logProxyWarn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
 		transport := cost.NewFileTransport(outputFile)
 		transports = append(transports, transport)
+		transportTypes = append(transportTypes, "file")
 		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
 	}
 
 	// Create cost tracker with all working transports
 	costTracker := cost.NewCostTracker(transports...)
-
-	// Log successful initialization
-	transportTypes := make([]string, len(transports))
-	for i := range transports {
-		if i < len(transportConfigs) {
-			transportTypes[i] = transportConfigs[i].Type
-		}
-	}
 
 	if len(failedTransports) > 0 {
 		logProxyWarn("💰 Cost Tracker: Initialized with some transport failures",
@@ -1904,10 +1899,11 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	// Set up graceful shutdown
+	serverErrChan := make(chan error, 1)
 	go func() {
 		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logProxyError("Server failed to start", "error", err)
+			serverErrChan <- err
 		}
 	}()
 
@@ -1915,9 +1911,18 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	sig := <-sigChan
-	logger.Info("🛑 Received shutdown signal", "signal", sig.String())
-	gracefulShutdown(server)
+	select {
+	case err := <-serverErrChan:
+		// e.g. port already in use — flush recorders/sinks, then exit
+		// non-zero so the orchestrator restarts us instead of leaving a
+		// dead proxy blocked on the signal channel.
+		logProxyError("Server failed to start", "error", err)
+		gracefulShutdown(server)
+		os.Exit(1)
+	case sig := <-sigChan:
+		logger.Info("🛑 Received shutdown signal", "signal", sig.String())
+		gracefulShutdown(server)
+	}
 }
 
 // closeGlobalHistorySink flushes buffered row history on shutdown.
