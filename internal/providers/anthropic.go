@@ -614,12 +614,14 @@ func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore)
 		// "Authorization: Bearer <key>" instead. Translate that onto
 		// x-api-key — the header Anthropic's API actually expects — so the
 		// rest of this function, and the upstream request, only ever deal
-		// with x-api-key.
-		const bearerPrefix = "Bearer "
-		if bearerCredential, ok := strings.CutPrefix(req.Header.Get("Authorization"), bearerPrefix); ok {
-			presentedCredential = bearerCredential
-			req.Header.Set("x-api-key", presentedCredential)
-			req.Header.Del("Authorization")
+		// with x-api-key. Scheme matching is case-insensitive per RFC 7235.
+		if authHeader := req.Header.Get("Authorization"); authHeader != "" {
+			scheme, credential, ok := strings.Cut(authHeader, " ")
+			if ok && strings.EqualFold(scheme, "Bearer") && credential != "" {
+				presentedCredential = credential
+				req.Header.Set("x-api-key", presentedCredential)
+				req.Header.Del("Authorization")
+			}
 		}
 	}
 	if presentedCredential == "" {

@@ -479,9 +479,16 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 		}
 	}
 	if m := inner.InvocationMetrics; m != nil && (m.InputTokenCount > 0 || m.OutputTokenCount > 0) {
-		metadata.InputTokens = m.InputTokenCount
-		metadata.OutputTokens = m.OutputTokenCount
-		metadata.TotalTokens = m.InputTokenCount + m.OutputTokenCount
+		// Overwrite each field independently. Bedrock may emit a metrics
+		// block with only one side populated; blindly assigning both would
+		// zero out a previously-correct count from message_start/delta.
+		if m.InputTokenCount > 0 {
+			metadata.InputTokens = m.InputTokenCount
+		}
+		if m.OutputTokenCount > 0 {
+			metadata.OutputTokens = m.OutputTokenCount
+		}
+		metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
 		sawUsage = true
 	}
 	return sawUsage

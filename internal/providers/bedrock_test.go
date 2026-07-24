@@ -461,6 +461,41 @@ func TestBedrock_ParseStreamingResponse_InvokeChunks(t *testing.T) {
 	}
 }
 
+// TestBedrock_ParseInvokeChunk_PartialInvocationMetricsPreservesPriorCounts
+// guards against zeroing a previously-correct token when Bedrock emits
+// amazon-bedrock-invocationMetrics with only one side populated.
+func TestBedrock_ParseInvokeChunk_PartialInvocationMetricsPreservesPriorCounts(t *testing.T) {
+	b := NewBedrockProxy()
+	var buf bytes.Buffer
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":    "message_start",
+		"message": map[string]any{"id": "msg_1", "usage": map[string]int{"input_tokens": 40, "output_tokens": 1}},
+	})
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]string{"stop_reason": "end_turn"},
+		"usage": map[string]int{"output_tokens": 12},
+		// Only output side present — must not wipe the input count from message_start.
+		"amazon-bedrock-invocationMetrics": map[string]int{
+			"outputTokenCount": 12,
+		},
+	})
+
+	md, err := b.ParseResponseMetadata(&buf, true)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if md.InputTokens != 40 {
+		t.Errorf("input tokens wiped by partial InvocationMetrics: got %d want 40", md.InputTokens)
+	}
+	if md.OutputTokens != 12 {
+		t.Errorf("output tokens: got %d want 12", md.OutputTokens)
+	}
+	if md.TotalTokens != 52 {
+		t.Errorf("total tokens: got %d want 52", md.TotalTokens)
+	}
+}
+
 func TestSigV4HeaderSigned(t *testing.T) {
 	auth := "AWS4-HMAC-SHA256 Credential=AKIA/20260724/us-east-1/bedrock/aws4_request, " +
 		"SignedHeaders=accept-encoding;content-type;host;x-amz-date, Signature=abc123"
