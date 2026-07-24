@@ -159,9 +159,9 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		req.Header.Del("X-Amz-Date")
 		req.Header.Del("X-Amz-Content-Sha256")
 		req.Header.Del("X-Amz-Security-Token")
-		// Drop CDN/client hop headers before SigV4. Cloudflare (in front of
-		// llm.instawork.com) and OpenAI SDKs inject headers that must not be
-		// forwarded or signed — otherwise Mantle returns 401 InvalidSignature.
+		// Drop CDN/client hop headers before SigV4. Reverse proxies and OpenAI
+		// SDKs inject headers that must not be forwarded or signed — otherwise
+		// Mantle returns 401 InvalidSignature.
 		stripMantleClientHopHeaders(req)
 		if opt.DisableGzip {
 			req.Header.Del("Accept-Encoding")
@@ -721,12 +721,17 @@ func parseMantleOpenAIStream(responseBody io.Reader) (*LLMResponseMetadata, erro
 
 func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, error) {
 	var envelope struct {
-		Model    string       `json:"model"`
-		ID       string       `json:"id"`
-		Status   string       `json:"status"`
-		Type     string       `json:"type"`
-		Usage    *mantleUsage `json:"usage"`
-		Response *struct {
+		Model  string `json:"model"`
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		// StopReason is the Anthropic-native finish field ("stop_reason");
+		// non-streaming /anthropic/v1/messages bodies land here (they have
+		// no "choices" so they take this generic path, not the Anthropic
+		// stream parser).
+		StopReason string       `json:"stop_reason"`
+		Type       string       `json:"type"`
+		Usage      *mantleUsage `json:"usage"`
+		Response   *struct {
 			Model  string       `json:"model"`
 			ID     string       `json:"id"`
 			Status string       `json:"status"`
@@ -762,22 +767,37 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 	if total == 0 {
 		total = input + output
 	}
+	finish := envelope.Status
+	if finish == "" {
+		finish = envelope.StopReason
+	}
+	cacheRead := usage.InputTokensDetails.CachedTokens
+	if cacheRead == 0 {
+		cacheRead = usage.CacheReadInputTokens
+	}
 	return &LLMResponseMetadata{
 		Model: envelope.Model, RequestID: envelope.ID, Provider: bedrockMantleName,
 		InputTokens: input, OutputTokens: output, TotalTokens: total,
-		FinishReason: envelope.Status, IsStreaming: streaming,
-		CacheReadInputTokens: usage.InputTokensDetails.CachedTokens,
-		ThoughtTokens:        usage.OutputTokensDetails.ReasoningTokens,
+		FinishReason: finish, IsStreaming: streaming,
+		CacheReadInputTokens:     cacheRead,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		ThoughtTokens:            usage.OutputTokensDetails.ReasoningTokens,
 	}, nil
 }
 
 type mantleUsage struct {
-	InputTokens        int `json:"input_tokens"`
-	OutputTokens       int `json:"output_tokens"`
-	TotalTokens        int `json:"total_tokens"`
-	PromptTokens       int `json:"prompt_tokens"`
-	CompletionTokens   int `json:"completion_tokens"`
-	InputTokensDetails struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	// Anthropic-native prompt-caching fields (non-streaming
+	// /anthropic/v1/messages responses take this parser, and Anthropic
+	// excludes cache reads from input_tokens — dropping these hid the
+	// cached prompt portion from cost accounting entirely).
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	InputTokensDetails       struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails struct {

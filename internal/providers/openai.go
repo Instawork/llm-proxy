@@ -296,8 +296,24 @@ func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provide
 		metadata, err = parseOpenAIUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
 	} else {
 		// Responses API has "output"; Chat Completions has "choices".
+		// The shape check must run on DECOMPRESSED bytes: clients that send
+		// Accept-Encoding: gzip themselves (the stock OpenAI SDKs do) leave
+		// raw gzip in the capture buffer, and probing that with
+		// json.Unmarshal fails — which used to mis-route Responses API
+		// bodies to the Chat Completions parser and silently record zero
+		// tokens. The downstream parsers decompress independently, so we
+		// only use the decompressed copy for the probe.
+		checkBytes := bodyBytes
+		if dr, derr := DecompressResponseIfNeeded(bytes.NewReader(bodyBytes)); derr == nil {
+			if decompressed, rerr := io.ReadAll(dr); rerr == nil {
+				checkBytes = decompressed
+			}
+			if gz, ok := dr.(*gzip.Reader); ok {
+				_ = gz.Close()
+			}
+		}
 		var checkResponse map[string]interface{}
-		if json.Unmarshal(bodyBytes, &checkResponse) == nil {
+		if json.Unmarshal(checkBytes, &checkResponse) == nil {
 			if _, hasOutput := checkResponse["output"]; hasOutput {
 				metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
 			} else {
@@ -488,8 +504,14 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 	// Check the type field to understand what kind of chunk this is
 	typeField, hasType := chunkData["type"].(string)
 	if hasType {
-		// Handle different types of Responses API streaming chunks
-		if typeField == "response.created" || typeField == "response.done" {
+		// Handle different types of Responses API streaming chunks.
+		// Usage is carried ONLY by the terminal events — the real API emits
+		// "response.completed" (or "response.incomplete"/"response.failed");
+		// earlier echoes of the response object have usage: null.
+		// "response.done" does not exist in the API but is kept for
+		// compatibility with older fixtures.
+		switch typeField {
+		case "response.created", "response.completed", "response.incomplete", "response.failed", "response.done":
 			// These events may contain usage information
 			log.Printf("🔄 OpenAI Responses API: Found %s event", typeField)
 			// Routed through redact.LogPreview: the chunk carries model
@@ -585,10 +607,12 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 					}
 				}
 			}
-		} else if strings.HasPrefix(typeField, "response.") {
-			// This is a delta chunk (e.g., "response.output_text.delta")
-			// Skip these for metadata extraction as they don't contain usage info
-			return nil, model, requestID, finishReason, thoughtTokens
+		default:
+			if strings.HasPrefix(typeField, "response.") {
+				// This is a delta chunk (e.g., "response.output_text.delta")
+				// Skip these for metadata extraction as they don't contain usage info
+				return nil, model, requestID, finishReason, thoughtTokens
+			}
 		}
 	}
 

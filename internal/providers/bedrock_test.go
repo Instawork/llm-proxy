@@ -387,6 +387,134 @@ func TestBedrock_ParseStreamingResponse(t *testing.T) {
 	}
 }
 
+// TestBedrock_ParseNonStreaming_InvokeAnthropicNative guards the InvokeModel
+// fallback: /model/{id}/invoke returns the model-NATIVE body whose snake_case
+// usage never matched the camelCase Converse struct, so the whole InvokeModel
+// family silently recorded zero tokens.
+func TestBedrock_ParseNonStreaming_InvokeAnthropicNative(t *testing.T) {
+	b := NewBedrockProxy()
+	body := `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5",` +
+		`"stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}`
+	md, err := b.ParseResponseMetadata(strings.NewReader(body), false)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata invoke: %v", err)
+	}
+	if md.InputTokens != 100 || md.OutputTokens != 50 || md.TotalTokens != 150 {
+		t.Errorf("invoke usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
+	}
+	if md.CacheReadInputTokens != 10 || md.CacheCreationInputTokens != 5 {
+		t.Errorf("invoke cache: read=%d write=%d", md.CacheReadInputTokens, md.CacheCreationInputTokens)
+	}
+	if md.FinishReason != "end_turn" {
+		t.Errorf("invoke finish: %q", md.FinishReason)
+	}
+}
+
+// encodeBedrockInvokeChunk wraps model-native JSON the way
+// InvokeModelWithResponseStream does: an eventstream frame with
+// :event-type "chunk" whose payload is {"bytes":"<base64 native JSON>"}.
+func encodeBedrockInvokeChunk(t *testing.T, w io.Writer, native any) {
+	t.Helper()
+	nativeJSON, err := json.Marshal(native)
+	if err != nil {
+		t.Fatalf("marshal native chunk: %v", err)
+	}
+	encodeBedrockEvent(t, w, "chunk", map[string]any{"bytes": nativeJSON})
+}
+
+// TestBedrock_ParseStreamingResponse_InvokeChunks guards streaming
+// InvokeModel parsing: `chunk` frames carry base64 model-native JSON that the
+// Converse-only switch used to drain without recording any tokens.
+func TestBedrock_ParseStreamingResponse_InvokeChunks(t *testing.T) {
+	b := NewBedrockProxy()
+	var buf bytes.Buffer
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":    "message_start",
+		"message": map[string]any{"id": "msg_1", "usage": map[string]int{"input_tokens": 25, "output_tokens": 1, "cache_read_input_tokens": 8}},
+	})
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":  "content_block_delta",
+		"delta": map[string]string{"type": "text_delta", "text": "hello"},
+	})
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]string{"stop_reason": "end_turn"},
+		"usage": map[string]int{"output_tokens": 17},
+		"amazon-bedrock-invocationMetrics": map[string]int{
+			"inputTokenCount": 25, "outputTokenCount": 17, "invocationLatency": 900, "firstByteLatency": 60,
+		},
+	})
+
+	md, err := b.ParseResponseMetadata(&buf, true)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata invoke stream: %v", err)
+	}
+	if md.InputTokens != 25 || md.OutputTokens != 17 || md.TotalTokens != 42 {
+		t.Errorf("invoke stream usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
+	}
+	if md.CacheReadInputTokens != 8 {
+		t.Errorf("invoke stream cache_read: %d", md.CacheReadInputTokens)
+	}
+	if md.FinishReason != "end_turn" {
+		t.Errorf("invoke stream finish: %q", md.FinishReason)
+	}
+}
+
+// TestBedrock_ParseInvokeChunk_PartialInvocationMetricsPreservesPriorCounts
+// guards against zeroing a previously-correct token when Bedrock emits
+// amazon-bedrock-invocationMetrics with only one side populated.
+func TestBedrock_ParseInvokeChunk_PartialInvocationMetricsPreservesPriorCounts(t *testing.T) {
+	b := NewBedrockProxy()
+	var buf bytes.Buffer
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":    "message_start",
+		"message": map[string]any{"id": "msg_1", "usage": map[string]int{"input_tokens": 40, "output_tokens": 1}},
+	})
+	encodeBedrockInvokeChunk(t, &buf, map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]string{"stop_reason": "end_turn"},
+		"usage": map[string]int{"output_tokens": 12},
+		// Only output side present — must not wipe the input count from message_start.
+		"amazon-bedrock-invocationMetrics": map[string]int{
+			"outputTokenCount": 12,
+		},
+	})
+
+	md, err := b.ParseResponseMetadata(&buf, true)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if md.InputTokens != 40 {
+		t.Errorf("input tokens wiped by partial InvocationMetrics: got %d want 40", md.InputTokens)
+	}
+	if md.OutputTokens != 12 {
+		t.Errorf("output tokens: got %d want 12", md.OutputTokens)
+	}
+	if md.TotalTokens != 52 {
+		t.Errorf("total tokens: got %d want 52", md.TotalTokens)
+	}
+}
+
+func TestSigV4HeaderSigned(t *testing.T) {
+	auth := "AWS4-HMAC-SHA256 Credential=AKIA/20260724/us-east-1/bedrock/aws4_request, " +
+		"SignedHeaders=accept-encoding;content-type;host;x-amz-date, Signature=abc123"
+	if !sigV4HeaderSigned(auth, "accept-encoding") {
+		t.Error("accept-encoding should be detected as signed")
+	}
+	if sigV4HeaderSigned(auth, "accept") {
+		t.Error("accept is not in SignedHeaders (must not prefix-match accept-encoding)")
+	}
+	botoAuth := "AWS4-HMAC-SHA256 Credential=AKIA/20260724/us-east-1/bedrock/aws4_request, " +
+		"SignedHeaders=content-type;host;x-amz-date, Signature=abc123"
+	if sigV4HeaderSigned(botoAuth, "accept-encoding") {
+		t.Error("accept-encoding not signed by boto3-style clients")
+	}
+	if sigV4HeaderSigned("", "accept-encoding") {
+		t.Error("empty Authorization must report unsigned")
+	}
+}
+
 func TestBedrock_ParseStreamingResponse_TruncatedBeforeMetadata(t *testing.T) {
 	b := NewBedrockProxy()
 	var buf bytes.Buffer

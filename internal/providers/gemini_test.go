@@ -106,6 +106,30 @@ func TestGemini_ModelNameStripping(t *testing.T) {
 	}`
 
 	geminiProvider := NewGeminiProxy()
+
+	// :streamGenerateContent WITHOUT alt=sse: a plain JSON array of chunks
+	// (no "data:" lines). Regression: this shape used to yield "no usage
+	// information found" and record zero tokens.
+	t.Run("json array stream without alt=sse", func(t *testing.T) {
+		arrayStream := `[
+			{"candidates":[{"content":{"parts":[{"text":"Hel"}]},"index":0}],"modelVersion":"models/gemini-2.0-flash"},
+			{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":11,"totalTokenCount":18},"modelVersion":"models/gemini-2.0-flash"}
+		]`
+		md, err := geminiProvider.ParseResponseMetadata(strings.NewReader(arrayStream), true)
+		if err != nil {
+			t.Fatalf("parse JSON-array stream: %v", err)
+		}
+		if md.InputTokens != 7 || md.OutputTokens != 11 || md.TotalTokens != 18 {
+			t.Errorf("array stream usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
+		}
+		if md.Model != "gemini-2.0-flash" {
+			t.Errorf("array stream model: %q", md.Model)
+		}
+		if md.FinishReason != "STOP" {
+			t.Errorf("array stream finish: %q", md.FinishReason)
+		}
+	})
+
 	metadata, err := geminiProvider.ParseResponseMetadata(strings.NewReader(nonStreamingResponse), false)
 	if err != nil {
 		t.Fatalf("Failed to parse non-streaming response: %v", err)

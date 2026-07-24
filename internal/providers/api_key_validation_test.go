@@ -84,6 +84,17 @@ func TestAnthropic_ValidateAPIKey_TranslatesBearerAuthorizationHeader(t *testing
 	assert.Empty(t, req.Header.Get("Authorization"))
 	assert.Equal(t, "iw:fake", store.lastInput)
 
+	// Scheme matching is case-insensitive (RFC 7235).
+	for _, scheme := range []string{"bearer", "BEARER", "BeArEr"} {
+		req, _ = http.NewRequest("POST", "/anthropic/v1/messages", nil)
+		req.Header.Set("Authorization", scheme+" iw:mixed")
+		mixedStore := &stubKeyStore{actual: "real-anthropic", provider: "anthropic"}
+		require.NoError(t, ap.ValidateAPIKey(req, mixedStore), "scheme=%s", scheme)
+		assert.Equal(t, "iw:mixed", mixedStore.lastInput, "scheme=%s", scheme)
+		assert.Equal(t, "real-anthropic", req.Header.Get("x-api-key"), "scheme=%s", scheme)
+		assert.Empty(t, req.Header.Get("Authorization"), "scheme=%s", scheme)
+	}
+
 	// x-api-key takes precedence over Authorization when both are present.
 	req, _ = http.NewRequest("POST", "/anthropic/v1/messages", nil)
 	req.Header.Set("x-api-key", "iw:direct")

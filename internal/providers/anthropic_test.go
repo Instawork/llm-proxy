@@ -123,17 +123,18 @@ data: {"type": "message_stop"}
 		t.Errorf("Expected request ID 'msg_01AVJ15FX8ZGY7sLCo4ajfPW', got %s", metadata.RequestID)
 	}
 
-	// Check token counts - should be 25 input + (1 + 15) output = 41 total
+	// Check token counts - message_delta usage is CUMULATIVE per Anthropic's
+	// docs, so the final value (15) already includes the message_start seed.
 	if metadata.InputTokens != 25 {
 		t.Errorf("Expected 25 input tokens, got %d", metadata.InputTokens)
 	}
 
-	if metadata.OutputTokens != 16 { // 1 from message_start + 15 from message_delta
-		t.Errorf("Expected 16 output tokens, got %d", metadata.OutputTokens)
+	if metadata.OutputTokens != 15 { // cumulative total from the last message_delta
+		t.Errorf("Expected 15 output tokens, got %d", metadata.OutputTokens)
 	}
 
-	if metadata.TotalTokens != 41 { // 25 + 16
-		t.Errorf("Expected 41 total tokens, got %d", metadata.TotalTokens)
+	if metadata.TotalTokens != 40 { // 25 + 15
+		t.Errorf("Expected 40 total tokens, got %d", metadata.TotalTokens)
 	}
 
 	if metadata.FinishReason != "end_turn" {
@@ -149,6 +150,37 @@ data: {"type": "message_stop"}
 }
 
 // TestAnthropicGzipDecompression tests the gzip decompression functionality
+// TestAnthropicNonStreamingCacheTokens guards the prompt-caching fields:
+// the non-streaming parser used to drop cache_read_input_tokens /
+// cache_creation_input_tokens, so cached prompt tokens (which Anthropic
+// excludes from input_tokens) vanished entirely from cost accounting while
+// the streaming path recorded them.
+func TestAnthropicNonStreamingCacheTokens(t *testing.T) {
+	response := `{
+		"id": "msg_cache",
+		"type": "message",
+		"role": "assistant",
+		"content": [{"type": "text", "text": "hi"}],
+		"model": "claude-3-5-sonnet-20241022",
+		"stop_reason": "end_turn",
+		"usage": {"input_tokens": 12, "output_tokens": 30, "cache_read_input_tokens": 2048, "cache_creation_input_tokens": 512}
+	}`
+
+	metadata, err := parseAnthropicNonStreamingResponse(strings.NewReader(response))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if metadata.CacheReadInputTokens != 2048 {
+		t.Errorf("Expected 2048 cache read tokens, got %d", metadata.CacheReadInputTokens)
+	}
+	if metadata.CacheCreationInputTokens != 512 {
+		t.Errorf("Expected 512 cache creation tokens, got %d", metadata.CacheCreationInputTokens)
+	}
+	if metadata.FinishReason != "end_turn" {
+		t.Errorf("Expected end_turn, got %s", metadata.FinishReason)
+	}
+}
+
 func TestAnthropicGzipDecompression(t *testing.T) {
 	// Create a sample JSON response
 	originalResponse := `{
