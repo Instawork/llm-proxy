@@ -1489,6 +1489,18 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		)
 	}
 
+	// Body-read logging must be the LAST transport wrap (outermost) so its
+	// reader is the one ReverseProxy copies from — it then records the exact
+	// error ReverseProxy sees before panicking with http.ErrAbortHandler
+	// (which is otherwise silent for context.Canceled). Pure pass-through:
+	// no buffering, streaming unaffected.
+	for _, np := range namedProviders {
+		name := np.name
+		np.p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
+			return providers.NewBodyReadLoggingTransport(inner, name)
+		})
+	}
+
 	// Add middleware (order matters for streaming)
 	// Abort logging must be outermost so it observes http.ErrAbortHandler
 	// panics raised anywhere below (ReverseProxy body-copy failures that

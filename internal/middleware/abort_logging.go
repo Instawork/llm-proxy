@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -43,6 +44,12 @@ func AbortLoggingMiddleware() func(http.Handler) http.Handler {
 					return
 				}
 				if rec == http.ErrAbortHandler {
+					// ctx_err / ctx_cause disambiguate the two abort flavours:
+					// a non-empty ctx_err means the inbound request context was
+					// already canceled (net/http saw the client/ALB connection
+					// die), while an empty ctx_err with an abort means the
+					// failure was on the upstream side of the body copy.
+					ctx := r.Context()
 					slog.Error(
 						proxylog.UpstreamMsg("request aborted mid-response; client connection will be reset"),
 						slog.String("method", r.Method),
@@ -52,6 +59,8 @@ func AbortLoggingMiddleware() func(http.Handler) http.Handler {
 						slog.Int64("bytes_written", aw.bytesWritten),
 						slog.Bool("headers_sent", aw.wroteHeader),
 						slog.Duration("duration", time.Since(start)),
+						slog.String("ctx_err", errText(ctx.Err())),
+						slog.String("ctx_cause", errText(context.Cause(ctx))),
 					)
 				}
 				panic(rec)
@@ -126,3 +135,12 @@ func (w *abortTrackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 // Unwrap exposes the wrapped writer for http.ResponseController.
 func (w *abortTrackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// errText renders an error for a slog attribute, with "" for nil so log
+// consumers can filter on attribute presence.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
