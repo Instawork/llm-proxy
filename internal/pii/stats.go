@@ -218,13 +218,17 @@ func (r *Recorder) RecordRedaction(
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
-	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.piiDeltaLocked()
 	r.advancePIIFlushedLocked()
 	r.mu.Unlock()
 
+	// Emit outside the lock: when the history buffer trips its size
+	// threshold, Emit uploads inline (S3 PUT); doing that under r.mu would
+	// block every concurrent request's PII recording for the upload's
+	// duration.
+	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
 	if r.RollupBound() {
 		r.AppendRecentEvent(adminrollup.MetricPII, entry, MaxRecentEvents)

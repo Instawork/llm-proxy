@@ -80,7 +80,12 @@ func (s *Sink) Emit(stream string, event any) {
 	s.mu.Unlock()
 
 	if batch != nil {
-		_ = s.upload(context.Background(), stream, batch)
+		// Bound the inline upload the same way FlushAll does: Emit runs on
+		// caller goroutines (often request paths), and an S3 endpoint that
+		// stops responding must not pin them indefinitely.
+		ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+		defer cancel()
+		_ = s.upload(ctx, stream, batch)
 	}
 }
 

@@ -47,9 +47,15 @@ func LogPreview(ctx context.Context, text string, maxLen int) string {
 	if r == nil {
 		return fmt.Sprintf("[len=%d bytes; pii_redact disabled]", len(text))
 	}
+	// Redact a slightly longer excerpt and truncate the REDACTED output:
+	// cutting the raw text at maxLen first can slice an entity in half
+	// (e.g. "222-33-4" from an SSN), and the fragment no longer matches any
+	// recognizer, so it would land in the log verbatim — exactly what this
+	// helper exists to prevent.
+	const entitySlack = 64
 	excerpt := text
-	if len(excerpt) > maxLen {
-		excerpt = excerpt[:maxLen]
+	if len(excerpt) > maxLen+entitySlack {
+		excerpt = excerpt[:maxLen+entitySlack]
 	}
 	// Bound to a tight slice of the redactor timeout so a slow sidecar
 	// can never drag down the calling request — debug previews are
@@ -60,5 +66,9 @@ func LogPreview(ctx context.Context, text string, maxLen int) string {
 	if err != nil {
 		return fmt.Sprintf("[len=%d bytes; pii_redact unavailable: %v]", len(text), err)
 	}
-	return res.Text
+	out := res.Text
+	if len(out) > maxLen {
+		out = out[:maxLen]
+	}
+	return out
 }

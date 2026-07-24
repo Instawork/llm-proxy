@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,6 +61,34 @@ func TestScrubJSON_ParallelizesMultipleContentBlocks(t *testing.T) {
 	}
 	if elapsed >= 3*delay {
 		t.Fatalf("parallel scrub took %v, expected well under sequential %v", elapsed, 3*delay)
+	}
+}
+
+// TestScrubJSON_ParallelSiblingStringsInSameMap covers two scrub-eligible
+// strings under the SAME parent map ("system" via the Anthropic adapter and
+// root-level "prompt" via the OpenAI adapter). Their setText callbacks write
+// into one shared map; regression: the parallel path used to apply them
+// outside the mutex, racing on the map (caught by -race; panics with
+// "concurrent map writes" in production).
+func TestScrubJSON_ParallelSiblingStringsInSameMap(t *testing.T) {
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode([]Span{})
+	})
+	r, err := New(Config{AnalyzerURL: srv.URL, AnalyzeConcurrency: 4})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	body := `{"system":"block one","prompt":"block two"}`
+	res, err := r.Scrub(context.Background(), body, NewRegistry())
+	if err != nil {
+		t.Fatalf("Scrub: %v", err)
+	}
+	for _, want := range []string{"block one", "block two"} {
+		if !strings.Contains(res.Text, want) {
+			t.Errorf("scrubbed output lost %q: %s", want, res.Text)
+		}
 	}
 }
 

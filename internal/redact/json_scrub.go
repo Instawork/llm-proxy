@@ -21,6 +21,15 @@ func (r *Redactor) scrubJSON(ctx context.Context, text string, reg *Registry, fo
 		return r.scrub(ctx, text, reg, forceRedactMarkers)
 	}
 
+	// Bare JSON scalars (a quoted string, number, bool, null) are valid JSON
+	// but the container walk below produces zero tasks for them, which would
+	// return the text without ever analyzing it. Treat them as plain text.
+	switch root.(type) {
+	case map[string]any, []any:
+	default:
+		return r.scrub(ctx, text, reg, forceRedactMarkers)
+	}
+
 	adapter := AdapterForContext(ctx)
 	var tasks []jsonScrubTask
 	collectJSONScrubTasks(root, nil, &tasks, adapter)
@@ -165,9 +174,11 @@ func (r *Redactor) runJSONScrubTasks(
 				return
 			}
 
-			tasks[i].setText(sub.Text)
-
 			mu.Lock()
+			// setText writes into a shared parent container; sibling string
+			// values in the same map would otherwise race (concurrent map
+			// writes panic the process, unrecoverably).
+			tasks[i].setText(sub.Text)
 			mergeScrubResult(acc, sub)
 			mu.Unlock()
 		}(i)

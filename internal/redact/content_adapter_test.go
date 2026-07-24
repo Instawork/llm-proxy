@@ -41,6 +41,53 @@ func TestContentAdapter_OpenAI_ResponsesInputArray(t *testing.T) {
 	}
 }
 
+// TestContentAdapter_OpenAI_ResponsesToolItems guards the Responses API
+// multi-turn tool shape: function_call arguments and function_call_output
+// output resent directly in the input array must be scrubbed, not skipped.
+func TestContentAdapter_OpenAI_ResponsesToolItems(t *testing.T) {
+	body := `{"input":[
+		{"type":"function_call","call_id":"c1","name":"save_user","arguments":"{\"ssn\":\"222-33-4444\"}"},
+		{"type":"function_call_output","call_id":"c1","output":"{\"email\":\"alice.real@gmail.com\"}"}
+	]}`
+	var tasks []jsonScrubTask
+	var root any
+	_ = json.Unmarshal([]byte(body), &root)
+	collectJSONScrubTasks(root, nil, &tasks, openAIContentAdapter{})
+	texts := taskTexts(tasks)
+	if !containsAll(texts, "222-33-4444", "alice.real@gmail.com") {
+		t.Fatalf("Responses tool arguments/output must be scrubbed, tasks = %v", texts)
+	}
+}
+
+// TestContentAdapter_Gemini_ToolCallAndResponse guards Gemini tool traffic:
+// functionCall.args and functionResponse.response hold arbitrary leaf keys
+// (never "text"), so they must be selected as JSON scrub values or the raw
+// PII goes to Google verbatim.
+func TestContentAdapter_Gemini_ToolCallAndResponse(t *testing.T) {
+	body := `{"contents":[{"role":"user","parts":[
+		{"functionCall":{"name":"save_user","args":{"ssn":"222-33-4444"}}},
+		{"functionResponse":{"name":"lookup_user","response":{"email":"alice.real@gmail.com"}}}
+	]}]}`
+	var tasks []jsonScrubTask
+	var root any
+	_ = json.Unmarshal([]byte(body), &root)
+	collectJSONScrubTasks(root, nil, &tasks, geminiContentAdapter{})
+	texts := taskTexts(tasks)
+	if !containsAll(texts, "222-33-4444", "alice.real@gmail.com") {
+		t.Fatalf("gemini tool payloads must be scrubbed, tasks = %v", texts)
+	}
+
+	// snake_case spellings (protobuf-JSON accepts both) are covered too.
+	body = `{"contents":[{"parts":[{"function_response":{"name":"f","response":{"phone":"555-867-5309"}}}]}]}`
+	tasks = nil
+	root = nil
+	_ = json.Unmarshal([]byte(body), &root)
+	collectJSONScrubTasks(root, nil, &tasks, geminiContentAdapter{})
+	if !containsAll(taskTexts(tasks), "555-867-5309") {
+		t.Fatalf("snake_case gemini tool payloads must be scrubbed, tasks = %v", tasks)
+	}
+}
+
 func TestContentAdapter_Anthropic_SystemBlockText(t *testing.T) {
 	body := `{"system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":"hi"}]}`
 	var tasks []jsonScrubTask
@@ -66,13 +113,13 @@ func TestContentAdapter_BedrockMantle_UsesUnionForAnthropicShape(t *testing.T) {
 }
 
 func TestContentAdapter_Bedrock_ConverseAndToolResult(t *testing.T) {
-	body := `{"messages":[{"role":"user","content":[{"text":"book shift"}]}],"system":[{"text":"sys prompt"}]}`
+	body := `{"messages":[{"role":"user","content":[{"text":"book appointment"}]}],"system":[{"text":"sys prompt"}]}`
 	var tasks []jsonScrubTask
 	var root any
 	_ = json.Unmarshal([]byte(body), &root)
 	collectJSONScrubTasks(root, nil, &tasks, bedrockContentAdapter{})
 	texts := taskTexts(tasks)
-	if !containsAll(texts, "book shift", "sys prompt") {
+	if !containsAll(texts, "book appointment", "sys prompt") {
 		t.Fatalf("tasks = %v", texts)
 	}
 

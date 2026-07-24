@@ -86,6 +86,18 @@ func TestIsPrivateOrLoopbackIP(t *testing.T) {
 		{"localhost", true},
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
+		// host:port forms
+		{net.JoinHostPort(classA, "443"), true},
+		{"8.8.8.8:53", false},
+		{"localhost:8080", true},
+		// IPv6: the old first-colon Cut truncated these to garbage and
+		// misclassified private/loopback addresses as public.
+		{"::1", true},
+		{"fd12:3456::1", true}, // ULA, IsPrivate
+		{"[::1]", true},
+		{"[::1]:8080", true},
+		{"[fd12:3456::1]:443", true},
+		{"2607:f8b0:4004:800::200e", false}, // public (Google)
 	}
 	for _, tc := range cases {
 		if got := isPrivateOrLoopbackIP(tc.value); got != tc.want {

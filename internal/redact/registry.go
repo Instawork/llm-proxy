@@ -28,7 +28,11 @@ var placeholderDelimiterPairs = []struct{ open, close byte }{
 
 // piiPlaceholderTailRE matches a complete PII token at the start of a stream
 // carry suffix, optionally followed by whitespace or a closing delimiter.
-var piiPlaceholderTailRE = regexp.MustCompile(`^PII_[A-Z][A-Z0-9_]*_\d+([\s\]\}>)]|$)`)
+// `\` and `&` count as terminators because the escaped closing delimiters
+// (\u003e, &gt;, &#93;) start with them — without that, a complete escaped
+// token like PII_PERSON_1\u003e was treated as incomplete and split across
+// the emit/carry boundary, so it could never match a wire form on restore.
+var piiPlaceholderTailRE = regexp.MustCompile(`^PII_[A-Z][A-Z0-9_]*_\d+([\s\]\}>)\\&]|$)`)
 
 type registryEntry struct {
 	placeholder string
@@ -296,13 +300,50 @@ func looksLikePIIPlaceholderStart(b []byte) bool {
 		i++
 	}
 	if i >= len(b) {
-		return false
+		// An empty (or all-spaces) suffix after an unclosed open delimiter is
+		// the maximally ambiguous case — the token may start on the very next
+		// chunk — so it must be held, not flushed.
+		return true
 	}
 	prefix := []byte(placeholderTokenPrefix)
 	if len(b[i:]) < len(prefix) {
 		return bytes.HasPrefix(prefix, b[i:])
 	}
 	return bytes.HasPrefix(b[i:], prefix)
+}
+
+// placeholderTextDelimiterPairs are the escaped delimiter spellings that
+// buildPlaceholderWireForms emits (and RestoreUserFacing therefore matches):
+// JSON \u-escapes for every delimiter pair plus the HTML-entity forms.
+// Gemini's JSON encoder escapes angle brackets as \u003c/\u003e in REST/SSE
+// responses, so on those streams the escaped form is the NORMAL case, not an
+// edge case.
+var placeholderTextDelimiterPairs = []struct{ open, close string }{
+	{`\u003c`, `\u003e`},
+	{"&lt;", "&gt;"},
+	{"&#91;", "&#93;"},
+	{`\u005b`, `\u005d`},
+	{`\u007b`, `\u007d`},
+	{`\u0028`, `\u0029`},
+}
+
+// trailingTextDelimPrefixLen reports the length of the longest suffix of b
+// that is a proper prefix of an escaped open-delimiter spelling (e.g. the
+// chunk ends "...\u00" mid-escape). Such a suffix must be held back.
+func trailingTextDelimPrefixLen(b []byte) int {
+	maxLen := 0
+	for _, pair := range placeholderTextDelimiterPairs {
+		open := []byte(pair.open)
+		for l := len(open) - 1; l >= 1; l-- {
+			if l > len(b) || l <= maxLen {
+				continue
+			}
+			if bytes.Equal(b[len(b)-l:], open[:l]) {
+				maxLen = l
+			}
+		}
+	}
+	return maxLen
 }
 
 func streamSafePrefixLen(combined []byte) int {
@@ -324,6 +365,27 @@ func streamSafePrefixLen(combined []byte) int {
 		if looksLikePIIPlaceholderStart(combined[idx+1:]) && idx < safeLen {
 			safeLen = idx
 		}
+	}
+	// Same scan for the escaped delimiter spellings: an unclosed escaped open
+	// followed by a possible token start (or nothing yet) must be held so the
+	// reassembled carry can match a full wire form.
+	for _, pair := range placeholderTextDelimiterPairs {
+		idx := bytes.LastIndex(combined, []byte(pair.open))
+		if idx < 0 {
+			continue
+		}
+		rest := combined[idx+len(pair.open):]
+		if bytes.Contains(rest, []byte(pair.close)) {
+			continue
+		}
+		if looksLikePIIPlaceholderStart(rest) && idx < safeLen {
+			safeLen = idx
+		}
+	}
+	// A chunk can also end mid-escape (e.g. "...\u00"); hold the partial
+	// escape so it can complete on the next chunk.
+	if tail := trailingTextDelimPrefixLen(combined[:safeLen]); tail > 0 && safeLen-tail >= 0 {
+		safeLen -= tail
 	}
 	return safeLen
 }

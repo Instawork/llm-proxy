@@ -159,6 +159,62 @@ func TestRegistry_RestoreStreamChunk_SplitPlaceholder(t *testing.T) {
 	}
 }
 
+// streamRestore pushes parts through RestoreStreamChunk + FlushCarry and
+// returns the concatenated client-visible output.
+func streamRestore(reg *Registry, parts []string) string {
+	var carry []byte
+	var got strings.Builder
+	for _, part := range parts {
+		emit, newCarry := reg.RestoreStreamChunk([]byte(part), carry)
+		carry = newCarry
+		got.Write(emit)
+	}
+	if tail := reg.FlushCarry(carry); len(tail) > 0 {
+		got.Write(tail)
+	}
+	return got.String()
+}
+
+// TestRegistry_RestoreStreamChunk_SplitAtDelimiter guards the empty-suffix
+// hold-back: a chunk ending exactly at the opening "<" used to be flushed,
+// after which the reassembled token could never match a wire form and the
+// client saw the mask token instead of the restored value.
+func TestRegistry_RestoreStreamChunk_SplitAtDelimiter(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("PERSON", "Alice") // "<PII_PERSON_1>"
+	parts := []string{"prefix " + ph[:1], ph[1:] + " suffix"}
+	if got := streamRestore(reg, parts); got != "prefix Alice suffix" {
+		t.Fatalf("stream restore = %q want %q", got, "prefix Alice suffix")
+	}
+}
+
+// TestRegistry_RestoreStreamChunk_EscapedFormSplit guards hold-back for the
+// escaped wire forms: Gemini's JSON encoder emits \u003cPII_..._1\u003e, and a
+// chunk boundary before the closing escape used to flush the token
+// unrestored.
+func TestRegistry_RestoreStreamChunk_EscapedFormSplit(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("PERSON", "Alice")
+	escaped := jsonEscapedPlaceholder(ph) // \u003cPII_PERSON_1\u003e
+
+	// Split right before the closing escape.
+	cut := strings.LastIndex(escaped, `\u003e`)
+	parts := []string{"x " + escaped[:cut], escaped[cut:] + " y"}
+	if got := streamRestore(reg, parts); got != "x Alice y" {
+		t.Fatalf("escaped-form stream restore = %q want %q", got, "x Alice y")
+	}
+
+	// Split mid-escape (chunk ends "...\u00").
+	reg2 := NewRegistry()
+	ph2 := reg2.Placeholder("PERSON", "Bob")
+	escaped2 := jsonEscapedPlaceholder(ph2)
+	cut2 := strings.LastIndex(escaped2, `\u003e`) + 3 // inside the escape
+	parts2 := []string{"x " + escaped2[:cut2], escaped2[cut2:] + " y"}
+	if got := streamRestore(reg2, parts2); got != "x Bob y" {
+		t.Fatalf("mid-escape stream restore = %q want %q", got, "x Bob y")
+	}
+}
+
 func TestScrub_PolicyAwarePlaceholders(t *testing.T) {
 	spans := []Span{
 		{Start: 0, End: 8, EntityType: "PERSON", Score: 0.9},
