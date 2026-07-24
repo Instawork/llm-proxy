@@ -48,6 +48,11 @@ func TestAbortLoggingMiddleware_LogsErrAbortHandler(t *testing.T) {
 	if !strings.Contains(logOutput, "headers_sent=true") {
 		t.Errorf("expected headers_sent=true in abort log, got: %s", logOutput)
 	}
+	// The stack must include the panic origin so production aborts can be
+	// traced to the exact panic(http.ErrAbortHandler) site.
+	if !strings.Contains(logOutput, "TestAbortLoggingMiddleware_LogsErrAbortHandler") {
+		t.Errorf("expected panic-site stack frames in abort log, got: %s", logOutput)
+	}
 }
 
 // TestAbortLoggingMiddleware_AbortBeforeHeaders covers the observed
