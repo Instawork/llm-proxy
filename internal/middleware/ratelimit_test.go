@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -100,8 +101,9 @@ func TestRateLimitingRequestsPerMinute(t *testing.T) {
 	if got := rr2.Header().Get("X-RateLimit-Remaining"); got != "0" {
 		t.Fatalf("unexpected X-RateLimit-Remaining: %q", got)
 	}
-	if got := rr2.Header().Get("Retry-After"); got != "60" {
-		t.Fatalf("unexpected Retry-After: %q", got)
+	// Retry-After is the true seconds to the minute boundary (1..60).
+	if got, err := strconv.Atoi(rr2.Header().Get("Retry-After")); err != nil || got < 1 || got > 60 {
+		t.Fatalf("unexpected Retry-After: %q", rr2.Header().Get("Retry-After"))
 	}
 }
 
@@ -159,8 +161,9 @@ func TestRateLimitingTokensPerMinute(t *testing.T) {
 	if got := rr2.Header().Get("X-RateLimit-Remaining"); got != "0" {
 		t.Fatalf("unexpected X-RateLimit-Remaining: %q", got)
 	}
-	if got := rr2.Header().Get("Retry-After"); got != "60" {
-		t.Fatalf("unexpected Retry-After: %q", got)
+	// Retry-After is the true seconds to the minute boundary (1..60).
+	if got, err := strconv.Atoi(rr2.Header().Get("Retry-After")); err != nil || got < 1 || got > 60 {
+		t.Fatalf("unexpected Retry-After: %q", rr2.Header().Get("Retry-After"))
 	}
 }
 
@@ -288,11 +291,11 @@ func (erroringLimiter) CheckAndReserve(ctx context.Context, id string, scope rat
 	return ratelimit.ReservationResult{}, errors.New("simulated limiter outage")
 }
 
-func (erroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
+func (erroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, reservedAt, now time.Time) error {
 	return errors.New("simulated adjust outage")
 }
 
-func (erroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
+func (erroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, reservedAt, now time.Time) error {
 	return nil
 }
 
@@ -332,11 +335,11 @@ func (adjustErroringLimiter) CheckAndReserve(ctx context.Context, id string, sco
 	return ratelimit.ReservationResult{Allowed: true}, nil
 }
 
-func (adjustErroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
+func (adjustErroringLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, reservedAt, now time.Time) error {
 	return errors.New("simulated adjust outage")
 }
 
-func (adjustErroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
+func (adjustErroringLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, reservedAt, now time.Time) error {
 	return nil
 }
 
@@ -381,11 +384,11 @@ func (l *cancelRecordingLimiter) CheckAndReserve(ctx context.Context, id string,
 	return ratelimit.ReservationResult{Allowed: true, ReservationID: id}, nil
 }
 
-func (l *cancelRecordingLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, now time.Time) error {
+func (l *cancelRecordingLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, reservedAt, now time.Time) error {
 	return nil
 }
 
-func (l *cancelRecordingLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) error {
+func (l *cancelRecordingLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, reservedAt, now time.Time) error {
 	l.cancelCalled = true
 	l.cancelTokens = estTokens
 	return nil
@@ -415,6 +418,63 @@ func TestRateLimitingMiddleware_CancelsReservationOnUpstream5xx(t *testing.T) {
 	}
 	if !lim.cancelCalled {
 		t.Fatal("Cancel must be called to release the reservation on a 5xx upstream")
+	}
+}
+
+// ctxRecordingLimiter allows reservations and records the ctx.Err() observed
+// by Cancel, so tests can prove reconciliation runs on a context that
+// outlives the client connection.
+type ctxRecordingLimiter struct {
+	cancelCalled bool
+	cancelCtxErr error
+}
+
+func (l *ctxRecordingLimiter) CheckAndReserve(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, now time.Time) (ratelimit.ReservationResult, error) {
+	return ratelimit.ReservationResult{Allowed: true, ReservationID: id}, nil
+}
+
+func (l *ctxRecordingLimiter) Adjust(ctx context.Context, id string, scope ratelimit.ScopeKeys, delta int, reservedAt, now time.Time) error {
+	return nil
+}
+
+func (l *ctxRecordingLimiter) Cancel(ctx context.Context, id string, scope ratelimit.ScopeKeys, estTokens int, reservedAt, now time.Time) error {
+	l.cancelCalled = true
+	l.cancelCtxErr = ctx.Err()
+	return nil
+}
+
+// TestRateLimitingMiddleware_ReconcileSurvivesClientDisconnect asserts that
+// post-handler reconciliation (Adjust/Cancel) runs on a context detached from
+// the request. r.Context() is canceled the moment the client disconnects —
+// exactly when an upstream 5xx is most likely — and both limiter backends
+// refuse canceled contexts, which used to leave the reservation stuck in the
+// window until TTL expiry.
+func TestRateLimitingMiddleware_ReconcileSurvivesClientDisconnect(t *testing.T) {
+	cfg := makeCfg()
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lim := &ctxRecordingLimiter{}
+	chain := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate the client disconnecting mid-request.
+		cancel()
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{"model":"gpt-4o","messages":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	chain.ServeHTTP(rr, req)
+
+	if !lim.cancelCalled {
+		t.Fatal("Cancel must be called to release the reservation on a 5xx upstream")
+	}
+	if lim.cancelCtxErr != nil {
+		t.Fatalf("Cancel must receive a context that survives client disconnect; got ctx.Err() = %v", lim.cancelCtxErr)
 	}
 }
 

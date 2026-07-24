@@ -77,7 +77,15 @@ type RateLimiter interface {
 
 	// Adjust reconciles a prior reservation by applying the token delta
 	// (actual-estimated) across the same scope. Negative deltas credit back.
-	Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, now time.Time) error
+	//
+	// reservedAt MUST be the time the reservation was made (the `now` passed
+	// to CheckAndReserve). LLM responses routinely take longer than a minute,
+	// so the reconcile often lands in a later window than the reservation;
+	// applying the delta to the current window would then debit/credit other
+	// requests' counters instead of this reservation's. Implementations skip
+	// any window (minute/day) that has rotated since reservedAt — the
+	// reservation expired with that window and there is nothing to reconcile.
+	Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, reservedAt, now time.Time) error
 
 	// Cancel releases the effects of a prior reservation entirely (e.g., upstream
 	// error). estTokens MUST be the same value passed to CheckAndReserve for this
@@ -85,7 +93,11 @@ type RateLimiter interface {
 	// silently left the reserved tokens in place, causing under-credit when an
 	// upstream error happened after reservation. Callers that genuinely don't
 	// know the est tokens can pass 0; counters will only decrement the request.
-	Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error
+	//
+	// reservedAt has the same window-attribution semantics as in Adjust: a
+	// cancel that arrives after the reservation's window rotated is a no-op
+	// for that window rather than erasing other requests' reservations.
+	Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, reservedAt, now time.Time) error
 }
 
 // PerKeyOverrideFunc resolves dynamic per-key rate-limit overrides at request

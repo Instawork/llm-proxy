@@ -57,6 +57,26 @@ func TestMemoryLimiterTokensPerMinute(t *testing.T) {
 	}
 }
 
+func TestMemoryLimiterBothLimitsExceededPrefersRequestsMetric(t *testing.T) {
+	// When a denial trips both RPM and TPM, report "requests" so headers
+	// match redis.luaCheckAndReserve (requests checked first).
+	cfg := baseCfg()
+	cfg.Features.RateLimiting.Limits.RequestsPerMinute = 1
+	cfg.Features.RateLimiting.Limits.TokensPerMinute = 10
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{Provider: "openai", Model: "gpt-4o", UserID: "u-both"}
+	now := time.Now()
+
+	if res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 10, now); !res.Allowed {
+		t.Fatalf("first should be allowed")
+	}
+	res, err := lim.CheckAndReserve(context.Background(), "2", scope, 10, now)
+	require.NoError(t, err)
+	require.False(t, res.Allowed)
+	require.NotNil(t, res.Details)
+	assert.Equal(t, "requests", res.Details.Metric)
+}
+
 func TestMemoryLimiterDailyWindow(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Features.RateLimiting.Limits.RequestsPerMinute = 1000
@@ -239,10 +259,57 @@ func TestMemoryLimiter_Adjust_AddsAndRefunds(t *testing.T) {
 	res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 50, now)
 	require.True(t, res.Allowed)
 
-	require.NoError(t, lim.Adjust(context.Background(), "1", scope, -30, now))
+	require.NoError(t, lim.Adjust(context.Background(), "1", scope, -30, now, now))
 
 	res2, _ := lim.CheckAndReserve(context.Background(), "2", scope, 70, now)
 	assert.True(t, res2.Allowed)
+}
+
+// TestMemoryLimiter_CancelAfterMinuteRotationSkipsNewWindow guards the
+// window-attribution fix: a reservation made in minute window W1 whose 5xx
+// cancel arrives after the boundary must not erase other requests'
+// reservations in W2. The still-current day window IS released.
+func TestMemoryLimiter_CancelAfterMinuteRotationSkipsNewWindow(t *testing.T) {
+	cfg := baseCfg()
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{UserID: "u-rotate"}
+	t0 := time.Date(2026, 7, 24, 12, 0, 50, 0, time.UTC)
+
+	resA, _ := lim.CheckAndReserve(context.Background(), "A", scope, 40, t0)
+	require.True(t, resA.Allowed)
+
+	t1 := t0.Add(15 * time.Second) // next minute window
+	resB, _ := lim.CheckAndReserve(context.Background(), "B", scope, 40, t1)
+	require.True(t, resB.Allowed)
+
+	require.NoError(t, lim.Cancel(context.Background(), "A", scope, 40, t0, t1))
+
+	snap := lim.(Snapshotter).Snapshot(t1)
+	minC := snap.Minute.Counters["user:u-rotate"]
+	assert.Equal(t, 1, minC.Requests, "B's minute request must survive A's late cancel")
+	assert.Equal(t, 40, minC.Tokens, "B's minute tokens must survive A's late cancel")
+	dayC := snap.Day.Counters["user:u-rotate"]
+	assert.Equal(t, 1, dayC.Requests, "A's day reservation should be released")
+	assert.Equal(t, 40, dayC.Tokens)
+}
+
+// TestMemoryLimiter_AdjustClampsAtZero guards the negative-clamp fix: an
+// over-refund (actual usage far below the estimate) must clamp the counter at
+// zero — mirroring the Redis script — instead of going negative and granting
+// free headroom beyond the configured TPM.
+func TestMemoryLimiter_AdjustClampsAtZero(t *testing.T) {
+	cfg := baseCfg()
+	lim := NewMemoryLimiter(cfg)
+	scope := ScopeKeys{UserID: "u-clamp"}
+	now := time.Now()
+
+	res, _ := lim.CheckAndReserve(context.Background(), "1", scope, 50, now)
+	require.True(t, res.Allowed)
+
+	require.NoError(t, lim.Adjust(context.Background(), "1", scope, -1900, now, now))
+	snap := lim.(Snapshotter).Snapshot(now)
+	assert.Equal(t, 0, snap.Minute.Counters["user:u-clamp"].Tokens)
+	assert.Equal(t, 0, snap.Day.Counters["user:u-clamp"].Tokens)
 }
 
 func TestMemoryLimiter_Cancel_FreesRequestSlot(t *testing.T) {
@@ -259,7 +326,7 @@ func TestMemoryLimiter_Cancel_FreesRequestSlot(t *testing.T) {
 	res3, _ := lim.CheckAndReserve(context.Background(), "3", scope, 1, now)
 	require.False(t, res3.Allowed)
 
-	require.NoError(t, lim.Cancel(context.Background(), "1", scope, 1, now))
+	require.NoError(t, lim.Cancel(context.Background(), "1", scope, 1, now, now))
 
 	res4, _ := lim.CheckAndReserve(context.Background(), "4", scope, 1, now)
 	assert.True(t, res4.Allowed)
