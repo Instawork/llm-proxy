@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/proxylog"
@@ -61,6 +62,12 @@ func AbortLoggingMiddleware() func(http.Handler) http.Handler {
 						slog.Duration("duration", time.Since(start)),
 						slog.String("ctx_err", errText(ctx.Err())),
 						slog.String("ctx_cause", errText(context.Cause(ctx))),
+						// The deferred recover runs while the panic frames are
+						// still on this goroutine's stack, so this pinpoints the
+						// exact panic(http.ErrAbortHandler) site — production
+						// aborts have shown "no read error, no write, live
+						// context" shapes that only a stack can disambiguate.
+						slog.String("stack", string(debug.Stack())),
 					)
 				}
 				panic(rec)
