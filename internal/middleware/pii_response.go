@@ -142,15 +142,27 @@ func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
 	if pw.registry == nil || len(b) == 0 {
 		return pw.ResponseWriter.Write(b)
 	}
+	// On success every branch must report exactly len(b) consumed, even when
+	// restoration (or gzip decompression) changes the byte count.
+	// httputil.ReverseProxy copies the upstream body with io.Copy, which
+	// treats n < len(b) as io.ErrShortWrite and n > len(b) as an invalid
+	// write — either aborts the copy and panics with http.ErrAbortHandler,
+	// surfacing to clients as an ALB 502 with no response body.
 	if !pw.streaming {
 		plain, _, err := decompressPIIResponseIfGzip(b)
 		if err != nil {
 			proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: gzip decompress failed; passing through without placeholder restore",
 				slog.String("error", err.Error()))
-			return pw.writeRestored(b)
+			if _, err := pw.writeRestored(b); err != nil {
+				return 0, err
+			}
+			return len(b), nil
 		}
 		restored := pw.registry.RestoreUserFacing(string(plain))
-		return pw.writeRestored([]byte(restored))
+		if _, err := pw.writeRestored([]byte(restored)); err != nil {
+			return 0, err
+		}
+		return len(b), nil
 	}
 	if pw.streaming {
 		emit, newCarry := pw.registry.RestoreStreamChunk(b, pw.carry)
