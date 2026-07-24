@@ -282,14 +282,16 @@ func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMet
 	}
 
 	metadata := &LLMResponseMetadata{
-		Model:        response.Model,
-		InputTokens:  response.Usage.InputTokens,
-		OutputTokens: response.Usage.OutputTokens,
-		TotalTokens:  response.Usage.InputTokens + response.Usage.OutputTokens,
-		Provider:     "anthropic",
-		RequestID:    response.ID,
-		IsStreaming:  false,
-		FinishReason: response.StopReason,
+		Model:                    response.Model,
+		InputTokens:              response.Usage.InputTokens,
+		OutputTokens:             response.Usage.OutputTokens,
+		TotalTokens:              response.Usage.InputTokens + response.Usage.OutputTokens,
+		CacheReadInputTokens:     response.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: response.Usage.CacheCreationInputTokens,
+		Provider:                 "anthropic",
+		RequestID:                response.ID,
+		IsStreaming:              false,
+		FinishReason:             response.StopReason,
 	}
 
 	return metadata, nil
@@ -397,8 +399,13 @@ func parseAnthropicStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 			if streamResponse.Delta != nil && streamResponse.Delta.StopReason != "" {
 				finishReason = streamResponse.Delta.StopReason
 			}
+			// Anthropic documents message_delta usage as CUMULATIVE ("the
+			// cumulative number of output tokens which were used"), so take
+			// the latest value. Adding it would double-count the
+			// message_start seed on every stream and double/triple-count
+			// output when multiple message_delta events arrive.
 			if streamResponse.Usage != nil && streamResponse.Usage.OutputTokens > 0 {
-				outputTokens += streamResponse.Usage.OutputTokens
+				outputTokens = streamResponse.Usage.OutputTokens
 			}
 
 		case "message_stop":
@@ -601,21 +608,21 @@ func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (stri
 // ValidateAPIKey validates and potentially replaces the API key in the request
 func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore) error {
 	// Get the API key from the x-api-key header (Anthropic uses this header).
-	apiKey := req.Header.Get("x-api-key")
-	if apiKey == "" {
+	presentedCredential := req.Header.Get("x-api-key")
+	if presentedCredential == "" {
 		// Some clients (e.g. OpenAI-compatible SDKs) send credentials as
 		// "Authorization: Bearer <key>" instead. Translate that onto
 		// x-api-key — the header Anthropic's API actually expects — so the
 		// rest of this function, and the upstream request, only ever deal
 		// with x-api-key.
 		const bearerPrefix = "Bearer "
-		if authHeader := req.Header.Get("Authorization"); strings.HasPrefix(authHeader, bearerPrefix) {
-			apiKey = strings.TrimPrefix(authHeader, bearerPrefix)
-			req.Header.Set("x-api-key", apiKey)
+		if bearerCredential, ok := strings.CutPrefix(req.Header.Get("Authorization"), bearerPrefix); ok {
+			presentedCredential = bearerCredential
+			req.Header.Set("x-api-key", presentedCredential)
 			req.Header.Del("Authorization")
 		}
 	}
-	if apiKey == "" {
+	if presentedCredential == "" {
 		// No API key provided, let the provider handle the error
 		return nil
 	}
@@ -623,7 +630,7 @@ func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore)
 	// Validate and potentially replace the key. Use the request context so
 	// client cancellation / handler-level deadlines propagate into the
 	// DynamoDB validation lookup.
-	actualKey, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), apiKey)
+	providerCredential, provider, err := keyStore.ValidateAndGetActualKey(req.Context(), presentedCredential)
 	if err != nil {
 		return fmt.Errorf("API key validation failed: %w", err)
 	}
@@ -634,8 +641,8 @@ func (a *AnthropicProxy) ValidateAPIKey(req *http.Request, keyStore APIKeyStore)
 	}
 
 	// Replace the key in the request header if it was translated
-	if actualKey != apiKey {
-		req.Header.Set("x-api-key", actualKey)
+	if providerCredential != presentedCredential {
+		req.Header.Set("x-api-key", providerCredential)
 		log.Printf("🔑 Anthropic: Translated API key from iw: format")
 	}
 

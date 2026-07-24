@@ -493,6 +493,54 @@ data: [DONE]`
 		assert.True(t, metadata.IsStreaming)
 	})
 
+	t.Run("Streaming Responses API real shape: usage only in response.completed", func(t *testing.T) {
+		// Mirrors the actual API event flow: response.created echoes the
+		// response object with usage null; usage arrives only on the
+		// terminal response.completed event. Regression: the parser used to
+		// look for a nonexistent "response.done" type, discarding
+		// response.completed and recording zero tokens for ALL streaming
+		// Responses API traffic.
+		streamData := `data: {"type":"response.created","response":{"id":"resp_real","model":"gpt-4o-2024-08-06","status":"in_progress","usage":null,"output":[]}}
+data: {"type":"response.output_text.delta","delta":"Hello"}
+data: {"type":"response.output_text.delta","delta":" world"}
+data: {"type":"response.completed","response":{"id":"resp_real","model":"gpt-4o-2024-08-06","status":"completed","usage":{"input_tokens":36,"output_tokens":87,"total_tokens":123,"output_tokens_details":{"reasoning_tokens":10}},"output":[{"id":"msg_real","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello world","annotations":[]}]}]}}
+`
+
+		reader := bytes.NewReader([]byte(streamData))
+		metadata, err := proxy.ParseResponseMetadata(reader, true)
+		require.NoError(t, err)
+		require.NotNil(t, metadata)
+		assert.Equal(t, "gpt-4o-2024-08-06", metadata.Model)
+		assert.Equal(t, 36, metadata.InputTokens)
+		assert.Equal(t, 87, metadata.OutputTokens)
+		assert.Equal(t, 123, metadata.TotalTokens)
+		assert.Equal(t, 10, metadata.ThoughtTokens)
+		assert.Equal(t, "resp_real", metadata.RequestID)
+		assert.True(t, metadata.IsStreaming)
+	})
+
+	t.Run("NonStreaming Responses API gzipped body routes to Responses parser", func(t *testing.T) {
+		// Clients sending their own Accept-Encoding: gzip (stock OpenAI
+		// SDKs) leave raw gzip in the capture buffer. Regression: the
+		// Responses-vs-Chat shape probe used to run on the compressed bytes,
+		// fail to unmarshal, and mis-route the body to the Chat Completions
+		// parser — yielding zero tokens with no error.
+		responseJSON := `{"id":"resp_gz","model":"gpt-4o-2024-08-06","object":"response","status":"completed","output":[{"id":"msg_gz","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"output_tokens_details":{"reasoning_tokens":0}}}`
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, err := gz.Write([]byte(responseJSON))
+		require.NoError(t, err)
+		require.NoError(t, gz.Close())
+
+		metadata, err := proxy.ParseResponseMetadata(bytes.NewReader(buf.Bytes()), false)
+		require.NoError(t, err)
+		require.NotNil(t, metadata)
+		assert.Equal(t, 11, metadata.InputTokens)
+		assert.Equal(t, 7, metadata.OutputTokens)
+		assert.Equal(t, 18, metadata.TotalTokens)
+		assert.Equal(t, "resp_gz", metadata.RequestID)
+	})
+
 	t.Run("Responses API with Reasoning Tokens", func(t *testing.T) {
 		responseJSON := `{
 			"id": "resp_123",

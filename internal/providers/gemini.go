@@ -327,6 +327,18 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 		return parseOpenAICompatMetadata(data, true, "gemini")
 	}
 
+	// :streamGenerateContent WITHOUT alt=sse returns a plain JSON array of
+	// GenerateContentResponse objects, not SSE "data:" lines. The line
+	// scanner below would find no data and report an error, silently losing
+	// the request's tokens, so detect the array shape and parse it directly.
+	if isJSONArrayHead(head) {
+		data, err := io.ReadAll(buffered)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read streaming response: %w", err)
+		}
+		return parseGeminiJSONArrayStream(data)
+	}
+
 	scanner := bufio.NewScanner(buffered)
 	// Allow lines up to 2 MB — large Gemini SSE JSON chunks (e.g. with grounded
 	// citations or long thinking traces) can exceed the default 64 KB.
@@ -419,6 +431,64 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 	}
 
 	return nil, fmt.Errorf("no usage information found in streaming response")
+}
+
+// isJSONArrayHead reports whether the peeked stream head starts a JSON array
+// (ignoring leading whitespace).
+func isJSONArrayHead(head []byte) bool {
+	for _, b := range head {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// parseGeminiJSONArrayStream handles the :streamGenerateContent response
+// shape used when the client does not pass alt=sse: a JSON array of
+// GenerateContentResponse chunks, the last of which carries usageMetadata.
+func parseGeminiJSONArrayStream(data []byte) (*LLMResponseMetadata, error) {
+	var chunks []GeminiStreamResponse
+	if err := json.Unmarshal(data, &chunks); err != nil {
+		return nil, fmt.Errorf("failed to parse gemini JSON-array stream: %w", err)
+	}
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("no usage information found in streaming response")
+	}
+	var model, finishReason string
+	var metadata *LLMResponseMetadata
+	for _, chunk := range chunks {
+		if model == "" && chunk.ModelVersion != "" {
+			model = strings.TrimPrefix(chunk.ModelVersion, "models/")
+		}
+		if len(chunk.Candidates) > 0 && chunk.Candidates[0].FinishReason != "" {
+			finishReason = chunk.Candidates[0].FinishReason
+		}
+		if chunk.UsageMetadata != nil {
+			metadata = &LLMResponseMetadata{
+				InputTokens:   chunk.UsageMetadata.PromptTokenCount,
+				OutputTokens:  chunk.UsageMetadata.CandidatesTokenCount,
+				TotalTokens:   chunk.UsageMetadata.TotalTokenCount,
+				ThoughtTokens: chunk.UsageMetadata.ThoughtsTokenCount,
+				Provider:      "gemini",
+				IsStreaming:   true,
+			}
+		}
+	}
+	if model == "" {
+		model = "gemini"
+	}
+	if metadata == nil {
+		return &LLMResponseMetadata{Model: model, Provider: "gemini", IsStreaming: true, FinishReason: finishReason}, nil
+	}
+	metadata.Model = model
+	metadata.FinishReason = finishReason
+	return metadata, nil
 }
 
 // UserIDFromRequest extracts user ID from Gemini request body

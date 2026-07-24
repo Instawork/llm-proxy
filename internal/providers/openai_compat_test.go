@@ -95,7 +95,8 @@ func TestOpenAICompatDetection_DoesNotMisfireOnNativeBodies(t *testing.T) {
 	metadata, err = NewAnthropicProxy().ParseResponseMetadata(strings.NewReader(anthropicNativeStream), true)
 	require.NoError(t, err)
 	assert.Equal(t, "anthropic", metadata.Provider)
-	assert.Equal(t, 16, metadata.TotalTokens)
+	// message_delta usage is cumulative: 10 input + 5 output.
+	assert.Equal(t, 15, metadata.TotalTokens)
 }
 
 // The OpenAI-compatibility endpoints signal streaming via "stream": true in

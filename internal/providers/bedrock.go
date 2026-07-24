@@ -106,10 +106,14 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 		req.Host = targetURL.Host
 		// Optional: strip Accept-Encoding so upstream returns plain bytes —
 		// matches the debug-mode contract of CreateGenericDirector.
-		// IMPORTANT: this header is NOT part of the SigV4 canonical request
-		// by default (the AWS signer signs `host` only when no x-amz-* is
-		// set), so mutating it does not break the signature.
-		if opt.DisableGzip {
+		// boto3 adds Accept-Encoding after signing so deleting it is safe
+		// there, but some signers (AWS SDK for Java v2, aws-crt-based
+		// custom signers) include every present header in SignedHeaders;
+		// deleting a signed header changes the canonical request AWS
+		// reconstructs and every request fails with
+		// InvalidSignatureException. Only strip when the client did not
+		// sign it.
+		if opt.DisableGzip && !sigV4HeaderSigned(req.Header.Get("Authorization"), "accept-encoding") {
 			req.Header.Del("Accept-Encoding")
 		}
 		isStreaming := bedrockProxy.IsStreamingRequest(req)
@@ -246,6 +250,36 @@ func (b *BedrockProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRe
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil, fmt.Errorf("failed to parse bedrock response: %w", err)
 	}
+	if r.Usage.InputTokens == 0 && r.Usage.OutputTokens == 0 {
+		// InvokeModel (`/model/{id}/invoke`) returns the model-NATIVE body,
+		// not the Converse shape. Anthropic models report snake_case usage
+		// (Go's JSON matching is case-insensitive but not
+		// underscore-insensitive, so input_tokens never matches inputTokens)
+		// — without this fallback the whole InvokeModel API family silently
+		// recorded zero tokens.
+		var native struct {
+			StopReason string `json:"stop_reason"`
+			Usage      struct {
+				InputTokens              int `json:"input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(body, &native) == nil &&
+			(native.Usage.InputTokens > 0 || native.Usage.OutputTokens > 0) {
+			return &LLMResponseMetadata{
+				InputTokens:              native.Usage.InputTokens,
+				OutputTokens:             native.Usage.OutputTokens,
+				TotalTokens:              native.Usage.InputTokens + native.Usage.OutputTokens,
+				CacheReadInputTokens:     native.Usage.CacheReadInputTokens,
+				CacheCreationInputTokens: native.Usage.CacheCreationInputTokens,
+				Provider:                 "bedrock",
+				IsStreaming:              false,
+				FinishReason:             native.StopReason,
+			}, nil
+		}
+	}
 	total := r.Usage.TotalTokens
 	if total == 0 {
 		total = r.Usage.InputTokens + r.Usage.OutputTokens
@@ -293,7 +327,12 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 	for {
 		msg, decErr := decoder.Decode(decompressed, payloadBuf)
 		if decErr != nil {
-			if errors.Is(decErr, io.EOF) {
+			// ErrUnexpectedEOF is a stream cut MID-frame (the typical shape
+			// when a client disconnects during body copy). Treat it like a
+			// clean EOF so the partial-metadata fallback below still returns
+			// whatever was decoded (e.g. the finish reason) instead of
+			// discarding everything.
+			if errors.Is(decErr, io.EOF) || errors.Is(decErr, io.ErrUnexpectedEOF) {
 				break
 			}
 			return nil, fmt.Errorf("decode eventstream: %w", decErr)
@@ -344,7 +383,18 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 				metadata.CacheCreationInputTokens = meta.Usage.CacheCreationInputTokens
 				sawUsage = true
 			}
+		case "chunk":
+			// InvokeModelWithResponseStream frames: the payload is
+			// {"bytes":"<base64 model-native JSON>"} (Converse streams never
+			// emit this event type). Without handling it, the InvokeModel
+			// streaming family silently recorded zero tokens.
+			if b.parseInvokeChunk(msg.Payload, metadata) {
+				sawUsage = true
+			}
 		}
+	}
+	if sawUsage && metadata.TotalTokens == 0 {
+		metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
 	}
 
 	if !sawData {
@@ -358,6 +408,106 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 		return metadata, nil
 	}
 	return metadata, nil
+}
+
+// parseInvokeChunk decodes one InvokeModelWithResponseStream `chunk` frame
+// and folds any usage/finish-reason information into metadata. It returns
+// true when it found authoritative token counts.
+//
+// Two sources of truth, in increasing authority:
+//   - Anthropic-native stream events (message_start seeds input/cache
+//     tokens; message_delta carries the CUMULATIVE output count and the
+//     stop reason);
+//   - the `amazon-bedrock-invocationMetrics` block Bedrock appends to the
+//     final chunk for EVERY model family, which we prefer since it is
+//     model-agnostic.
+func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMetadata) bool {
+	var wrapper struct {
+		Bytes []byte `json:"bytes"` // encoding/json base64-decodes into []byte
+	}
+	if json.Unmarshal(payload, &wrapper) != nil || len(wrapper.Bytes) == 0 {
+		return false
+	}
+
+	var inner struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Usage struct {
+				InputTokens              int `json:"input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		Delta *struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+		Usage *struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+		InvocationMetrics *struct {
+			InputTokenCount  int `json:"inputTokenCount"`
+			OutputTokenCount int `json:"outputTokenCount"`
+		} `json:"amazon-bedrock-invocationMetrics"`
+	}
+	if json.Unmarshal(wrapper.Bytes, &inner) != nil {
+		return false
+	}
+
+	sawUsage := false
+	switch inner.Type {
+	case "message_start":
+		if inner.Message != nil {
+			u := inner.Message.Usage
+			if u.InputTokens > 0 {
+				metadata.InputTokens = u.InputTokens
+			}
+			if u.OutputTokens > 0 {
+				metadata.OutputTokens = u.OutputTokens
+			}
+			metadata.CacheReadInputTokens = u.CacheReadInputTokens
+			metadata.CacheCreationInputTokens = u.CacheCreationInputTokens
+			sawUsage = u.InputTokens > 0 || u.OutputTokens > 0
+		}
+	case "message_delta":
+		if inner.Delta != nil && inner.Delta.StopReason != "" {
+			metadata.FinishReason = inner.Delta.StopReason
+		}
+		if inner.Usage != nil && inner.Usage.OutputTokens > 0 {
+			metadata.OutputTokens = inner.Usage.OutputTokens
+			sawUsage = true
+		}
+	}
+	if m := inner.InvocationMetrics; m != nil && (m.InputTokenCount > 0 || m.OutputTokenCount > 0) {
+		metadata.InputTokens = m.InputTokenCount
+		metadata.OutputTokens = m.OutputTokenCount
+		metadata.TotalTokens = m.InputTokenCount + m.OutputTokenCount
+		sawUsage = true
+	}
+	return sawUsage
+}
+
+// sigV4HeaderSigned reports whether name appears in the SignedHeaders list of
+// an AWS SigV4 Authorization header value ("AWS4-HMAC-SHA256
+// Credential=..., SignedHeaders=a;b;c, Signature=..."). SignedHeaders
+// entries are lowercase per the SigV4 spec, but compare case-insensitively
+// to be safe.
+func sigV4HeaderSigned(authorization, name string) bool {
+	const marker = "SignedHeaders="
+	idx := strings.Index(authorization, marker)
+	if idx < 0 {
+		return false
+	}
+	list := authorization[idx+len(marker):]
+	if end := strings.IndexAny(list, ", "); end >= 0 {
+		list = list[:end]
+	}
+	for _, h := range strings.Split(list, ";") {
+		if strings.EqualFold(h, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // eventstreamHeaderString returns the string value of a given header name,

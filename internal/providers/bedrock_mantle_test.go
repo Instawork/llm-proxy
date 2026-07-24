@@ -411,7 +411,7 @@ func TestBedrockMantle_StripsCloudflareAndClientHopHeadersBeforeSigning(t *testi
 	req.Header.Set("Authorization", "Bearer sk-iw-mantle")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// Headers Cloudflare / OpenAI SDKs inject in front of llm.instawork.com.
+	// Headers CDN proxies and OpenAI SDKs may inject before the request arrives.
 	req.Header.Set("CDN-Loop", "cloudflare; loops=1")
 	req.Header.Set("CF-Connecting-IP", "73.143.211.71")
 	req.Header.Set("CF-IPCountry", "US")
@@ -585,6 +585,29 @@ data: [DONE]
 	}
 }
 
+// TestBedrockMantle_ParseAnthropicNonStreamingUsage guards the non-streaming
+// Anthropic path through parseMantleMetadata: cache token fields and
+// stop_reason used to be dropped (the generic envelope only knew OpenAI
+// shapes), making the books inconsistent with the streaming path.
+func TestBedrockMantle_ParseAnthropicNonStreamingUsage(t *testing.T) {
+	body := `{"id":"msg_ns","type":"message","model":"anthropic.claude-haiku-4-5",` +
+		`"stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":40,"output_tokens":9,"cache_read_input_tokens":1024,"cache_creation_input_tokens":256}}`
+	metadata, err := mustNewBedrockMantleProxy(t).ParseResponseMetadata(strings.NewReader(body), false)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+	if metadata.InputTokens != 40 || metadata.OutputTokens != 9 || metadata.TotalTokens != 49 {
+		t.Fatalf("unexpected usage: %+v", metadata)
+	}
+	if metadata.CacheReadInputTokens != 1024 || metadata.CacheCreationInputTokens != 256 {
+		t.Fatalf("cache tokens dropped: %+v", metadata)
+	}
+	if metadata.FinishReason != "end_turn" {
+		t.Fatalf("finish reason dropped: %+v", metadata)
+	}
+}
+
 func TestBedrockMantle_ParseAnthropicStreamingUsage(t *testing.T) {
 	stream := `event: message_start
 data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"anthropic.claude-haiku-4-5","stop_reason":null,"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}
@@ -603,7 +626,9 @@ data: {"type":"message_stop"}
 	if metadata.Provider != bedrockMantleName || metadata.Model != "anthropic.claude-haiku-4-5" {
 		t.Fatalf("unexpected metadata: %+v", metadata)
 	}
-	if metadata.InputTokens != 25 || metadata.OutputTokens != 16 || metadata.TotalTokens != 41 {
+	// message_delta usage is cumulative per Anthropic's docs, so the final
+	// output count is the last delta's value (15), not message_start + delta.
+	if metadata.InputTokens != 25 || metadata.OutputTokens != 15 || metadata.TotalTokens != 40 {
 		t.Fatalf("unexpected token aggregation: %+v", metadata)
 	}
 	if metadata.CacheReadInputTokens != 5 || metadata.CacheCreationInputTokens != 2 {
