@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log"
@@ -51,7 +52,10 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 
 			scope := ratelimit.ScopeKeys{Provider: prov.GetName(), Model: model, APIKey: apiKey, UserID: userID}
 			reservationID := newReservationID()
-			res, err := limiter.CheckAndReserve(r.Context(), reservationID, scope, estTokens, time.Now())
+			// Reconciliation (Adjust/Cancel below) must attribute the delta to
+			// the window this reservation was made in, so keep the timestamp.
+			reservedAt := time.Now()
+			res, err := limiter.CheckAndReserve(r.Context(), reservationID, scope, estTokens, reservedAt)
 			if err != nil {
 				// Fail OPEN on limiter/backend (e.g. Redis) errors. A transient
 				// Redis blip must not turn into a wholesale 500 for every LLM
@@ -109,11 +113,17 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			sw := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
 
-			// Reconcile using input token metadata set by token parsing middleware headers if present
+			// Reconcile using input token metadata set by token parsing middleware headers if present.
+			// Detach from the request context: r.Context() is canceled the
+			// moment the client disconnects — which is exactly when the 5xx
+			// Cancel path below fires — and both limiter backends fail on a
+			// canceled context, leaving the reservation stuck in the window.
+			reconcileCtx, reconcileCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+			defer reconcileCancel()
 			actualInput := headerToInt(w.Header().Get("X-LLM-Input-Tokens"))
 			if actualInput > 0 {
 				delta := actualInput - estTokens
-				if err := limiter.Adjust(r.Context(), reservationID, scope, delta, time.Now()); err != nil {
+				if err := limiter.Adjust(reconcileCtx, reservationID, scope, delta, reservedAt, time.Now()); err != nil {
 					proxylog.Proxy("ratelimit: adjust error: %v", err)
 				} else if delta != 0 {
 					log.Printf("ratelimit: adjust (input) provider=%s model=%s user=%s key_prefix=%s delta_input_tokens=%d",
@@ -128,7 +138,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				// (client-caused) attempt that should count, and 2xx without an
 				// input-token header is a streaming/parsed success that the
 				// Adjust branch above (or estimation) already accounts for.
-				if err := limiter.Cancel(r.Context(), reservationID, scope, estTokens, time.Now()); err != nil {
+				if err := limiter.Cancel(reconcileCtx, reservationID, scope, estTokens, reservedAt, time.Now()); err != nil {
 					proxylog.Proxy("ratelimit: cancel error: %v", err)
 				} else {
 					log.Printf("ratelimit: cancel (upstream %d) provider=%s model=%s user=%s key_prefix=%s est_tokens=%d",

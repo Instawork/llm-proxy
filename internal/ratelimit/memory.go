@@ -56,38 +56,36 @@ func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope Sc
 		minC := m.getCounterLocked(m.minute, k)
 		minLim := m.limitFor(k, true)
 		if m.exceeds(minC, minLim, estTokens) {
-			remaining := 0
-			if minLim.tokPerWindow > 0 {
-				remaining = max0(minLim.tokPerWindow - (minC.Tokens + estTokens))
-			} else if minLim.reqPerWindow > 0 {
-				remaining = max0(minLim.reqPerWindow - (minC.Requests + 1))
-			}
+			// Derive Limit and Remaining from the metric that actually
+			// tripped, so the X-RateLimit-* headers are internally consistent
+			// (matches the Redis script's per-check computation).
 			metric := exceededMetric(minC, minLim, estTokens)
-			limitVal := 0
+			remaining, limitVal := 0, 0
 			if metric == "tokens" {
 				limitVal = minLim.tokPerWindow
+				remaining = max0(minLim.tokPerWindow - (minC.Tokens + estTokens))
 			} else {
 				limitVal = minLim.reqPerWindow
+				remaining = max0(minLim.reqPerWindow - (minC.Requests + 1))
 			}
 			details := &LimitDetails{ScopeKey: k, Metric: metric, Window: "minute", Limit: limitVal, Remaining: remaining}
-			return ReservationResult{Allowed: false, RetryAfterSeconds: 60, Reason: "minute limit exceeded", Details: details}, nil
+			// Retry-After is the true time to the window boundary, matching
+			// the Redis backend, not a flat 60 (a denial at second 55 can
+			// retry in 5s).
+			return ReservationResult{Allowed: false, RetryAfterSeconds: secToMinuteEnd(now), Reason: "minute limit exceeded", Details: details}, nil
 		}
 		// day window
 		dayC := m.getCounterLocked(m.day, k)
 		dayLim := m.limitFor(k, false)
 		if m.exceeds(dayC, dayLim, estTokens) {
-			remaining := 0
-			if dayLim.tokPerWindow > 0 {
-				remaining = max0(dayLim.tokPerWindow - (dayC.Tokens + estTokens))
-			} else if dayLim.reqPerWindow > 0 {
-				remaining = max0(dayLim.reqPerWindow - (dayC.Requests + 1))
-			}
 			metric := exceededMetric(dayC, dayLim, estTokens)
-			limitVal := 0
+			remaining, limitVal := 0, 0
 			if metric == "tokens" {
 				limitVal = dayLim.tokPerWindow
+				remaining = max0(dayLim.tokPerWindow - (dayC.Tokens + estTokens))
 			} else {
 				limitVal = dayLim.reqPerWindow
+				remaining = max0(dayLim.reqPerWindow - (dayC.Requests + 1))
 			}
 			details := &LimitDetails{ScopeKey: k, Metric: metric, Window: "day", Limit: limitVal, Remaining: remaining}
 			return ReservationResult{Allowed: false, RetryAfterSeconds: int(time.Until(m.dayTick.Add(24 * time.Hour)).Seconds()), Reason: "daily limit exceeded", Details: details}, nil
@@ -105,7 +103,7 @@ func (m *memoryLimiter) CheckAndReserve(ctx context.Context, id string, scope Sc
 	return ReservationResult{Allowed: true, ReservationID: id}, nil
 }
 
-func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, now time.Time) error {
+func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, reservedAt, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -113,10 +111,23 @@ func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, 
 	defer m.mu.Unlock()
 
 	m.rotateWindowsLocked(now)
+	// Only touch windows the reservation was actually made in; if a window
+	// rotated between reserve and reconcile, the reservation vanished with it
+	// and applying the delta here would mutate other requests' counters.
+	sameMin := reservedAt.Truncate(time.Minute).Equal(m.minTick)
+	sameDay := reservedAt.Truncate(24 * time.Hour).Equal(m.dayTick)
 	keys := m.scopeKeys(scope)
 	for _, k := range keys {
-		m.getCounterLocked(m.minute, k).Tokens += tokenDelta
-		m.getCounterLocked(m.day, k).Tokens += tokenDelta
+		if sameMin {
+			c := m.getCounterLocked(m.minute, k)
+			// Clamp like the Redis script does: a large negative delta must
+			// not drive the counter negative and grant free capacity.
+			c.Tokens = max0(c.Tokens + tokenDelta)
+		}
+		if sameDay {
+			c := m.getCounterLocked(m.day, k)
+			c.Tokens = max0(c.Tokens + tokenDelta)
+		}
 	}
 	return nil
 }
@@ -124,7 +135,7 @@ func (m *memoryLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, 
 // Cancel undoes a prior reservation. estTokens MUST mirror what was passed
 // to CheckAndReserve for this reservation; otherwise the reserved tokens
 // remain in the window and silently under-credit the limit.
-func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error {
+func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, reservedAt, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -132,14 +143,20 @@ func (m *memoryLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, 
 	defer m.mu.Unlock()
 
 	m.rotateWindowsLocked(now)
+	sameMin := reservedAt.Truncate(time.Minute).Equal(m.minTick)
+	sameDay := reservedAt.Truncate(24 * time.Hour).Equal(m.dayTick)
 	keys := m.scopeKeys(scope)
 	for _, k := range keys {
-		minC := m.getCounterLocked(m.minute, k)
-		minC.Requests = max0(minC.Requests - 1)
-		minC.Tokens = max0(minC.Tokens - estTokens)
-		dayC := m.getCounterLocked(m.day, k)
-		dayC.Requests = max0(dayC.Requests - 1)
-		dayC.Tokens = max0(dayC.Tokens - estTokens)
+		if sameMin {
+			minC := m.getCounterLocked(m.minute, k)
+			minC.Requests = max0(minC.Requests - 1)
+			minC.Tokens = max0(minC.Tokens - estTokens)
+		}
+		if sameDay {
+			dayC := m.getCounterLocked(m.day, k)
+			dayC.Requests = max0(dayC.Requests - 1)
+			dayC.Tokens = max0(dayC.Tokens - estTokens)
+		}
 	}
 	return nil
 }

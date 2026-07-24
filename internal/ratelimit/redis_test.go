@@ -57,6 +57,41 @@ func TestRedisLimiterTokensPerMinute(t *testing.T) {
 	}
 }
 
+// TestRedisLimiterCancelAfterMinuteRotationSkipsNewWindow guards the
+// window-attribution fix: request A reserves in minute window W1, the key
+// expires at the boundary, request B reserves in W2, and A's late 5xx cancel
+// must not drain B's counters. The day window is still current, so A's day
+// reservation is released.
+func TestRedisLimiterCancelAfterMinuteRotationSkipsNewWindow(t *testing.T) {
+	cfg := baseCfg()
+	lim, mr := newRedisLimiterForTest(t, cfg)
+
+	scope := ScopeKeys{UserID: "u-rotate"}
+	t0 := time.Date(2026, 7, 24, 12, 0, 50, 0, time.UTC)
+
+	resA, _ := lim.CheckAndReserve(context.Background(), "A", scope, 40, t0)
+	require.True(t, resA.Allowed)
+
+	// Cross the minute boundary: the W1 minute key (TTL 10s) expires.
+	mr.FastForward(15 * time.Second)
+	t1 := t0.Add(15 * time.Second)
+
+	resB, _ := lim.CheckAndReserve(context.Background(), "B", scope, 40, t1)
+	require.True(t, resB.Allowed)
+
+	require.NoError(t, lim.Cancel(context.Background(), "A", scope, 40, t0, t1))
+
+	// B's 40 minute tokens must still be counted: a further 70-token reserve
+	// exceeds TPM=100 only if B's reservation survived the cancel.
+	probe, _ := lim.CheckAndReserve(context.Background(), "probe", scope, 70, t1)
+	assert.False(t, probe.Allowed, "B's minute reservation must survive A's late cancel")
+
+	// The day window was still current, so A's day tokens were released:
+	// B's 40 remain (A's 40 + B's 40 - A's cancel).
+	dayTok := mr.HGet("rl:day:user:u-rotate", "tok")
+	assert.Equal(t, "40", dayTok, "day window should hold only B's tokens after A's cancel")
+}
+
 func TestRedisLimiterAdjust(t *testing.T) {
 	cfg := baseCfg()
 	lim, _ := newRedisLimiterForTest(t, cfg)
@@ -71,7 +106,7 @@ func TestRedisLimiterAdjust(t *testing.T) {
 	}
 
 	// Adjust to refund 30 tokens
-	err := lim.Adjust(context.Background(), "1", scope, -30, now)
+	err := lim.Adjust(context.Background(), "1", scope, -30, now, now)
 	if err != nil {
 		t.Fatalf("Adjust: %v", err)
 	}
@@ -101,7 +136,7 @@ func TestRedisLimiterCancel(t *testing.T) {
 	}
 
 	// Cancel one request
-	err := lim.Cancel(context.Background(), "1", scope, 10, now)
+	err := lim.Cancel(context.Background(), "1", scope, 10, now, now)
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}

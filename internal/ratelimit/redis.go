@@ -258,20 +258,29 @@ end
 return {1}
 `)
 
+// applyMin/applyDay (ARGV 5/6) gate each window: the caller sets them to 0
+// when that window rotated since the reservation was made, in which case the
+// counters now belong to other requests and must not be touched.
 var luaAdjust = redis.NewScript(`
 local delta = tonumber(ARGV[1])
 local ttlMin = tonumber(ARGV[2])
 local ttlDay = tonumber(ARGV[3])
 local pairsCount = tonumber(ARGV[4])
+local applyMin = tonumber(ARGV[5]) == 1
+local applyDay = tonumber(ARGV[6]) == 1
 for i = 0, pairsCount - 1 do
   local kMin = KEYS[2*i + 1]
   local kDay = KEYS[2*i + 2]
-  local newMin = redis.call('HINCRBY', kMin, 'tok', delta)
-  if tonumber(newMin) < 0 then redis.call('HSET', kMin, 'tok', 0) end
-  redis.call('EXPIRE', kMin, ttlMin)
-  local newDay = redis.call('HINCRBY', kDay, 'tok', delta)
-  if tonumber(newDay) < 0 then redis.call('HSET', kDay, 'tok', 0) end
-  redis.call('EXPIRE', kDay, ttlDay)
+  if applyMin then
+    local newMin = redis.call('HINCRBY', kMin, 'tok', delta)
+    if tonumber(newMin) < 0 then redis.call('HSET', kMin, 'tok', 0) end
+    redis.call('EXPIRE', kMin, ttlMin)
+  end
+  if applyDay then
+    local newDay = redis.call('HINCRBY', kDay, 'tok', delta)
+    if tonumber(newDay) < 0 then redis.call('HSET', kDay, 'tok', 0) end
+    redis.call('EXPIRE', kDay, ttlDay)
+  end
 end
 return {1}
 `)
@@ -284,19 +293,25 @@ local estTokens = tonumber(ARGV[1])
 local ttlMin = tonumber(ARGV[2])
 local ttlDay = tonumber(ARGV[3])
 local pairsCount = tonumber(ARGV[4])
+local applyMin = tonumber(ARGV[5]) == 1
+local applyDay = tonumber(ARGV[6]) == 1
 for i = 0, pairsCount - 1 do
   local kMin = KEYS[2*i + 1]
   local kDay = KEYS[2*i + 2]
-  local newMinReq = redis.call('HINCRBY', kMin, 'req', -1)
-  if tonumber(newMinReq) < 0 then redis.call('HSET', kMin, 'req', 0) end
-  local newMinTok = redis.call('HINCRBY', kMin, 'tok', -estTokens)
-  if tonumber(newMinTok) < 0 then redis.call('HSET', kMin, 'tok', 0) end
-  redis.call('EXPIRE', kMin, ttlMin)
-  local newDayReq = redis.call('HINCRBY', kDay, 'req', -1)
-  if tonumber(newDayReq) < 0 then redis.call('HSET', kDay, 'req', 0) end
-  local newDayTok = redis.call('HINCRBY', kDay, 'tok', -estTokens)
-  if tonumber(newDayTok) < 0 then redis.call('HSET', kDay, 'tok', 0) end
-  redis.call('EXPIRE', kDay, ttlDay)
+  if applyMin then
+    local newMinReq = redis.call('HINCRBY', kMin, 'req', -1)
+    if tonumber(newMinReq) < 0 then redis.call('HSET', kMin, 'req', 0) end
+    local newMinTok = redis.call('HINCRBY', kMin, 'tok', -estTokens)
+    if tonumber(newMinTok) < 0 then redis.call('HSET', kMin, 'tok', 0) end
+    redis.call('EXPIRE', kMin, ttlMin)
+  end
+  if applyDay then
+    local newDayReq = redis.call('HINCRBY', kDay, 'req', -1)
+    if tonumber(newDayReq) < 0 then redis.call('HSET', kDay, 'req', 0) end
+    local newDayTok = redis.call('HINCRBY', kDay, 'tok', -estTokens)
+    if tonumber(newDayTok) < 0 then redis.call('HSET', kDay, 'tok', 0) end
+    redis.call('EXPIRE', kDay, ttlDay)
+  end
 end
 return {1}
 `)
@@ -406,10 +421,28 @@ func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope Sco
 	return ReservationResult{Allowed: false, RetryAfterSeconds: retry, Reason: reason, Details: details}, nil
 }
 
-func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, now time.Time) error {
+// windowFlags reports which windows are still the ones the reservation was
+// made in. The Redis key names are not window-stamped (identity comes from
+// TTL expiry), so a reconcile that crosses a boundary would otherwise land on
+// the next window's counters and erase other requests' reservations.
+func windowFlags(reservedAt, now time.Time) (applyMin, applyDay int) {
+	if reservedAt.Truncate(time.Minute).Equal(now.Truncate(time.Minute)) {
+		applyMin = 1
+	}
+	if reservedAt.Truncate(24 * time.Hour).Equal(now.Truncate(24 * time.Hour)) {
+		applyDay = 1
+	}
+	return applyMin, applyDay
+}
+
+func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, tokenDelta int, reservedAt, now time.Time) error {
 	_ = id
 	scopeKeys := r.scopeKeys(scope)
 	if len(scopeKeys) == 0 {
+		return nil
+	}
+	applyMin, applyDay := windowFlags(reservedAt, now)
+	if applyMin == 0 && applyDay == 0 {
 		return nil
 	}
 	keys := make([]string, 0, len(scopeKeys)*2)
@@ -417,15 +450,19 @@ func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, t
 		keys = append(keys, minuteKey(sk))
 		keys = append(keys, dayKey(sk))
 	}
-	argv := []interface{}{tokenDelta, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys)}
+	argv := []interface{}{tokenDelta, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaAdjust.Run(ctx, r.rdb, keys, argv...).Result()
 	return err
 }
 
-func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) error {
+func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, estTokens int, reservedAt, now time.Time) error {
 	_ = id
 	scopeKeys := r.scopeKeys(scope)
 	if len(scopeKeys) == 0 {
+		return nil
+	}
+	applyMin, applyDay := windowFlags(reservedAt, now)
+	if applyMin == 0 && applyDay == 0 {
 		return nil
 	}
 	keys := make([]string, 0, len(scopeKeys)*2)
@@ -433,7 +470,7 @@ func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, e
 		keys = append(keys, minuteKey(sk))
 		keys = append(keys, dayKey(sk))
 	}
-	argv := []interface{}{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys)}
+	argv := []interface{}{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaCancel.Run(ctx, r.rdb, keys, argv...).Result()
 	return err
 }
