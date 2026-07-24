@@ -13,7 +13,13 @@ func (openAIContentAdapter) ScrubString(path []string, key string) bool {
 	case "input", "prompt":
 		return len(path) == 0
 	case "arguments", "output":
-		return hasPathAncestor(path, "tool_calls") || hasPathAncestor(path, "function")
+		// tool_calls/function covers Chat Completions; "input" covers the
+		// Responses API, where multi-turn tool use resends function_call /
+		// function_call_output items directly in the input array (array
+		// traversal does not append path segments, so those items are seen
+		// with path=["input"]).
+		return hasPathAncestor(path, "tool_calls") || hasPathAncestor(path, "function") ||
+			hasPathAncestor(path, "input")
 	default:
 		return false
 	}

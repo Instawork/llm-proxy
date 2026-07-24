@@ -104,6 +104,43 @@ func TestRedact_SingleSpanReplaced(t *testing.T) {
 	}
 }
 
+// TestRedact_BareJSONStringScalarStillAnalyzed covers text that is a valid
+// JSON scalar (here a quoted string). Regression: the JSON scrub path used
+// to collect zero tasks for a scalar root and return the text without ever
+// calling the analyzer — a redaction bypass reachable from POST /redact.
+func TestRedact_BareJSONStringScalarStillAnalyzed(t *testing.T) {
+	text := `"ssn 222-33-4444"`
+	called := false
+	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
+		called = true
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode analyzer payload: %v", err)
+		}
+		if payload.Text != text {
+			t.Errorf("analyzer received %q, want raw text %q", payload.Text, text)
+		}
+		_ = json.NewEncoder(w).Encode([]Span{
+			{Start: 5, End: 16, EntityType: "US_SSN", Score: 0.95},
+		})
+	})
+	r, _ := New(Config{AnalyzerURL: srv.URL})
+
+	res, err := r.Redact(context.Background(), text)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("bare JSON scalar text must still be sent to the analyzer")
+	}
+	want := `"ssn [REDACTED:US_SSN]"`
+	if res.Text != want {
+		t.Errorf("got %q, want %q", res.Text, want)
+	}
+}
+
 func TestRedact_MultipleSpansSpliceInReverse(t *testing.T) {
 	// "Bob lives in 222-33-4444 area and email me bob@x.com"
 	//    0   4     12 13         24             45 48

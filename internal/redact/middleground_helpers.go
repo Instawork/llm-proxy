@@ -10,10 +10,23 @@ func isPrivateOrLoopbackIP(value string) bool {
 	if trimmed == "localhost" {
 		return true
 	}
-	if host, _, ok := strings.Cut(trimmed, ":"); ok && host != "" {
-		trimmed = host
-	}
 	ip := net.ParseIP(trimmed)
+	if ip == nil && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		// Bracketed IPv6 without a port, e.g. "[::1]".
+		ip = net.ParseIP(trimmed[1 : len(trimmed)-1])
+	}
+	if ip == nil {
+		// host:port — SplitHostPort handles IPv4, [IPv6]:port, and
+		// hostname:port. Cutting at the first ':' (the old behavior)
+		// truncated bare IPv6 addresses ("fd12:3456::1" became "fd12"),
+		// so private IPv6 was never recognized and got over-masked.
+		if host, _, err := net.SplitHostPort(trimmed); err == nil {
+			if host == "localhost" {
+				return true
+			}
+			ip = net.ParseIP(host)
+		}
+	}
 	if ip == nil {
 		return false
 	}
