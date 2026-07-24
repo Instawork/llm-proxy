@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -230,6 +231,70 @@ func TestPIIResponseRestoreMiddleware_RestoresSquareBracketPIIPlaceholder(t *tes
 	}
 	if got := piiMetricFromResponse(rec, "X-LLM-PII-Leaked"); got != "0" {
 		t.Fatalf("leaked = %q, want 0", got)
+	}
+}
+
+// TestPIIResponseRestoreMiddleware_WriteHonorsIoCopyContract reproduces the
+// production ALB 502s: httputil.ReverseProxy copies the upstream body with
+// io.Copy, which errors (io.ErrShortWrite / invalid write) whenever Write
+// reports n != len(input) — and ReverseProxy then panics with
+// http.ErrAbortHandler, resetting the client connection. Restoring a
+// placeholder changes the byte count, so Write must report the input length,
+// not the restored length.
+func TestPIIResponseRestoreMiddleware_WriteHonorsIoCopyContract(t *testing.T) {
+	reg := redact.NewRegistry()
+	ph := reg.Placeholder("PERSON", "Jane Doe")
+	pm := providers.NewProviderManager()
+
+	body := `{"content":"` + ph + `"}`
+	var copyErr error
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, copyErr = io.Copy(w, strings.NewReader(body))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if copyErr != nil {
+		t.Fatalf("io.Copy failed (ReverseProxy would panic with ErrAbortHandler): %v", copyErr)
+	}
+	want := `{"content":"Jane Doe"}`
+	if rec.Body.String() != want {
+		t.Fatalf("body = %q want %q", rec.Body.String(), want)
+	}
+}
+
+// Gzip variant of the io.Copy contract test: the decompressed+restored body
+// is much longer than the compressed input chunk, so a Write that reports
+// the restored length returns n > len(input), which io.Copy also treats as
+// a fatal error.
+func TestPIIResponseRestoreMiddleware_WriteHonorsIoCopyContractGzip(t *testing.T) {
+	reg := redact.NewRegistry()
+	ph := reg.Placeholder("PERSON", "Jane Doe")
+	pm := providers.NewProviderManager()
+
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	_, _ = gz.Write([]byte(`{"content":"` + ph + `","pad":"` + strings.Repeat("a", 2048) + `"}`))
+	_ = gz.Close()
+
+	var copyErr error
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, copyErr = io.Copy(w, bytes.NewReader(compressed.Bytes()))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if copyErr != nil {
+		t.Fatalf("io.Copy failed (ReverseProxy would panic with ErrAbortHandler): %v", copyErr)
+	}
+	if !strings.Contains(rec.Body.String(), "Jane Doe") {
+		t.Fatalf("body = %q, want restored PII", rec.Body.String())
 	}
 }
 
