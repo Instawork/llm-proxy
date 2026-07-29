@@ -190,6 +190,16 @@ retired_models:
       replacement: o3
       aliases:
         - o1-preview-2024-09-12
+    "o3-deep-research":
+      retired_date: "2026-07-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o3-deep-research-2025-06-26
+    "o4-mini-deep-research":
+      retired_date: "2026-07-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o4-mini-deep-research-2025-06-26
   anthropic:
     "claude-sonnet-4-0":
       retired_date: "2026-06-15"
@@ -257,6 +267,42 @@ retired_models:
       aliases:
         - gemini-3-pro-preview
         - gemini-3-0-pro
+    "gemini-3.1-flash-lite-preview":
+      retired_date: "2026-05-25"
+      replacement: gemini-3.1-flash-lite
+      aliases: []
+    "gemini-2.5-pro-preview":
+      retired_date: "2025-12-02"
+      replacement: gemini-3.1-pro
+      aliases:
+        - gemini-pro-2.5-preview
+        - gemini-2.5-pro-preview-03-25
+        - gemini-2.5-pro-preview-05-06
+        - gemini-2.5-pro-preview-06-05
+    "gemini-1.5-pro":
+      retired_date: "2025-09-24" # -001 retired 2025-05-24, -002 2025-09-24
+      replacement: gemini-3.6-flash
+      aliases:
+        - gemini-pro-1.5
+        - gemini-1-5-pro
+        - gemini-1.5-pro-latest
+        - gemini-1.5-pro-001
+        - gemini-1.5-pro-002
+    "gemini-1.5-flash":
+      retired_date: "2025-09-24" # -001 retired 2025-05-24, -002 2025-09-24
+      replacement: gemini-3.5-flash-lite
+      aliases:
+        - gemini-flash-1.5
+        - gemini-1.5-flash-latest
+        - gemini-1.5-flash-001
+        - gemini-1.5-flash-002
+    "gemini-1.5-flash-8b":
+      retired_date: "2025-09-24" # date not published; retired with the 1.5 series
+      replacement: gemini-3.5-flash-lite
+      aliases:
+        - gemini-flash-1.5-8b
+        - gemini-1.5-flash-8b-latest
+        - gemini-1.5-flash-8b-001
   bedrock: {}
 
 # =============================================================================
@@ -279,6 +325,8 @@ providers:
     models:
       "gpt-5":
         enabled: true
+        deprecated: true # snapshot gpt-5-2025-08-07 shuts down 2026-12-11
+        replacement: "gpt-5.6-sol"
         aliases: ["gpt-5-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -292,6 +340,8 @@ providers:
           output: 10.00
       "gpt-5-mini":
         enabled: true
+        deprecated: true # snapshot gpt-5-mini-2025-08-07 shuts down 2026-12-11
+        replacement: "gpt-5.6-terra"
         aliases: ["gpt-5-mini-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -305,6 +355,8 @@ providers:
           output: 2.00
       "gpt-5-nano":
         enabled: true
+        deprecated: true # snapshot gpt-5-nano-2025-08-07 shuts down 2026-12-11
+        replacement: "gpt-5.6-luna"
         aliases: ["gpt-5-nano-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -318,6 +370,8 @@ providers:
           output: 0.40
       "gpt-4":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-sol"
         aliases: ["gpt-4-0613"]
         limits:
           tokens_per_minute: 450_000
@@ -331,6 +385,8 @@ providers:
           output: 60.00
       "gpt-4-turbo":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-sol"
         aliases: ["gpt-4-turbo-2024-04-09"]
         limits:
           tokens_per_minute: 450_000
@@ -370,6 +426,8 @@ providers:
           output: 1.60
       "gpt-4.1-nano":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-luna"
         aliases: ["gpt-4.1-nano-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -413,6 +471,8 @@ providers:
           output: 0.60
       "gpt-3.5-turbo":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-terra"
         aliases:
           ["gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-16k"]
         limits:
@@ -427,6 +487,8 @@ providers:
           output: 1.50
       "o1":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-sol"
         aliases: ["o1-2024-12-17"]
         limits:
           tokens_per_minute: 450_000
@@ -440,6 +502,8 @@ providers:
           output: 60.00
       "o3-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-sol"
         aliases: ["o3-mini-2025-01-31"]
         limits:
           tokens_per_minute: 200_000
@@ -453,6 +517,8 @@ providers:
           output: 4.40
       "o4-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-terra"
         aliases: ["o4-mini-2025-04-16"]
         limits:
           tokens_per_minute: 200_000
@@ -466,6 +532,8 @@ providers:
           output: 4.40
       "o3":
         enabled: true
+        deprecated: true # snapshot o3-2025-04-16 shuts down 2026-12-11
+        replacement: "gpt-5.6-sol"
         aliases: ["o3-2025-04-16"]
         limits:
           tokens_per_minute: 40_000
@@ -479,7 +547,9 @@ providers:
           output: 8.00
       "o3-pro":
         enabled: true
-        aliases: ["o3-pro-2025-04-16"]
+        deprecated: true # snapshot o3-pro-2025-06-10 shuts down 2026-12-11
+        replacement: "gpt-5.6-sol"
+        aliases: ["o3-pro-2025-04-16", "o3-pro-2025-06-10"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -492,6 +562,8 @@ providers:
           output: 80.00
       "o1-pro":
         enabled: true
+        deprecated: true # vendor shutdown 2026-10-23
+        replacement: "gpt-5.6-sol"
         aliases: ["o1-pro-2024-12-17", "o1-pro-2025-03-19"]
         limits:
           tokens_per_minute: 450_000
@@ -514,8 +586,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 2.50
-          output: 15.00
+          - threshold: 272_000
+            input: 2.50
+            output: 15.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 5.00
+            output: 22.50
       "gpt-5.4-mini":
         enabled: true
         aliases: ["gpt-5.4-mini-2026-03-05", "gpt-5.4-mini-2026-03-17"]
@@ -553,8 +629,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 30.00
-          output: 180.00
+          - threshold: 272_000
+            input: 30.00
+            output: 180.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 60.00
+            output: 270.00
       "gpt-5.5":
         enabled: true
         aliases: ["gpt-5.5-2026-04-23"]
@@ -566,8 +646,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 5.00
-          output: 30.00
+          - threshold: 272_000
+            input: 5.00
+            output: 30.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 10.00
+            output: 45.00
       "gpt-5.5-pro":
         enabled: true
         aliases: ["gpt-5.5-pro-2026-04-23"]
@@ -579,34 +663,69 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 30.00
-          output: 180.00
-      "o3-deep-research":
+          - threshold: 272_000
+            input: 30.00
+            output: 180.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 60.00
+            output: 270.00
+      # -----------------------------------------------------------------------
+      # GPT-5.6 family (GA 2026-07-09). Sol/Terra/Luna are durable capability
+      # tiers replacing the mini/nano suffixes. No dated snapshots published
+      # yet. Prompts >272K input tokens bill at 2x input / 1.5x output for the
+      # full request. Cache writes bill at 1.25x uncached input (new billing
+      # dimension for 5.6+); flat pricing here covers standard input/output.
+      "gpt-5.6-sol":
         enabled: true
-        aliases: ["o3-deep-research-2025-06-26"]
+        aliases: ["gpt-5.6"] # vendor-documented rolling alias routes to sol
         limits:
-          tokens_per_minute: 40_000
-          requests_per_minute: 1_000
-          tokens_per_day: 960_000
-          requests_per_day: 1_440_000
-          burst_tokens: 4_000
-          burst_requests: 100
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
         pricing:
-          input: 10.00
-          output: 40.00
-      "o4-mini-deep-research":
+          - threshold: 272_000
+            input: 5.00
+            output: 30.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 10.00
+            output: 45.00
+      "gpt-5.6-terra":
         enabled: true
-        aliases: ["o4-mini-deep-research-2025-06-26"]
+        aliases: []
         limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
         pricing:
-          input: 2.00
-          output: 8.00
+          - threshold: 272_000
+            input: 2.50
+            output: 15.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 5.00
+            output: 22.50
+      "gpt-5.6-luna":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 1.00
+            output: 6.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.00
+            output: 9.00
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -648,6 +767,8 @@ providers:
           output: 10.00
       "gpt-5-pro":
         enabled: true
+        deprecated: true # snapshot gpt-5-pro-2025-10-06 shuts down 2026-12-11
+        replacement: "gpt-5.6-sol"
         aliases: ["gpt-5-pro-2025-08-07", "gpt-5-pro-2025-10-06"]
         limits:
           tokens_per_minute: 450_000
@@ -676,6 +797,50 @@ providers:
       burst_requests: 100
 
     models:
+      # Claude 4.6+ / 5-series models use dateless pinned IDs (no dated
+      # snapshots) and include the full 1M-token context window at standard
+      # pricing — Anthropic removed all long-context (>200K) surcharges.
+      "claude-fable-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 50.00
+      # Limited availability (Project Glasswing approved customers only).
+      # Same pricing/specs as claude-fable-5; inert unless a key has access.
+      "claude-mythos-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 50.00
+      "claude-opus-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 5.00
+          output: 25.00
       "claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4.8", "claude-opus-4-8-20260528"]
@@ -764,16 +929,15 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
+        # The >200K long-context tier (6.00/22.50) was removed when Anthropic
+        # retired the 1M-context beta on 2026-04-30; requests >200K tokens on
+        # Sonnet 4.5 now return a 400 error, so the tier is unreachable.
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "claude-opus-4-1":
         enabled: true
-        deprecated: true
+        deprecated: true # vendor shutdown 2026-08-05
         replacement: "claude-opus-4-8"
         aliases: ["claude-opus-4-1-20250805", "claude-opus-4.1"]
         limits:
@@ -844,13 +1008,11 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
+        # >200K tier removed 2026-04-30 with the 1M-context beta retirement
+        # (mirrors the native claude-sonnet-4-5 entry above).
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases:
@@ -906,16 +1068,13 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
-        # Standard on-demand pricing ($3/$15, tiered above 200K). The launch
+        # Standard on-demand pricing ($3/$15, flat — Sonnet 5 includes the 1M
+        # context window at standard pricing, no long-context tier). The launch
         # intro rate ($2/$10 through 2026-08-31) is intentionally omitted so
         # cost tracking never under-bills after the promo ends.
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "us.anthropic.claude-sonnet-4-6":
         enabled: true
         aliases:
@@ -932,13 +1091,11 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
+        # Sonnet 4.6 has 1M context GA at standard pricing (no >200K
+        # surcharge since 2026-03-13).
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -990,13 +1147,10 @@ providers:
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
         aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
+        # >200K tier removed 2026-04-30 with the 1M-context beta retirement.
         pricing:
-          - threshold: 200_000
-            input: 3.00
-            output: 15.00
-          - threshold: 0
-            input: 6.00
-            output: 22.50
+          input: 3.00
+          output: 15.00
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases: ["claude-haiku-4-5", "anthropic.claude-haiku-4-5"]
@@ -1038,6 +1192,8 @@ providers:
             output: 18.00
       "gemini-3-flash":
         enabled: true
+        deprecated: true # vendor legacy status, no shutdown date announced
+        replacement: "gemini-3.6-flash"
         aliases: ["gemini-3-flash-preview", "gemini-3-0-flash"]
         limits:
           tokens_per_minute: 3_000_000
@@ -1062,9 +1218,40 @@ providers:
         pricing:
           input: 1.50
           output: 9.00
+      # Workhorse successor to gemini-3.5-flash (GA 2026-07-21): same input
+      # rate, cheaper output. Flat pricing — no prompt-length tier.
+      "gemini-3.6-flash":
+        enabled: true
+        aliases: ["gemini-flash-3.6", "gemini-3-6-flash"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 1.50
+          output: 7.50
+      # Fastest 3.5-class model (GA 2026-07-21). Flat pricing, no tier.
+      "gemini-3.5-flash-lite":
+        enabled: true
+        aliases: ["gemini-flash-lite-3.5", "gemini-3-5-flash-lite"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 0.30
+          output: 2.50
+      # Note: the gemini-3.1-flash-lite-preview id was shut down 2026-05-25
+      # (now listed under retired_models); the GA id below is canonical.
       "gemini-3.1-flash-lite":
         enabled: true
-        aliases: ["gemini-3.1-flash-lite-preview", "gemini-3-1-flash-lite"]
+        aliases: ["gemini-3-1-flash-lite"]
         limits:
           tokens_per_minute: 3_000_000
           requests_per_minute: 2_000
@@ -1077,7 +1264,7 @@ providers:
           output: 1.50
       "gemini-2.5-pro":
         enabled: true
-        deprecated: true
+        deprecated: true # vendor earliest shutdown 2026-10-16
         replacement: "gemini-3.1-pro"
         aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
         limits:
@@ -1094,21 +1281,10 @@ providers:
           - threshold: 0 # Fallback for prompts > 200k tokens
             input: 2.50
             output: 15.00
-      "gemini-2.5-pro-preview":
-        enabled: true
-        aliases: ["gemini-pro-2.5-preview"]
-        limits:
-          tokens_per_minute: 5_000_000
-          requests_per_minute: 1_000
-          tokens_per_day: 120_000_000
-          requests_per_day: 1_440_000
-          burst_tokens: 500_000
-          burst_requests: 100
-        pricing:
-          input: 1.25
-          output: 10.00
       "gemini-2.5-flash":
         enabled: true
+        deprecated: true # vendor earliest shutdown 2026-10-16
+        replacement: "gemini-3.6-flash"
         aliases:
           [
             "gemini-flash-2.5",
@@ -1127,6 +1303,8 @@ providers:
           output: 2.50
       "gemini-2.5-flash-lite":
         enabled: true
+        deprecated: true # vendor earliest shutdown 2026-10-16
+        replacement: "gemini-3.1-flash-lite"
         aliases:
           [
             "gemini-flash-lite-2.5",
@@ -1143,8 +1321,12 @@ providers:
         pricing:
           input: 0.10
           output: 0.40
+      # Internal routing id (never an official Google API id); priced as
+      # gemini-2.5-flash, so it follows that model's 2026-10-16 sunset.
       "gemini-2.5-flash-thinking":
         enabled: true
+        deprecated: true # follows gemini-2.5-flash shutdown 2026-10-16
+        replacement: "gemini-3.6-flash"
         aliases: ["gemini-flash-2.5-thinking"]
         limits:
           tokens_per_minute: 3_000_000
@@ -1156,75 +1338,6 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
-      "gemini-1.5-pro":
-        enabled: true
-        aliases:
-          [
-            "gemini-pro-1.5",
-            "gemini-1-5-pro",
-            "gemini-1.5-pro-latest",
-            "gemini-1.5-pro-001",
-            "gemini-1.5-pro-002",
-          ]
-        limits:
-          tokens_per_minute: 4_000_000
-          requests_per_minute: 1_000
-          tokens_per_day: 96_000_000
-          requests_per_day: 1_440_000
-          burst_tokens: 400_000
-          burst_requests: 100
-        pricing:
-          - threshold: 128_000
-            input: 1.25
-            output: 5.00
-          - threshold: 0 # Fallback for prompts > 128k tokens
-            input: 2.50
-            output: 10.00
-      "gemini-1.5-flash":
-        enabled: true
-        aliases:
-          [
-            "gemini-flash-1.5",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash-001",
-            "gemini-1.5-flash-002",
-          ]
-        limits:
-          tokens_per_minute: 4_000_000
-          requests_per_minute: 1_000
-          tokens_per_day: 96_000_000
-          requests_per_day: 1_440_000
-          burst_tokens: 400_000
-          burst_requests: 100
-        pricing:
-          - threshold: 128_000
-            input: 0.075
-            output: 0.30
-          - threshold: 0 # Fallback for prompts > 128k tokens
-            input: 0.15
-            output: 0.60
-      "gemini-1.5-flash-8b":
-        enabled: true
-        aliases:
-          [
-            "gemini-flash-1.5-8b",
-            "gemini-1.5-flash-8b-latest",
-            "gemini-1.5-flash-8b-001",
-          ]
-        limits:
-          tokens_per_minute: 4_000_000
-          requests_per_minute: 1_000
-          tokens_per_day: 96_000_000
-          requests_per_day: 1_440_000
-          burst_tokens: 400_000
-          burst_requests: 100
-        pricing:
-          - threshold: 128_000
-            input: 0.0375
-            output: 0.15
-          - threshold: 0 # Fallback for prompts > 128k tokens
-            input: 0.075
-            output: 0.30
 
 # =============================================================================
 # DEFAULT RATE LIMITS (FALLBACKS)
