@@ -64,6 +64,8 @@ EXAMPLES:
     $0 --skip-aws-setup                  # Skip AWS setup (assume already configured)
     # Build and push the OCR sidecar image to the ocr-gate repo:
     $0 -r ocr-gate -f ocr_sidecar/Dockerfile -c ocr_sidecar --dockerignore ""
+    # Build and push the Presidio sidecar with baked-in recognizers.yaml:
+    $0 -r llm-proxy-presidio -f build/Dockerfile.presidio -c . --dockerignore ""
 
 EOF
 }

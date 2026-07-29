@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -121,6 +122,12 @@ func classifyOpenAI(status int, resp *http.Response) FailureClass {
 // multi-megabyte error page into memory on the hot path.
 const responseBodyPeekBytes = 512
 
+// responseBodyGzipPeekBytes is the compressed-byte budget when the upstream
+// error response is Content-Encoding: gzip.  Error envelopes are tiny JSON,
+// but the gzip wrapper + a truncated peek of only 512 compressed bytes often
+// fails to decompress; 4 KiB is still small and covers real provider errors.
+const responseBodyGzipPeekBytes = 4096
+
 type geminiErrorEnvelope struct {
 	Error struct {
 		Status  string `json:"status"`
@@ -210,12 +217,20 @@ func gemini429IsQuota(resp *http.Response) bool {
 // peekResponseBodyPrefix reads up to responseBodyPeekBytes from resp.Body
 // and restores the stream so callers can still forward or drain the full
 // body afterward.  Returns nil when resp / Body is nil.
+//
+// When Content-Encoding includes gzip, the restored body stays byte-identical
+// to the upstream (compressed) stream — only the returned peek is gunzipped
+// so JSON classification / upstream_error logging can parse the envelope.
 func peekResponseBodyPrefix(resp *http.Response) []byte {
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
 	orig := resp.Body
-	buf, _ := io.ReadAll(io.LimitReader(orig, responseBodyPeekBytes))
+	limit := int64(responseBodyPeekBytes)
+	if contentEncodingHasGzip(resp) {
+		limit = responseBodyGzipPeekBytes
+	}
+	buf, _ := io.ReadAll(io.LimitReader(orig, limit))
 	// Preserve the original Closer so closing resp.Body still releases the
 	// upstream connection (io.NopCloser would swallow Close and leak it).
 	resp.Body = struct {
@@ -225,7 +240,39 @@ func peekResponseBodyPrefix(resp *http.Response) []byte {
 		Reader: io.MultiReader(bytes.NewReader(buf), orig),
 		Closer: orig,
 	}
-	return buf
+	return maybeGunzipPeek(resp, buf)
+}
+
+func contentEncodingHasGzip(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
+	return strings.Contains(ce, "gzip")
+}
+
+// maybeGunzipPeek returns a decompressed copy of buf when the response is
+// gzip-encoded.  On any gunzip failure it returns the raw buf so callers fall
+// through to their existing parse / generic-detail paths.
+func maybeGunzipPeek(resp *http.Response, buf []byte) []byte {
+	if len(buf) == 0 || !contentEncodingHasGzip(resp) {
+		return buf
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(buf))
+	if err != nil {
+		return buf
+	}
+	defer zr.Close() //nolint:errcheck
+	out, err := io.ReadAll(io.LimitReader(zr, responseBodyPeekBytes))
+	if len(out) == 0 {
+		return buf
+	}
+	// Truncated compressed peeks yield UnexpectedEOF after some bytes; prefer
+	// whatever decompressed payload we got so JSON envelopes still parse.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return buf
+	}
+	return out
 }
 
 // peekUpstreamErrorDetail extracts a compact, provider-aware summary from

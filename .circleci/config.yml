@@ -217,6 +217,34 @@ jobs:
               --dockerignore "" \
               --skip-aws-setup
 
+  build-and-push-presidio:
+    docker:
+      - image: cimg/base:stable
+    working_directory: ~/llm-proxy
+    # Target the Presidio sidecar repo for ensure-repo + the build script.
+    environment:
+      AWS_ECR_REPOSITORY_NAME: llm-proxy-presidio
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - setup_aws_and_docker
+      - run:
+          name: Build and push Presidio sidecar image
+          command: |
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            echo "Building Presidio image with SHA: ${GIT_SHA}"
+            # Bake recognizers.yaml into the stock Presidio image so ECS tasks
+            # get DATE_OF_BIRTH / US_STREET_ADDRESS without a bind mount.
+            # Context is the repo root so COPY recognizers.yaml works; skip the
+            # prod dockerignore (it excludes build/) and use an empty one.
+            ./scripts/build_for_ecr.sh -s ${GIT_SHA} \
+              --repo llm-proxy-presidio \
+              --dockerfile build/Dockerfile.presidio \
+              --context . \
+              --dockerignore "" \
+              --skip-aws-setup
+
   deploy-prod:
     docker:
       - image: cimg/python:3.11.8
@@ -339,6 +367,21 @@ workflows:
             - AWS
 
       - build-and-push-ocr:
+          requires:
+            - lint
+            - unit-tests
+            - integration-tests
+            - fuzz-tests
+          filters:
+            branches:
+              only:
+                - main
+            tags:
+              ignore: /.*/
+          context:
+            - AWS
+
+      - build-and-push-presidio:
           requires:
             - lint
             - unit-tests

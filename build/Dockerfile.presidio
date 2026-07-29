@@ -1,0 +1,13 @@
+# Presidio analyzer sidecar for llm-proxy with custom recognizers baked in.
+#
+# Stock mcr.microsoft.com/presidio-analyzer does not ship DATE_OF_BIRTH /
+# US_STREET_ADDRESS (and loads UK_NHS / MAC_ADDRESS / etc.). Production ECS
+# cannot bind-mount recognizers.yaml the way docker-compose does, so we
+# overwrite the default registry config at the path Presidio actually reads:
+#   /app/presidio_analyzer/conf/default_recognizers.yaml
+#
+# Keep recognizers.yaml in lockstep with the compose mount and any other
+# consumers (see the header comment in that file).
+FROM mcr.microsoft.com/presidio-analyzer:2.2.362
+
+COPY recognizers.yaml /app/presidio_analyzer/conf/default_recognizers.yaml
