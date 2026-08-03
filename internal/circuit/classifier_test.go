@@ -1,6 +1,8 @@
 package circuit
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -222,6 +224,58 @@ func TestPeekUpstreamErrorDetail_Gemini_UNAVAILABLE(t *testing.T) {
 	}
 	if string(rest) != body {
 		t.Fatalf("restored body = %q, want %q", string(rest), body)
+	}
+}
+
+func TestPeekUpstreamErrorDetail_Gemini_GzipEncoded(t *testing.T) {
+	plain := `{"error":{"code":503,"message":"The model is overloaded. Please try again later.","status":"UNAVAILABLE"}}`
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte(plain)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	raw := compressed.Bytes()
+
+	r := &http.Response{
+		StatusCode: 503,
+		Header:     http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:       io.NopCloser(bytes.NewReader(raw)),
+	}
+	got := peekUpstreamErrorDetail("gemini", r)
+	want := "UNAVAILABLE: The model is overloaded. Please try again later."
+	if got != want {
+		t.Fatalf("peekUpstreamErrorDetail(gzip gemini) = %q, want %q", got, want)
+	}
+	// Restored body must remain the compressed bytes (client sees upstream as-is).
+	rest, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if !bytes.Equal(rest, raw) {
+		t.Fatalf("restored body must stay gzip-encoded; got %d bytes want %d", len(rest), len(raw))
+	}
+}
+
+func TestPeekOpenAIErrorCode_GzipEncoded(t *testing.T) {
+	plain := `{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte(plain)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	r := &http.Response{
+		StatusCode: 429,
+		Header:     http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:       io.NopCloser(bytes.NewReader(compressed.Bytes())),
+	}
+	if got := peekOpenAIErrorCode(r); got != "insufficient_quota" {
+		t.Fatalf("peekOpenAIErrorCode(gzip) = %q, want insufficient_quota", got)
 	}
 }
 

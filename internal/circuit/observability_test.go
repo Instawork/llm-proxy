@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -490,6 +491,65 @@ func TestEnforce_HandleTerminalFailure_LogsGeminiUpstreamError(t *testing.T) {
 	}
 	if gotKind, _ := terminalEntry["failure_kind"].(string); gotKind != string(KindGeminiUnavailable) {
 		t.Fatalf("terminal failure failure_kind = %q, want %q", gotKind, KindGeminiUnavailable)
+	}
+}
+
+func TestEnforce_HandleTerminalFailure_LogsGeminiGzipUpstreamError(t *testing.T) {
+	buf := &bytes.Buffer{}
+	log := captureLogs(buf)
+
+	plain := `{"error":{"code":503,"message":"The model is overloaded. Please try again later.","status":"UNAVAILABLE"}}`
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte(plain)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		h := make(http.Header)
+		h.Set("Content-Encoding", "gzip")
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Status:     http.StatusText(http.StatusServiceUnavailable),
+			Header:     h,
+			Body:       io.NopCloser(bytes.NewReader(compressed.Bytes())),
+		}, nil
+	})
+	cfg := Config{
+		Enabled:             true,
+		Mode:                ModeEnforce,
+		FailureThreshold:    1,
+		WindowSeconds:       60,
+		CooldownSeconds:     300,
+		MaxTransientRetries: 1,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	tr := NewTransport(
+		inner, store, cfg, "gemini", log,
+		WithModelExtractor(fakeModelFn("gemini-2.5-flash-lite")),
+	)
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gemini-2.5-flash-lite"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	resp.Body.Close()              //nolint:errcheck
+
+	terminalEntry := findLogLine(t, buf, "terminal failure, returning degraded signal")
+	if terminalEntry == nil {
+		t.Fatalf("expected terminal failure log line; got %s", buf.String())
+	}
+	got, _ := terminalEntry["upstream_error"].(string)
+	want := "UNAVAILABLE: The model is overloaded. Please try again later."
+	if got != want {
+		t.Fatalf("gzip terminal failure upstream_error = %q, want %q", got, want)
+	}
+	if gotKind, _ := terminalEntry["failure_kind"].(string); gotKind != string(KindGeminiUnavailable) {
+		t.Fatalf("gzip terminal failure failure_kind = %q, want %q", gotKind, KindGeminiUnavailable)
 	}
 }
 
