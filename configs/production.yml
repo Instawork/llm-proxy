@@ -138,6 +138,13 @@ features:
     timeout_ms_per_100kb: 2000
     timeout_ms_max: 30000
     analyze_concurrency: 4
+    # Without this, max_body_bytes falls back to the 1 MiB default. With
+    # fail_mode "closed" any body over the limit 503s instead of skipping
+    # redaction, and a caller that retries an oversized payload keeps
+    # hitting 503 on every attempt. 2 MiB clears the largest observed
+    # production payload (a 1,092,866-byte Anthropic tool-result body) with
+    # headroom.
+    max_body_bytes: 2097152
     allow_per_key_override: false
     analyze_cache:
       enabled: true
