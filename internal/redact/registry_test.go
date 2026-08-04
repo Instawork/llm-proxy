@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -212,6 +213,121 @@ func TestRegistry_RestoreStreamChunk_EscapedFormSplit(t *testing.T) {
 	parts2 := []string{"x " + escaped2[:cut2], escaped2[cut2:] + " y"}
 	if got := streamRestore(reg2, parts2); got != "x Bob y" {
 		t.Fatalf("mid-escape stream restore = %q want %q", got, "x Bob y")
+	}
+}
+
+// TestRegistry_RestoreUserFacing_QuoteBreaksRawJSON documents the bug: the
+// verbatim restore splices an original containing a JSON-special character
+// straight into the byte stream, so a caller that treats the input as JSON
+// ends up with invalid JSON on the wire. RestoreUserFacing is for plain-text
+// callers only — see RestoreUserFacingJSON for the JSON-safe counterpart
+// used on every provider response.
+func TestRegistry_RestoreUserFacing_QuoteBreaksRawJSON(t *testing.T) {
+	reg := NewRegistry()
+	ph := reg.Placeholder("PERSON", `Robert "Bob" Johnson`)
+	in := `{"name": "` + ph + `"}`
+	out := reg.RestoreUserFacing(in)
+	if json.Valid([]byte(out)) {
+		t.Fatalf("expected verbatim restore to produce invalid JSON, got valid: %q", out)
+	}
+}
+
+// TestRegistry_RestoreUserFacingJSON_EscapesQuotes is the fix: restoring
+// the same PERSON through the JSON-safe path keeps the response valid JSON
+// and still yields the original name once unmarshaled.
+func TestRegistry_RestoreUserFacingJSON_EscapesQuotes(t *testing.T) {
+	reg := NewRegistry()
+	original := `Robert "Bob" Johnson`
+	ph := reg.Placeholder("PERSON", original)
+	in := `{"name": "` + ph + `"}`
+	out := reg.RestoreUserFacingJSON(in)
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("RestoreUserFacingJSON produced invalid JSON: %q", out)
+	}
+	var parsed struct{ Name string }
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (body %q)", err, out)
+	}
+	if parsed.Name != original {
+		t.Fatalf("Name = %q, want %q", parsed.Name, original)
+	}
+}
+
+// TestRegistry_RestoreUserFacingJSON_EscapesNewlineAndBackslash covers the
+// exact production failure mode: "invalid character '\n' in string
+// literal", plus a literal backslash which would otherwise start a bogus
+// escape sequence.
+func TestRegistry_RestoreUserFacingJSON_EscapesNewlineAndBackslash(t *testing.T) {
+	reg := NewRegistry()
+	original := "123 Main St\\nApt 4\nSpringfield"
+	ph := reg.Placeholder("LOCATION", original)
+	in := `{"address": "` + ph + `"}`
+	out := reg.RestoreUserFacingJSON(in)
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("RestoreUserFacingJSON produced invalid JSON: %q", out)
+	}
+	var parsed struct{ Address string }
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (body %q)", err, out)
+	}
+	if parsed.Address != original {
+		t.Fatalf("Address = %q, want %q", parsed.Address, original)
+	}
+}
+
+// TestRegistry_RestoreUserFacingJSON_DoesNotEscapeAngleBrackets checks that
+// the JSON-safe restore does not add Go's default HTML-safe escaping on top
+// of the required JSON escaping — angle brackets and ampersands are legal
+// unescaped inside a JSON string and should come back byte-for-byte.
+func TestRegistry_RestoreUserFacingJSON_DoesNotEscapeAngleBrackets(t *testing.T) {
+	reg := NewRegistry()
+	original := "Bourne & Hollingsworth <legal name>"
+	ph := reg.Placeholder("PERSON", original)
+	in := `{"name": "` + ph + `"}`
+	out := reg.RestoreUserFacingJSON(in)
+	if !strings.Contains(out, original) {
+		t.Fatalf("expected verbatim angle brackets/ampersand in %q", out)
+	}
+	var parsed struct{ Name string }
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (body %q)", err, out)
+	}
+	if parsed.Name != original {
+		t.Fatalf("Name = %q, want %q", parsed.Name, original)
+	}
+}
+
+// TestRegistry_RestoreStreamChunkJSON_QuoteSplitAcrossChunks exercises the
+// streaming path end to end: the placeholder itself is split across chunk
+// boundaries (already covered elsewhere), and once restored the
+// quote-bearing original must not break the JSON accumulated so far.
+func TestRegistry_RestoreStreamChunkJSON_QuoteSplitAcrossChunks(t *testing.T) {
+	reg := NewRegistry()
+	original := `Robert "Bob" Johnson`
+	ph := reg.Placeholder("PERSON", original)
+	parts := []string{`{"name": "` + ph[:4], ph[4:] + `"}`}
+
+	var carry []byte
+	var got strings.Builder
+	for _, part := range parts {
+		emit, newCarry := reg.RestoreStreamChunkJSON([]byte(part), carry)
+		carry = newCarry
+		got.Write(emit)
+	}
+	if tail := reg.FlushCarryJSON(carry); len(tail) > 0 {
+		got.Write(tail)
+	}
+
+	out := got.String()
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("streamed JSON restore produced invalid JSON: %q", out)
+	}
+	var parsed struct{ Name string }
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (body %q)", err, out)
+	}
+	if parsed.Name != original {
+		t.Fatalf("Name = %q, want %q", parsed.Name, original)
 	}
 }
 
