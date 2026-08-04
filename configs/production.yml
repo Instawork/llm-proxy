@@ -107,6 +107,21 @@ features:
     redis:
       url: "${REDIS_URL}"
       db: 4
+    # Shared by rate limiting, cost-limit reservations, and fake-upstream
+    # sizing (see providers.EstimateRequestTokens) — not only used when
+    # rate_limiting.enabled is true. Without this block every field
+    # defaults to zero, max_sample_bytes=0 makes every non-empty request
+    # body look "too large to parse", and the model name is never
+    # extracted: cost-limit estimation then always prices an empty model,
+    # which fails pricing lookup and silently disables the cluster-wide
+    # cost reservation added in #43 for any key with a cost limit set.
+    estimation:
+      max_sample_bytes: 200000
+      bytes_per_token: 4
+      chars_per_token: 4
+      provider_chars_per_token:
+        openai: 5 # ~185–190 tokens per 1k chars (from scripts/token_estimation.py)
+        anthropic: 3 # ~290–315 tokens per 1k chars (from scripts/token_estimation.py)
     limits:
       requests_per_minute: 0
       tokens_per_minute: 0

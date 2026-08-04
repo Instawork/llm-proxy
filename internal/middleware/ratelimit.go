@@ -25,12 +25,7 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 		return func(next http.Handler) http.Handler { return next }
 	}
 
-	estCfg := providers.YAMLConfigEstimationAdapter{
-		MaxSampleBytes:        cfg.Features.RateLimiting.Estimation.MaxSampleBytes,
-		BytesPerToken:         cfg.Features.RateLimiting.Estimation.BytesPerToken,
-		CharsPerToken:         cfg.Features.RateLimiting.Estimation.CharsPerToken,
-		ProviderCharsPerToken: cfg.Features.RateLimiting.Estimation.ProviderCharsPerToken,
-	}
+	estCfg := providers.NewYAMLConfigEstimationAdapter(cfg.Features.RateLimiting.Estimation)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -135,6 +135,38 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 	}
 }
 
+// TestProductionYAML_HasEstimationBlock guards against the production bug
+// where rate_limiting had no estimation child: every field defaulted to
+// zero, MaxSampleBytes=0 made EstimateRequestTokens treat any non-empty
+// request body as too large to sample, and the model name was never
+// extracted — silently disabling the cluster-wide cost-limit reservation
+// added in #43 for any key with a cost limit configured, in addition to
+// breaking rate-limit token estimation.
+func TestProductionYAML_HasEstimationBlock(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	merged, err := config.LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "production.yml"),
+	})
+	if err != nil {
+		t.Fatalf("load prod configs: %v", err)
+	}
+
+	est := merged.Features.RateLimiting.Estimation
+	if est.MaxSampleBytes <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.max_sample_bytes must be > 0, got %d", est.MaxSampleBytes)
+	}
+	if est.BytesPerToken <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.bytes_per_token must be > 0, got %d", est.BytesPerToken)
+	}
+	if est.CharsPerToken <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.chars_per_token must be > 0, got %d", est.CharsPerToken)
+	}
+}
+
 // TestSidecarProfile_WritesRollupsWithoutDashboard locks in the sidecar
 // contract: the dashboard HTTP server is OFF, but rollup writing stays ON so
 // sidecars publish usage/cost/etc to the shared Redis the standalone dashboard
