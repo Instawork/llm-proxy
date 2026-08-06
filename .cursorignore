@@ -1,0 +1,6 @@
+**/.env
+**/.env.*
+logs/
+circleci-build-logs-*.txt
+bin/
+build/
