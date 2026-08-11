@@ -1157,6 +1157,21 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
+      # Mantle catalog IDs (short form). Pricing mirrors the matching bedrock SKUs.
+      # Aliases omit *-bedrock (owned by the bedrock provider) to keep them globally unique.
+      "anthropic.claude-sonnet-5":
+        enabled: true
+        aliases: ["claude-sonnet-5"]
+        # Flat $3/$15 — Sonnet 5 includes 1M context at standard pricing.
+        pricing:
+          input: 3.00
+          output: 15.00
+      "anthropic.claude-opus-4-8":
+        enabled: true
+        aliases: ["claude-opus-4-8"]
+        pricing:
+          input: 6.00
+          output: 30.00
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
