@@ -1157,6 +1157,17 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
+      # Mantle catalog ID (short form). Same pricing as bedrock us.anthropic.claude-sonnet-5.
+      "anthropic.claude-sonnet-5":
+        enabled: true
+        aliases: ["claude-sonnet-5-bedrock", "claude-sonnet-5-bedrock-thinking"]
+        pricing:
+          - threshold: 200_000
+            input: 3.00
+            output: 15.00
+          - threshold: 0
+            input: 6.00
+            output: 22.50
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
