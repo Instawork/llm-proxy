@@ -71,8 +71,11 @@ func servePIIStreamingRestore(w http.ResponseWriter, r *http.Request, next http.
 	}
 	next.ServeHTTP(restoreWriter, r)
 
+	// flushCarryTail already restored the carry; write it directly so the
+	// stale carry is not prepended and re-held by the streaming path.
 	if tail := restoreWriter.flushCarryTail(); len(tail) > 0 {
-		_, _ = restoreWriter.Write(tail)
+		restoreWriter.carry = nil
+		_, _ = restoreWriter.writeRestored(tail)
 	}
 	finalizePIIRestored(r.Context(), reg)
 	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())

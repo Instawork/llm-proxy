@@ -781,9 +781,18 @@ func (r *Runner) runPIIWireRestoreGeminiJSONSafety(ctx context.Context) []Result
 	} else if !json.Valid(body) {
 		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
 			fmt.Sprintf("placeholder restore produced invalid JSON: %s", truncate(string(body), 300))))
-	} else if content, cerr := geminiAssistantContent(body); cerr == nil && !strings.Contains(content, quotedMultilineName) {
+	} else if content, cerr := geminiAssistantContent(body); cerr != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			"parse Gemini response: "+cerr.Error()))
+	} else if !strings.Contains(content, quotedMultilineName) {
 		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
 			fmt.Sprintf("expected restored name %q in assistant reply %q", quotedMultilineName, content)))
+	} else if restored, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Restored"); !ok || restored <= 0 {
+		// Without this the test passes trivially when the name was never
+		// masked and Gemini simply echoed it back.
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			fmt.Sprintf("name reached client but X-LLM-PII-Restored=%q — MASK restore path did not run",
+				pr.Headers.Get("X-LLM-PII-Restored"))))
 	} else {
 		out = append(out, passResult("pii", "wire-restore-gemini-json-safety",
 			"quote/newline-bearing PERSON restored without corrupting response JSON", elapsed(start)))
@@ -805,6 +814,13 @@ func (r *Runner) runPIIWireRestoreGeminiJSONSafety(ctx context.Context) []Result
 	} else if !strings.Contains(string(streamBody), "Bob") {
 		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream",
 			fmt.Sprintf("expected restored name fragments in stream body %q", truncate(string(streamBody), 200))))
+	} else if masked, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Masked"); !ok || masked <= 0 {
+		// Streaming responses omit X-LLM-PII-Restored, but the early Masked
+		// header proves the upstream saw a MASK placeholder — so name
+		// fragments in the body can only come from the restore path.
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream",
+			fmt.Sprintf("name reached client but X-LLM-PII-Masked=%q — request was never masked",
+				pr.Headers.Get("X-LLM-PII-Masked"))))
 	} else {
 		out = append(out, passResult("pii", "wire-restore-gemini-json-safety-stream",
 			"quote/newline-bearing PERSON restored without corrupting any SSE chunk", elapsed(start)))

@@ -141,6 +141,31 @@ func TestPIIResponseRestoreMiddleware_StreamingOmitsRestoredLeakedHeaders(t *tes
 	}
 }
 
+func TestPIIResponseRestoreMiddleware_StreamTailIncompletePlaceholderNotTruncated(t *testing.T) {
+	reg := redact.NewRegistry()
+	_ = reg.Placeholder("PERSON", "Jane Doe")
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+
+	// Ends mid-escape after a placeholder-like open: the whole suffix is held
+	// in the carry, and the end-of-stream flush must emit it verbatim exactly
+	// once rather than re-feeding it through the streaming Write path.
+	body := `data: {"text":"\u003cPII_PERSON_1\u00`
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if rec.Body.String() != body {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), body)
+	}
+}
+
 func TestPIIResponseRestoreMiddleware_NonStreamingRestoredInHeaders(t *testing.T) {
 	reg := redact.NewRegistry()
 	ph := reg.Placeholder("EMAIL_ADDRESS", "header@example.com")
