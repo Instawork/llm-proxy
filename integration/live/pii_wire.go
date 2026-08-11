@@ -223,3 +223,48 @@ func (p *ProxyClient) GeminiChatRepeatEmail(ctx context.Context, apiKey, email s
 		return p.GeminiChatWithPIIScrub(ctx, apiKey, userMessage, stream)
 	}, geminiAssistantContent)
 }
+
+// repeatNamePromptFor asks the model to echo a PERSON-tagged name inside a
+// JSON object it constructs itself. The upstream model only ever sees the
+// MASK placeholder in place of name — it never sees the quote/newline
+// characters below — so if the client-visible response is invalid JSON, the
+// corruption was introduced by the proxy's placeholder restore step, not by
+// the model.
+const repeatNamePrompt = `My full name is %s. Reply with ONLY this exact JSON object and nothing else (no code fences, no extra text): {"name": "PLACEHOLDER"} where PLACEHOLDER is replaced with my full name as given above.`
+
+func repeatNamePromptFor(name string) string {
+	return fmt.Sprintf(repeatNamePrompt, name)
+}
+
+// quotedMultilineName is a PERSON-shaped value containing characters that
+// require JSON string escaping (a double quote and an embedded newline).
+// Reused verbatim so callers can assert on the exact bytes.
+const quotedMultilineName = "Robert \"Bob\"\nJohnson"
+
+// GeminiChatRepeatQuotedName posts a prompt whose PII original (a nickname
+// containing a double quote and a newline) is expected to come back
+// restored inside a JSON string value. It returns the raw response body
+// unparsed so callers can validate JSON well-formedness directly.
+func (p *ProxyClient) GeminiChatRepeatQuotedName(ctx context.Context, apiKey string, stream bool) (*ProxyResponse, []byte, error) {
+	return p.GeminiChatWithPIIScrub(ctx, apiKey, repeatNamePromptFor(quotedMultilineName), stream)
+}
+
+// firstInvalidSSEDataJSON scans a Gemini SSE stream ("data: {...}\n\n" lines,
+// terminated by "data: [DONE]") and returns the first data payload that does
+// not parse as valid JSON. ok is false when every payload was valid (or no
+// payloads were found).
+func firstInvalidSSEDataJSON(body []byte) (payload string, ok bool) {
+	for _, line := range strings.Split(string(body), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonData := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if jsonData == "" || jsonData == "[DONE]" {
+			continue
+		}
+		if !json.Valid([]byte(jsonData)) {
+			return jsonData, true
+		}
+	}
+	return "", false
+}

@@ -135,6 +135,65 @@ func TestCircuitConfigFromYAML_ProductionYAMLExpandsEndToEnd(t *testing.T) {
 	}
 }
 
+// TestProductionYAML_HasEstimationBlock guards against the production bug
+// where rate_limiting had no estimation child: every field defaulted to
+// zero, MaxSampleBytes=0 made EstimateRequestTokens treat any non-empty
+// request body as too large to sample, and the model name was never
+// extracted — silently disabling the cluster-wide cost-limit reservation
+// added in #43 for any key with a cost limit configured, in addition to
+// breaking rate-limit token estimation.
+func TestProductionYAML_HasEstimationBlock(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	merged, err := config.LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "production.yml"),
+	})
+	if err != nil {
+		t.Fatalf("load prod configs: %v", err)
+	}
+
+	est := merged.Features.RateLimiting.Estimation
+	if est.MaxSampleBytes <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.max_sample_bytes must be > 0, got %d", est.MaxSampleBytes)
+	}
+	if est.BytesPerToken <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.bytes_per_token must be > 0, got %d", est.BytesPerToken)
+	}
+	if est.CharsPerToken <= 0 {
+		t.Fatalf("production.yml rate_limiting.estimation.chars_per_token must be > 0, got %d", est.CharsPerToken)
+	}
+}
+
+// TestProductionYAML_PIIRedactSetsExplicitMaxBodyBytes guards against the
+// production bug where pii_redact had no max_body_bytes, silently falling
+// back to the 1 MiB middleware default. With fail_mode "closed", any body
+// over that limit 503s instead of skipping redaction, and a caller that
+// retries an oversized payload keeps hitting 503 on every attempt — not
+// just once, and with no attached alert (see the Datadog monitor fix in
+// the paired infrastructure PR).
+func TestProductionYAML_PIIRedactSetsExplicitMaxBodyBytes(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	merged, err := config.LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "production.yml"),
+	})
+	if err != nil {
+		t.Fatalf("load prod configs: %v", err)
+	}
+
+	const oneMiB = 1024 * 1024
+	got := merged.Features.PIIRedact.MaxBodyBytes
+	if got <= oneMiB {
+		t.Fatalf("production.yml pii_redact.max_body_bytes must be set above the 1 MiB default, got %d", got)
+	}
+}
+
 // TestSidecarProfile_WritesRollupsWithoutDashboard locks in the sidecar
 // contract: the dashboard HTTP server is OFF, but rollup writing stays ON so
 // sidecars publish usage/cost/etc to the shared Redis the standalone dashboard

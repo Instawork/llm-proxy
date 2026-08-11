@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -223,8 +224,31 @@ func countPlaceholderForms(text string, forms []string) int {
 }
 
 // RestoreUserFacing replaces MASK-tier placeholders with their original
-// values. SEAL placeholders and REDACT markers are left unchanged.
+// values, spliced in verbatim with no escaping. SEAL placeholders and
+// REDACT markers are left unchanged.
+//
+// Every provider response this proxy restores (OpenAI, Anthropic, Gemini,
+// Bedrock — streamed or not) is JSON, or JSON-per-SSE-line, on the wire. A
+// MASK original containing a quote, backslash, or control character (a
+// nickname like `Robert "Bob" Johnson`, an address with an embedded
+// newline) spliced in verbatim breaks the enclosing JSON string and
+// produces a response the client cannot parse. Callers restoring inside a
+// JSON (or JSON-per-line) body must use RestoreUserFacingJSON instead; this
+// verbatim form only belongs on genuinely plain-text responses.
 func (r *Registry) RestoreUserFacing(text string) string {
+	return r.restoreUserFacing(text, false)
+}
+
+// RestoreUserFacingJSON is the JSON-safe counterpart to RestoreUserFacing:
+// each restored original is escaped as a JSON string fragment (quotes,
+// backslashes, control characters) before being spliced back in, so the
+// result stays valid JSON even when the original value itself is not
+// JSON-string-safe.
+func (r *Registry) RestoreUserFacingJSON(text string) string {
+	return r.restoreUserFacing(text, true)
+}
+
+func (r *Registry) restoreUserFacing(text string, jsonEscape bool) string {
 	if r == nil || text == "" {
 		return text
 	}
@@ -246,14 +270,41 @@ func (r *Registry) RestoreUserFacing(text string) string {
 		if !ok || entry.policy != PolicyMask {
 			continue
 		}
+		original := entry.original
+		if jsonEscape {
+			original = jsonEscapeString(original)
+		}
 		var delta int
-		out, delta = applyWireFormReplacements(out, entry.wireForms, entry.original)
+		out, delta = applyWireFormReplacements(out, entry.wireForms, original)
 		restoredDelta += delta
 	}
 	if restoredDelta > 0 {
 		r.mu.Lock()
 		r.restoredCount += restoredDelta
 		r.mu.Unlock()
+	}
+	return out
+}
+
+// jsonEscapeString returns s escaped as the interior of a JSON string
+// literal — quotes, backslashes, and control characters (including
+// newlines) — without the surrounding quotes and without Go's default
+// HTML-safe escaping of <, >, and &. Those three are legal unescaped inside
+// a JSON string; skipping that extra escaping keeps a restored original
+// byte-for-byte outside of the characters that actually require it.
+func jsonEscapeString(s string) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(s); err != nil {
+		// encoding/json only errors on unsupported types, never on strings;
+		// this is unreachable in practice. Fall back to the verbatim value
+		// rather than dropping the restore entirely.
+		return s
+	}
+	out := strings.TrimSuffix(buf.String(), "\n")
+	if len(out) >= 2 && out[0] == '"' && out[len(out)-1] == '"' {
+		return out[1 : len(out)-1]
 	}
 	return out
 }
@@ -392,7 +443,20 @@ func streamSafePrefixLen(combined []byte) int {
 
 // RestoreStreamChunk restores MASK placeholders in a streaming chunk,
 // holding back a suffix that might be an incomplete placeholder token.
+// Restored originals are spliced in verbatim; see RestoreUserFacing for why
+// that is only correct for genuinely plain-text streams.
 func (r *Registry) RestoreStreamChunk(chunk []byte, carry []byte) (emit []byte, newCarry []byte) {
+	return r.restoreStreamChunk(chunk, carry, false)
+}
+
+// RestoreStreamChunkJSON is the JSON-safe counterpart to RestoreStreamChunk;
+// see RestoreUserFacingJSON. Use this for SSE streams, where each "data: "
+// line is itself a JSON payload.
+func (r *Registry) RestoreStreamChunkJSON(chunk []byte, carry []byte) (emit []byte, newCarry []byte) {
+	return r.restoreStreamChunk(chunk, carry, true)
+}
+
+func (r *Registry) restoreStreamChunk(chunk []byte, carry []byte, jsonEscape bool) (emit []byte, newCarry []byte) {
 	combined := append(append([]byte(nil), carry...), chunk...)
 	safeLen := streamSafePrefixLen(combined)
 	toProcess := combined[:safeLen]
@@ -401,16 +465,26 @@ func (r *Registry) RestoreStreamChunk(chunk []byte, carry []byte) (emit []byte, 
 		toProcess = combined
 		newCarry = nil
 	}
-	restored := r.RestoreUserFacing(string(toProcess))
+	restored := r.restoreUserFacing(string(toProcess), jsonEscape)
 	return []byte(restored), newCarry
 }
 
-// FlushCarry restores any bytes held back at the end of a stream.
+// FlushCarry restores any bytes held back at the end of a stream, verbatim;
+// see RestoreUserFacing.
 func (r *Registry) FlushCarry(carry []byte) []byte {
+	return r.flushCarry(carry, false)
+}
+
+// FlushCarryJSON is the JSON-safe counterpart to FlushCarry.
+func (r *Registry) FlushCarryJSON(carry []byte) []byte {
+	return r.flushCarry(carry, true)
+}
+
+func (r *Registry) flushCarry(carry []byte, jsonEscape bool) []byte {
 	if len(carry) == 0 {
 		return nil
 	}
-	return []byte(r.RestoreUserFacing(string(carry)))
+	return []byte(r.restoreUserFacing(string(carry), jsonEscape))
 }
 
 // Len returns the number of registered placeholders (MASK + SEAL).

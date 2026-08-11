@@ -482,21 +482,7 @@ func isFakeModeAllowed(yc *config.YAMLConfig) bool {
 
 func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
 	fu := yc.Features.FakeUpstream
-	est := providers.YAMLConfigEstimationAdapter{
-		MaxSampleBytes:        yc.Features.RateLimiting.Estimation.MaxSampleBytes,
-		BytesPerToken:         yc.Features.RateLimiting.Estimation.BytesPerToken,
-		CharsPerToken:         yc.Features.RateLimiting.Estimation.CharsPerToken,
-		ProviderCharsPerToken: yc.Features.RateLimiting.Estimation.ProviderCharsPerToken,
-	}
-	if est.MaxSampleBytes == 0 {
-		est.MaxSampleBytes = 200000
-	}
-	if est.BytesPerToken == 0 {
-		est.BytesPerToken = 4
-	}
-	if est.CharsPerToken == 0 {
-		est.CharsPerToken = 4
-	}
+	est := providers.NewYAMLConfigEstimationAdapter(yc.Features.RateLimiting.Estimation)
 	return fake.Config{
 		Enabled:          allowed,
 		ChaosFailureRate: fu.ChaosFailureRate,
@@ -1540,12 +1526,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				}
 				return total
 			}
-			costLimitOpts.Estimation = providers.YAMLConfigEstimationAdapter{
-				MaxSampleBytes:        yamlConfig.Features.RateLimiting.Estimation.MaxSampleBytes,
-				BytesPerToken:         yamlConfig.Features.RateLimiting.Estimation.BytesPerToken,
-				CharsPerToken:         yamlConfig.Features.RateLimiting.Estimation.CharsPerToken,
-				ProviderCharsPerToken: yamlConfig.Features.RateLimiting.Estimation.ProviderCharsPerToken,
-			}
+			costLimitOpts.Estimation = providers.NewYAMLConfigEstimationAdapter(yamlConfig.Features.RateLimiting.Estimation)
 		}
 		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder, costLimitOpts))
 	}

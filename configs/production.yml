@@ -107,6 +107,21 @@ features:
     redis:
       url: "${REDIS_URL}"
       db: 4
+    # Shared by rate limiting, cost-limit reservations, and fake-upstream
+    # sizing (see providers.EstimateRequestTokens) — not only used when
+    # rate_limiting.enabled is true. Without this block every field
+    # defaults to zero, max_sample_bytes=0 makes every non-empty request
+    # body look "too large to parse", and the model name is never
+    # extracted: cost-limit estimation then always prices an empty model,
+    # which fails pricing lookup and silently disables the cluster-wide
+    # cost reservation added in #43 for any key with a cost limit set.
+    estimation:
+      max_sample_bytes: 200000
+      bytes_per_token: 4
+      chars_per_token: 4
+      provider_chars_per_token:
+        openai: 5 # ~185–190 tokens per 1k chars (from scripts/token_estimation.py)
+        anthropic: 3 # ~290–315 tokens per 1k chars (from scripts/token_estimation.py)
     limits:
       requests_per_minute: 0
       tokens_per_minute: 0
@@ -123,6 +138,13 @@ features:
     timeout_ms_per_100kb: 2000
     timeout_ms_max: 30000
     analyze_concurrency: 4
+    # Without this, max_body_bytes falls back to the 1 MiB default. With
+    # fail_mode "closed" any body over the limit 503s instead of skipping
+    # redaction, and a caller that retries an oversized payload keeps
+    # hitting 503 on every attempt. 2 MiB clears the largest observed
+    # production payload (a 1,092,866-byte Anthropic tool-result body) with
+    # headroom.
+    max_body_bytes: 2097152
     allow_per_key_override: false
     analyze_cache:
       enabled: true

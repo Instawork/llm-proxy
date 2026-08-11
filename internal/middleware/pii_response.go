@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/proxylog"
@@ -70,8 +71,11 @@ func servePIIStreamingRestore(w http.ResponseWriter, r *http.Request, next http.
 	}
 	next.ServeHTTP(restoreWriter, r)
 
-	if tail := reg.FlushCarry(restoreWriter.carry); len(tail) > 0 {
-		_, _ = restoreWriter.Write(tail)
+	// flushCarryTail already restored the carry; write it directly so the
+	// stale carry is not prepended and re-held by the streaming path.
+	if tail := restoreWriter.flushCarryTail(); len(tail) > 0 {
+		restoreWriter.carry = nil
+		_, _ = restoreWriter.writeRestored(tail)
 	}
 	finalizePIIRestored(r.Context(), reg)
 	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
@@ -114,10 +118,48 @@ func logPIILeakIfNeeded(r *http.Request, streaming bool) {
 
 type piiRestoreResponseWriter struct {
 	http.ResponseWriter
-	registry  *redact.Registry
-	streaming bool
-	carry     []byte
-	emitted   bytes.Buffer
+	registry    *redact.Registry
+	streaming   bool
+	carry       []byte
+	emitted     bytes.Buffer
+	jsonMode    bool
+	jsonModeSet bool
+}
+
+// useJSONRestore decides, once per response, whether restored originals
+// need JSON-string escaping. Every provider response this proxy handles is
+// JSON (or JSON-per-SSE-line); the Content-Type sniff below only exists so
+// a genuinely plain-text response — none exist among current providers,
+// but nothing guarantees that stays true — falls back to the verbatim
+// restore instead of corrupting non-JSON bytes with stray backslashes.
+//
+// Content-Type is safe to read on the first Write: httputil.ReverseProxy
+// copies the upstream response headers onto pw.Header() before it starts
+// copying the body, for both buffered and streamed responses.
+func (pw *piiRestoreResponseWriter) useJSONRestore() bool {
+	if !pw.jsonModeSet {
+		pw.jsonMode = responseLooksLikeJSON(pw.Header().Get("Content-Type"))
+		pw.jsonModeSet = true
+	}
+	return pw.jsonMode
+}
+
+func (pw *piiRestoreResponseWriter) flushCarryTail() []byte {
+	if pw.useJSONRestore() {
+		return pw.registry.FlushCarryJSON(pw.carry)
+	}
+	return pw.registry.FlushCarry(pw.carry)
+}
+
+// responseLooksLikeJSON reports whether a response Content-Type carries a
+// JSON (or JSON-per-SSE-line) body. An empty Content-Type defaults to true
+// since every provider this proxy fronts responds with JSON by default.
+func responseLooksLikeJSON(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	if ct == "" {
+		return true
+	}
+	return strings.Contains(ct, "json") || strings.Contains(ct, "event-stream")
 }
 
 func (pw *piiRestoreResponseWriter) Flush() {
@@ -158,14 +200,24 @@ func (pw *piiRestoreResponseWriter) Write(b []byte) (int, error) {
 			}
 			return len(b), nil
 		}
-		restored := pw.registry.RestoreUserFacing(string(plain))
+		var restored string
+		if pw.useJSONRestore() {
+			restored = pw.registry.RestoreUserFacingJSON(string(plain))
+		} else {
+			restored = pw.registry.RestoreUserFacing(string(plain))
+		}
 		if _, err := pw.writeRestored([]byte(restored)); err != nil {
 			return 0, err
 		}
 		return len(b), nil
 	}
 	if pw.streaming {
-		emit, newCarry := pw.registry.RestoreStreamChunk(b, pw.carry)
+		var emit, newCarry []byte
+		if pw.useJSONRestore() {
+			emit, newCarry = pw.registry.RestoreStreamChunkJSON(b, pw.carry)
+		} else {
+			emit, newCarry = pw.registry.RestoreStreamChunk(b, pw.carry)
+		}
 		pw.carry = newCarry
 		if len(emit) == 0 {
 			return len(b), nil

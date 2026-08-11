@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,106 @@ func TestPIIResponseRestoreMiddleware_RestoresMaskNonStreaming(t *testing.T) {
 	mw.ServeHTTP(rec, req)
 
 	want := `{"content":"Jane Doe"}`
+	if rec.Body.String() != want {
+		t.Fatalf("body = %q want %q", rec.Body.String(), want)
+	}
+}
+
+// TestPIIResponseRestoreMiddleware_QuoteBearingPersonStaysValidJSON is the
+// end-to-end regression test for the production bug: a PERSON original
+// containing a double quote and a newline must not corrupt the JSON
+// response the client receives, even though the upstream handler here only
+// ever emits the placeholder (mirroring how the real upstream LLM only
+// sees a MASK placeholder, never the raw PII).
+func TestPIIResponseRestoreMiddleware_QuoteBearingPersonStaysValidJSON(t *testing.T) {
+	reg := redact.NewRegistry()
+	original := "Robert \"Bob\"\nJohnson"
+	ph := reg.Placeholder("PERSON", original)
+	pm := providers.NewProviderManager()
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"` + ph + `"}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/gemini/v1beta/models/gemini-2.5-flash:generateContent", nil)
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	body := rec.Body.Bytes()
+	if !json.Valid(body) {
+		t.Fatalf("response is not valid JSON: %q", body)
+	}
+	var parsed struct{ Name string }
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (body %q)", err, body)
+	}
+	if parsed.Name != original {
+		t.Fatalf("Name = %q, want %q", parsed.Name, original)
+	}
+}
+
+// TestPIIResponseRestoreMiddleware_QuoteBearingPersonStaysValidJSONStreaming
+// is the streaming counterpart, using an SSE Content-Type as Gemini's
+// streamGenerateContent endpoint does.
+func TestPIIResponseRestoreMiddleware_QuoteBearingPersonStaysValidJSONStreaming(t *testing.T) {
+	reg := redact.NewRegistry()
+	original := "Robert \"Bob\"\nJohnson"
+	ph := reg.Placeholder("PERSON", original)
+	pm := providers.NewProviderManager()
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"name":"` + ph + `"}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/gemini/v1beta/models/gemini-2.5-flash:streamGenerateContent", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		jsonData, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		if jsonData == "" || jsonData == "[DONE]" {
+			continue
+		}
+		if !json.Valid([]byte(jsonData)) {
+			t.Fatalf("SSE data line is not valid JSON: %q (full body %q)", jsonData, rec.Body.String())
+		}
+		var parsed struct{ Name string }
+		if err := json.Unmarshal([]byte(jsonData), &parsed); err != nil {
+			t.Fatalf("unmarshal: %v (line %q)", err, jsonData)
+		}
+		if parsed.Name != original {
+			t.Fatalf("Name = %q, want %q", parsed.Name, original)
+		}
+	}
+}
+
+// TestPIIResponseRestoreMiddleware_PlainTextFallsBackToVerbatimRestore
+// checks that a non-JSON Content-Type is not JSON-escaped: a plain-text
+// response should get the original back byte-for-byte, matching
+// RestoreUserFacing rather than RestoreUserFacingJSON.
+func TestPIIResponseRestoreMiddleware_PlainTextFallsBackToVerbatimRestore(t *testing.T) {
+	reg := redact.NewRegistry()
+	original := "Robert \"Bob\" Johnson"
+	ph := reg.Placeholder("PERSON", original)
+	pm := providers.NewProviderManager()
+	mw := PIIResponseRestoreMiddleware(pm)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("hello " + ph))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(withPIIRegistry(req.Context(), reg))
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	want := "hello " + original
 	if rec.Body.String() != want {
 		t.Fatalf("body = %q want %q", rec.Body.String(), want)
 	}

@@ -499,9 +499,12 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 	}
 	if r.cfg.GeminiKey != "" {
 		out = append(out, r.runPIIWireRestoreGemini(ctx)...)
+		out = append(out, r.runPIIWireRestoreGeminiJSONSafety(ctx)...)
 	} else {
 		out = append(out, skipResult("pii", "wire-restore-gemini", "GEMINI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-gemini-stream", "GEMINI_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-gemini-json-safety", "GEMINI_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-gemini-json-safety-stream", "GEMINI_API_KEY not set"))
 	}
 	return out
 }
@@ -742,6 +745,85 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	} else {
 		out = append(out, passResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))
+	}
+	return out
+}
+
+// runPIIWireRestoreGeminiJSONSafety reproduces a production bug: when a
+// MASK-tier placeholder's original value contains characters that require
+// JSON string escaping (a quote, a newline), RestoreUserFacing splices the
+// raw text back into the response byte stream verbatim, producing invalid
+// JSON that reaches the client. The upstream model only ever sees the
+// placeholder, so any corruption here was introduced by the proxy.
+func (r *Runner) runPIIWireRestoreGeminiJSONSafety(ctx context.Context) []Result {
+	start := time.Now()
+	redactPII := true
+	key, err := r.admin.CreateKey(ctx, createKeyRequest{
+		Provider:    "gemini",
+		ActualKey:   r.cfg.GeminiKey,
+		Description: "live-pii-wire-gemini-json-safety",
+		RedactPII:   &redactPII,
+	})
+	if err != nil {
+		return []Result{
+			failResult("pii", "wire-restore-gemini-json-safety", "create key: "+err.Error()),
+			failResult("pii", "wire-restore-gemini-json-safety-stream", "create key: "+err.Error()),
+		}
+	}
+	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
+
+	pr, body, err := r.proxy.GeminiChatRepeatQuotedName(ctx, key.Key, false)
+	var out []Result
+	if err != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety", err.Error()))
+	} else if perr := proxyOK(pr); perr != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety", perr.Error()))
+	} else if !json.Valid(body) {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			fmt.Sprintf("placeholder restore produced invalid JSON: %s", truncate(string(body), 300))))
+	} else if content, cerr := geminiAssistantContent(body); cerr != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			"parse Gemini response: "+cerr.Error()))
+	} else if !strings.Contains(content, quotedMultilineName) {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			fmt.Sprintf("expected restored name %q in assistant reply %q", quotedMultilineName, content)))
+	} else if restored, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Restored"); !ok || restored <= 0 {
+		// Without this the test passes trivially when the name was never
+		// masked and Gemini simply echoed it back.
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety",
+			fmt.Sprintf("name reached client but X-LLM-PII-Restored=%q — MASK restore path did not run",
+				pr.Headers.Get("X-LLM-PII-Restored"))))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-gemini-json-safety",
+			"quote/newline-bearing PERSON restored without corrupting response JSON", elapsed(start)))
+	}
+
+	start = time.Now()
+	pr, streamBody, err := r.proxy.GeminiChatRepeatQuotedName(ctx, key.Key, true)
+	if err != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream", err.Error()))
+		return out
+	}
+	if perr := proxyOK(pr); perr != nil {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream", perr.Error()))
+		return out
+	}
+	if invalid, found := firstInvalidSSEDataJSON(streamBody); found {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream",
+			fmt.Sprintf("placeholder restore produced invalid JSON in an SSE chunk: %s", truncate(invalid, 300))))
+	} else if !strings.Contains(string(streamBody), "Bob") {
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream",
+			fmt.Sprintf("expected restored name fragments in stream body %q", truncate(string(streamBody), 200))))
+	} else if masked, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Masked"); !ok || masked <= 0 {
+		// Streaming responses omit X-LLM-PII-Restored, but the early Masked
+		// header proves the upstream saw a MASK placeholder — so name
+		// fragments in the body can only come from the restore path.
+		out = append(out, failResult("pii", "wire-restore-gemini-json-safety-stream",
+			fmt.Sprintf("name reached client but X-LLM-PII-Masked=%q — request was never masked",
+				pr.Headers.Get("X-LLM-PII-Masked"))))
+	} else {
+		out = append(out, passResult("pii", "wire-restore-gemini-json-safety-stream",
+			"quote/newline-bearing PERSON restored without corrupting any SSE chunk", elapsed(start)))
 	}
 	return out
 }

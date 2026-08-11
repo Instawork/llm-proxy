@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/gorilla/mux"
 )
 
@@ -390,6 +391,43 @@ func (a YAMLConfigEstimationAdapter) GetProviderCharsPerToken(provider string) i
 		return v
 	}
 	return 0
+}
+
+// Fallback defaults applied by NewYAMLConfigEstimationAdapter whenever a
+// field is left at its YAML zero value — i.e. an absent or partially
+// specified rate_limiting.estimation block behaves like the tuned defaults
+// below, not like "estimation disabled".
+const (
+	defaultEstimationMaxSampleBytes = 200000
+	defaultEstimationBytesPerToken  = 4
+	defaultEstimationCharsPerToken  = 4
+)
+
+// NewYAMLConfigEstimationAdapter builds a YAMLConfigEstimationAdapter from
+// config.EstimationConfig, applying the fallback defaults above to any
+// zero-valued field. Every one of Features.RateLimiting.Estimation's three
+// consumers — rate limiting, cost-limit reservations, and fake-upstream
+// request sizing — must build its adapter through this constructor rather
+// than copying fields directly, so a missing YAML block can't silently
+// zero out MaxSampleBytes and disable model-name extraction for
+// EstimateRequestTokens (see provider.go EstimateRequestTokens).
+func NewYAMLConfigEstimationAdapter(cfg config.EstimationConfig) YAMLConfigEstimationAdapter {
+	a := YAMLConfigEstimationAdapter{
+		MaxSampleBytes:        cfg.MaxSampleBytes,
+		BytesPerToken:         cfg.BytesPerToken,
+		CharsPerToken:         cfg.CharsPerToken,
+		ProviderCharsPerToken: cfg.ProviderCharsPerToken,
+	}
+	if a.MaxSampleBytes == 0 {
+		a.MaxSampleBytes = defaultEstimationMaxSampleBytes
+	}
+	if a.BytesPerToken == 0 {
+		a.BytesPerToken = defaultEstimationBytesPerToken
+	}
+	if a.CharsPerToken == 0 {
+		a.CharsPerToken = defaultEstimationCharsPerToken
+	}
+	return a
 }
 
 // EstimateRequestTokens returns (estimatedTokens, model)
