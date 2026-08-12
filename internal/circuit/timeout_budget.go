@@ -164,42 +164,62 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 		done <- result{resp, err}
 	}()
 
+	// handle decides the outcome for a result off done, regardless of which
+	// select branch below observed it. A single decision point here is what
+	// keeps the three call sites below (the fast path, the race where select
+	// picks the timer despite done also being ready, and the genuine
+	// post-cancel wait) from silently diverging on how a body gets closed —
+	// a real response must never be closed before being handed back, and a
+	// real error's body must always be released rather than leaked.
+	handle := func(res result, cancelWasCalled bool) (*http.Response, error) {
+		if res.err != nil {
+			if res.resp != nil && res.resp.Body != nil {
+				_ = res.resp.Body.Close()
+			}
+			if cancelWasCalled && errors.Is(res.err, context.Canceled) {
+				return nil, errTimeoutBudgetExceeded
+			}
+			return nil, res.err
+		}
+		if res.resp == nil || res.resp.Body == nil {
+			return res.resp, nil
+		}
+		// A real response — even one that arrived only after we'd already
+		// canceled the budget context — must be handed back intact. req.
+		// Context() governs the WHOLE RoundTrip lifetime for a real
+		// http.Transport, not just the header wait, so cancelling any
+		// earlier (like the removed unconditional `defer cancel()` did)
+		// could abort an in-flight body read the instant headers arrived.
+		// Defer releasing the context until the caller closes the body.
+		res.resp.Body = &cancelOnCloseBody{ReadCloser: res.resp.Body, cancel: cancel}
+		return res.resp, nil
+	}
+
 	timer := time.NewTimer(remaining)
 	defer timer.Stop()
 
 	select {
 	case res := <-done:
-		if res.err != nil || res.resp == nil || res.resp.Body == nil {
-			// Nothing left to read: safe to cancel immediately.
-			cancel()
-			return res.resp, res.err
-		}
-		// Headers arrived within budget. req.Context() governs the WHOLE
-		// RoundTrip lifetime for a real http.Transport, not just the header
-		// wait — cancelling now (like the removed `defer cancel()` did)
-		// would abort an in-flight body read on a real connection, killing
-		// a stream the instant headers arrived. Defer the cancel until the
-		// caller closes the body instead, so the budget context is still
-		// eventually released without cutting the response short.
-		res.resp.Body = &cancelOnCloseBody{ReadCloser: res.resp.Body, cancel: cancel}
-		return res.resp, nil
+		return handle(res, false)
 	case <-timer.C:
+		// select can land here even though a result was already sitting in
+		// done — Go picks pseudo-randomly between two simultaneously-ready
+		// cases. Peek non-blockingly before treating this as a real
+		// timeout, so a response that genuinely beat the deadline isn't
+		// discarded just because select happened to pick this branch.
+		select {
+		case res := <-done:
+			return handle(res, false)
+		default:
+		}
+
 		// Headers have not arrived within budget. Cancel the underlying
 		// request so the goroutine unblocks (net/http's Transport honours
 		// context cancellation while dialing and while awaiting the
 		// response), then wait for it so we never leak the goroutine or
 		// race a later attempt against this one's connection.
 		cancel()
-		res := <-done
-		if res.resp != nil && res.resp.Body != nil {
-			_ = res.resp.Body.Close()
-		}
-		if res.err != nil && errors.Is(res.err, context.Canceled) {
-			return nil, errTimeoutBudgetExceeded
-		}
-		// A response raced in just as the timer fired — headers technically
-		// arrived in time. Honour it rather than discarding a good response.
-		return res.resp, res.err
+		return handle(<-done, true)
 	}
 }
 

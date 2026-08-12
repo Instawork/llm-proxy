@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -117,6 +118,68 @@ func TestTransport_TimeoutBudget_StreamingSurvivesPastBudget(t *testing.T) {
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
 	require.Equal(t, "chunk-1chunk-2", string(body))
+}
+
+// errorAfterCloseBody errors on Read once Close has been called, unlike
+// io.NopCloser (used by makeResp elsewhere in this package) or
+// closeTrackingBody (classifier_test.go), neither of which invalidates
+// reads on Close — so neither can reveal an already-closed body being
+// handed back to a caller.
+type errorAfterCloseBody struct {
+	data   []byte
+	pos    int
+	closed bool
+}
+
+func (b *errorAfterCloseBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read on closed body")
+	}
+	if b.pos >= len(b.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data[b.pos:])
+	b.pos += n
+	return n, nil
+}
+
+func (b *errorAfterCloseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestTransport_TimeoutBudget_RaceAtDeadlineNeverReturnsClosedBody(t *testing.T) {
+	// Regression: when the RoundTrip goroutine finishes at almost exactly
+	// the same instant the budget timer fires, select can pick the timer
+	// branch even though a good response was already sitting in done. That
+	// must never result in an *http.Response whose Body was closed before
+	// being handed back to the caller.
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Status:     http.StatusText(200),
+			Header:     make(http.Header),
+			Body:       &errorAfterCloseBody{data: []byte("ok")},
+		}, nil
+	})
+	tr := newTimeoutBudgetTestTransport(inner, 0) // ceiling unused; called directly below
+
+	for i := 0; i < 2000; i++ {
+		req := budgetRequest("")
+		// Exercises roundTripWithBudget directly rather than through the
+		// full RoundTrip/runWithRetries stack, so this test isolates the
+		// select race from unrelated retry/classification behavior.
+		resp, err := tr.roundTripWithBudget(req, time.Now().Add(20*time.Microsecond))
+		if err != nil {
+			require.ErrorIs(t, err, errTimeoutBudgetExceeded)
+			continue
+		}
+		require.NotNil(t, resp)
+		body, readErr := io.ReadAll(resp.Body)
+		require.NoError(t, readErr, "a response returned without error must have a readable body")
+		require.Equal(t, "ok", string(body))
+		_ = resp.Body.Close()
+	}
 }
 
 func TestTransport_TimeoutBudget_SkipsRetryWhenBudgetExhausted(t *testing.T) {
