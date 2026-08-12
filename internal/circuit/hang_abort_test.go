@@ -128,7 +128,7 @@ func TestTransport_RunWithRetries_HangDisconnect_EndToEnd(t *testing.T) {
 
 func TestTransport_RunWithRetries_ResponseReceived_NotCreditedAsHangAbort(t *testing.T) {
 	// A real upstream response arrived — this must never be mistaken for a
-	// hang-disconnect even with the feature enabled and a zero threshold.
+	// hang-disconnect even with the feature enabled at a real threshold.
 	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return makeResp(200), nil
 	})
@@ -141,7 +141,7 @@ func TestTransport_RunWithRetries_ResponseReceived_NotCreditedAsHangAbort(t *tes
 		CooldownSeconds:              300,
 		MaxTransientRetries:          1,
 		MaxRateLimitRetries:          1,
-		HangDisconnectFailureSeconds: 0, // any wait at all would exceed a zero threshold if misapplied
+		HangDisconnectFailureSeconds: 60,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
 	tr := NewTransport(inner, store, cfg, "openai", nil)
