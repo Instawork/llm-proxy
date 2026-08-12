@@ -98,6 +98,14 @@ features:
   # before returning 502. Must stay <= Cloudflare origin read timeout and the
   # dedicated ALB idle_timeout (typically 300s when aligned). Override per
   # provider with providers.<name>.response_header_timeout_seconds.
+  #
+  # A caller can shorten (never extend) this per request via the
+  # X-LLM-Proxy-Timeout-Ms header or ?llm_proxy_timeout_ms= query param —
+  # e.g. a 5s value for a routing decision that should fail fast with the
+  # tagged degraded signal well before the caller's own client-side timeout
+  # would otherwise fire silently. Only takes effect when circuit_breaker is
+  # enabled, since the breaker's retry loop is what enforces it; a streaming
+  # response that starts before the budget elapses keeps flowing after it.
   upstream:
     response_header_timeout_seconds: 300
   # ---------------------------------------------------------------------------

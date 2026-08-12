@@ -530,6 +530,14 @@ const (
 	// next to provider-degradation events on dashboards.
 	KindBodyTooLarge FailureKind = "body_too_large"
 
+	// KindTimeoutBudgetExceeded marks a RoundTrip attempt the proxy itself
+	// aborted because the caller's X-LLM-Proxy-Timeout-Ms budget elapsed
+	// while still awaiting response headers. It classifies as
+	// FailureClassDegraded (see errTimeoutBudgetExceeded) since the whole
+	// point of the budget is to surface a provider degradation signal
+	// before the caller's own deadline would otherwise fire silently.
+	KindTimeoutBudgetExceeded FailureKind = "timeout_budget_exceeded"
+
 	// Provider-specific kinds parsed from upstream JSON error bodies.
 	// Gemini: https://ai.google.dev/gemini-api/docs/troubleshooting
 	KindGeminiUnavailable       FailureKind = "gemini_unavailable"
@@ -723,6 +731,9 @@ func refineFailureKindFromUpstreamDetail(provider string, detail string, base Fa
 func classifyTransportErrorKind(err error) FailureKind {
 	if err == nil {
 		return KindNone
+	}
+	if errors.Is(err, errTimeoutBudgetExceeded) {
+		return KindTimeoutBudgetExceeded
 	}
 	if errors.Is(err, context.Canceled) {
 		return KindClientCanceled

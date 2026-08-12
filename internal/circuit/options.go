@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/observability"
 )
@@ -102,5 +103,16 @@ type ActivityRecorder interface {
 func WithActivityRecorder(r ActivityRecorder) Option {
 	return func(t *Transport) {
 		t.activity = r
+	}
+}
+
+// WithMaxTimeoutBudget sets the ceiling a caller's X-LLM-Proxy-Timeout-Ms
+// header/query param can shorten but never extend — pass the provider's own
+// response_header_timeout_seconds. A zero or negative ceiling (the default
+// if this option is never applied) disables the timeout-budget feature
+// entirely for this transport.
+func WithMaxTimeoutBudget(ceiling time.Duration) Option {
+	return func(t *Transport) {
+		t.maxTimeoutBudget = ceiling
 	}
 }

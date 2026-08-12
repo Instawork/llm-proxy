@@ -209,6 +209,15 @@ Optional **per-provider rollup** opens wholesale enforcement when N distinct mod
 breakers trip within a sliding window. Callers without a fallback can bypass
 fast-fail per request via `X-LLM-Proxy-Bypass-Circuit` (when `bypass_allowed: true`).
 
+Callers can also shorten (never extend) the retry loop's total header-wait
+budget per request via `X-LLM-Proxy-Timeout-Ms` (or `?llm_proxy_timeout_ms=`),
+clamped to the provider's own `response_header_timeout_seconds`. This exists
+so a caller with a short deadline (e.g. a router query) gets the tagged
+degraded 503 before its own timeout fires — otherwise it would see a bare
+timeout with no failover signal. A watchdog cancels only the in-flight
+attempt if headers haven't arrived by the deadline; once headers arrive the
+watchdog is disarmed, so a streaming response keeps flowing past the budget.
+
 Redis store failures fail open so a dead Redis never takes the proxy down.
 
 ## Cost tracking

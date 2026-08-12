@@ -22,7 +22,7 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 			w.Header().Set("Access-Control-Allow-Headers",
 				"Content-Type, Authorization, Accept, Cache-Control, "+
 					"x-api-key, anthropic-version, x-goog-api-key, "+
-					"X-LLM-Proxy-Test-Mode, X-Amz-Date, X-Amz-Security-Token, "+
+					"X-LLM-Proxy-Test-Mode, X-LLM-Proxy-Timeout-Ms, X-Amz-Date, X-Amz-Security-Token, "+
 					"X-Amz-Content-Sha256")
 			w.Header().Set("Access-Control-Expose-Headers",
 				"Content-Type, Cache-Control, "+

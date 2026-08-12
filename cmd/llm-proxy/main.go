@@ -1461,7 +1461,13 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 
 		for _, np := range namedProviders {
-			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, opts...)
+			// The timeout-budget ceiling is per-provider (each provider's own
+			// response_header_timeout_seconds), so it can't live in the
+			// shared opts slice above — a caller's X-LLM-Proxy-Timeout-Ms can
+			// shorten that provider's wait but never extend past it.
+			providerOpts := append(append([]circuit.Option{}, opts...),
+				circuit.WithMaxTimeoutBudget(yamlConfig.ResponseHeaderTimeoutFor(np.name)))
+			wrapProviderWithCircuitBreaker(np.p, globalCircuitStore, cbCfg, np.name, providerOpts...)
 		}
 		logger.Info(
 			"⚡ Circuit Breaker: transports wrapped for all providers",
