@@ -3,6 +3,7 @@ package circuit
 import (
 	"context"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -80,40 +81,42 @@ func TestTransport_TimeoutBudget_ClampedToCeiling_NeverExtendsWait(t *testing.T)
 
 func TestTransport_TimeoutBudget_StreamingSurvivesPastBudget(t *testing.T) {
 	// Headers arrive well inside the budget; the body then takes longer to
-	// finish streaming than the budget allowed. The watchdog must not have
-	// killed the read once headers were in.
-	bodyDone := make(chan struct{})
-	inner := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		pr, pw := io.Pipe()
-		go func() {
-			defer close(bodyDone)
-			defer pw.Close()
-			_, _ = pw.Write([]byte("chunk-1"))
-			time.Sleep(400 * time.Millisecond) // longer than the 200ms budget below
-			_, _ = pw.Write([]byte("chunk-2"))
-		}()
-		return &http.Response{
-			StatusCode: 200,
-			Status:     http.StatusText(200),
-			Header:     make(http.Header),
-			Body:       pr,
-		}, nil
-	})
-	tr := newTimeoutBudgetTestTransport(inner, 10*time.Second)
+	// finish streaming than the budget allowed. Uses a real httptest.Server
+	// behind a real *http.Transport (not the roundTripFunc fakes used
+	// elsewhere in this file) because a fake body that ignores the request
+	// context can't detect roundTripWithBudget cancelling the budget
+	// context too early — only a real net/http connection reproduces that
+	// failure mode, where the request context governs body reads too.
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("chunk-1"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+		_, _ = w.Write([]byte("chunk-2"))
+	}))
+	defer srv.Close()
 
-	resp, err := tr.RoundTrip(budgetRequest("200")) // clamped up to minTimeoutBudget (1s)
+	tr := newTimeoutBudgetTestTransport(http.DefaultTransport, 10*time.Second)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	req.Header.Set(TimeoutBudgetHeader, "200") // clamped up to minTimeoutBudget (1s)
+
+	go func() {
+		time.Sleep(1300 * time.Millisecond) // longer than the effective 1s budget
+		close(release)
+	}()
+
+	resp, err := tr.RoundTrip(req)
 	require.NoError(t, err)
 	require.Equal(t, 200, resp.StatusCode)
 
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
 	require.Equal(t, "chunk-1chunk-2", string(body))
-
-	select {
-	case <-bodyDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("body-writing goroutine never finished")
-	}
 }
 
 func TestTransport_TimeoutBudget_SkipsRetryWhenBudgetExhausted(t *testing.T) {
@@ -159,6 +162,17 @@ func TestTimeoutBudgetFromRequest_ClampsBelowMinimum(t *testing.T) {
 	require.Equal(t, minTimeoutBudget, budget)
 }
 
+func TestTimeoutBudgetFromRequest_HugeValueClampsToCeilingWithoutOverflow(t *testing.T) {
+	// A caller-supplied value near math.MaxInt64 would overflow int64 if
+	// converted to time.Duration before being clamped, silently wrapping to
+	// an arbitrary (possibly tiny or negative) duration instead of the
+	// intended ceiling.
+	req := budgetRequest(strconv.FormatInt(math.MaxInt64, 10))
+	budget, ok := timeoutBudgetFromRequest(req, 60*time.Second)
+	require.True(t, ok)
+	require.Equal(t, 60*time.Second, budget)
+}
+
 func TestTimeoutBudgetFromRequest_QueryParamFallback(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 		"/openai/v1/chat/completions?"+TimeoutBudgetQueryParam+"="+strconv.Itoa(5000), nil)
@@ -186,6 +200,16 @@ func TestTransport_TimeoutBudget_HeaderStrippedBeforeUpstream(t *testing.T) {
 	require.Equal(t, 200, resp.StatusCode)
 	require.Empty(t, sawHeader, "header must be stripped before reaching the inner transport")
 	require.Empty(t, sawQueryParam, "query param must be stripped before reaching the inner transport")
+}
+
+func TestHasTimeoutBudgetMarkers_DetectsPresentButEmptyHeader(t *testing.T) {
+	// http.Header.Get returns "" for both an absent header and a present
+	// header with an empty value, so a bare "X-LLM-Proxy-Timeout-Ms:" must
+	// still be detected (and therefore stripped) rather than silently
+	// treated as if the header were never sent.
+	req := dummyRequest()
+	req.Header.Set(TimeoutBudgetHeader, "")
+	require.True(t, hasTimeoutBudgetMarkers(req))
 }
 
 func TestTransport_TimeoutBudget_NoHeaderBehavesUnchanged(t *testing.T) {

@@ -974,6 +974,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
 				"failure_kind", string(KindBodyTooLarge),
 			)
+			if hasBudget {
+				return t.roundTripWithBudget(req, budgetDeadline)
+			}
 			return t.inner.RoundTrip(req)
 		}
 		return nil, fmt.Errorf("circuit: cacheBody: %w", err)

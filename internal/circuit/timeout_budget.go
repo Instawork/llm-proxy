@@ -3,6 +3,7 @@ package circuit
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -64,12 +65,20 @@ func timeoutBudgetFromRequest(req *http.Request, ceiling time.Duration) (budget 
 	if err != nil || ms <= 0 {
 		return 0, false
 	}
+	// Clamp in millisecond units BEFORE converting to time.Duration: a
+	// caller-supplied value near math.MaxInt64 would overflow int64 when
+	// multiplied by time.Millisecond, silently wrapping to an arbitrary
+	// (possibly tiny or negative) duration instead of clamping to ceiling.
+	if ceilingMs := int64(ceiling / time.Millisecond); ms > ceilingMs {
+		ms = ceilingMs
+	}
 	budget = time.Duration(ms) * time.Millisecond
 	if budget < minTimeoutBudget {
-		budget = minTimeoutBudget
-	}
-	if budget > ceiling {
-		budget = ceiling
+		if minTimeoutBudget > ceiling {
+			budget = ceiling
+		} else {
+			budget = minTimeoutBudget
+		}
 	}
 	return budget, true
 }
@@ -82,7 +91,11 @@ func hasTimeoutBudgetMarkers(req *http.Request) bool {
 	if req == nil {
 		return false
 	}
-	if req.Header.Get(TimeoutBudgetHeader) != "" {
+	// http.Header.Get returns "" for both an absent header and a present
+	// header with an empty value, so a bare "X-LLM-Proxy-Timeout-Ms:" would
+	// otherwise slip past this check and leak upstream unstripped. Values
+	// distinguishes "absent" (nil slice) from "present but empty".
+	if len(req.Header.Values(TimeoutBudgetHeader)) > 0 {
 		return true
 	}
 	if req.URL != nil {
@@ -139,7 +152,6 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 	}
 
 	budgetCtx, cancel := context.WithCancel(attemptReq.Context())
-	defer cancel()
 	attemptReq = attemptReq.WithContext(budgetCtx)
 
 	type result struct {
@@ -157,7 +169,20 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 
 	select {
 	case res := <-done:
-		return res.resp, res.err
+		if res.err != nil || res.resp == nil || res.resp.Body == nil {
+			// Nothing left to read: safe to cancel immediately.
+			cancel()
+			return res.resp, res.err
+		}
+		// Headers arrived within budget. req.Context() governs the WHOLE
+		// RoundTrip lifetime for a real http.Transport, not just the header
+		// wait — cancelling now (like the removed `defer cancel()` did)
+		// would abort an in-flight body read on a real connection, killing
+		// a stream the instant headers arrived. Defer the cancel until the
+		// caller closes the body instead, so the budget context is still
+		// eventually released without cutting the response short.
+		res.resp.Body = &cancelOnCloseBody{ReadCloser: res.resp.Body, cancel: cancel}
+		return res.resp, nil
 	case <-timer.C:
 		// Headers have not arrived within budget. Cancel the underlying
 		// request so the goroutine unblocks (net/http's Transport honours
@@ -166,6 +191,9 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 		// race a later attempt against this one's connection.
 		cancel()
 		res := <-done
+		if res.resp != nil && res.resp.Body != nil {
+			_ = res.resp.Body.Close()
+		}
 		if res.err != nil && errors.Is(res.err, context.Canceled) {
 			return nil, errTimeoutBudgetExceeded
 		}
@@ -173,4 +201,18 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 		// arrived in time. Honour it rather than discarding a good response.
 		return res.resp, res.err
 	}
+}
+
+// cancelOnCloseBody releases roundTripWithBudget's per-attempt budget
+// context only once the caller closes the response body, instead of the
+// instant RoundTrip returns — see roundTripWithBudget's success branch for
+// why cancelling any earlier would abort an in-flight stream.
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
 }
