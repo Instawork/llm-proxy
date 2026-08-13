@@ -29,6 +29,17 @@ var errRetryBodyTooLarge = errors.New("circuit: request body exceeds MaxRetryabl
 // down to the inner transport (used by the test-mode transport).
 type retryAttemptKey struct{}
 
+// timeoutBudgetKey carries the caller-requested header-wait budget for the
+// in-flight request, so the failure-recording paths can tell a caller-shortened
+// abort from the provider's own timeout without threading the value through
+// every handler signature.
+type timeoutBudgetKey struct{}
+
+func timeoutBudgetFromContext(ctx context.Context) (time.Duration, bool) {
+	budget, ok := ctx.Value(timeoutBudgetKey{}).(time.Duration)
+	return budget, ok
+}
+
 // Transport wraps an inner http.RoundTripper with circuit-breaker logic:
 //
 //   - checks the circuit state before every logical request;
@@ -950,6 +961,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	if hasTimeoutBudgetMarkers(req) {
 		req = stripTimeoutBudgetMarkers(req)
 	}
+	if hasBudget {
+		req = req.WithContext(context.WithValue(req.Context(), timeoutBudgetKey{}, budget))
+	}
 
 	ctx := req.Context()
 	startedAt := time.Now()
@@ -1270,6 +1284,20 @@ func (t *Transport) recordHangAbort(req *http.Request, key string, err error, wa
 	t.emit("hang_disconnect_abort", fc)
 }
 
+// creditsBreaker reports whether fc should count toward the breaker's failure
+// window for this request. Everything except a caller-shortened timeout-budget
+// abort does; see budgetAbortCredits for why that one does not.
+func (t *Transport) creditsBreaker(req *http.Request, fc failureContext) bool {
+	if fc.Kind != KindTimeoutBudgetExceeded || req == nil {
+		return true
+	}
+	budget, ok := timeoutBudgetFromContext(req.Context())
+	if !ok {
+		return true
+	}
+	return budgetAbortCredits(budget, t.maxTimeoutBudget, t.cfg.HangDisconnectFailureSeconds)
+}
+
 // retryLoopState is the mutable per-iteration state runWithRetries
 // hands to the per-failure-class handlers below.  It exists so the
 // handlers can update attempt counters and remember the most recent
@@ -1375,15 +1403,15 @@ func (t *Transport) handleDegradedFailure(
 ) (*http.Response, error, bool) {
 	switch t.cfg.RetryContributionMode {
 	case "on":
+		evt := t.enrichedFailureContext(req, resp, err, st.lastUpstreamError)
+		if !t.creditsBreaker(req, evt) {
+			break
+		}
 		t.log.Info("circuit: retried failure contributing to degradation score",
-			append(t.enrichedFailureContext(req, resp, err, st.lastUpstreamError).attrs(),
-				"attempt", st.transientAttempts)...)
+			append(evt.attrs(), "attempt", st.transientAttempts)...)
 		_, openedNow, _ := t.store.RecordTerminalFailure(ctx, key)
 		if openedNow {
-			t.emitOpened(
-				t.enrichedFailureContext(req, resp, err, st.lastUpstreamError),
-				"threshold",
-			)
+			t.emitOpened(evt, "threshold")
 		}
 		t.maybeRecordRollup(ctx, key, openedNow)
 	case "log":
@@ -1665,6 +1693,12 @@ func (t *Transport) recordProbeFailure(ctx context.Context, req *http.Request, r
 // parsed from the response body before drain.
 func (t *Transport) handleTerminalFailure(ctx context.Context, req *http.Request, key string, lastResp *http.Response, lastErr error, upstreamError string) (*http.Response, error) {
 	evt := t.enrichedFailureContext(req, lastResp, lastErr, upstreamError)
+	if !t.creditsBreaker(req, evt) {
+		t.log.Warn(proxylog.UpstreamMsg("circuit: caller's timeout budget elapsed short of a provider timeout; returning degraded signal without crediting the breaker"),
+			append(evt.attrs(), "mode", ModeEnforce)...)
+		t.emit("timeout_budget_uncredited", evt)
+		return t.degradedResponse(req, true), nil
+	}
 	newState, openedNow, err := t.store.RecordTerminalFailure(ctx, key)
 	if err != nil {
 		t.log.Error(proxylog.ProxyMsg("circuit: RecordTerminalFailure error"), "key", key, "error", err)

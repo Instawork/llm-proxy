@@ -278,6 +278,88 @@ func TestHasTimeoutBudgetMarkers_DetectsPresentButEmptyHeader(t *testing.T) {
 	require.True(t, hasTimeoutBudgetMarkers(req))
 }
 
+// newBudgetCreditTestTransport mirrors newTimeoutBudgetTestTransport but exposes
+// the store and lets the test set the two knobs that decide whether a budget
+// abort reaches the breaker: the provider's ceiling and
+// hang_disconnect_failure_seconds.
+func newBudgetCreditTestTransport(inner http.RoundTripper, ceiling time.Duration, hangSeconds int) (*Transport, Store) {
+	cfg := Config{
+		Enabled:                      true,
+		Mode:                         ModeEnforce,
+		FailureThreshold:             2,
+		WindowSeconds:                60,
+		CooldownSeconds:              300,
+		MaxTransientRetries:          2,
+		MaxRateLimitRetries:          1,
+		HangDisconnectFailureSeconds: hangSeconds,
+	}.Defaults()
+	store := NewMemoryStore(cfg)
+	return NewTransport(inner, store, cfg, "openai", nil, WithMaxTimeoutBudget(ceiling)), store
+}
+
+func hangingRoundTripper() http.RoundTripper {
+	return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+}
+
+func TestTransport_TimeoutBudget_ShortBudgetNeverOpensBreaker(t *testing.T) {
+	// A caller that wants an answer in 1s learns nothing about a provider whose
+	// own timeout is 300s — otherwise one impatient caller could open the shared
+	// breaker and fast-fail every other caller of this provider.
+	tr, store := newBudgetCreditTestTransport(hangingRoundTripper(), 300*time.Second, 60)
+
+	for i := 0; i < 3; i++ {
+		resp, err := tr.RoundTrip(budgetRequest("1000"))
+		require.NoError(t, err)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		require.Contains(t, string(body), DefaultDegradedSignal, "caller still needs the tagged 503 to fail over")
+	}
+
+	state, err := store.GetState(context.Background(), "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateClosed, state)
+}
+
+func TestTransport_TimeoutBudget_CeilingBudgetStillOpensBreaker(t *testing.T) {
+	// Budget == the provider's ceiling: the caller shortened nothing, so this
+	// abort is the provider's own response-header timeout firing.
+	tr, store := newBudgetCreditTestTransport(hangingRoundTripper(), 1*time.Second, 60)
+
+	for i := 0; i < 2; i++ {
+		resp, err := tr.RoundTrip(budgetRequest("1000"))
+		require.NoError(t, err)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	}
+
+	state, err := store.GetState(context.Background(), "openai")
+	require.NoError(t, err)
+	require.Equal(t, StateOpen, state)
+}
+
+func TestBudgetAbortCredits(t *testing.T) {
+	const ceiling = 300 * time.Second
+	for _, tc := range []struct {
+		name           string
+		budget         time.Duration
+		hangSeconds    int
+		expectCredited bool
+	}{
+		{"router-sized budget stays uncredited", 15 * time.Second, 60, false},
+		{"budget past the hang threshold is a real hang", 90 * time.Second, 60, true},
+		{"budget at the hang threshold is a real hang", 60 * time.Second, 60, true},
+		{"budget at the ceiling is the provider's own timeout", ceiling, 60, true},
+		{"hang crediting disabled leaves short budgets uncredited", 90 * time.Second, 0, false},
+		{"hang crediting disabled still credits the ceiling", ceiling, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expectCredited, budgetAbortCredits(tc.budget, ceiling, tc.hangSeconds))
+		})
+	}
+}
+
 func TestTransport_TimeoutBudget_NoHeaderBehavesUnchanged(t *testing.T) {
 	// No header/param at all: behaviour must be identical to the feature
 	// not existing, even with a ceiling configured.

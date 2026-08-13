@@ -83,6 +83,33 @@ func timeoutBudgetFromRequest(req *http.Request, ceiling time.Duration) (budget 
 	return budget, true
 }
 
+// budgetAbortCredits reports whether a RoundTrip we aborted at budget should
+// count toward the breaker's failure window.
+//
+// A caller-shortened budget elapsing says the CALLER gave up early, not that
+// the provider is broken: a router deciding it wants an answer within 15s
+// learns nothing about a provider that reliably answers in 20s. Crediting
+// those would let any one caller with a short budget open the shared breaker
+// and fast-fail every other caller of that provider — including callers whose
+// own budget would have waited happily.
+//
+// Two waits do say something real and stay credited:
+//   - budget >= ceiling: the caller never shortened anything, so this abort is
+//     the provider's own response_header_timeout firing.
+//   - budget >= HangDisconnectFailureSeconds: a pre-headers wait that long is
+//     a hang in its own right, which is the same judgement the
+//     hang_disconnect_failure_seconds carve-out already makes for a caller
+//     that disconnects mid-hang.
+func budgetAbortCredits(budget, ceiling time.Duration, hangDisconnectSeconds int) bool {
+	if ceiling > 0 && budget >= ceiling {
+		return true
+	}
+	if hangDisconnectSeconds <= 0 {
+		return false
+	}
+	return budget >= time.Duration(hangDisconnectSeconds)*time.Second
+}
+
 // hasTimeoutBudgetMarkers returns true if req carries the timeout-budget
 // header or query param, regardless of whether the value is usable —
 // mirrors hasBypassMarkers so an unparsable value still gets stripped
@@ -129,8 +156,10 @@ func stripTimeoutBudgetMarkers(req *http.Request) *http.Request {
 // caller's timeout budget elapsed while still awaiting response headers.
 // Deliberately distinct from context.Canceled (which classifyNetworkError
 // does not credit to the breaker — that carve-out is for an ordinary client
-// disconnect): this IS a provider-degradation signal, so classifyNetworkError
-// falls through to its "unknown transport error => degraded" default for it.
+// disconnect): this caller still needs the tagged degraded 503 to fail over
+// on, so classifyNetworkError falls through to its "unknown transport error
+// => degraded" default for it. Whether it also counts toward the breaker's
+// failure window is a separate question — see budgetAbortCredits.
 var errTimeoutBudgetExceeded = errors.New("circuit: timeout budget exceeded while awaiting response headers")
 
 // roundTripWithBudget runs a single RoundTrip attempt but aborts it if
