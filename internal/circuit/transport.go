@@ -1166,6 +1166,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				lastResp:          lastResp,
 				lastErr:           lastErr,
 				lastUpstreamError: upstreamDetail,
+				hasBudget:         hasBudget,
+				budgetDeadline:    budgetDeadline,
 			}
 			resp2, err2, done := t.handleRateLimitFailure(ctx, req, key, fc, retryAfterSec, st)
 			rateLimitAttempts = st.rateLimitAttempts
@@ -1194,6 +1196,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				lastResp:          lastResp,
 				lastErr:           lastErr,
 				lastUpstreamError: upstreamDetail,
+				hasBudget:         hasBudget,
+				budgetDeadline:    budgetDeadline,
 			}
 			resp2, err2, done := t.handleDegradedFailure(ctx, req, key, resp, err, st)
 			transientAttempts = st.transientAttempts
@@ -1222,6 +1226,8 @@ type retryLoopState struct {
 	lastResp          *http.Response // post-drain — only StatusCode / Header safe
 	lastErr           error
 	lastUpstreamError string // parsed from body before drain
+	hasBudget         bool
+	budgetDeadline    time.Time
 }
 
 // handleRateLimitFailure runs the rate-limit branch of runWithRetries.
@@ -1272,6 +1278,12 @@ func (t *Transport) handleRateLimitFailure(
 		st.firstRateLimitAt = time.Now()
 	}
 	backoff := rateLimitBackoff(retryAfterSec, st.rateLimitAttempts)
+	// A backoff the caller's timeout budget cannot afford would only delay
+	// the degraded response past the deadline the budget exists to beat.
+	if st.hasBudget && time.Until(st.budgetDeadline) <= backoff {
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
+		return respT, errT, true
+	}
 	t.log.Info(
 		"circuit: rate-limit backoff",
 		"provider", t.provider,
@@ -1331,6 +1343,12 @@ func (t *Transport) handleDegradedFailure(
 	}
 
 	backoff := transientBackoff(st.transientAttempts)
+	// A backoff the caller's timeout budget cannot afford would only delay
+	// the degraded response past the deadline the budget exists to beat.
+	if st.hasBudget && time.Until(st.budgetDeadline) <= backoff {
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
+		return respT, errT, true
+	}
 	t.log.Info(
 		"circuit: transient backoff",
 		"provider", t.provider,

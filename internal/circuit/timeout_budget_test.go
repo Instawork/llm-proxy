@@ -59,7 +59,10 @@ func TestTransport_TimeoutBudget_TaggedDegradedWithinBudget(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
 	require.Contains(t, string(body), DefaultDegradedSignal)
-	require.Less(t, elapsed, 10*time.Second, "must return well inside the 300s provider ceiling, bounded by the 1.5s budget")
+	// Strictly tighter than budget+backoff: once the budget expires, the
+	// retry loop must not sleep a transient backoff before returning the
+	// degraded response — that padding is exactly what the budget beats.
+	require.Less(t, elapsed, 2*time.Second, "degraded response must arrive at ~the 1.5s budget with no backoff padding")
 }
 
 func TestTransport_TimeoutBudget_ClampedToCeiling_NeverExtendsWait(t *testing.T) {

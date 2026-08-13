@@ -173,6 +173,9 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 	// real error's body must always be released rather than leaked.
 	handle := func(res result, cancelWasCalled bool) (*http.Response, error) {
 		if res.err != nil {
+			// No body will be read: release budgetCtx now (a second cancel
+			// after the timer branch is a no-op).
+			cancel()
 			if res.resp != nil && res.resp.Body != nil {
 				_ = res.resp.Body.Close()
 			}
@@ -182,6 +185,7 @@ func (t *Transport) roundTripWithBudget(attemptReq *http.Request, deadline time.
 			return nil, res.err
 		}
 		if res.resp == nil || res.resp.Body == nil {
+			cancel()
 			return res.resp, nil
 		}
 		// A real response — even one that arrived only after we'd already
