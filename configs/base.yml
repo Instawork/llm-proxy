@@ -106,6 +106,9 @@ features:
   # would otherwise fire silently. Only takes effect when circuit_breaker is
   # enabled, since the breaker's retry loop is what enforces it; a streaming
   # response that starts before the budget elapses keeps flowing after it.
+  # A shortened budget elapsing is reported to that caller but not credited to
+  # the shared breaker (see circuit_breaker.hang_disconnect_failure_seconds),
+  # so one impatient caller cannot fast-fail everyone else.
   upstream:
     response_header_timeout_seconds: 300
   # ---------------------------------------------------------------------------

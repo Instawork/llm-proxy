@@ -536,6 +536,8 @@ const (
 	// FailureClassDegraded (see errTimeoutBudgetExceeded) since the whole
 	// point of the budget is to surface a provider degradation signal
 	// before the caller's own deadline would otherwise fire silently.
+	// A budget the caller shortened is NOT credited to the breaker, though —
+	// see budgetAbortCredits for which waits count as real degradation.
 	KindTimeoutBudgetExceeded FailureKind = "timeout_budget_exceeded"
 
 	// KindClientDisconnectAwaitingHeaders marks a caller disconnect that

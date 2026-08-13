@@ -217,6 +217,11 @@ degraded 503 before its own timeout fires — otherwise it would see a bare
 timeout with no failover signal. A watchdog cancels only the in-flight
 attempt if headers haven't arrived by the deadline; once headers arrive the
 watchdog is disarmed, so a streaming response keeps flowing past the budget.
+A budget the caller shortened does **not** count toward the breaker's failure
+window — one impatient caller must not fast-fail every other caller of a
+provider that is merely slower than its deadline. Only a wait that reached the
+provider's own `response_header_timeout_seconds`, or lasted at least
+`hang_disconnect_failure_seconds`, is credited as provider degradation.
 
 Redis store failures fail open so a dead Redis never takes the proxy down.
 
