@@ -538,6 +538,15 @@ const (
 	// before the caller's own deadline would otherwise fire silently.
 	KindTimeoutBudgetExceeded FailureKind = "timeout_budget_exceeded"
 
+	// KindClientDisconnectAwaitingHeaders marks a caller disconnect that
+	// happened while still awaiting the first response byte from upstream,
+	// after Config.HangDisconnectFailureSeconds had already elapsed. Unlike
+	// KindClientCanceled (a normal, uncredited cancel), this kind IS credited
+	// to the circuit breaker — see the Config.HangDisconnectFailureSeconds
+	// docstring in types.go for why a sustained pre-headers hang needs this
+	// carve-out.
+	KindClientDisconnectAwaitingHeaders FailureKind = "client_disconnect_awaiting_headers"
+
 	// Provider-specific kinds parsed from upstream JSON error bodies.
 	// Gemini: https://ai.google.dev/gemini-api/docs/troubleshooting
 	KindGeminiUnavailable       FailureKind = "gemini_unavailable"

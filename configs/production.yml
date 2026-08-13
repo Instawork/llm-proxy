@@ -69,6 +69,14 @@ features:
     max_transient_retries: 2
     max_rate_limit_retries: 2
     retry_contribution_mode: "on"
+    # A caller with a shorter deadline than this proxy's retry budget
+    # (~15 min: response_header_timeout_seconds * (max_transient_retries+1))
+    # always disconnects before a pure provider hang could ever surface as a
+    # synthesised degraded 503 — the breaker would otherwise never learn
+    # about it. Once a disconnect-while-awaiting-headers wait crosses this
+    # many seconds, credit it as a failure anyway so the NEXT caller gets a
+    # fast-fail instead of repeating the same hang.
+    hang_disconnect_failure_seconds: 60
     # Bypass safety valve: callers without a fallback can set
     # X-LLM-Proxy-Bypass-Circuit (or ?llm_proxy_bypass_circuit=1) to opt
     # out of fast-fail.  Default is true; set to false to disable the

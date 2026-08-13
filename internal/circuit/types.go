@@ -283,6 +283,28 @@ type Config struct {
 	// Default: 60.
 	GlobalRateLimitEscalationWindow int
 
+	// HangDisconnectFailureSeconds credits the breaker with a failure when the
+	// CALLER disconnects while we are still waiting on the first response byte
+	// from upstream (no response headers ever arrived) and that wait has
+	// already lasted at least this many seconds.
+	//
+	// classifyNetworkError deliberately does not credit context.Canceled — a
+	// caller closing the tab a moment after issuing a request isn't a provider
+	// failure. But a caller whose own deadline is shorter than this proxy's
+	// ResponseHeaderTimeout + retry budget will always disconnect before a
+	// pure provider hang could ever surface as a synthesised degraded 503: the
+	// client gives up first, the outbound request context cancels, and
+	// classifyNetworkError's context.Canceled carve-out makes the hang
+	// invisible to the breaker. Sustained hangs are exactly the outage this
+	// breaker exists to detect, so once a disconnect-while-awaiting-headers
+	// wait crosses this threshold we credit it as a failure anyway, using a
+	// detached store context since the request's own context is already
+	// canceled.
+	//
+	// Zero (the default) disables this accounting entirely — existing
+	// deployments see no behaviour change until they opt in.
+	HangDisconnectFailureSeconds int
+
 	// Redis connection settings, used when Backend == "redis".
 	//
 	// Two mutually compatible ways to supply the connection:
@@ -474,6 +496,9 @@ func (c Config) Validate() error {
 	}
 	if c.PerProviderRollupWindowSeconds < 0 {
 		return fmt.Errorf("circuit: per_provider_rollup_window_seconds cannot be negative (got %d)", c.PerProviderRollupWindowSeconds)
+	}
+	if c.HangDisconnectFailureSeconds < 0 {
+		return fmt.Errorf("circuit: hang_disconnect_failure_seconds cannot be negative (got %d)", c.HangDisconnectFailureSeconds)
 	}
 	return nil
 }

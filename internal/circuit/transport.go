@@ -1097,6 +1097,12 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 
 		// ── Success ───────────────────────────────────────────────────────
 		if fc == FailureClassNone {
+			if resp == nil && err != nil && errors.Is(err, context.Canceled) {
+				// The caller disconnected before we ever got a response byte —
+				// see recordHangAbort for why this needs its own accounting
+				// path distinct from the (correctly) uncredited fast-cancel case.
+				t.recordHangAbort(req, key, err, time.Since(rtStart))
+			}
 			t.logTimingBreakdown(req, startedAt, cacheBodyDur, upstreamDur, attempt+1, resp)
 			return resp, err
 		}
@@ -1210,6 +1216,58 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		// ── Unknown / unclassifiable failure — pass through as-is ─────────
 		return resp, err
 	}
+}
+
+// hangAbortStoreTimeout bounds the detached store call recordHangAbort makes
+// after the caller has already disconnected. The caller is gone either way,
+// so this only protects server resources (a stuck Redis call) from an
+// otherwise-unbounded background wait, not caller-visible latency.
+const hangAbortStoreTimeout = 2 * time.Second
+
+// recordHangAbort credits the circuit breaker with a failure when the caller
+// disconnected while we were still waiting on the first response byte from
+// upstream (resp == nil, i.e. no headers arrived) and that wait already
+// lasted at least Config.HangDisconnectFailureSeconds.
+//
+// This exists because a pure provider hang is otherwise invisible to the
+// breaker whenever the caller's own deadline is shorter than this proxy's
+// ResponseHeaderTimeout + retry budget (the common case): the caller always
+// disconnects first, cancelling req's context, and classifyNetworkError's
+// context.Canceled → FailureClassNone carve-out (correct for an ordinary
+// fast cancel) means runWithRetries would otherwise return without ever
+// recording anything. No synthesised degraded response can reach a caller
+// that already left, so the only useful thing left to do is make sure the
+// NEXT caller sees an open circuit instead of repeating the same multi-
+// minute hang.
+//
+// Uses a context detached from req (whose context is already canceled)
+// bounded by hangAbortStoreTimeout, matching the "best effort, never affects
+// request flow" convention used by every other Store call in this file.
+func (t *Transport) recordHangAbort(req *http.Request, key string, err error, waited time.Duration) {
+	if t.cfg.HangDisconnectFailureSeconds <= 0 {
+		return
+	}
+	if waited < time.Duration(t.cfg.HangDisconnectFailureSeconds)*time.Second {
+		return
+	}
+	fc := t.newFailureContext(req, nil, err).withKind(KindClientDisconnectAwaitingHeaders)
+
+	storeCtx, cancel := context.WithTimeout(context.Background(), hangAbortStoreTimeout)
+	defer cancel()
+	newState, openedNow, storeErr := t.store.RecordTerminalFailure(storeCtx, key)
+	if storeErr != nil {
+		t.log.Error(proxylog.ProxyMsg("circuit: RecordTerminalFailure (hang-abort) error"), "key", key, "error", storeErr)
+	}
+	if openedNow {
+		if t.activity != nil {
+			t.activity.RecordOpened(t.provider, key, "hang_disconnect", string(fc.Kind), fc.ErrorString, fc.StatusCode)
+		}
+		t.emitOpened(fc, "hang_disconnect")
+	}
+	t.maybeRecordRollup(storeCtx, key, openedNow)
+	t.log.Warn(proxylog.UpstreamMsg("circuit: caller disconnected while still awaiting response headers past hang_disconnect_failure_seconds; recording as provider failure"),
+		append(fc.attrs(), "waited_ms", waited.Milliseconds(), "new_state", newState.String())...)
+	t.emit("hang_disconnect_abort", fc)
 }
 
 // retryLoopState is the mutable per-iteration state runWithRetries

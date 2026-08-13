@@ -457,6 +457,16 @@ type CircuitBreakerConfig struct {
 	// provider_degraded.  Default: 60.
 	GlobalRateLimitEscalationWindow int `yaml:"global_rate_limit_escalation_window"`
 
+	// HangDisconnectFailureSeconds credits the breaker with a failure when a
+	// caller disconnects while still awaiting the first response byte from
+	// upstream (no headers ever arrived) and that wait already lasted at
+	// least this many seconds. Zero (the default) disables this accounting.
+	// See circuit.Config.HangDisconnectFailureSeconds for the full rationale:
+	// without it, a provider hang whose caller has a shorter deadline than
+	// this proxy's response_header_timeout_seconds + retry budget never
+	// registers with the breaker at all.
+	HangDisconnectFailureSeconds int `yaml:"hang_disconnect_failure_seconds,omitempty"`
+
 	// Redis connection settings when Backend is "redis".
 	Redis *RedisConfig `yaml:"redis,omitempty"`
 
@@ -1558,6 +1568,9 @@ func (c *YAMLConfig) validateCircuitBreakerConfig() error {
 	}
 	if cb.GlobalRateLimitEscalationWindow < 0 {
 		return fmt.Errorf("global_rate_limit_escalation_window cannot be negative")
+	}
+	if cb.HangDisconnectFailureSeconds < 0 {
+		return fmt.Errorf("hang_disconnect_failure_seconds cannot be negative")
 	}
 
 	switch cb.RetryContributionMode {
