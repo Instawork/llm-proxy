@@ -62,6 +62,14 @@ type Transport struct {
 	modelFn  ModelFromRequestFunc
 	callerFn CallerFromRequestFunc
 	activity ActivityRecorder
+
+	// maxTimeoutBudget is the ceiling a caller's X-LLM-Proxy-Timeout-Ms
+	// header/query param can shorten but never extend — normally the
+	// provider's own response_header_timeout_seconds. Zero (the default)
+	// disables the feature entirely: timeoutBudgetFromRequest always
+	// returns ok=false, so runWithRetries behaves exactly as it did before
+	// this field existed. Set via WithMaxTimeoutBudget.
+	maxTimeoutBudget time.Duration
 }
 
 // NewTransport wraps inner with circuit-breaker behaviour for provider.
@@ -737,12 +745,16 @@ func (t *Transport) runObserveOnly(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// Strip bypass markers in log mode too — even though they have no
-	// effect on routing, they shouldn't leak upstream and pollute
-	// provider-side logs with proxy-internal diagnostics.
+	// Strip bypass and timeout-budget markers in log mode too — even
+	// though neither has any effect on routing here, they shouldn't leak
+	// upstream and pollute provider-side logs with proxy-internal
+	// diagnostics.
 	upstreamReq := req
 	if hasBypassMarkers(req) {
-		upstreamReq = stripBypassMarkers(req)
+		upstreamReq = stripBypassMarkers(upstreamReq)
+	}
+	if hasTimeoutBudgetMarkers(upstreamReq) {
+		upstreamReq = stripTimeoutBudgetMarkers(upstreamReq)
 	}
 	resp, err := t.inner.RoundTrip(upstreamReq)
 	class := ClassifyResponse(t.provider, resp, err)
@@ -860,6 +872,9 @@ func (t *Transport) runBypass(req *http.Request, reason string) (*http.Response,
 
 	key := t.keyFor(req)
 	upstreamReq := stripBypassMarkers(req)
+	if hasTimeoutBudgetMarkers(upstreamReq) {
+		upstreamReq = stripTimeoutBudgetMarkers(upstreamReq)
+	}
 
 	if t.activity != nil {
 		t.activity.RecordCheck()
@@ -929,8 +944,19 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		req = stripBypassMarkers(req)
 	}
 
+	// budget/hasBudget must be read BEFORE stripping, since the marker
+	// lives in the header/query we're about to remove.
+	budget, hasBudget := timeoutBudgetFromRequest(req, t.maxTimeoutBudget)
+	if hasTimeoutBudgetMarkers(req) {
+		req = stripTimeoutBudgetMarkers(req)
+	}
+
 	ctx := req.Context()
 	startedAt := time.Now()
+	var budgetDeadline time.Time
+	if hasBudget {
+		budgetDeadline = startedAt.Add(budget)
+	}
 
 	// Ensure the body can be re-read on retries.  When the body is too
 	// large to buffer in memory we gracefully disable retries and fall
@@ -948,6 +974,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				"max_retryable_body_bytes", t.cfg.MaxRetryableBodyBytes,
 				"failure_kind", string(KindBodyTooLarge),
 			)
+			if hasBudget {
+				return t.roundTripWithBudget(req, budgetDeadline)
+			}
 			return t.inner.RoundTrip(req)
 		}
 		return nil, fmt.Errorf("circuit: cacheBody: %w", err)
@@ -998,8 +1027,9 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 	// upstream status code, kind, and error string.  StatusCode is the
 	// only field we read off of resp post-drain so this is safe.
 	var (
-		lastResp *http.Response
-		lastErr  error
+		lastResp           *http.Response
+		lastErr            error
+		lastUpstreamDetail string
 	)
 
 	for {
@@ -1008,6 +1038,14 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		// failures for requests whose downstream has already cancelled.
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+
+		// Budget already exhausted by a previous attempt's backoff sleep —
+		// stop retrying now rather than burning another attempt+backoff
+		// cycle the caller's own deadline (which the budget exists to beat)
+		// will never wait for.
+		if hasBudget && time.Until(budgetDeadline) <= 0 {
+			return t.handleTerminalFailure(ctx, req, key, lastResp, lastErr, lastUpstreamDetail)
 		}
 
 		attempt := transientAttempts + rateLimitAttempts
@@ -1047,7 +1085,13 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		}
 
 		rtStart := time.Now()
-		resp, err := t.inner.RoundTrip(attemptReq)
+		var resp *http.Response
+		var err error
+		if hasBudget {
+			resp, err = t.roundTripWithBudget(attemptReq, budgetDeadline)
+		} else {
+			resp, err = t.inner.RoundTrip(attemptReq)
+		}
 		upstreamDur += time.Since(rtStart)
 		fc := ClassifyResponse(t.provider, resp, err)
 
@@ -1111,6 +1155,7 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 		upstreamDetail := peekUpstreamErrorDetail(t.provider, resp)
 		lastResp = resp
 		lastErr = err
+		lastUpstreamDetail = upstreamDetail
 
 		// Drain the response body before retrying so the connection is
 		// returned to the pool cleanly.
@@ -1127,6 +1172,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				lastResp:          lastResp,
 				lastErr:           lastErr,
 				lastUpstreamError: upstreamDetail,
+				hasBudget:         hasBudget,
+				budgetDeadline:    budgetDeadline,
 			}
 			resp2, err2, done := t.handleRateLimitFailure(ctx, req, key, fc, retryAfterSec, st)
 			rateLimitAttempts = st.rateLimitAttempts
@@ -1155,6 +1202,8 @@ func (t *Transport) runWithRetries(req *http.Request) (*http.Response, error) {
 				lastResp:          lastResp,
 				lastErr:           lastErr,
 				lastUpstreamError: upstreamDetail,
+				hasBudget:         hasBudget,
+				budgetDeadline:    budgetDeadline,
 			}
 			resp2, err2, done := t.handleDegradedFailure(ctx, req, key, resp, err, st)
 			transientAttempts = st.transientAttempts
@@ -1235,6 +1284,8 @@ type retryLoopState struct {
 	lastResp          *http.Response // post-drain — only StatusCode / Header safe
 	lastErr           error
 	lastUpstreamError string // parsed from body before drain
+	hasBudget         bool
+	budgetDeadline    time.Time
 }
 
 // handleRateLimitFailure runs the rate-limit branch of runWithRetries.
@@ -1285,6 +1336,12 @@ func (t *Transport) handleRateLimitFailure(
 		st.firstRateLimitAt = time.Now()
 	}
 	backoff := rateLimitBackoff(retryAfterSec, st.rateLimitAttempts)
+	// A backoff the caller's timeout budget cannot afford would only delay
+	// the degraded response past the deadline the budget exists to beat.
+	if st.hasBudget && time.Until(st.budgetDeadline) <= backoff {
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
+		return respT, errT, true
+	}
 	t.log.Info(
 		"circuit: rate-limit backoff",
 		"provider", t.provider,
@@ -1344,6 +1401,12 @@ func (t *Transport) handleDegradedFailure(
 	}
 
 	backoff := transientBackoff(st.transientAttempts)
+	// A backoff the caller's timeout budget cannot afford would only delay
+	// the degraded response past the deadline the budget exists to beat.
+	if st.hasBudget && time.Until(st.budgetDeadline) <= backoff {
+		respT, errT := t.handleTerminalFailure(ctx, req, key, st.lastResp, st.lastErr, st.lastUpstreamError)
+		return respT, errT, true
+	}
 	t.log.Info(
 		"circuit: transient backoff",
 		"provider", t.provider,
@@ -1414,6 +1477,9 @@ func (t *Transport) logTimingBreakdown(
 func (t *Transport) runProbe(req *http.Request, key string) (*http.Response, error) {
 	if hasBypassMarkers(req) {
 		req = stripBypassMarkers(req)
+	}
+	if hasTimeoutBudgetMarkers(req) {
+		req = stripTimeoutBudgetMarkers(req)
 	}
 
 	ctx := req.Context()
