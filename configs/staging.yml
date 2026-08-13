@@ -41,6 +41,7 @@ features:
     max_transient_retries: 2
     max_rate_limit_retries: 2
     retry_contribution_mode: "on"
+    hang_disconnect_failure_seconds: 60
     # Match production's bypass and rollup configuration so staging
     # validates the same wiring + log lines before prod is flipped.
     bypass_allowed: true
