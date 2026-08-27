@@ -186,12 +186,12 @@ func sessionCookies(t *testing.T, rec *httptest.ResponseRecorder) []*http.Cookie
 }
 
 func TestLoadAuthConfig_EnvOverrides(t *testing.T) {
-	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "instawork.com")
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "override.com")
 	t.Setenv("LLM_PROXY_ADMIN_OAUTH_REDIRECT_URL", "https://llm.example.com/admin/auth/callback")
 
 	cfg, err := loadAuthConfig("example.com", "cid", "csecret", "ssecret")
 	require.NoError(t, err)
-	assert.Equal(t, "instawork.com", cfg.allowedDomain)
+	assert.Equal(t, "override.com", cfg.allowedDomain)
 	assert.Equal(t, "https://llm.example.com/admin/auth/callback", cfg.redirectURL)
 	assert.Equal(t, "cid", cfg.clientID)
 }
@@ -202,14 +202,14 @@ func TestNewAuthenticator_AllowedDomainHonorsEnvOverride(t *testing.T) {
 	// resolved into cfg but auth.allowedDomain kept the YAML value, so every
 	// real-org login was rejected as "forbidden". DevBypassLogin keeps this
 	// network-free (returns before the Google OIDC call).
-	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "instawork.com")
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "override.com")
 	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
 		DevBypassLogin: true,
 		AllowedDomain:  "example.com",
 	}, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "instawork.com", auth.allowedDomain)
-	assert.True(t, auth.isAllowedUser("alice@instawork.com", "instawork.com"))
+	assert.Equal(t, "override.com", auth.allowedDomain)
+	assert.True(t, auth.isAllowedUser("alice@override.com", "override.com"))
 	assert.False(t, auth.isAllowedUser("alice@example.com", "example.com"))
 }
 
@@ -221,6 +221,14 @@ func TestIsAllowedUser(t *testing.T) {
 	assert.True(t, auth.isAllowedUser("alice@other.com", "example.com"), "hd match wins over email domain")
 	assert.False(t, auth.isAllowedUser("alice@example.com", "other.com"))
 	assert.False(t, auth.isAllowedUser("not-an-email", ""))
+}
+
+func TestIsAllowedUser_MultipleDomains(t *testing.T) {
+	auth := &authenticator{allowedDomain: "example.com,example.org"}
+	assert.True(t, auth.isAllowedUser("adam@example.org", "example.org"))
+	assert.True(t, auth.isAllowedUser("adam@example.org", ""))
+	assert.True(t, auth.isAllowedUser("alice@example.com", "example.com"))
+	assert.False(t, auth.isAllowedUser("alice@other.com", "other.com"))
 }
 
 func TestRandomState_UniqueAndNonEmpty(t *testing.T) {
@@ -236,9 +244,9 @@ func TestRandomState_UniqueAndNonEmpty(t *testing.T) {
 func TestRedirectURL_FromRequest(t *testing.T) {
 	auth := &authenticator{}
 	req := httptest.NewRequest(http.MethodGet, "/admin/auth/login", nil)
-	req.Host = "llm.instawork.com"
+	req.Host = "llm.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
-	assert.Equal(t, "https://llm.instawork.com/admin/auth/callback", auth.redirectURL(req))
+	assert.Equal(t, "https://llm.example.com/admin/auth/callback", auth.redirectURL(req))
 }
 
 func TestRedirectURL_EnvWins(t *testing.T) {
