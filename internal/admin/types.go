@@ -141,6 +141,9 @@ type CreateKeyRequest struct {
 	RateLimitTPM     int               `json:"rate_limit_tpm,omitempty"`
 	RateLimitRPD     int               `json:"rate_limit_rpd,omitempty"`
 	RateLimitTPD     int               `json:"rate_limit_tpd,omitempty"`
+	// ExpiresAt optionally sets when the key stops accepting proxy requests
+	// and becomes eligible for the expiry sweeper's cleanup.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // UpdateKeyRequest patches mutable key fields.
@@ -155,6 +158,8 @@ type UpdateKeyRequest struct {
 	RateLimitTPM     *int              `json:"rate_limit_tpm,omitempty"`
 	RateLimitRPD     *int              `json:"rate_limit_rpd,omitempty"`
 	RateLimitTPD     *int              `json:"rate_limit_tpd,omitempty"`
+	// ExpiresAt: omitted leaves expiry unchanged, null clears it, a value sets it.
+	ExpiresAt OptionalTime `json:"expires_at,omitempty"`
 }
 
 // OptionalBool distinguishes omitted, null (inherit), and explicit bool values.
@@ -175,6 +180,27 @@ func (o *OptionalBool) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	o.Value = &b
+	return nil
+}
+
+// OptionalTime distinguishes omitted, null (clear), and explicit time values.
+type OptionalTime struct {
+	Defined bool
+	Value   *time.Time
+}
+
+// UnmarshalJSON implements tri-state time decoding for PATCH payloads.
+func (o *OptionalTime) UnmarshalJSON(data []byte) error {
+	o.Defined = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var t time.Time
+	if err := json.Unmarshal(data, &t); err != nil {
+		return err
+	}
+	o.Value = &t
 	return nil
 }
 

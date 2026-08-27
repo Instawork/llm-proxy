@@ -27,6 +27,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/fake"
 	"github.com/Instawork/llm-proxy/internal/history"
 	"github.com/Instawork/llm-proxy/internal/idgatestats"
+	"github.com/Instawork/llm-proxy/internal/keyexpiry"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
 	"github.com/Instawork/llm-proxy/internal/observability"
@@ -151,6 +152,9 @@ var (
 	globalAdminRollupStore *adminrollup.Store
 	globalAdminRollupStop  chan struct{}
 )
+
+// Background sweeper that revokes and deletes keys past their expiry grace period.
+var globalKeyExpiryStop chan struct{}
 
 // Global circuit breaker store instance
 var globalCircuitStore circuit.Store
@@ -803,6 +807,31 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	return store
 }
 
+// startKeyExpirySweeper launches the background job that revokes and deletes
+// keys past their expiry grace period. It is a no-op when the key store
+// isn't a *apikeys.Store (e.g. disabled) or the feature is off in config.
+func startKeyExpirySweeper(yamlConfig *config.YAMLConfig) {
+	expiryCfg := yamlConfig.Features.APIKeyManagement.Expiry
+	if !expiryCfg.Enabled {
+		return
+	}
+	store, ok := globalAPIKeyStore.(*apikeys.Store)
+	if !ok || store == nil {
+		logProxyError("Key expiry sweeper disabled: API key store unavailable")
+		return
+	}
+
+	sweeper := keyexpiry.NewSweeper(store, globalKeyProvisioner, keyexpiry.Config{
+		SweepInterval: time.Duration(expiryCfg.SweepIntervalSeconds) * time.Second,
+		GracePeriod:   time.Duration(expiryCfg.GracePeriodDays) * 24 * time.Hour,
+	}, logger)
+	globalKeyExpiryStop = make(chan struct{})
+	go sweeper.Run(globalKeyExpiryStop)
+	logger.Info("Key expiry sweeper: ENABLED",
+		"sweep_interval_seconds", expiryCfg.SweepIntervalSeconds,
+		"grace_period_days", expiryCfg.GracePeriodDays)
+}
+
 func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
 	if yamlConfig == nil || !yamlConfig.Features.AdminDashboard.Enabled {
 		logger.Info("👤 Admin User Store: admin dashboard disabled")
@@ -1365,6 +1394,8 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			logger.Info("Key provisioning: ENABLED")
 		}
 	}
+
+	startKeyExpirySweeper(yamlConfig)
 
 	// Initialize rate limiter if enabled
 	if yamlConfig.Features.RateLimiting.Enabled {
@@ -1976,6 +2007,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalAdminRollupStop != nil {
 		close(globalAdminRollupStop)
+	}
+	if globalKeyExpiryStop != nil {
+		close(globalKeyExpiryStop)
 	}
 	if globalAdminRollupStore != nil {
 		if err := globalAdminRollupStore.Close(); err != nil {

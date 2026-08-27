@@ -17,6 +17,15 @@ export function providerLabel(provider: Provider): string {
 
 export type PiiFormValue = "inherit" | "on" | "off";
 
+export type ExpiryPreset = "never" | "1d" | "7d" | "30d" | "90d" | "custom";
+
+const EXPIRY_PRESET_DAYS: Partial<Record<ExpiryPreset, number>> = {
+  "1d": 1,
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+};
+
 export type KeyFormState = {
   provider: Provider;
   actual_key: string;
@@ -30,6 +39,9 @@ export type KeyFormState = {
   rate_limit_rpd: string;
   rate_limit_tpd: string;
   anthropic_tier: string;
+  expiry_preset: ExpiryPreset;
+  // ISO date (YYYY-MM-DD) from a <input type="date">, used when expiry_preset is "custom".
+  expiry_custom: string;
 };
 
 export const defaultKeyForm: KeyFormState = {
@@ -45,7 +57,33 @@ export const defaultKeyForm: KeyFormState = {
   rate_limit_rpd: "",
   rate_limit_tpd: "",
   anthropic_tier: "metered",
+  expiry_preset: "never",
+  expiry_custom: "",
 };
+
+// expiresAtFromForm converts a preset or custom date into an absolute ISO
+// timestamp for the wire, or null when the key should never expire.
+export function expiresAtFromForm(form: KeyFormState): string | null {
+  if (form.expiry_preset === "custom") {
+    if (!form.expiry_custom) return null;
+    const d = new Date(`${form.expiry_custom}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const days = EXPIRY_PRESET_DAYS[form.expiry_preset];
+  if (!days) return null;
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+export function expiryFormFromRecord(
+  record: APIKey,
+): Pick<KeyFormState, "expiry_preset" | "expiry_custom"> {
+  if (!record.expires_at) {
+    return { expiry_preset: "never", expiry_custom: "" };
+  }
+  return { expiry_preset: "custom", expiry_custom: record.expires_at.slice(0, 10) };
+}
 
 export function piiToFormValue(value?: PiiRedactSetting): PiiFormValue {
   if (value === true) return "on";
@@ -119,6 +157,7 @@ export function keyFormFromRecord(
     rate_limit_rpd: record.rate_limit_rpd ? String(record.rate_limit_rpd) : "",
     rate_limit_tpd: record.rate_limit_tpd ? String(record.rate_limit_tpd) : "",
     anthropic_tier: record.tags?.tier ?? anthropicDefaultTier,
+    ...expiryFormFromRecord(record),
   };
 }
 

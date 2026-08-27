@@ -30,6 +30,7 @@ import { formatShareExpiry } from "../../lib/share-expiry";
 import {
   costLimitsFromForm,
   defaultKeyForm,
+  expiresAtFromForm,
   formPiiOffRequiresBedrock,
   formatRateLimits,
   keyFormFromRecord,
@@ -454,6 +455,7 @@ export default function KeysPage() {
               monthly_cost_limit: monthlyCostLimit,
               enabled: form.enabled,
               redact_pii: redactPii,
+              expires_at: expiresAtFromForm(form),
               ...rateLimitsFromForm(form),
             },
           });
@@ -470,6 +472,7 @@ export default function KeysPage() {
         const body: CreateAPIKeyRequest = {
           provider: form.provider,
           description: form.description,
+          expires_at: expiresAtFromForm(form),
         };
         if (useAutoProvision) {
           body.auto_provision = true;
@@ -500,6 +503,7 @@ export default function KeysPage() {
           monthly_cost_limit: monthlyCostLimit,
           enabled: form.enabled,
           redact_pii: redactPii,
+          expires_at: expiresAtFromForm(form),
           ...rateLimitsFromForm(form),
         };
         if (useAutoProvision) {

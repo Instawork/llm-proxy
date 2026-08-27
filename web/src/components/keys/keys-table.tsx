@@ -23,6 +23,19 @@ function formatCreatedAt(value?: string): string {
   return d.toLocaleString();
 }
 
+function isExpired(expiresAt?: string | null): boolean {
+  if (!expiresAt) return false;
+  const d = new Date(expiresAt);
+  return !Number.isNaN(d.getTime()) && d.getTime() <= Date.now();
+}
+
+function formatExpiresAt(expiresAt?: string | null): string {
+  if (!expiresAt) return "Never";
+  const d = new Date(expiresAt);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString();
+}
+
 interface KeysTableProps {
   keys: APIKey[];
   onShare: (record: APIKey) => void;
@@ -74,8 +87,28 @@ export default function KeysTable({
         id: "status",
         accessorKey: "enabled",
         header: "Status",
-        cell: ({ getValue }) => (
-          <StatusBadge active={getValue<boolean>()} activeLabel="Enabled" inactiveLabel="Disabled" />
+        cell: ({ row }) => {
+          if (!row.original.enabled) {
+            return <StatusBadge active={false} inactiveLabel="Disabled" />;
+          }
+          if (isExpired(row.original.expires_at)) {
+            return <span className="badge badge-sm badge-warning badge-outline">Expired</span>;
+          }
+          return <StatusBadge active activeLabel="Enabled" />;
+        },
+      },
+      {
+        id: "expires_at",
+        accessorKey: "expires_at",
+        header: "Expires",
+        cell: ({ row }) => (
+          <span
+            className={`whitespace-nowrap text-xs ${
+              isExpired(row.original.expires_at) ? "text-warning" : "text-base-content/70"
+            }`}
+          >
+            {formatExpiresAt(row.original.expires_at)}
+          </span>
         ),
       },
       {

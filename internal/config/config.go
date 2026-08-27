@@ -599,6 +599,26 @@ type APIKeyManagementConfig struct {
 	KeyPrefix string `yaml:"key_prefix"`
 	// Provisioning configures automatic upstream key minting for the admin UI.
 	Provisioning KeyProvisioningConfig `yaml:"provisioning,omitempty"`
+	// Expiry controls optional per-key expiry dates and cleanup of expired keys.
+	Expiry KeyExpiryConfig `yaml:"expiry,omitempty"`
+}
+
+// KeyExpiryConfig controls the background sweeper that revokes and deletes
+// keys past their expiry date. Rejection of expired keys on the validation
+// path happens unconditionally in apikeys.Store.GetKey; this only gates
+// cleanup.
+type KeyExpiryConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// SweepIntervalSeconds is how often the sweeper checks for expired keys.
+	// Defaults to 900 (15 minutes) when unset.
+	SweepIntervalSeconds int `yaml:"sweep_interval_seconds,omitempty"`
+	// GracePeriodDays delays deletion after expiry so the admin UI can show
+	// an "Expired" key before it disappears. Defaults to 7 when unset.
+	GracePeriodDays int `yaml:"grace_period_days,omitempty"`
+	// MaxDays bounds how far in the future an expiry date may be set, so a
+	// typo can't produce a key that effectively never expires. Defaults to
+	// 365 when unset.
+	MaxDays int `yaml:"max_days,omitempty"`
 }
 
 // KeyProvisioningConfig controls server-side upstream API key creation.

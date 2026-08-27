@@ -192,6 +192,111 @@ func TestStore_UpdateKey_AllFields(t *testing.T) {
 	// code paths in Store.UpdateKey, which is its primary value.
 }
 
+// ----------------------------------------------------------------------------
+// Expiry: set at creation, update (set + clear), and ListExpiredKeys
+// ----------------------------------------------------------------------------
+
+func TestStore_CreateKeyWithMeta_SetsExpiresAt(t *testing.T) {
+	store, _ := newFakeStore(t)
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	created, err := store.CreateKeyWithMeta(
+		context.Background(), "openai", "real-sk", "expiring", 100, 0, nil, nil,
+		KeyCreateMeta{ExpiresAt: &expiresAt},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, created.ExpiresAt)
+	assert.WithinDuration(t, expiresAt, *created.ExpiresAt, time.Second)
+	assert.Equal(t, time.UTC, created.ExpiresAt.Location())
+}
+
+func TestStore_UpdateKey_SetsExpiresAt(t *testing.T) {
+	store, _ := newFakeStore(t)
+	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "", 100, nil, nil)
+	require.NoError(t, err)
+
+	future := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+		"expires_at": future,
+	}))
+
+	record, err := store.GetKeyRecord(context.Background(), created.PK)
+	require.NoError(t, err)
+	require.NotNil(t, record.ExpiresAt)
+	assert.WithinDuration(t, future, *record.ExpiresAt, time.Second)
+}
+
+func TestStore_UpdateKey_ClearsExpiresAt(t *testing.T) {
+	store, _ := newFakeStore(t)
+	future := time.Now().Add(1 * time.Hour)
+	created, err := store.CreateKeyWithMeta(
+		context.Background(), "openai", "real-sk", "", 100, 0, nil, nil,
+		KeyCreateMeta{ExpiresAt: &future},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, created.ExpiresAt)
+
+	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+		"expires_at": nil,
+	}))
+
+	record, err := store.GetKeyRecord(context.Background(), created.PK)
+	require.NoError(t, err)
+	assert.Nil(t, record.ExpiresAt)
+}
+
+func TestStore_UpdateKey_ExpiresAtWrongTypeErrors(t *testing.T) {
+	store, _ := newFakeStore(t)
+	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "", 100, nil, nil)
+	require.NoError(t, err)
+
+	err = store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+		"expires_at": "not-a-time",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expires_at update must be a time.Time")
+}
+
+func TestStore_ListExpiredKeys(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+	cutoff := time.Now()
+
+	past := cutoff.Add(-2 * time.Hour)
+	expired, err := store.CreateKeyWithMeta(ctx, "openai", "real-1", "expired", 100, 0, nil, nil, KeyCreateMeta{ExpiresAt: &past})
+	require.NoError(t, err)
+
+	future := cutoff.Add(2 * time.Hour)
+	_, err = store.CreateKeyWithMeta(ctx, "openai", "real-2", "not-yet", 100, 0, nil, nil, KeyCreateMeta{ExpiresAt: &future})
+	require.NoError(t, err)
+
+	_, err = store.CreateKey(ctx, "openai", "real-3", "never-expires", 100, nil, nil)
+	require.NoError(t, err)
+
+	results, err := store.ListExpiredKeys(ctx, cutoff)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, expired.PK, results[0].PK)
+}
+
+// TestStore_TryAcquireSweepLease covers the first-acquire and contended
+// branches. Re-acquisition after TTL expiry relies on DynamoDB evaluating
+// the "lease_expires_at < :now" half of the ConditionExpression, which the
+// shared dynamodbfake (only "attribute_not_exists" aware) doesn't model; that
+// path is exercised by the integration tests against real DynamoDB.
+func TestStore_TryAcquireSweepLease(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+
+	acquired, err := store.TryAcquireSweepLease(ctx, "host-a", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, acquired, "first acquisition should succeed (no existing lease)")
+
+	acquired, err = store.TryAcquireSweepLease(ctx, "host-b", time.Minute)
+	require.NoError(t, err)
+	assert.False(t, acquired, "host-a's lease is still live, so host-b must not acquire it")
+}
+
 func TestStore_LookupProxyKey(t *testing.T) {
 	store, _ := newFakeStore(t)
 	ctx := context.Background()

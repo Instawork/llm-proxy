@@ -122,6 +122,7 @@ export interface CreateAPIKeyRequest {
   rate_limit_rpd?: number;
   rate_limit_tpd?: number;
   tags?: Record<string, string>;
+  expires_at?: string | null;
 }
 
 export interface UpdateAPIKeyRequest {
@@ -135,6 +136,7 @@ export interface UpdateAPIKeyRequest {
   rate_limit_rpd?: number;
   rate_limit_tpd?: number;
   tags?: Record<string, string>;
+  expires_at?: string | null;
 }
 
 export interface FeatureToggle {
