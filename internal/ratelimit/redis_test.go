@@ -88,8 +88,42 @@ func TestRedisLimiterCancelAfterMinuteRotationSkipsNewWindow(t *testing.T) {
 
 	// The day window was still current, so A's day tokens were released:
 	// B's 40 remain (A's 40 + B's 40 - A's cancel).
-	dayTok := mr.HGet("rl:day:user:u-rotate", "tok")
+	dayTok := mr.HGet(dayKey("user:u-rotate", t0), "tok")
 	assert.Equal(t, "40", dayTok, "day window should hold only B's tokens after A's cancel")
+}
+
+// TestRedisLimiterMinuteWindowsDoNotCarryOver pins the window-stamped key
+// layout. EXPIRE has whole-second granularity, so a reservation made late in a
+// minute leaves a key that outlives its window; the next window must neither
+// inherit that count nor extend the stale key's TTL.
+func TestRedisLimiterMinuteWindowsDoNotCarryOver(t *testing.T) {
+	cfg := baseCfg()
+	lim, mr := newRedisLimiterForTest(t, cfg)
+
+	scope := ScopeKeys{UserID: "u-carry"}
+	// Second 59, so the minute key gets a 1s TTL and survives into W2.
+	t0 := time.Date(2026, 7, 24, 12, 0, 59, 0, time.UTC)
+	t1 := t0.Add(time.Second)
+
+	for i := 0; i < 2; i++ {
+		res, err := lim.CheckAndReserve(context.Background(), "w1", scope, 1, t0)
+		require.NoError(t, err)
+		require.True(t, res.Allowed, "W1 reserve %d", i)
+	}
+	over, _ := lim.CheckAndReserve(context.Background(), "w1-over", scope, 1, t0)
+	require.False(t, over.Allowed, "W1's RPM budget should be spent")
+
+	// W1's key is deliberately left unexpired (no FastForward), reproducing the
+	// sub-second overlap at the boundary.
+	for i := 0; i < 2; i++ {
+		res, err := lim.CheckAndReserve(context.Background(), "w2", scope, 1, t1)
+		require.NoError(t, err)
+		require.True(t, res.Allowed, "W2 must start on a full budget, reserve %d", i)
+	}
+
+	w1Key := minuteKey("user:u-carry", t0)
+	assert.Equal(t, "2", mr.HGet(w1Key, "req"), "W2 must not touch W1's counter")
+	assert.Equal(t, time.Second, mr.TTL(w1Key), "W2 must not extend W1's TTL")
 }
 
 func TestRedisLimiterAdjust(t *testing.T) {
