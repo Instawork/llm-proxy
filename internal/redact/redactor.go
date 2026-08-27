@@ -349,7 +349,7 @@ func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Spa
 // entity scope and returns raw spans without redacting the input. The
 // redactor's ScoreThreshold is applied server-side.
 func (r *Redactor) Analyze(ctx context.Context, text string) ([]Span, error) {
-	return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+	return r.analyzeChunked(ctx, text)
 }
 
 // AnalyzeEntities posts text to Presidio /analyze scoped to entityTypes

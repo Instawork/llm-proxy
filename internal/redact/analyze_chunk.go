@@ -52,48 +52,63 @@ func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, err
 	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
 	defer cancel()
 
-	sem := make(chan struct{}, limit)
+	// A fixed pool of workers pulls chunk indexes off jobs, capping goroutine
+	// count at AnalyzeConcurrency. A goroutine-per-chunk design would let a
+	// pathologically small analyze_chunk_chars (e.g. 1) turn a multi-MB field
+	// into millions of goroutines blocked on a semaphore, exhausting memory
+	// before the shared deadline even expires.
+	workers := limit
+	if workers > len(chunks) {
+		workers = len(chunks)
+	}
+
+	jobs := make(chan int)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
 	perChunkSpans := make([][]Span, len(chunks))
 
-	for i := range chunks {
-		wg.Add(1)
-		go func(i int) {
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = ctx.Err()
+			for i := range jobs {
+				spans, err := r.analyze(ctx, chunks[i].text, nil, r.cfg.ScoreThreshold)
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					mu.Unlock()
+					continue
 				}
-				mu.Unlock()
-				return
-			}
-
-			spans, err := r.analyze(ctx, chunks[i].text, nil, r.cfg.ScoreThreshold)
-			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
+				offset := chunks[i].offset
+				rebased := make([]Span, len(spans))
+				for j, s := range spans {
+					s.Start += offset
+					s.End += offset
+					rebased[j] = s
 				}
-				mu.Unlock()
-				return
+				perChunkSpans[i] = rebased
 			}
-			offset := chunks[i].offset
-			rebased := make([]Span, len(spans))
-			for j, s := range spans {
-				s.Start += offset
-				s.End += offset
-				rebased[j] = s
-			}
-			perChunkSpans[i] = rebased
-		}(i)
+		}()
 	}
+
+feed:
+	for i := range chunks {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			mu.Unlock()
+			break feed
+		}
+	}
+	close(jobs)
 
 	wg.Wait()
 	if firstErr != nil {
@@ -164,9 +179,13 @@ func whitespaceSplitPoint(runes []rune, start, end int) int {
 	return end
 }
 
-// dedupeOverlapSpans drops duplicate detections in the overlap window
+// dedupeOverlapSpans merges duplicate detections in the overlap window
 // between adjacent chunks: spans of the same entity type with overlapping
-// [Start,End) ranges collapse to the single highest-scoring detection.
+// [Start,End) ranges collapse to their union range, keeping the highest
+// score. Adjacent chunks can disagree on an entity's exact boundaries (e.g.
+// [10,20) at 0.6 from one chunk's view vs [15,25) at 0.9 from the
+// overlapping view); taking only the higher-scored span's range would drop
+// the [10,15) prefix from redaction, so the merged span must cover both.
 func dedupeOverlapSpans(spans []Span) []Span {
 	if len(spans) < 2 {
 		return spans
@@ -180,8 +199,14 @@ func dedupeOverlapSpans(spans []Span) []Span {
 	out := make([]Span, 0, len(spans))
 	for _, s := range spans {
 		if i := indexOfOverlappingSameType(out, s); i >= 0 {
+			if s.Start < out[i].Start {
+				out[i].Start = s.Start
+			}
+			if s.End > out[i].End {
+				out[i].End = s.End
+			}
 			if s.Score > out[i].Score {
-				out[i] = s
+				out[i].Score = s.Score
 			}
 			continue
 		}

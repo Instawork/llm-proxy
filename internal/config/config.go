@@ -1339,6 +1339,13 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	if r.AnalyzeChunkChars < 0 {
 		return fmt.Errorf("analyze_chunk_chars cannot be negative")
 	}
+	// 200 mirrors redact.analyzeChunkOverlapChars (can't import redact here
+	// without a cycle). A chunk size at or below the overlap collapses the
+	// overlap window to zero, so a PII value straddling a chunk boundary
+	// would go undetected.
+	if r.AnalyzeChunkChars > 0 && r.AnalyzeChunkChars <= 200 {
+		return fmt.Errorf("analyze_chunk_chars must be 0 (disabled) or greater than 200 (the chunk overlap window), got %d", r.AnalyzeChunkChars)
+	}
 	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
 		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)
 	}

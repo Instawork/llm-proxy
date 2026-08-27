@@ -106,8 +106,11 @@ func TestDedupeOverlapSpans_CollapsesOverlappingSameType(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 merged span, got %d (%+v)", len(got), got)
 	}
+	if got[0].Start != 10 || got[0].End != 25 {
+		t.Fatalf("expected the merged span to cover the union range [10,25), got %+v", got[0])
+	}
 	if got[0].Score != 0.9 {
-		t.Fatalf("expected the higher-scoring span to survive, got %+v", got[0])
+		t.Fatalf("expected the higher score to survive, got %+v", got[0])
 	}
 }
 

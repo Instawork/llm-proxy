@@ -194,6 +194,11 @@ func TestValidatePIIRedact_AllBranches(t *testing.T) {
 		{"max_body_bytes zero is fine (uses default)", func(c *PIIRedactConfig) { c.MaxBodyBytes = 0 }, true},
 		{"max_body_bytes positive ok", func(c *PIIRedactConfig) { c.MaxBodyBytes = 1024 * 1024 }, true},
 		{"max_body_bytes negative", func(c *PIIRedactConfig) { c.MaxBodyBytes = -1 }, false},
+		{"analyze_chunk_chars zero disables chunking", func(c *PIIRedactConfig) { c.AnalyzeChunkChars = 0 }, true},
+		{"analyze_chunk_chars above overlap window ok", func(c *PIIRedactConfig) { c.AnalyzeChunkChars = 65536 }, true},
+		{"analyze_chunk_chars negative", func(c *PIIRedactConfig) { c.AnalyzeChunkChars = -1 }, false},
+		{"analyze_chunk_chars within overlap window rejected", func(c *PIIRedactConfig) { c.AnalyzeChunkChars = 200 }, false},
+		{"analyze_chunk_chars just above overlap window ok", func(c *PIIRedactConfig) { c.AnalyzeChunkChars = 201 }, true},
 		{"analyze_cache ttl negative", func(c *PIIRedactConfig) {
 			c.AnalyzeCache.Enabled = true
 			c.AnalyzeCache.TTLSeconds = -1
