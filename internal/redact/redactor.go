@@ -192,6 +192,15 @@ type Config struct {
 	// with multiple user-content strings. Zero defaults to 4.
 	AnalyzeConcurrency int
 
+	// ChunkChars splits a single text field larger than this many runes
+	// into overlapping segments analyzed in parallel (bounded by
+	// AnalyzeConcurrency) instead of one /analyze call covering the whole
+	// field. Presidio's spaCy NER is CPU-bound and effectively
+	// single-threaded per request, so one large field otherwise takes
+	// latency proportional to its full size no matter how many sidecar
+	// workers are running. Zero (default) disables chunking.
+	ChunkChars int
+
 	// AnalyzeCache optionally caches Presidio span lists per content block.
 	AnalyzeCache AnalyzeCache
 }
@@ -326,7 +335,7 @@ func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Spa
 			return spans, nil
 		}
 	}
-	spans, err := r.analyze(ctx, analysisText, nil, r.cfg.ScoreThreshold)
+	spans, err := r.analyzeChunked(ctx, analysisText)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +349,7 @@ func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Spa
 // entity scope and returns raw spans without redacting the input. The
 // redactor's ScoreThreshold is applied server-side.
 func (r *Redactor) Analyze(ctx context.Context, text string) ([]Span, error) {
-	return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+	return r.analyzeChunked(ctx, text)
 }
 
 // AnalyzeEntities posts text to Presidio /analyze scoped to entityTypes

@@ -150,6 +150,16 @@ type PIIRedactConfig struct {
 	// Zero defaults to 4. Tune down if the sidecar shows queue latency.
 	AnalyzeConcurrency int `yaml:"analyze_concurrency,omitempty"`
 
+	// AnalyzeChunkChars splits a single text field larger than this many
+	// characters into overlapping segments analyzed in parallel (bounded by
+	// AnalyzeConcurrency) instead of one /analyze call covering the whole
+	// field. Presidio's spaCy NER is CPU-bound and effectively
+	// single-threaded per request, so a single large field (e.g. a big tool
+	// result) otherwise takes latency proportional to its own size no
+	// matter how many sidecar workers are running — the root cause of the
+	// August 2026 fail_mode "closed" 503 incident. Zero disables chunking.
+	AnalyzeChunkChars int `yaml:"analyze_chunk_chars,omitempty"`
+
 	// ScoreThreshold is the minimum Presidio confidence score for a
 	// span to be redacted. Default: 0.5.
 	ScoreThreshold float64 `yaml:"score_threshold"`
@@ -1325,6 +1335,20 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	}
 	if r.AnalyzeConcurrency < 0 {
 		return fmt.Errorf("analyze_concurrency cannot be negative")
+	}
+	if r.AnalyzeChunkChars < 0 {
+		return fmt.Errorf("analyze_chunk_chars cannot be negative")
+	}
+	// minAnalyzeChunkChars keeps chunkRunes' worst-case forward progress per
+	// chunk meaningfully positive. redact.chunkRunes backs its boundary off
+	// by up to a 200-rune whitespace lookback, then by the 200-rune overlap
+	// (redact.analyzeChunkOverlapChars; duplicated here since config can't
+	// import redact without a cycle) — together up to 400 runes. Below this
+	// floor a chunk can advance by only a handful of runes, turning one
+	// multi-MB field into millions of chunks.
+	const minAnalyzeChunkChars = 1024
+	if r.AnalyzeChunkChars > 0 && r.AnalyzeChunkChars < minAnalyzeChunkChars {
+		return fmt.Errorf("analyze_chunk_chars must be 0 (disabled) or at least %d, got %d", minAnalyzeChunkChars, r.AnalyzeChunkChars)
 	}
 	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
 		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)

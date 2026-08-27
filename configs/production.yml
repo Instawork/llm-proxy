@@ -146,6 +146,13 @@ features:
     timeout_ms_per_100kb: 2000
     timeout_ms_max: 30000
     analyze_concurrency: 4
+    # Presidio's spaCy NER is single-threaded per /analyze call, so one large
+    # field (e.g. a big tool-result string) pins a single sidecar worker for
+    # its whole call no matter how many workers are running — the root cause
+    # of the Aug 2026 fail_mode "closed" 503 incident on large bodies. Fields
+    # above 64 KiB are split into overlapping chunks and analyzed in
+    # parallel (bounded by analyze_concurrency) instead of one long call.
+    analyze_chunk_chars: 65536
     # Without this, max_body_bytes falls back to the 1 MiB default. With
     # fail_mode "closed" any body over the limit 503s instead of skipping
     # redaction, and a caller that retries an oversized payload keeps
