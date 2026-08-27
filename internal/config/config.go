@@ -1339,12 +1339,16 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	if r.AnalyzeChunkChars < 0 {
 		return fmt.Errorf("analyze_chunk_chars cannot be negative")
 	}
-	// 200 mirrors redact.analyzeChunkOverlapChars (can't import redact here
-	// without a cycle). A chunk size at or below the overlap collapses the
-	// overlap window to zero, so a PII value straddling a chunk boundary
-	// would go undetected.
-	if r.AnalyzeChunkChars > 0 && r.AnalyzeChunkChars <= 200 {
-		return fmt.Errorf("analyze_chunk_chars must be 0 (disabled) or greater than 200 (the chunk overlap window), got %d", r.AnalyzeChunkChars)
+	// minAnalyzeChunkChars keeps chunkRunes' worst-case forward progress per
+	// chunk meaningfully positive. redact.chunkRunes backs its boundary off
+	// by up to a 200-rune whitespace lookback, then by the 200-rune overlap
+	// (redact.analyzeChunkOverlapChars; duplicated here since config can't
+	// import redact without a cycle) — together up to 400 runes. Below this
+	// floor a chunk can advance by only a handful of runes, turning one
+	// multi-MB field into millions of chunks.
+	const minAnalyzeChunkChars = 1024
+	if r.AnalyzeChunkChars > 0 && r.AnalyzeChunkChars < minAnalyzeChunkChars {
+		return fmt.Errorf("analyze_chunk_chars must be 0 (disabled) or at least %d, got %d", minAnalyzeChunkChars, r.AnalyzeChunkChars)
 	}
 	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
 		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)
