@@ -184,8 +184,27 @@ func (r *redisLimiter) limitFor(key string, minute bool) rlLimits {
 	return lim
 }
 
-func minuteKey(scopeKey string) string { return "rl:min:" + scopeKey }
-func dayKey(scopeKey string) string    { return "rl:day:" + scopeKey }
+// Counter keys are window-stamped so window identity is explicit. Redis EXPIRE
+// is whole-second granular, so an unstamped key reserved late in a minute
+// outlived its window; the next window's first request inherited the stale
+// count and renewed its TTL, shrinking that window's budget for a full minute.
+func minuteWindow(t time.Time) string {
+	return strconv.FormatInt(t.Unix()/60, 10)
+}
+
+// The Unix epoch starts at UTC midnight, so dividing by a day agrees with
+// secToDayEnd and the memory limiter, both of which truncate on UTC.
+func dayWindow(t time.Time) string {
+	return strconv.FormatInt(t.Unix()/86400, 10)
+}
+
+func minuteKey(scopeKey string, t time.Time) string {
+	return "rl:min:" + minuteWindow(t) + ":" + scopeKey
+}
+
+func dayKey(scopeKey string, t time.Time) string {
+	return "rl:day:" + dayWindow(t) + ":" + scopeKey
+}
 
 func secToMinuteEnd(t time.Time) int {
 	s := int(t.Unix() % 60)
@@ -322,7 +341,7 @@ const snapshotTimeout = 2 * time.Second
 
 // Snapshot implements Snapshotter for the Redis backend so the admin dashboard
 // shows live fleet-wide counters (not just configured limits). It SCANs the
-// rl:min:* and rl:day:* hashes on the rate-limit DB and reports each scope's
+// current window's hashes on the rate-limit DB and reports each scope's
 // current req/tok. Best-effort: on any Redis error it returns the configured
 // limits with empty counters rather than failing the admin request.
 func (r *redisLimiter) Snapshot(now time.Time) LimitsSnapshot {
@@ -346,8 +365,8 @@ func (r *redisLimiter) Snapshot(now time.Time) LimitsSnapshot {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
 	defer cancel()
-	r.scanCounters(ctx, "rl:min:", snap.Minute.Counters)
-	r.scanCounters(ctx, "rl:day:", snap.Day.Counters)
+	r.scanCounters(ctx, "rl:min:"+minuteWindow(now)+":", snap.Minute.Counters)
+	r.scanCounters(ctx, "rl:day:"+dayWindow(now)+":", snap.Day.Counters)
 	return snap
 }
 
@@ -382,8 +401,8 @@ func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope Sco
 	keys := make([]string, 0, len(scopeKeys)*2)
 	argLimits := make([]interface{}, 0, len(scopeKeys)*4)
 	for _, sk := range scopeKeys {
-		keys = append(keys, minuteKey(sk))
-		keys = append(keys, dayKey(sk))
+		keys = append(keys, minuteKey(sk, now))
+		keys = append(keys, dayKey(sk, now))
 		minLim := r.limitFor(sk, true)
 		dayLim := r.limitFor(sk, false)
 		argLimits = append(argLimits, minLim.reqPerWindow, minLim.tokPerWindow, dayLim.reqPerWindow, dayLim.tokPerWindow)
@@ -422,14 +441,14 @@ func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope Sco
 }
 
 // windowFlags reports which windows are still the ones the reservation was
-// made in. The Redis key names are not window-stamped (identity comes from
-// TTL expiry), so a reconcile that crosses a boundary would otherwise land on
-// the next window's counters and erase other requests' reservations.
+// made in. A window that has rolled over took the reservation with it, so
+// there is nothing left to reconcile — touching its key would only resurrect
+// an expired counter.
 func windowFlags(reservedAt, now time.Time) (applyMin, applyDay int) {
-	if reservedAt.Truncate(time.Minute).Equal(now.Truncate(time.Minute)) {
+	if minuteWindow(reservedAt) == minuteWindow(now) {
 		applyMin = 1
 	}
-	if reservedAt.Truncate(24 * time.Hour).Equal(now.Truncate(24 * time.Hour)) {
+	if dayWindow(reservedAt) == dayWindow(now) {
 		applyDay = 1
 	}
 	return applyMin, applyDay
@@ -447,8 +466,8 @@ func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, t
 	}
 	keys := make([]string, 0, len(scopeKeys)*2)
 	for _, sk := range scopeKeys {
-		keys = append(keys, minuteKey(sk))
-		keys = append(keys, dayKey(sk))
+		keys = append(keys, minuteKey(sk, reservedAt))
+		keys = append(keys, dayKey(sk, reservedAt))
 	}
 	argv := []interface{}{tokenDelta, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaAdjust.Run(ctx, r.rdb, keys, argv...).Result()
@@ -467,8 +486,8 @@ func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, e
 	}
 	keys := make([]string, 0, len(scopeKeys)*2)
 	for _, sk := range scopeKeys {
-		keys = append(keys, minuteKey(sk))
-		keys = append(keys, dayKey(sk))
+		keys = append(keys, minuteKey(sk, reservedAt))
+		keys = append(keys, dayKey(sk, reservedAt))
 	}
 	argv := []interface{}{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaCancel.Run(ctx, r.rdb, keys, argv...).Result()
