@@ -150,6 +150,16 @@ type PIIRedactConfig struct {
 	// Zero defaults to 4. Tune down if the sidecar shows queue latency.
 	AnalyzeConcurrency int `yaml:"analyze_concurrency,omitempty"`
 
+	// AnalyzeChunkChars splits a single text field larger than this many
+	// characters into overlapping segments analyzed in parallel (bounded by
+	// AnalyzeConcurrency) instead of one /analyze call covering the whole
+	// field. Presidio's spaCy NER is CPU-bound and effectively
+	// single-threaded per request, so a single large field (e.g. a big tool
+	// result) otherwise takes latency proportional to its own size no
+	// matter how many sidecar workers are running — the root cause of the
+	// August 2026 fail_mode "closed" 503 incident. Zero disables chunking.
+	AnalyzeChunkChars int `yaml:"analyze_chunk_chars,omitempty"`
+
 	// ScoreThreshold is the minimum Presidio confidence score for a
 	// span to be redacted. Default: 0.5.
 	ScoreThreshold float64 `yaml:"score_threshold"`
@@ -1325,6 +1335,9 @@ func (c *YAMLConfig) validatePIIRedactConfig() error {
 	}
 	if r.AnalyzeConcurrency < 0 {
 		return fmt.Errorf("analyze_concurrency cannot be negative")
+	}
+	if r.AnalyzeChunkChars < 0 {
+		return fmt.Errorf("analyze_chunk_chars cannot be negative")
 	}
 	if r.ScoreThreshold < 0 || r.ScoreThreshold > 1 {
 		return fmt.Errorf("score_threshold must be in [0, 1] (got %v)", r.ScoreThreshold)

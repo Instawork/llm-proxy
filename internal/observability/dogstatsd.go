@@ -67,5 +67,12 @@ func NewMetricsSink(cfg *configPkg.DatadogTransportConfig, logger *slog.Logger, 
 		"namespace", namespace,
 		"tags", cfg.Tags,
 	)
+	// A one-time heartbeat so "is this sink actually emitting" is answerable
+	// from Datadog without waiting on real feature traffic — llm-proxy
+	// container logs aren't forwarded to Datadog, so the log line above is
+	// otherwise the only signal a broken client construction ever produced.
+	if err := client.Incr("metrics_sink.up", []string{"feature:" + feature}, 1.0); err != nil {
+		logger.Warn("dogstatsd metrics_sink.up heartbeat failed", "feature", feature, "error", err)
+	}
 	return client
 }

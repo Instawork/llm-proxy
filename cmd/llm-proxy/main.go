@@ -1558,6 +1558,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			Language:           piiCfg.Language,
 			AllowTestEmails:    piiCfg.AllowTestEmails,
 			AnalyzeConcurrency: piiCfg.AnalyzeConcurrency,
+			ChunkChars:         piiCfg.AnalyzeChunkChars,
 		}
 		cacheCfg := redact.AnalyzeCacheConfigFromYAML(piiCfg.AnalyzeCache)
 		fingerprint := redact.AnalyzeCacheFingerprint(redactCfg)
@@ -1667,6 +1668,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			"timeout_ms_per_100kb", piiCfg.TimeoutMsPer100KB,
 			"timeout_ms_max", piiCfg.TimeoutMsMax,
 			"analyze_concurrency", piiCfg.AnalyzeConcurrency,
+			"analyze_chunk_chars", piiCfg.AnalyzeChunkChars,
 		)
 	}
 
