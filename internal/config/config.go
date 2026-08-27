@@ -297,8 +297,9 @@ type FakeUpstreamConfig struct {
 // AdminDashboardConfig gates the /admin UI and JSON API.
 type AdminDashboardConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// AllowedDomain restricts Google OAuth sign-in to a single hosted domain
-	// (e.g. example.com). Defaults to example.com when unset.
+	// AllowedDomain restricts Google OAuth sign-in and user invites to one or
+	// more hosted domains, given as a comma-separated list (e.g.
+	// "example.com,example.co"). Defaults to example.com when unset.
 	AllowedDomain string `yaml:"allowed_domain"`
 	// DevCORSOrigin allows the Vite dev server to call the admin API.
 	DevCORSOrigin string `yaml:"dev_cors_origin"`

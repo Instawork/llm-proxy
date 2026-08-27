@@ -23,6 +23,13 @@ func TestIsAllowedDomainEmail(t *testing.T) {
 	assert.False(t, isAllowedDomainEmail("no-at-sign", "example.com"))
 }
 
+func TestIsAllowedDomainEmail_MultipleDomains(t *testing.T) {
+	assert.True(t, isAllowedDomainEmail("a@example.com", "example.com,example.org"))
+	assert.True(t, isAllowedDomainEmail("a@example.org", "example.com,example.org"))
+	assert.True(t, isAllowedDomainEmail("a@example.org", " example.com , example.org "))
+	assert.False(t, isAllowedDomainEmail("a@other.com", "example.com,example.org"))
+}
+
 func TestRequireRoleAllowsAdmin(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/users", nil)

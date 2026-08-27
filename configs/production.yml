@@ -201,10 +201,11 @@ features:
     requests_per_minute: 120
   admin_dashboard:
     enabled: true
-    # Real sign-in domain is injected at deploy time via the
+    # Real sign-in domain(s) are injected at deploy time via the
     # LLM_PROXY_ADMIN_ALLOWED_DOMAIN env var (it takes precedence over this
-    # value in auth.go). Keep the neutral placeholder here so no private
-    # domain ships in the repo.
+    # value in auth.go). Comma-separate multiple domains, e.g.
+    # "example.com,example.org". Keep the neutral placeholder here so no
+    # private domain ships in the repo.
     allowed_domain: "example.com"
     users:
       dynamodb:

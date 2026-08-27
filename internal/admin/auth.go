@@ -476,15 +476,10 @@ func (a *authenticator) requireSession(next http.Handler) http.Handler {
 }
 
 func (a *authenticator) isAllowedUser(email, hd string) bool {
-	domain := a.allowedDomain
 	if hd != "" {
-		return strings.EqualFold(hd, domain)
+		return isAllowedDomain(hd, a.allowedDomain)
 	}
-	at := strings.LastIndex(email, "@")
-	if at < 0 {
-		return false
-	}
-	return strings.EqualFold(email[at+1:], domain)
+	return isAllowedDomainEmail(email, a.allowedDomain)
 }
 
 func randomState() (string, error) {

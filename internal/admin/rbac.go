@@ -38,17 +38,42 @@ func (a *authenticator) requireRole(min adminusers.Role) func(http.Handler) http
 	}
 }
 
+// allowedDomains splits a comma-separated allowed_domain config value (e.g.
+// "example.com,example.org") into its individual, trimmed domains.
+func allowedDomains(allowedDomain string) []string {
+	parts := strings.Split(allowedDomain, ",")
+	domains := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			domains = append(domains, p)
+		}
+	}
+	return domains
+}
+
+func isAllowedDomain(domain, allowedDomain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return false
+	}
+	for _, d := range allowedDomains(allowedDomain) {
+		if strings.EqualFold(domain, d) {
+			return true
+		}
+	}
+	return false
+}
+
 func isAllowedDomainEmail(email, allowedDomain string) bool {
 	email = strings.TrimSpace(email)
-	allowedDomain = strings.TrimSpace(allowedDomain)
-	if email == "" || allowedDomain == "" {
+	if email == "" {
 		return false
 	}
 	at := strings.LastIndex(email, "@")
 	if at < 0 {
 		return false
 	}
-	return strings.EqualFold(email[at+1:], allowedDomain)
+	return isAllowedDomain(email[at+1:], allowedDomain)
 }
 
 func validateAllowedEmail(email, allowedDomain string) error {
