@@ -85,6 +85,29 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
+## Key expiry
+
+Any key (org-wide or personal) can have an optional expiry date, set from the admin UI (presets: 1 day, 7 days, 30 days, 90 days, or a custom date) or via the API's `expires_at` field. `expires_at` is stored as an absolute RFC3339 UTC timestamp.
+
+- **Enforcement is immediate**: once `expires_at` is in the past, every request using that key is rejected at the validation path (`Store.GetKey`) with `API key has expired`, the same way a disabled key is rejected. No separate mechanism is needed for this part.
+- **Cleanup runs on a delay**: a background sweeper (`internal/keyexpiry`) periodically finds keys that expired more than `grace_period_days` ago (default 7) and retires them — revoking the upstream provider credential first if the key was provisioned (`internal/provision`), then deleting the DynamoDB record. The grace period keeps an expired key visible (marked "Expired") in the admin UI for a few days before it disappears.
+- **Editing**: expiry can be set, extended, shortened, or cleared at any time via `PATCH /admin/api/keys/{key}` with `expires_at` set to an ISO timestamp (set/extend) or `null` (clear). Viewers may set expiry when creating their own personal key, but cannot edit it afterward — only editors and admins can PATCH `expires_at`.
+- **Bounds**: `expires_at` must be in the future and no more than `max_days` (default 365) out, enforced on both create and update.
+
+Configure the sweeper under `features.api_key_management.expiry` in YAML:
+
+```yaml
+features:
+  api_key_management:
+    expiry:
+      enabled: true
+      sweep_interval_seconds: 900  # how often the sweeper runs (default 900 = 15 min)
+      grace_period_days: 7         # delay between expiry and hard delete (default 7)
+      max_days: 365                # furthest an expiry date can be set (default 365)
+```
+
+Only one ECS task performs cleanup at a time: the sweeper acquires a lease via a conditional put on a fixed DynamoDB record (`lease:key-expiry-sweep`) before scanning for expired keys, so running multiple proxy instances does not cause duplicate revoke calls or delete races.
+
 ## Using the Key Management Tool
 
 ### Building the Tool
@@ -253,7 +276,6 @@ With HTTP status code 401 (Unauthorized).
 
 - **Cost Limiting**: The `daily_cost_limit` field is ready for implementing 24-hour spending limits
 - **Usage Analytics**: Track usage per key for billing and monitoring
-- **Key Expiration**: Automatic key expiration based on `expires_at` field
 - **Rate Limiting**: Per-key rate limiting
 - **Multi-provider Keys**: Single proxy key that works across multiple providers
 

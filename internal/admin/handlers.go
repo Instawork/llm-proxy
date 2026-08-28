@@ -14,6 +14,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/keyexpiry"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
@@ -139,6 +140,10 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider is required"})
 		return
 	}
+	if err := h.validateExpiresAt(req.ExpiresAt); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	user, err := h.auth.currentUser(r)
 	if err != nil {
@@ -202,6 +207,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		meta.ExpiresAt = req.ExpiresAt
 		key, err := h.deps.APIKeyStore.CreatePersonalKey(
 			r.Context(),
 			user.Email,
@@ -336,12 +342,19 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 
 	if !permissions.UpdateKeyPolicyFieldsAllowed(role) {
 		if req.Enabled != nil || req.DailyCostLimit != nil || req.MonthlyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
-			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil {
+			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil || req.ExpiresAt.Defined {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "viewers may only update description"})
 			return
 		}
 		if req.Description == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to update"})
+			return
+		}
+	}
+
+	if req.ExpiresAt.Defined && req.ExpiresAt.Value != nil {
+		if err := h.validateExpiresAt(req.ExpiresAt.Value); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 	}
@@ -399,6 +412,13 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RateLimitTPD != nil {
 		updates["rate_limit_tpd"] = *req.RateLimitTPD
+	}
+	if req.ExpiresAt.Defined {
+		if req.ExpiresAt.Value == nil {
+			updates["expires_at"] = nil
+		} else {
+			updates["expires_at"] = *req.ExpiresAt.Value
+		}
 	}
 
 	if len(updates) == 0 {
@@ -484,24 +504,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if record.Provisioned && h.deps.KeyProvisioner != nil {
-		if revokeErr := h.deps.KeyProvisioner.Revoke(
-			r.Context(),
-			record.Provider,
-			record.UpstreamKeyID,
-			record.UpstreamKind,
-		); revokeErr != nil {
-			h.deps.Logger.Warn(
-				"admin: upstream revoke failed",
-				"key", keyID,
-				"provider", record.Provider,
-				"upstream_id", record.UpstreamKeyID,
-				"error", revokeErr,
-			)
-		}
-	}
-
-	if err := h.deps.APIKeyStore.DeleteKey(r.Context(), record.PK); err != nil {
+	if err := keyexpiry.RetireKey(r.Context(), h.deps.APIKeyStore, h.deps.KeyProvisioner, record, h.deps.Logger); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 			return

@@ -5,6 +5,7 @@ import {
   type KeyFormState,
   type KeyFormTab,
   providerNeedsUpstreamKey,
+  tomorrowDateString,
 } from "../../lib/key-form";
 import type { APIKey, Provider } from "../../types";
 import { ProviderLabel, ProviderSelect } from "../ui/page-header";
@@ -273,6 +274,48 @@ export default function ApiKeysModal({
                   }
                 />
               </label>
+
+              {!editingKey || canManagePolicy ? (
+                <div className="form-control w-full">
+                  <span className="label-text mb-1.5">Expires</span>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <select
+                      className="select select-bordered w-full sm:w-48"
+                      value={form.expiry_preset}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          expiry_preset: event.target.value as KeyFormState["expiry_preset"],
+                        }))
+                      }
+                    >
+                      <option value="never">Never</option>
+                      <option value="1d">1 day</option>
+                      <option value="7d">7 days</option>
+                      <option value="30d">30 days</option>
+                      <option value="90d">90 days</option>
+                      <option value="custom">Custom date</option>
+                    </select>
+                    {form.expiry_preset === "custom" ? (
+                      <input
+                        type="date"
+                        className="input input-bordered flex-1"
+                        min={tomorrowDateString()}
+                        value={form.expiry_custom}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            expiry_custom: event.target.value,
+                          }))
+                        }
+                      />
+                    ) : null}
+                  </div>
+                  <span className="label-text-alt mt-1.5 block text-base-content/60">
+                    After expiry the key stops accepting requests and is deleted a few days later.
+                  </span>
+                </div>
+              ) : null}
 
               {treatAsPersonal && !editingKey ? (
                 <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">

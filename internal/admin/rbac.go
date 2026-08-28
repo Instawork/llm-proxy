@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/config"
 )
+
+const defaultKeyExpiryMaxDays = 365
 
 func (a *authenticator) userRole(r *http.Request) (adminusers.Role, error) {
 	user, err := a.currentUser(r)
@@ -157,6 +160,27 @@ func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {
 	max := h.editorMaxDailyCostCents()
 	if max > 0 && cents > max {
 		return fmt.Errorf("daily_cost_limit exceeds editor maximum of %d cents", max)
+	}
+	return nil
+}
+
+// validateExpiresAt rejects expiry dates that are already past or further out
+// than the configured maximum, so a typo can't produce a key that never
+// effectively expires. A nil expiresAt (no expiry requested) always passes.
+func (h *handler) validateExpiresAt(expiresAt *time.Time) error {
+	if expiresAt == nil {
+		return nil
+	}
+	now := time.Now()
+	if !expiresAt.After(now) {
+		return fmt.Errorf("expires_at must be in the future")
+	}
+	maxDays := defaultKeyExpiryMaxDays
+	if h.deps.YAMLConfig != nil && h.deps.YAMLConfig.Features.APIKeyManagement.Expiry.MaxDays > 0 {
+		maxDays = h.deps.YAMLConfig.Features.APIKeyManagement.Expiry.MaxDays
+	}
+	if expiresAt.After(now.AddDate(0, 0, maxDays)) {
+		return fmt.Errorf("expires_at cannot be more than %d days in the future", maxDays)
 	}
 	return nil
 }

@@ -513,6 +513,18 @@ type KeyCreateMeta struct {
 	Provisioned   bool
 	UpstreamKeyID string
 	UpstreamKind  string
+	// ExpiresAt optionally sets the key's expiry at creation time.
+	ExpiresAt *time.Time
+}
+
+// normalizeExpiresAt converts an optional expiry to UTC so stored values sort
+// lexicographically, which ListExpiredKeys relies on for its scan filter.
+func normalizeExpiresAt(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	utc := t.UTC()
+	return &utc
 }
 
 // GenerateKey generates a new API key using the current generation prefix
@@ -553,6 +565,7 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 		Description:      description,
 		CreatedAt:        now,
 		UpdatedAt:        now,
+		ExpiresAt:        normalizeExpiresAt(meta.ExpiresAt),
 		Enabled:          true,
 		Tags:             tags,
 		RedactPII:        redactPII,
@@ -642,6 +655,7 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 		Description:      description,
 		CreatedAt:        now,
 		UpdatedAt:        now,
+		ExpiresAt:        normalizeExpiresAt(meta.ExpiresAt),
 		Enabled:          true,
 		Tags:             map[string]string{"personal": "true"},
 		Provisioned:      meta.Provisioned,
@@ -796,9 +810,15 @@ func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]in
 			updateExpr.WriteString(", enabled = :enabled")
 			exprAttrValues[":enabled"] = &types.AttributeValueMemberBOOL{Value: value.(bool)}
 		case "expires_at":
-			updateExpr.WriteString(", expires_at = :expires_at")
-			if t, ok := value.(time.Time); ok {
-				exprAttrValues[":expires_at"] = &types.AttributeValueMemberS{Value: t.Format(time.RFC3339)}
+			if value == nil {
+				removeParts = append(removeParts, "expires_at")
+			} else {
+				t, ok := value.(time.Time)
+				if !ok {
+					return fmt.Errorf("expires_at update must be a time.Time or nil, got %T", value)
+				}
+				updateExpr.WriteString(", expires_at = :expires_at")
+				exprAttrValues[":expires_at"] = &types.AttributeValueMemberS{Value: t.UTC().Format(time.RFC3339)}
 			}
 		case "tags":
 			updateExpr.WriteString(", tags = :tags")
@@ -1010,6 +1030,82 @@ func (s *Store) GetOwnerKeyByProvider(ctx context.Context, ownerEmail, provider 
 		return nil, nil
 	}
 	return keys[0], nil
+}
+
+// ListExpiredKeys returns proxy keys whose expiry is at or before the given
+// cutoff. The DynamoDB filter is a lexicographic narrowing only (expires_at
+// is stored as an RFC3339 UTC string), so callers must not depend on it for
+// correctness; ExpiresAt is re-checked against cutoff after unmarshalling.
+func (s *Store) ListExpiredKeys(ctx context.Context, cutoff time.Time) ([]*APIKey, error) {
+	cutoff = cutoff.UTC()
+	scanInput := &dynamodb.ScanInput{
+		TableName: aws.String(s.tableName),
+		FilterExpression: aws.String(
+			"(begins_with(pk, :skPfx) OR begins_with(pk, :legacyPfx)) AND attribute_exists(expires_at) AND expires_at <= :cutoff",
+		),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":skPfx":     &types.AttributeValueMemberS{Value: generationKeyPrefix(keyPrefixBase)},
+			":legacyPfx": &types.AttributeValueMemberS{Value: keyPrefixBase},
+			":cutoff":    &types.AttributeValueMemberS{Value: cutoff.Format(time.RFC3339)},
+		},
+	}
+
+	var keys []*APIKey
+	for {
+		result, err := s.client.Scan(ctx, scanInput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan expired API keys: %w", err)
+		}
+		for _, item := range result.Items {
+			var apiKey APIKey
+			if err := attributevalue.UnmarshalMap(item, &apiKey); err != nil {
+				s.logger.Warn("Failed to unmarshal API key", "error", err)
+				continue
+			}
+			if apiKey.ExpiresAt == nil || apiKey.ExpiresAt.After(cutoff) {
+				continue
+			}
+			keys = append(keys, &apiKey)
+		}
+		if len(result.LastEvaluatedKey) == 0 {
+			break
+		}
+		scanInput.ExclusiveStartKey = result.LastEvaluatedKey
+	}
+	return keys, nil
+}
+
+// sweepLeasePK is the fixed sentinel record used to elect a single sweeper
+// across ECS tasks. It shares the keys table so cleanup has no dependency
+// beyond DynamoDB, which must already be up for keys to exist at all.
+const sweepLeasePK = "lease:key-expiry-sweep"
+
+// TryAcquireSweepLease attempts to become the sole owner of the expiry sweep
+// for the given ttl. Returns true if the caller now holds the lease.
+func (s *Store) TryAcquireSweepLease(ctx context.Context, holder string, ttl time.Duration) (bool, error) {
+	now := time.Now().UTC()
+	expiresAt := now.Add(ttl).Format(time.RFC3339)
+
+	_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.tableName),
+		Item: map[string]types.AttributeValue{
+			"pk":               &types.AttributeValueMemberS{Value: sweepLeasePK},
+			"holder":           &types.AttributeValueMemberS{Value: holder},
+			"lease_expires_at": &types.AttributeValueMemberS{Value: expiresAt},
+		},
+		ConditionExpression: aws.String("attribute_not_exists(pk) OR lease_expires_at < :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339)},
+		},
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to acquire sweep lease: %w", err)
+	}
+	return true, nil
 }
 
 // LookupProxyKey returns the DynamoDB record for a proxy bearer token

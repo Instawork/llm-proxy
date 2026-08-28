@@ -48,6 +48,11 @@ features:
           metered: "${LLM_PROXY_ANTHROPIC_KEY_METERED}"
           elevated: "${LLM_PROXY_ANTHROPIC_KEY_ELEVATED}"
           unrestricted: "${LLM_PROXY_ANTHROPIC_KEY_UNRESTRICTED}"
+    expiry:
+      enabled: true
+      sweep_interval_seconds: 900
+      grace_period_days: 7
+      max_days: 365
   # Circuit breaker: enforce mode.  Retries transient failures (up to
   # max_transient_retries), fast-fails open circuits with a synthetic 503,
   # and counts retry contributions toward the failure window.

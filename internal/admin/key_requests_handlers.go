@@ -249,6 +249,9 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 	if err := validateProvisionedKeyOnly(role, &req); err != nil {
 		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
 	}
+	if err := h.validateExpiresAt(req.ExpiresAt); err != nil {
+		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
+	}
 
 	if err := apikeys.ValidatePIIOffBedrockPolicy(
 		h.globalPIIEnabled(),
@@ -309,6 +312,7 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 			return nil, &orgKeyError{status: http.StatusBadRequest, message: "actual_key is required unless auto_provision is true"}
 		}
 	}
+	meta.ExpiresAt = req.ExpiresAt
 
 	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(
 		r.Context(),
