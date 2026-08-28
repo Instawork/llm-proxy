@@ -81,7 +81,18 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 
 				proxyKeyAttached := false
 				if lookup, ok := keyStore.(proxyKeyLookup); ok && inboundKey != "" {
-					if record, err := lookup.LookupProxyKey(r.Context(), inboundKey); err == nil && record != nil {
+					record, err := lookup.LookupProxyKey(r.Context(), inboundKey)
+					if err != nil {
+						// Only a prefixed proxy key reaches this branch with an error
+						// (disabled, expired, or unknown); providers like Bedrock whose
+						// ValidateAPIKey is a SigV4-passthrough no-op rely on this lookup
+						// as their only gate, so a swallowed error here would let a
+						// revoked key keep working.
+						proxylog.Proxy("proxy key lookup failed for %s: %v", provider.GetName(), err)
+						proxylog.WriteProxyJSONError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid API key: %s", err.Error()))
+						return
+					}
+					if record != nil {
 						r = r.WithContext(apikeys.WithContext(r.Context(), record))
 						proxyKeyAttached = true
 						if err := apikeys.EnforcePIIOffBedrockProvider(globalPIIEnabled, record); err != nil {

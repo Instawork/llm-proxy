@@ -260,6 +260,54 @@ func (m *mockBanCheckingStore) IsBYOCredentialBanned(_ context.Context, provider
 	return m.banned[provider+":"+hash], nil
 }
 
+// mockRejectingProxyKeyStore simulates a disabled/expired proxy key: the
+// prefix is recognized but the lookup fails, the same as apikeys.Store.GetKey
+// returning an error for a disabled or expired record.
+type mockRejectingProxyKeyStore struct {
+	mockAPIKeyStore
+}
+
+func (m *mockRejectingProxyKeyStore) LookupProxyKey(_ context.Context, bearer string) (*apikeys.APIKey, error) {
+	if bearer == apikeys.KeyPrefix+"disabled" {
+		return nil, errors.New("API key is disabled")
+	}
+	return nil, nil
+}
+
+// TestAPIKeyValidationMiddleware_RejectsDisabledProxyKeyWhenValidateAPIKeyIsNoop
+// covers providers like Bedrock whose ValidateAPIKey is a SigV4-passthrough
+// no-op: the LookupProxyKey error is the only gate for a presented proxy key,
+// so it must reject the request instead of silently letting it through.
+func TestAPIKeyValidationMiddleware_RejectsDisabledProxyKeyWhenValidateAPIKeyIsNoop(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewBedrockProxy())
+
+	store := &mockRejectingProxyKeyStore{}
+	mw := APIKeyValidationMiddleware(pm, store, false, true)
+
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/bedrock/model/foo/converse", nil)
+	req.Header.Set("Authorization", "Bearer "+apikeys.KeyPrefix+"disabled")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for disabled proxy key on a no-op ValidateAPIKey provider, got %d", rec.Code)
+	}
+
+	// Genuine SigV4-signed Bedrock traffic (no Bearer proxy key) must still
+	// pass through untouched.
+	req = httptest.NewRequest("POST", "/bedrock/model/foo/converse", nil)
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=example")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for SigV4 passthrough request, got %d", rec.Code)
+	}
+}
+
 func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())
