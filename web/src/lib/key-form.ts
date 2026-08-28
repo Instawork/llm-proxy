@@ -61,6 +61,15 @@ export const defaultKeyForm: KeyFormState = {
   expiry_custom: "",
 };
 
+// tomorrowDateString returns tomorrow's local calendar date as YYYY-MM-DD,
+// for use as the <input type="date"> min: today would convert to a past
+// expires_at as soon as local midnight passes, and the API rejects it.
+export function tomorrowDateString(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // expiresAtFromForm converts a preset or custom date into an absolute ISO
 // timestamp for the wire, or null when the key should never expire.
 export function expiresAtFromForm(form: KeyFormState): string | null {

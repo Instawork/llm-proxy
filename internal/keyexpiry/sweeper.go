@@ -109,7 +109,10 @@ func (s *Sweeper) SweepOnce(ctx context.Context) (int, error) {
 
 	deleted := 0
 	for _, record := range expired {
-		keyCtx, cancel := context.WithTimeout(ctx, perKeyTimeout)
+		// Independent of ctx's deadline: lease acquisition or listing may have
+		// already consumed most of the sweep budget, and each retirement still
+		// needs its own full timeout rather than whatever is left over.
+		keyCtx, cancel := context.WithTimeout(context.Background(), perKeyTimeout)
 		err := RetireKey(keyCtx, s.store, s.rev, record, s.logger)
 		cancel()
 		if err != nil {

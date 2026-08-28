@@ -5,6 +5,7 @@ import {
   type KeyFormState,
   type KeyFormTab,
   providerNeedsUpstreamKey,
+  tomorrowDateString,
 } from "../../lib/key-form";
 import type { APIKey, Provider } from "../../types";
 import { ProviderLabel, ProviderSelect } from "../ui/page-header";
@@ -299,7 +300,7 @@ export default function ApiKeysModal({
                       <input
                         type="date"
                         className="input input-bordered flex-1"
-                        min={new Date().toISOString().slice(0, 10)}
+                        min={tomorrowDateString()}
                         value={form.expiry_custom}
                         onChange={(event) =>
                           setForm((current) => ({
