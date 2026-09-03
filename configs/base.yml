@@ -212,6 +212,12 @@ retired_models:
       aliases:
         - o4-mini-deep-research-2025-06-26
   anthropic:
+    "claude-opus-4-1":
+      retired_date: "2026-08-05"
+      replacement: claude-opus-4-8
+      aliases:
+        - claude-opus-4-1-20250805
+        - claude-opus-4.1
     "claude-sonnet-4-0":
       retired_date: "2026-06-15"
       replacement: claude-sonnet-4-6
@@ -686,6 +692,7 @@ providers:
       # yet. Prompts >272K input tokens bill at 2x input / 1.5x output for the
       # full request. Cache writes bill at 1.25x uncached input (new billing
       # dimension for 5.6+); flat pricing here covers standard input/output.
+      # Terra and Luna were permanently repriced 2026-07-30.
       "gpt-5.6-sol":
         enabled: true
         aliases: ["gpt-5.6"] # vendor-documented rolling alias routes to sol
@@ -696,6 +703,9 @@ providers:
           requests_per_day: 7_200_000
           burst_tokens: 45_000
           burst_requests: 500
+        # List price. The 4.00/20.00 (>272K 8.00/30.00) promo running since
+        # 2026-08-21 is guaranteed only "at least through 2026-11-21", so it
+        # is intentionally not encoded here.
         pricing:
           - threshold: 272_000
             input: 5.00
@@ -715,11 +725,11 @@ providers:
           burst_requests: 500
         pricing:
           - threshold: 272_000
-            input: 2.50
-            output: 15.00
+            input: 2.00
+            output: 12.00
           - threshold: 0 # Fallback for prompts > 272k input tokens
-            input: 5.00
-            output: 22.50
+            input: 4.00
+            output: 18.00
       "gpt-5.6-luna":
         enabled: true
         aliases: []
@@ -732,11 +742,11 @@ providers:
           burst_requests: 500
         pricing:
           - threshold: 272_000
-            input: 1.00
-            output: 6.00
+            input: 0.20
+            output: 1.20
           - threshold: 0 # Fallback for prompts > 272k input tokens
-            input: 2.00
-            output: 9.00
+            input: 0.40
+            output: 1.80
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -765,7 +775,7 @@ providers:
           output: 168.00
       "gpt-5.1":
         enabled: true
-        aliases: ["gpt-5.1-2025-10-01", "gpt-5.1-2025-11-13"]
+        aliases: ["gpt-5.1-2025-11-13"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -811,6 +821,34 @@ providers:
       # Claude 4.6+ / 5-series models use dateless pinned IDs (no dated
       # snapshots) and include the full 1M-token context window at standard
       # pricing — Anthropic removed all long-context (>200K) surcharges.
+      "claude-fable-5-1":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 50.00
+      # Limited availability (Project Glasswing approved customers only).
+      # Same pricing/specs as claude-fable-5-1; inert unless a key has access.
+      "claude-mythos-5-1":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 10.00
+          output: 50.00
       "claude-fable-5":
         enabled: true
         aliases: []
@@ -854,7 +892,7 @@ providers:
           output: 25.00
       "claude-opus-4-8":
         enabled: true
-        aliases: ["claude-opus-4.8", "claude-opus-4-8-20260528"]
+        aliases: ["claude-opus-4.8"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -867,7 +905,7 @@ providers:
           output: 25.00
       "claude-opus-4-7":
         enabled: true
-        aliases: ["claude-opus-4.7", "claude-opus-4-7-20260416"]
+        aliases: ["claude-opus-4.7"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -880,7 +918,7 @@ providers:
           output: 25.00
       "claude-opus-4-6":
         enabled: true
-        aliases: ["claude-opus-4.6", "claude-opus-4-6-20260215"]
+        aliases: ["claude-opus-4.6"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -893,7 +931,7 @@ providers:
           output: 25.00
       "claude-opus-4-5":
         enabled: true
-        aliases: ["claude-opus-4.5", "claude-opus-4-5-20251101", "claude-opus-4-5-20251215"]
+        aliases: ["claude-opus-4.5", "claude-opus-4-5-20251101"]
         limits:
           tokens_per_minute: 40_000
           requests_per_minute: 1_000
@@ -914,12 +952,13 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
+        # The launch intro rate became the permanent list price on 2026-08-10.
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 2.00
+          output: 10.00
       "claude-sonnet-4-6":
         enabled: true
-        aliases: ["claude-sonnet-4.6", "claude-sonnet-4-6-20260217"]
+        aliases: ["claude-sonnet-4.6"]
         limits:
           tokens_per_minute: 80_000
           requests_per_minute: 1_000
@@ -946,24 +985,9 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
-      "claude-opus-4-1":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-08-05
-        replacement: "claude-opus-4-8"
-        aliases: ["claude-opus-4-1-20250805", "claude-opus-4.1"]
-        limits:
-          tokens_per_minute: 40_000
-          requests_per_minute: 1_000
-          tokens_per_day: 960_000
-          requests_per_day: 1_440_000
-          burst_tokens: 4_000
-          burst_requests: 100
-        pricing:
-          input: 15.00
-          output: 75.00
       "claude-haiku-4-5":
         enabled: true
-        aliases: ["claude-haiku-4.5", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251015"]
+        aliases: ["claude-haiku-4.5", "claude-haiku-4-5-20251001"]
         limits:
           tokens_per_minute: 100_000
           requests_per_minute: 1_000
@@ -985,10 +1009,12 @@ providers:
   # $AWS_REGION (default us-west-2) for the upstream hostname; no AWS SDK
   # clients run in the proxy itself.
   #
-  # Anthropic-on-Bedrock pricing matches native Anthropic pricing today, so the
-  # `pricing` blocks below mirror the matching SKUs in the `anthropic` provider
-  # above.  Aliases let cost-tracking key off either the AWS-native model id
-  # (e.g. `us.anthropic.claude-sonnet-4-5-...`) or the bare slug.
+  # The `us.` geo and bare `anthropic.` in-region IDs below are regional
+  # endpoints, which Anthropic bills at a 10% premium over global/native for
+  # Sonnet 4.5, Haiku 4.5, Opus 4.5 and every later model; Opus 4.1 and older
+  # keep native pricing.  Aliases let cost-tracking key off either the
+  # AWS-native model id (e.g. `us.anthropic.claude-sonnet-4-5-...`) or the
+  # bare slug.
   bedrock:
     enabled: false # flip per-environment in configs/{staging,production}.yml
 
@@ -1022,8 +1048,8 @@ providers:
         # >200K tier removed 2026-04-30 with the 1M-context beta retirement
         # (mirrors the native claude-sonnet-4-5 entry above).
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 3.30
+          output: 16.50
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases:
@@ -1042,10 +1068,15 @@ providers:
           burst_tokens: 10_000
           burst_requests: 100
         pricing:
-          input: 1.00
-          output: 5.00
+          input: 1.10
+          output: 5.50
+      # Retired on the native Claude API 2026-08-05 but still served on Bedrock:
+      # legacy since 2026-07-08, public extended access from 2026-10-08 (price
+      # not yet published), EOL 2027-01-08.
       "us.anthropic.claude-opus-4-1-20250805-v1:0":
         enabled: true
+        deprecated: true # Bedrock EOL 2027-01-08
+        replacement: "us.anthropic.claude-opus-4-8"
         aliases:
           [
             "anthropic.claude-opus-4-1-20250805-v1:0",
@@ -1079,13 +1110,11 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 8_000
           burst_requests: 100
-        # Standard on-demand pricing ($3/$15, flat — Sonnet 5 includes the 1M
-        # context window at standard pricing, no long-context tier). The launch
-        # intro rate ($2/$10 through 2026-08-31) is intentionally omitted so
-        # cost tracking never under-bills after the promo ends.
+        # Native $2/$10 (the launch intro rate became permanent 2026-08-10) plus
+        # the 10% regional premium. Flat: 1M context at standard pricing.
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 2.20
+          output: 11.00
       "us.anthropic.claude-sonnet-4-6":
         enabled: true
         aliases:
@@ -1105,8 +1134,8 @@ providers:
         # Sonnet 4.6 has 1M context GA at standard pricing (no >200K
         # surcharge since 2026-03-13).
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 3.30
+          output: 16.50
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1123,9 +1152,10 @@ providers:
           requests_per_day: 1_440_000
           burst_tokens: 4_000
           burst_requests: 100
+        # Native $5/$25 plus the 10% regional premium ($6/$30 is the GovCloud rate).
         pricing:
-          input: 6.00
-          output: 30.00
+          input: 5.50
+          output: 27.50
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK MANTLE PROVIDER (OpenAI-compatible API + task-role SigV4)
@@ -1141,48 +1171,52 @@ providers:
       # them through a project pinned to "default" retention (data stays inside
       # AWS, not shared with OpenAI). project_id is env-driven per account; unset
       # -> no OpenAI-Project header -> account default applies.
+      # Bedrock serves these In-Region only and bills at OpenAI's data-residency
+      # tier (1.1x list); 272K context, so no long-context tier.
       "openai.gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-bedrock"]
         project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
         pricing:
-          input: 2.50
-          output: 15.00
+          input: 2.75
+          output: 16.50
       "openai.gpt-5.5":
         enabled: true
         aliases: ["gpt-5.5-bedrock"]
         project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
         pricing:
-          input: 5.00
-          output: 30.00
+          input: 5.50
+          output: 33.00
+      # Mantle Anthropic endpoints are in-region, so the 10% regional premium
+      # applies (mirrors the matching bedrock SKUs above).
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
         aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
         # >200K tier removed 2026-04-30 with the 1M-context beta retirement.
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 3.30
+          output: 16.50
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases: ["claude-haiku-4-5", "anthropic.claude-haiku-4-5"]
         pricing:
-          input: 1.00
-          output: 5.00
-      # Mantle catalog IDs (short form). Pricing mirrors the matching bedrock SKUs.
+          input: 1.10
+          output: 5.50
+      # Mantle catalog IDs (short form).
       # Aliases omit *-bedrock (owned by the bedrock provider) to keep them globally unique.
       "anthropic.claude-sonnet-5":
         enabled: true
         aliases: ["claude-sonnet-5"]
-        # Flat $3/$15 — Sonnet 5 includes 1M context at standard pricing.
+        # Flat — Sonnet 5 includes 1M context at standard pricing.
         pricing:
-          input: 3.00
-          output: 15.00
+          input: 2.20
+          output: 11.00
       "anthropic.claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4-8"]
         pricing:
-          input: 6.00
-          output: 30.00
+          input: 5.50
+          output: 27.50
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
@@ -1244,11 +1278,39 @@ providers:
         pricing:
           input: 1.50
           output: 9.00
-      # Workhorse successor to gemini-3.5-flash (GA 2026-07-21): same input
-      # rate, cheaper output. Flat pricing — no prompt-length tier.
+      # Flash workhorse line (3.6 GA 2026-07-21, 3.7 GA 2026-08-13, 3.8 GA
+      # 2026-09-02). Flat pricing — no prompt-length tier. All three bill at
+      # an introductory 0.75/3.75 through 2026-12-31; the 1.50/7.50 list rate
+      # below applies from 2027-01-01 and is what we encode.
       "gemini-3.6-flash":
         enabled: true
         aliases: ["gemini-flash-3.6", "gemini-3-6-flash"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 1.50
+          output: 7.50
+      "gemini-3.7-flash":
+        enabled: true
+        aliases: ["gemini-flash-3.7", "gemini-3-7-flash"]
+        limits:
+          tokens_per_minute: 3_000_000
+          requests_per_minute: 2_000
+          tokens_per_day: 72_000_000
+          requests_per_day: 2_880_000
+          burst_tokens: 300_000
+          burst_requests: 200
+        pricing:
+          input: 1.50
+          output: 7.50
+      "gemini-3.8-flash":
+        enabled: true
+        aliases: ["gemini-flash-3.8", "gemini-3-8-flash"]
         limits:
           tokens_per_minute: 3_000_000
           requests_per_minute: 2_000
@@ -1277,6 +1339,8 @@ providers:
       # (now listed under retired_models); the GA id below is canonical.
       "gemini-3.1-flash-lite":
         enabled: true
+        deprecated: true # vendor shutdown 2027-05-07
+        replacement: "gemini-3.5-flash-lite"
         aliases: ["gemini-3-1-flash-lite"]
         limits:
           tokens_per_minute: 3_000_000
@@ -1288,9 +1352,13 @@ providers:
         pricing:
           input: 0.25
           output: 1.50
+      # Gemini 2.5 series: Google withdrew the 2026-10-16 shutdown date in
+      # Aug 2026 ("No shutdown date announced"; Vertex still lists 2026-10-20).
+      # Served "until further notice" but only to projects that already used
+      # them; new projects get 404.
       "gemini-2.5-pro":
         enabled: true
-        deprecated: true # vendor earliest shutdown 2026-10-16
+        deprecated: true # no vendor shutdown date; legacy, existing users only
         replacement: "gemini-3.1-pro"
         aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
         limits:
@@ -1309,7 +1377,7 @@ providers:
             output: 15.00
       "gemini-2.5-flash":
         enabled: true
-        deprecated: true # vendor earliest shutdown 2026-10-16
+        deprecated: true # no vendor shutdown date; legacy, existing users only
         replacement: "gemini-3.6-flash"
         aliases:
           [
@@ -1329,7 +1397,7 @@ providers:
           output: 2.50
       "gemini-2.5-flash-lite":
         enabled: true
-        deprecated: true # vendor earliest shutdown 2026-10-16
+        deprecated: true # no vendor shutdown date; legacy, existing users only
         replacement: "gemini-3.1-flash-lite"
         aliases:
           [
@@ -1348,10 +1416,10 @@ providers:
           input: 0.10
           output: 0.40
       # Internal routing id (never an official Google API id); priced as
-      # gemini-2.5-flash, so it follows that model's 2026-10-16 sunset.
+      # gemini-2.5-flash, so it follows that model's lifecycle.
       "gemini-2.5-flash-thinking":
         enabled: true
-        deprecated: true # follows gemini-2.5-flash shutdown 2026-10-16
+        deprecated: true # follows gemini-2.5-flash (no vendor shutdown date)
         replacement: "gemini-3.6-flash"
         aliases: ["gemini-flash-2.5-thinking"]
         limits:
