@@ -1,6 +1,6 @@
 import type { CostLimitPeriod } from "./format";
 import { costLimitFormFromKey } from "./format";
-import type { APIKey, PiiRedactSetting, Provider } from "../types";
+import type { APIKey, PiiRedactSetting, Provider, UpdateAPIKeyRequest } from "../types";
 
 export const KEY_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 export const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
@@ -83,6 +83,19 @@ export function expiresAtFromForm(form: KeyFormState): string | null {
   const d = new Date();
   d.setDate(d.getDate() + days);
   return d.toISOString();
+}
+
+export function isExpired(expiresAt?: string | null): boolean {
+  if (!expiresAt) return false;
+  const d = new Date(expiresAt);
+  return !Number.isNaN(d.getTime()) && d.getTime() <= Date.now();
+}
+
+export function formatExpiresAt(expiresAt?: string | null): string {
+  if (!expiresAt) return "Never";
+  const d = new Date(expiresAt);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString();
 }
 
 export function expiryFormFromRecord(
@@ -168,6 +181,68 @@ export function keyFormFromRecord(
     anthropic_tier: record.tags?.tier ?? anthropicDefaultTier,
     ...expiryFormFromRecord(record),
   };
+}
+
+/** Compares a rate-limit form field against the record's stored value. */
+function rateLimitChanged(formValue: string, recordValue: number | undefined): boolean {
+  return parseLimitField(formValue) !== (recordValue ?? 0);
+}
+
+/**
+ * keyUpdateFromForm diffs the edit form against the record it was seeded
+ * from and returns only the fields that changed. Sending unchanged fields on
+ * every save re-encodes derived values (e.g. expiry as local midnight) and
+ * can trigger side effects like upstream key rotation on rename.
+ */
+export function keyUpdateFromForm(record: APIKey, form: KeyFormState): UpdateAPIKeyRequest {
+  const update: UpdateAPIKeyRequest = {};
+
+  const description = form.description.trim();
+  if (description !== (record.description ?? "").trim()) {
+    update.description = description;
+  }
+
+  if (form.enabled !== record.enabled) {
+    update.enabled = form.enabled;
+  }
+
+  const recordCostLimit = costLimitFormFromKey(record);
+  if (
+    form.cost_limit_period !== recordCostLimit.period ||
+    form.cost_limit_dollars !== recordCostLimit.dollars
+  ) {
+    const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
+      costLimitsFromForm(form);
+    update.daily_cost_limit = dailyCostLimit;
+    update.monthly_cost_limit = monthlyCostLimit;
+  }
+
+  if (piiFromFormValue(form.redact_pii) !== (record.redact_pii ?? null)) {
+    update.redact_pii = piiFromFormValue(form.redact_pii);
+  }
+
+  if (rateLimitChanged(form.rate_limit_rpm, record.rate_limit_rpm)) {
+    update.rate_limit_rpm = parseLimitField(form.rate_limit_rpm);
+  }
+  if (rateLimitChanged(form.rate_limit_tpm, record.rate_limit_tpm)) {
+    update.rate_limit_tpm = parseLimitField(form.rate_limit_tpm);
+  }
+  if (rateLimitChanged(form.rate_limit_rpd, record.rate_limit_rpd)) {
+    update.rate_limit_rpd = parseLimitField(form.rate_limit_rpd);
+  }
+  if (rateLimitChanged(form.rate_limit_tpd, record.rate_limit_tpd)) {
+    update.rate_limit_tpd = parseLimitField(form.rate_limit_tpd);
+  }
+
+  const recordExpiry = expiryFormFromRecord(record);
+  if (
+    form.expiry_preset !== recordExpiry.expiry_preset ||
+    form.expiry_custom !== recordExpiry.expiry_custom
+  ) {
+    update.expires_at = expiresAtFromForm(form);
+  }
+
+  return update;
 }
 
 export function formatRateLimits(record: APIKey): string {

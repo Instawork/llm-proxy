@@ -1,13 +1,13 @@
 import { FormEvent, useState } from "react";
 
+import { CostFields, ExpiryField, PiiFields, RateLimitFields } from "./key-form-fields";
 import {
   modalTabClass,
+  providerNeedsUpstreamKey,
   type KeyFormState,
   type KeyFormTab,
-  providerNeedsUpstreamKey,
-  tomorrowDateString,
 } from "../../lib/key-form";
-import type { APIKey, Provider } from "../../types";
+import type { Provider } from "../../types";
 import { ProviderLabel, ProviderSelect } from "../ui/page-header";
 
 type ApiKeysModalProps = {
@@ -15,7 +15,6 @@ type ApiKeysModalProps = {
   onClose: () => void;
   onSubmit: (event: FormEvent) => void;
   saving: boolean;
-  editingKey: APIKey | null;
   form: KeyFormState;
   setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
   isViewer: boolean;
@@ -36,12 +35,17 @@ type ApiKeysModalProps = {
   editorMaxDollars: number | null;
 };
 
-export default function ApiKeysModal({
-  open,
+export default function ApiKeysModal(props: ApiKeysModalProps) {
+  if (!props.open) return null;
+  return <ApiKeysModalContent {...props} />;
+}
+
+// Split into a component that only mounts while open, so `tab` always
+// starts fresh on "general" instead of carrying over from the last open.
+function ApiKeysModalContent({
   onClose,
   onSubmit,
   saving,
-  editingKey,
   form,
   setForm,
   isViewer,
@@ -60,21 +64,15 @@ export default function ApiKeysModal({
   piiOffRequiresBedrock,
   viewerMonthlyLimitLabel,
   editorMaxDollars,
-}: ApiKeysModalProps) {
+}: Omit<ApiKeysModalProps, "open">) {
   const [tab, setTab] = useState<KeyFormTab>("general");
-
-  if (!open) return null;
 
   const policyTabs: KeyFormTab[] = canManagePolicy && !treatAsPersonal
     ? ["cost", "pii", "rate-limits"]
     : [];
   const visibleTabs: KeyFormTab[] = ["general", ...policyTabs];
 
-  const title = editingKey
-    ? "Edit API key"
-    : treatAsPersonal
-      ? "Create personal key"
-      : "Create API key";
+  const title = treatAsPersonal ? "Create personal key" : "Create API key";
   const needsUpstreamKey = providerNeedsUpstreamKey(form.provider);
 
   return (
@@ -110,7 +108,7 @@ export default function ApiKeysModal({
         <form className="mt-4 space-y-5" onSubmit={onSubmit}>
           {tab === "general" ? (
             <>
-              {!editingKey && !isViewer ? (
+              {!isViewer ? (
                 <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2">
                   <span className="text-sm">
                     <span className="font-medium">Personal key</span>
@@ -131,7 +129,6 @@ export default function ApiKeysModal({
                 <label className="form-control w-full">
                   <span className="label-text mb-1.5">Provider</span>
                   <ProviderSelect
-                    disabled={Boolean(editingKey)}
                     value={form.provider}
                     onChange={(value) =>
                       setForm((current) => ({
@@ -155,17 +152,14 @@ export default function ApiKeysModal({
                 ) : null}
               </div>
 
-              {!editingKey && useAutoProvision ? (
+              {useAutoProvision ? (
                 <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-base-content/80">
                   Upstream key will be created automatically for{" "}
                   <ProviderLabel provider={form.provider} />.
                 </div>
               ) : null}
 
-              {!editingKey &&
-              (provisionedKeysOnly || treatAsPersonal) &&
-              !providerAutoProvision &&
-              needsUpstreamKey ? (
+              {(provisionedKeysOnly || treatAsPersonal) && !providerAutoProvision && needsUpstreamKey ? (
                 <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                   Automatic key provisioning is not available for{" "}
                   <ProviderLabel provider={form.provider} />. Choose another provider or contact an
@@ -199,7 +193,7 @@ export default function ApiKeysModal({
                 </label>
               ) : null}
 
-              {!editingKey && !needsUpstreamKey ? (
+              {!needsUpstreamKey ? (
                 <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-4 py-3.5 text-sm text-base-content/80">
                   <p className="font-medium text-base-content">
                     You still create an llm-proxy key (<code className="text-xs">sk-iw-*</code>).
@@ -212,7 +206,7 @@ export default function ApiKeysModal({
                 </div>
               ) : null}
 
-              {!editingKey && needsUpstreamKey && providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
+              {needsUpstreamKey && providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
                 <details
                   className="rounded-lg border border-base-300 px-3 py-2"
                   open={manualKeyEntry}
@@ -240,7 +234,7 @@ export default function ApiKeysModal({
                 </details>
               ) : null}
 
-              {!editingKey && needsUpstreamKey && !providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
+              {needsUpstreamKey && !providerAutoProvision && !provisionedKeysOnly && !treatAsPersonal ? (
                 <label className="form-control w-full">
                   <span className="label-text">Provider API key</span>
                   <input
@@ -275,93 +269,26 @@ export default function ApiKeysModal({
                 />
               </label>
 
-              {!editingKey || canManagePolicy ? (
-                <div className="form-control w-full">
-                  <span className="label-text mb-1.5">Expires</span>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <select
-                      className="select select-bordered w-full sm:w-48"
-                      value={form.expiry_preset}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          expiry_preset: event.target.value as KeyFormState["expiry_preset"],
-                        }))
-                      }
-                    >
-                      <option value="never">Never</option>
-                      <option value="1d">1 day</option>
-                      <option value="7d">7 days</option>
-                      <option value="30d">30 days</option>
-                      <option value="90d">90 days</option>
-                      <option value="custom">Custom date</option>
-                    </select>
-                    {form.expiry_preset === "custom" ? (
-                      <input
-                        type="date"
-                        className="input input-bordered flex-1"
-                        min={tomorrowDateString()}
-                        value={form.expiry_custom}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            expiry_custom: event.target.value,
-                          }))
-                        }
-                      />
-                    ) : null}
-                  </div>
-                  <span className="label-text-alt mt-1.5 block text-base-content/60">
-                    After expiry the key stops accepting requests and is deleted a few days later.
-                  </span>
-                </div>
-              ) : null}
+              <ExpiryField form={form} setForm={setForm} />
 
-              {treatAsPersonal && !editingKey ? (
+              {treatAsPersonal ? (
                 <div className="rounded-lg border border-base-300/70 bg-base-200/40 px-3 py-2 text-sm text-base-content/80">
                   Monthly spend limit: <span className="font-medium">{viewerMonthlyLimitLabel}</span>{" "}
                   (set by your organization).
-                </div>
-              ) : null}
-
-              {editingKey && canManagePolicy && !treatAsPersonal ? (
-                <div className="form-control w-full">
-                  <span className="label-text">Key status</span>
-                  <label className="flex h-12 cursor-pointer items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="toggle toggle-primary"
-                      checked={form.enabled}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          enabled: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="text-sm font-medium">
-                      {form.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                  </label>
                 </div>
               ) : null}
             </>
           ) : null}
 
           {tab === "cost" && canManagePolicy && !treatAsPersonal ? (
-            <CostFields
-              form={form}
-              setForm={setForm}
-              editorMaxDollars={editorMaxDollars}
-              showEnabled={!editingKey}
-            />
+            <CostFields form={form} setForm={setForm} editorMaxDollars={editorMaxDollars} />
           ) : null}
 
           {tab === "pii" && canManagePolicy && !treatAsPersonal ? (
             <PiiFields
               form={form}
               setForm={setForm}
-              editingKey={editingKey}
+              editingKey={null}
               piiOffRequiresBedrock={piiOffRequiresBedrock}
             />
           ) : null}
@@ -379,14 +306,11 @@ export default function ApiKeysModal({
               className="btn btn-primary"
               disabled={
                 saving ||
-                (!editingKey &&
-                  (provisionedKeysOnly || treatAsPersonal) &&
-                  !useAutoProvision &&
-                  needsUpstreamKey)
+                ((provisionedKeysOnly || treatAsPersonal) && !useAutoProvision && needsUpstreamKey)
               }
             >
               {saving ? <span className="loading loading-spinner loading-sm" /> : null}
-              {editingKey ? "Save changes" : "Create key"}
+              Create key
             </button>
           </div>
         </form>
@@ -395,164 +319,5 @@ export default function ApiKeysModal({
         <button type="button" aria-label="Close" onClick={onClose} />
       </form>
     </dialog>
-  );
-}
-
-export function CostFields({
-  form,
-  setForm,
-  editorMaxDollars,
-  showEnabled = true,
-}: {
-  form: KeyFormState;
-  setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
-  editorMaxDollars: number | null;
-  showEnabled?: boolean;
-}) {
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-        <div className="form-control w-full">
-          <span className="label-text">Cost limit (USD)</span>
-          <div className="flex gap-2">
-            <select
-              className="select select-bordered w-32 shrink-0"
-              value={form.cost_limit_period}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  cost_limit_period: event.target.value as KeyFormState["cost_limit_period"],
-                  cost_limit_dollars: "",
-                }))
-              }
-            >
-              <option value="daily">Daily</option>
-              <option value="monthly">Monthly</option>
-            </select>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              className="input input-bordered min-w-0 flex-1"
-              placeholder="0 = unlimited"
-              value={form.cost_limit_dollars}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  cost_limit_dollars: event.target.value,
-                }))
-              }
-            />
-          </div>
-          <p className="mt-1.5 text-xs text-base-content/60">
-            Leave at 0 for unlimited
-            {editorMaxDollars != null && form.cost_limit_period === "daily"
-              ? ` · Editor max $${editorMaxDollars}/day`
-              : null}
-          </p>
-        </div>
-
-        {showEnabled ? (
-          <div className="form-control w-full sm:w-auto">
-            <span className="label-text">Key status</span>
-            <label className="flex h-12 cursor-pointer items-center gap-3">
-              <input
-                type="checkbox"
-                className="toggle toggle-primary"
-                checked={form.enabled}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    enabled: event.target.checked,
-                  }))
-                }
-              />
-              <span className="text-sm font-medium">{form.enabled ? "Enabled" : "Disabled"}</span>
-            </label>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-export function PiiFields({
-  form,
-  setForm,
-  editingKey,
-  piiOffRequiresBedrock,
-}: {
-  form: KeyFormState;
-  setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
-  editingKey: APIKey | null;
-  piiOffRequiresBedrock: boolean;
-}) {
-  return (
-    <label className="form-control w-full">
-      <span className="label-text">PII redaction</span>
-      <select
-        className="select select-bordered w-full"
-        value={form.redact_pii}
-        onChange={(event) =>
-          setForm((current) => ({
-            ...current,
-            redact_pii: event.target.value as KeyFormState["redact_pii"],
-          }))
-        }
-      >
-        <option value="inherit">Inherit global default</option>
-        <option value="on">On</option>
-        <option value="off">Off</option>
-      </select>
-      {piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
-        <p className="mt-1.5 text-xs text-warning">
-          Turning PII off requires a Bedrock key. Create a new Bedrock key instead.
-        </p>
-      ) : null}
-    </label>
-  );
-}
-
-export function RateLimitFields({
-  form,
-  setForm,
-}: {
-  form: KeyFormState;
-  setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
-}) {
-  return (
-    <div className="rounded-xl border border-base-300/70 p-4">
-      <div className="mb-3 text-sm font-medium">Rate limits</div>
-      <p className="mb-3 text-xs text-base-content/60">
-        Optional per-key overrides. Leave blank to inherit global limits. Zero clears an override.
-      </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {(
-          [
-            ["rate_limit_rpm", "Requests / minute"],
-            ["rate_limit_tpm", "Tokens / minute"],
-            ["rate_limit_rpd", "Requests / day"],
-            ["rate_limit_tpd", "Tokens / day"],
-          ] as const
-        ).map(([field, label]) => (
-          <label key={field} className="form-control">
-            <span className="label-text text-xs">{label}</span>
-            <input
-              type="number"
-              min="0"
-              className="input input-bordered input-sm w-full"
-              placeholder="inherit"
-              value={form[field]}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  [field]: event.target.value,
-                }))
-              }
-            />
-          </label>
-        ))}
-      </div>
-    </div>
   );
 }
