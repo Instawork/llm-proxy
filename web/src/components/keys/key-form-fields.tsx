@@ -111,6 +111,12 @@ export function PiiFields({
           Turning PII off requires a Bedrock key. Create a new Bedrock key instead.
         </p>
       ) : null}
+      {!piiOffRequiresBedrock && form.redact_pii === "off" && form.provider !== "bedrock" ? (
+        <p className="mt-1.5 text-xs text-warning">
+          Requests on this key will reach the provider with PII unredacted. You will be asked
+          to confirm when saving.
+        </p>
+      ) : null}
     </label>
   );
 }

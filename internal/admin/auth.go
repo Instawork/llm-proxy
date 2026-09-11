@@ -442,7 +442,7 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 		Name:                            name,
 		Picture:                         picture,
 		Role:                            role,
-		CanBypassPIIOffNonBedrockPolicy: apikeys.CanBypassPIIOffNonBedrockPolicy(email),
+		CanBypassPIIOffNonBedrockPolicy: role == string(adminusers.RoleAdmin) || apikeys.CanBypassPIIOffNonBedrockPolicy(email),
 	}
 	if role == string(adminusers.RoleEditor) && a.editorLimits.MaxDailyCostLimitCents > 0 {
 		resp.EditorLimits = &EditorLimitsResponse{

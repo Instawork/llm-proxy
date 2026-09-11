@@ -52,7 +52,29 @@ func withTestProvisioner(t *testing.T, h *handler, providers ...string) {
 
 func boolPtr(v bool) *bool { return &v }
 
-func TestHandleCreateKey_PIIOffRequiresBedrock(t *testing.T) {
+// Editors are held to the Bedrock-only rule for PII-off keys; admins (below)
+// may override it after confirming in the dashboard.
+func TestHandleCreateKey_PIIOffRequiresBedrockForEditor(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
+	withTestProvisioner(t, h, "openai")
+	_, err := h.deps.UserStore.CreateUser(context.Background(), "editor@example.com", adminusers.RoleEditor)
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(CreateKeyRequest{
+		Provider:       "openai",
+		Description:    "editor key",
+		DailyCostLimit: 1000,
+		AutoProvision:  true,
+		RedactPII:      boolPtr(false),
+	})
+	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKey(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+func TestHandleCreateKey_PIIOffAdminAllowed(t *testing.T) {
 	h, _ := testAdminHandler(t)
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
 
@@ -64,7 +86,7 @@ func TestHandleCreateKey_PIIOffRequiresBedrock(t *testing.T) {
 	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
 	h.handleCreateKey(rec, req)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
 func TestHandleCreateKey_PIIOffBedrockAllowed(t *testing.T) {
@@ -108,26 +130,48 @@ func TestHandleCreateKey_BedrockWithoutActualKey(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code)
 }
 
-func TestHandleCreateKey_PIIOffBypassAdmin(t *testing.T) {
-	t.Setenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL", "admin@example.com")
-	// The shipped allowlist is empty; opt this admin in for the test.
-	apikeys.SetPIIOffNonBedrockBypassAdmins([]string{"admin@example.com"})
+func TestHandleCreateKey_PIIOffBypassAllowlistedEditor(t *testing.T) {
+	// The shipped allowlist is empty; opt this editor in for the test.
+	apikeys.SetPIIOffNonBedrockBypassAdmins([]string{"editor@example.com"})
 	t.Cleanup(func() { apikeys.SetPIIOffNonBedrockBypassAdmins(nil) })
 	h, _ := testAdminHandler(t)
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
+	withTestProvisioner(t, h, "openai")
+	_, err := h.deps.UserStore.CreateUser(context.Background(), "editor@example.com", adminusers.RoleEditor)
+	require.NoError(t, err)
 
 	body, _ := json.Marshal(CreateKeyRequest{
-		Provider:  "openai",
-		ActualKey: "sk-real",
-		RedactPII: boolPtr(false),
+		Provider:       "openai",
+		Description:    "editor key",
+		DailyCostLimit: 1000,
+		AutoProvision:  true,
+		RedactPII:      boolPtr(false),
 	})
-	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
 	h.handleCreateKey(rec, req)
-	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
-func TestHandleUpdateKey_PIIOffRequiresBedrock(t *testing.T) {
+func TestHandleUpdateKey_PIIOffRequiresBedrockForEditor(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
+	_, err := h.deps.UserStore.CreateUser(ctx, "editor@example.com", adminusers.RoleEditor)
+	require.NoError(t, err)
+
+	key, err := store.CreateKey(ctx, "openai", "sk", "", 0, nil, boolPtr(true))
+	require.NoError(t, err)
+
+	body := []byte(`{"redact_pii": false}`)
+	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPatch, "/admin/api/keys/"+key.PK, body)
+	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+	rec := httptest.NewRecorder()
+	h.handleUpdateKey(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+func TestHandleUpdateKey_PIIOffAdminAllowed(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
@@ -140,7 +184,12 @@ func TestHandleUpdateKey_PIIOffRequiresBedrock(t *testing.T) {
 	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 	rec := httptest.NewRecorder()
 	h.handleUpdateKey(rec, req)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	updated, err := store.GetKeyRecordByID(ctx, key.PK)
+	require.NoError(t, err)
+	require.NotNil(t, updated.RedactPII)
+	assert.False(t, *updated.RedactPII)
 }
 
 func TestHandleUpdateKey_PersonalKeyRenameForbidden(t *testing.T) {

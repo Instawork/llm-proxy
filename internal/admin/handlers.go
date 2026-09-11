@@ -117,12 +117,22 @@ func (h *handler) globalPIIEnabled() bool {
 	return h.deps.YAMLConfig.Features.PIIRedact.Enabled
 }
 
-func (h *handler) adminBypassPIIBedrockPolicy(r *http.Request) bool {
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		return false
+// validatePIIOffPolicy applies the PII-off Bedrock rule for the current user
+// and leaves an audit line naming whoever authorized redaction off for a
+// non-Bedrock key. The key write itself may still fail afterwards; the store
+// logs the persisted change separately.
+func (h *handler) validatePIIOffPolicy(r *http.Request, provider string, redactPII *bool) error {
+	err := apikeys.ValidatePIIOffBedrockPolicy(h.globalPIIEnabled(), provider, redactPII)
+	if err == nil {
+		return nil
 	}
-	return user.CanBypassPIIOffNonBedrockPolicy
+	user, userErr := h.auth.currentUser(r)
+	if userErr != nil || !user.CanBypassPIIOffNonBedrockPolicy {
+		return err
+	}
+	h.deps.Logger.Warn("admin: authorized PII-off on non-Bedrock key",
+		"admin", user.Email, "provider", provider)
+	return nil
 }
 
 func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
@@ -433,12 +443,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.RedactPII.Defined {
-		if err := apikeys.ValidatePIIOffBedrockPolicy(
-			h.globalPIIEnabled(),
-			existing.Provider,
-			req.RedactPII.Value,
-			h.adminBypassPIIBedrockPolicy(r),
-		); err != nil {
+		if err := h.validatePIIOffPolicy(r, existing.Provider, req.RedactPII.Value); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}

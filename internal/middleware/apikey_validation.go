@@ -20,10 +20,9 @@ type byoBanChecker interface {
 }
 
 // APIKeyValidationMiddleware validates and potentially replaces API keys for
-// all providers. globalPIIEnabled is features.pii_redact.enabled from YAML.
-// byoKeysEnabled is features.byo_keys.enabled — when false, raw provider
+// all providers. byoKeysEnabled is features.byo_keys.enabled — when false, raw provider
 // credentials are rejected and callers must use proxy iw-* keys.
-func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, globalPIIEnabled, byoKeysEnabled bool) func(http.Handler) http.Handler {
+func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, byoKeysEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" || r.URL.Path == "/redact" || strings.HasPrefix(r.URL.Path, "/admin/") {
@@ -95,11 +94,6 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 					if record != nil {
 						r = r.WithContext(apikeys.WithContext(r.Context(), record))
 						proxyKeyAttached = true
-						if err := apikeys.EnforcePIIOffBedrockProvider(globalPIIEnabled, record); err != nil {
-							proxylog.Proxy("PII-off Bedrock policy violation for %s: %v", provider.GetName(), err)
-							proxylog.WriteProxyJSONError(w, http.StatusForbidden, err.Error())
-							return
-						}
 					}
 				}
 

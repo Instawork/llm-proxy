@@ -1553,7 +1553,6 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		r.Use(middleware.APIKeyValidationMiddleware(
 			globalProviderManager,
 			globalAPIKeyStore,
-			yamlConfig.Features.PIIRedact.Enabled,
 			yamlConfig.Features.BYOKeys.Enabled,
 		))
 	}

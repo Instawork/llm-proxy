@@ -51,7 +51,7 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	pm.RegisterProvider(op)
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -97,7 +97,7 @@ func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testin
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	iwKey := apikeys.KeyPrefix + "proxy"
 	if !strings.HasPrefix(iwKey, "sk-") {
@@ -162,7 +162,7 @@ func TestAPIKeyValidationMiddleware_StashesByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	var byoID string
 	var proxyRecord *apikeys.APIKey
@@ -190,7 +190,7 @@ func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	byoID := "sentinel"
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +212,7 @@ func TestAPIKeyValidationMiddleware_RejectsBYOKeyWhenDisabled(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, false)
+	mw := APIKeyValidationMiddleware(pm, store, false)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -236,7 +236,7 @@ func TestAPIKeyValidationMiddleware_RejectsBannedBYOKey(t *testing.T) {
 			"openai:" + apikeys.CredentialHashSuffix("valid"): true,
 		},
 	}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -283,7 +283,7 @@ func TestAPIKeyValidationMiddleware_RejectsDisabledProxyKeyWhenValidateAPIKeyIsN
 	pm.RegisterProvider(providers.NewBedrockProxy())
 
 	store := &mockRejectingProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -313,7 +313,7 @@ func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false, true)
+	mw := APIKeyValidationMiddleware(pm, store, true)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

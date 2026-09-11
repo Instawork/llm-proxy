@@ -326,10 +326,11 @@ type AdminDashboardConfig struct {
 	PublicBaseURL string `yaml:"public_base_url"`
 	// Rollups persists daily admin metrics to Redis for historical charts.
 	Rollups AdminRollupsConfig `yaml:"rollups"`
-	// PIIOffBypassAdmins lists admin emails allowed to create/update keys with
-	// PII redaction disabled on a non-Bedrock provider. When empty, a built-in
-	// default list applies (see apikeys.SetPIIOffNonBedrockBypassAdmins).
-	// Prefer setting this in YAML so roster changes don't require a deploy.
+	// PIIOffBypassAdmins lists non-admin emails allowed to create/update keys
+	// with PII redaction disabled on a non-Bedrock provider; admins always can.
+	// When empty, a built-in default list applies (see
+	// apikeys.SetPIIOffNonBedrockBypassAdmins). Prefer setting this in YAML so
+	// roster changes don't require a deploy.
 	PIIOffBypassAdmins []string `yaml:"pii_off_bypass_admins"`
 	// Users configures the DynamoDB-backed admin user roster and RBAC.
 	Users AdminUsersConfig `yaml:"users"`
