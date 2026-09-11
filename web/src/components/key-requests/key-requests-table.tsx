@@ -51,6 +51,14 @@ export default function KeyRequestsTable({
         cell: ({ getValue }) => <ProviderBadge provider={getValue<string>()} />,
       },
       {
+        id: "name",
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ getValue }) => (
+          <span className="font-mono text-sm">{getValue<string>()}</span>
+        ),
+      },
+      {
         id: "description",
         accessorKey: "description",
         header: "Description",

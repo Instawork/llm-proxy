@@ -6,6 +6,7 @@ import { ProviderBadge, ProviderSelect } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { dailyCostLimitFormDollars } from "../../lib/format";
 import { keyDetailPath } from "../../lib/key-routes";
+import { KEY_REQUEST_NAME_MAX, slugifyKeyName } from "../../lib/key-request-name";
 import { useCreateKeyRequest, useMe, useMyKeyRequests } from "../../hooks/queries";
 import type { KeyRequestRecord, Provider } from "../../types";
 
@@ -43,10 +44,24 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : 100;
 
   const [provider, setProvider] = useState<Provider>("openai");
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
   const [description, setDescription] = useState("");
   const [dailyCostLimitDollars, setDailyCostLimitDollars] = useState(
     String(editorMaxDollars),
   );
+
+  const onDescriptionChange = (value: string) => {
+    setDescription(value);
+    if (!nameTouched) {
+      setName(slugifyKeyName(value));
+    }
+  };
+
+  const onNameChange = (value: string) => {
+    setNameTouched(true);
+    setName(slugifyKeyName(value));
+  };
 
   useEffect(() => {
     if (editorMaxCents > 0) {
@@ -65,10 +80,13 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
     try {
       await createRequest.mutateAsync({
         provider,
+        name,
         description: description.trim(),
         daily_cost_limit: Number.isFinite(dailyCents) && dailyCents > 0 ? dailyCents : undefined,
       });
       toast.push("Key request submitted", "success");
+      setName("");
+      setNameTouched(false);
       setDescription("");
       onClose();
     } catch (err) {
@@ -97,8 +115,8 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
             <div>
               <h3 className="text-xl font-semibold">Request a key</h3>
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-base-content/70">
-                Tell admins exactly what you are building. They will choose the key name and
-                provision the org-wide key for you.
+                Tell admins exactly what you are building. They will review your use case and
+                provision the org-wide key under the name below.
               </p>
             </div>
           </div>
@@ -115,6 +133,27 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
             />
           </label>
 
+          <label className="form-control w-full gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="label-text font-semibold">Key name</span>
+              <span className="text-xs text-base-content/60">
+                {name.length}/{KEY_REQUEST_NAME_MAX}
+              </span>
+            </div>
+            <input
+              type="text"
+              className="input input-bordered h-11 w-full font-mono"
+              required
+              maxLength={KEY_REQUEST_NAME_MAX}
+              placeholder="my-service-prod"
+              value={name}
+              onChange={(e) => onNameChange(e.target.value)}
+            />
+            <span className="text-xs text-base-content/60">
+              lowercase letters, numbers, hyphens · max {KEY_REQUEST_NAME_MAX}
+            </span>
+          </label>
+
           <div className="space-y-3 pt-1">
             <label className="form-control w-full gap-2">
               <div className="flex items-center justify-between gap-3">
@@ -127,7 +166,7 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
                 rows={6}
                 placeholder="Example: my-service in production calls OpenAI for document classification from the worker queue. Expected volume is about 10k requests/day. We need an org-wide key because this runs in deployed infrastructure."
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => onDescriptionChange(e.target.value)}
               />
             </label>
             <div className="grid gap-2 rounded-xl border border-warning/25 bg-warning/10 p-3 text-xs text-base-content/75 sm:grid-cols-3">
@@ -179,7 +218,7 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
             <button
               type="submit"
               className="btn btn-primary min-w-36"
-              disabled={createRequest.isPending || !description.trim()}
+              disabled={createRequest.isPending || !description.trim() || !name}
             >
               {createRequest.isPending ? (
                 <span className="loading loading-spinner loading-sm" />
@@ -201,6 +240,7 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
               <table className="table table-xs">
                 <thead>
                   <tr>
+                    <th>Name</th>
                     <th>Provider</th>
                     <th>Status</th>
                     <th>Submitted</th>
@@ -210,6 +250,7 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
                 <tbody>
                   {myRequests.map((req) => (
                     <tr key={req.id}>
+                      <td className="font-mono text-xs">{req.name}</td>
                       <td>
                         <ProviderBadge provider={req.provider} />
                       </td>
