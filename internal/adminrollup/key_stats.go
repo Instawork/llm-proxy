@@ -34,6 +34,15 @@ var costMemberFields = []struct {
 	{"output_tokens", func(s *KeyCostDayStats, v float64) { s.OutputTokens = int64(v) }},
 }
 
+func applyCostField(s *KeyCostDayStats, field string, v float64) {
+	for _, spec := range costMemberFields {
+		if spec.field == field {
+			spec.apply(s, v)
+			return
+		}
+	}
+}
+
 // KeyCostDayStats reads exact fleet-wide cost counters for one key from today's
 // by_key hash (not the top-N-capped dashboard snapshot).
 func (s *Store) KeyCostDayStats(ctx context.Context, day, keyID string) (KeyCostDayStats, bool, error) {
@@ -54,6 +63,157 @@ func (s *Store) KeyCostDayStats(ctx context.Context, day, keyID string) (KeyCost
 		}
 	}
 	return out, any, nil
+}
+
+// CostDayByKey reads exact counters for every key seen today in one HGETALL.
+func (s *Store) CostDayByKey(ctx context.Context, day string) (map[string]KeyCostDayStats, error) {
+	return s.costDayDim(ctx, day, "by_key")
+}
+
+// CostDayByProvider reads exact per-provider counters for one UTC day.
+func (s *Store) CostDayByProvider(ctx context.Context, day string) (map[string]KeyCostDayStats, error) {
+	return s.costDayDim(ctx, day, "by_provider")
+}
+
+// CostDayByUser reads exact per-user-scope counters for one UTC day.
+func (s *Store) CostDayByUser(ctx context.Context, day string) (map[string]KeyCostDayStats, error) {
+	return s.costDayDim(ctx, day, "by_user")
+}
+
+func (s *Store) costDayDim(ctx context.Context, day, dim string) (map[string]KeyCostDayStats, error) {
+	if s == nil || s.be == nil {
+		return nil, nil
+	}
+	h, err := s.be.hgetall(ctx, dimKey(MetricCost, day, dim))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]KeyCostDayStats, len(h))
+	for k, v := range h {
+		member, field, ok := parseDimMemberField(k)
+		if !ok {
+			continue
+		}
+		stats := out[member]
+		applyCostField(&stats, field, v)
+		out[member] = stats
+	}
+	return out, nil
+}
+
+// MonthlySpendByKey reads the exact month-to-date spend of every key in one HGETALL.
+func (s *Store) MonthlySpendByKey(ctx context.Context, metric, month string) (map[string]float64, error) {
+	if s == nil || s.be == nil {
+		return nil, nil
+	}
+	h, err := s.be.hgetall(ctx, monthKey(metric, month))
+	if err != nil {
+		return nil, err
+	}
+	return flattenCostByKey(h), nil
+}
+
+// CostDay is one archived UTC day's cost aggregates. ByKeySpend and ByUserSpend
+// are top-N capped at archive time and omit the "other_*" remainder rows.
+type CostDay struct {
+	Day         string
+	Totals      KeyCostDayStats
+	ByKeySpend  map[string]float64
+	ByProvider  map[string]KeyCostDayStats
+	ByUserSpend map[string]float64
+}
+
+// CostDailyHistory returns the archived prior days (oldest first, up to
+// HistoryDays, today excluded) in one MGET. Days without an archive are skipped.
+func (s *Store) CostDailyHistory(ctx context.Context) ([]CostDay, error) {
+	if s == nil || s.be == nil {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	days := make([]string, 0, s.historyDays)
+	keys := make([]string, 0, s.historyDays)
+	for i := s.historyDays; i >= 1; i-- {
+		day := now.AddDate(0, 0, -i).Format("2006-01-02")
+		days = append(days, day)
+		keys = append(keys, dailyKey(MetricCost, day))
+	}
+	raw, err := s.be.mget(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CostDay, 0, len(raw))
+	for i, payload := range raw {
+		if payload == nil {
+			continue
+		}
+		var rec DayRecord
+		if err := json.Unmarshal([]byte(*payload), &rec); err != nil {
+			s.logger.Warn("admin rollup: skip corrupt record", "metric", MetricCost, "key", keys[i], "error", err)
+			continue
+		}
+		if len(rec.Data) == 0 {
+			continue
+		}
+		out = append(out, costDayFromData(days[i], rec.Data))
+	}
+	return out, nil
+}
+
+func costDayFromData(day string, data map[string]interface{}) CostDay {
+	cd := CostDay{
+		Day:         day,
+		ByKeySpend:  map[string]float64{},
+		ByProvider:  map[string]KeyCostDayStats{},
+		ByUserSpend: map[string]float64{},
+	}
+	cd.Totals = KeyCostDayStats{
+		SpendUSD:       FloatField(data, "spend_today_usd"),
+		InputSpendUSD:  FloatField(data, "input_spend_today_usd"),
+		OutputSpendUSD: FloatField(data, "output_spend_today_usd"),
+		Requests:       int64(FloatField(data, "requests_today")),
+		InputTokens:    int64(FloatField(data, "input_tokens_today")),
+		OutputTokens:   int64(FloatField(data, "output_tokens_today")),
+	}
+	if rows, ok := data["by_key"].([]interface{}); ok {
+		for _, raw := range rows {
+			row, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			id, _ := row["key_id"].(string)
+			if id == "" || id == "other_key" {
+				continue
+			}
+			cd.ByKeySpend[id] = FloatField(row, "spend_usd")
+		}
+	}
+	if rows, ok := data["by_provider"].([]interface{}); ok {
+		for _, raw := range rows {
+			row, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := row["name"].(string)
+			if name == "" {
+				continue
+			}
+			var stats KeyCostDayStats
+			for _, spec := range costMemberFields {
+				spec.apply(&stats, FloatField(row, spec.field))
+			}
+			cd.ByProvider[name] = stats
+		}
+	}
+	if users, ok := data["by_user"].(map[string]interface{}); ok {
+		for scope, raw := range users {
+			row, ok := raw.(map[string]interface{})
+			if !ok || scope == "other_user" {
+				continue
+			}
+			cd.ByUserSpend[scope] = FloatField(row, "spend_usd")
+		}
+	}
+	return cd
 }
 
 // KeyPIIDayCount reads the fleet-wide PII scan count for one key on a UTC day.
