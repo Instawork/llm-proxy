@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import {
   flexRender,
   getCoreRowModel,
+  getExpandedRowModel,
   getFilteredRowModel,
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type ExpandedState,
   type SortingState,
 } from "@tanstack/react-table";
 
@@ -22,6 +24,12 @@ interface DataTableProps<T> {
   searchable?: boolean;
   tableClassName?: string;
   initialSorting?: SortingState;
+  /**
+   * Opts a row into nested sub-rows (e.g. a stacked group). Enables expand/collapse state, leaf-aware
+   * search that keeps a parent whose child matches, and auto-expansion while a search is active.
+   * Tables that omit this behave exactly as before.
+   */
+  getSubRows?: (row: T) => T[] | undefined;
 }
 
 export default function DataTable<T>({
@@ -35,19 +43,26 @@ export default function DataTable<T>({
   searchable = true,
   tableClassName = "table table-zebra",
   initialSorting = [],
+  getSubRows,
 }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
   const [globalFilter, setGlobalFilter] = useState("");
+  const [expanded, setExpanded] = useState<ExpandedState>({});
+  const searching = Boolean(globalFilter.trim());
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter },
+    state: { sorting, globalFilter, expanded: searching ? true : expanded },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
+    onExpandedChange: setExpanded,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getExpandedRowModel: getSubRows ? getExpandedRowModel() : undefined,
+    getSubRows,
+    filterFromLeafRows: Boolean(getSubRows),
     getRowId: getRowId ? (row, index) => getRowId(row, index) : undefined,
     globalFilterFn: (row, _columnId, filter) => {
       const query = String(filter).trim().toLowerCase();
@@ -130,7 +145,16 @@ export default function DataTable<T>({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className={row.original && (row.original as { isOthers?: boolean }).isOthers ? "text-base-content/70" : undefined}>
+              <tr
+                key={row.id}
+                className={
+                  row.depth > 0
+                    ? "bg-base-200/40"
+                    : row.original && (row.original as { isOthers?: boolean }).isOthers
+                      ? "text-base-content/70"
+                      : undefined
+                }
+              >
                 {row.getVisibleCells().map((cell) => (
                   <td
                     key={cell.id}
