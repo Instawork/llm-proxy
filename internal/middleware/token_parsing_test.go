@@ -49,6 +49,79 @@ func (m *configurableProvider) ParseResponseMetadata(body io.Reader, isStreaming
 	return m.metadata, m.parseErr
 }
 
+// namedProvider is a configurableProvider registered under an arbitrary
+// provider name so route-to-provider resolution can be exercised.
+type namedProvider struct {
+	configurableProvider
+	name string
+}
+
+func (m *namedProvider) GetName() string { return m.name }
+
+// TestTokenParsingMiddleware_EndpointCoverage pins which provider paths fire
+// the metadata callbacks (and so reach cost tracking) and which pass through
+// unmetered. Every path seen in production traffic belongs here.
+func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
+	cases := []struct {
+		path    string
+		metered bool
+	}{
+		{"/openai/v1/chat/completions", true},
+		{"/openai/v1/completions", true},
+		{"/openai/v1/responses", true},
+		{"/meta/autolabel/openai/v1/responses", true},
+		{"/anthropic/v1/messages", true},
+		{"/anthropic/v1/chat/completions", true},
+		{"/meta/autolabel/anthropic/v1/messages", true},
+		{"/gemini/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/gemini/v1beta/models/gemini-3.6-flash:streamGenerateContent", true},
+		{"/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/meta/autolabel/gemini/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/gemini/v1beta/openai/chat/completions", true},
+		{"/bedrock/model/anthropic.claude-3/converse", true},
+		{"/model/anthropic.claude-3/converse-stream", true},
+		{"/bedrock-mantle/anthropic/v1/messages", true},
+		{"/meta/autolabel/bedrock-mantle/anthropic/v1/messages", true},
+
+		{"/gemini/v1beta/interactions", false},
+		{"/gemini/upload/v1beta/files", false},
+		{"/gemini/v1beta/models", false},
+		{"/anthropic/v1/models", false},
+		{"/openai/v1/models", false},
+		{"/openai/v1/realtime/client_secrets", false},
+		{"/openai/v1/audio/transcriptions", false},
+		{"/openai/v1/embeddings", false},
+		{"/bedrock/model/anthropic.claude-3/invoke", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			pm := providers.NewProviderManager()
+			for _, name := range []string{"openai", "anthropic", "gemini", "bedrock", "bedrock-mantle"} {
+				pm.RegisterProvider(&namedProvider{
+					name:                 name,
+					configurableProvider: configurableProvider{metadata: &providers.LLMResponseMetadata{Provider: name, InputTokens: 1}},
+				})
+			}
+			fired := false
+			chain := TokenParsingMiddleware(pm, func(*http.Request, *providers.LLMResponseMetadata) { fired = true })(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{}`))
+				}),
+			)
+
+			req := httptest.NewRequest("POST", tc.path, bytes.NewReader([]byte("{}")))
+			rr := httptest.NewRecorder()
+			captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+
+			if fired != tc.metered {
+				t.Fatalf("metered=%v, want %v", fired, tc.metered)
+			}
+		})
+	}
+}
+
 // driveTokenParsing wraps handler in TokenParsingMiddleware (with the given
 // configurableProvider registered), runs a JSON request against path, and
 // returns captured stdlib-log output and the response recorder.
