@@ -468,9 +468,12 @@ export interface ModelStatusStats extends StatsWithDailyHistory {
   retired_total?: number;
   deprecated_total?: number;
   unknown_total?: number;
+  unmetered_total?: number;
   by_retired?: ModelStatusNameCount[];
   by_deprecated?: ModelStatusNameCount[];
   by_unknown?: ModelStatusNameCount[];
+  /** provider:endpoint-template pairs forwarded without token metering. */
+  by_unmetered?: ModelStatusNameCount[];
 }
 
 export interface ModelStatusResponse {

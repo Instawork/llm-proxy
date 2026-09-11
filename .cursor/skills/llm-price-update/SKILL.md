@@ -1,11 +1,11 @@
 ---
 name: llm-price-update
-description: Refresh LLM provider pricing (OpenAI, Anthropic, Google Gemini) in configs/base.yml for the llm-proxy app. Use when the user asks to "update llm prices", "refresh model pricing", "sync llm-proxy pricing", "check llm pricing", "llm price update", or otherwise wants the llm-proxy pricing config audited against current vendor pricing.
+description: Refresh LLM provider pricing (OpenAI, Anthropic, Google Gemini) in configs/base.yml for the llm-proxy app and audit which vendor API endpoints the proxy meters. Use when the user asks to "update llm prices", "refresh model pricing", "sync llm-proxy pricing", "check llm pricing", "llm price update", "model audit", "endpoint audit", or otherwise wants the llm-proxy pricing config and endpoint coverage audited against current vendor docs.
 ---
 
 # llm-price-update
 
-Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) for the `llm-proxy` app against the current published prices from OpenAI, Anthropic, and Google. Produce both the pricing diff and a deprecation list.
+Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) for the `llm-proxy` app against the current published prices from OpenAI, Anthropic, and Google, and audit endpoint coverage in [internal/providers/endpoints.go](../../../internal/providers/endpoints.go) against each vendor's API reference. Produce the pricing diff, a deprecation list, and an endpoint-coverage report.
 
 ## Hard rules
 
@@ -15,6 +15,7 @@ Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) 
 4. **Always encode tiered pricing when the vendor publishes it.** This is not optional. If the vendor lists different input/output rates based on prompt length (e.g., Gemini Pro ≤200k vs >200k, Gemini 1.5 ≤128k vs >128k, Anthropic Sonnet 4.x ≤200k vs >200k), the model MUST be configured as a `PricingTier` list — never collapsed to flat `{input, output}`. Flat pricing silently under-bills long-prompt traffic.
 5. **Always consult each vendor's official deprecations page.** Do not rely on the pricing page alone — models often linger on the pricing page after sunset, and new sunsets are announced on the deprecations page first. Cross-reference every model in `configs/base.yml` against the URLs in "Vendor URLs" below, and surface any retired/sunset model in the deprecations output.
 6. **Always produce a deprecations list** alongside the pricing diff so it can be consumed by downstream callers (e.g., client UI, docs). See "Deprecation output" below.
+7. **Always audit endpoint coverage.** A model whose price is right is still billed at $0 if the request path is not in the metered list of `internal/providers/endpoints.go`. Every run diffs the vendor API reference against that registry and checks live traffic for unmetered paths (see "Step 4b"). This is how the Gemini Interactions API ran unbilled for a day: the model was known, the endpoint was not.
 
 ## Workflow
 
@@ -23,10 +24,11 @@ Copy this checklist at the start of a run:
 ```text
 Task progress:
 - [ ] 1. Read configs/base.yml to capture current pricing and models
-- [ ] 2. Dispatch 3 parallel subagents (OpenAI, Anthropic, Google), each reading BOTH the pricing page AND the deprecations page
+- [ ] 2. Dispatch 3 parallel subagents (OpenAI, Anthropic, Google), each reading the pricing page, the deprecations page, AND the API reference index
 - [ ] 3. Verify surprising findings with direct WebSearch
 - [ ] 4. Diff vendor data against configs/base.yml (pricing + deprecations)
-- [ ] 5. Build pricing changeset + deprecations list (including shutdown models to remove)
+- [ ] 4b. Diff vendor endpoints against internal/providers/endpoints.go; check by_unmetered and Datadog for live unmetered traffic
+- [ ] 5. Build pricing changeset + deprecations list + endpoint-coverage report
 - [ ] 6. Present plan (or apply, depending on mode)
 - [ ] 7. Run `go run ./cmd/config-validator/` after editing
 - [ ] 8. Run `go test ./internal/config/...` after editing
@@ -63,17 +65,19 @@ Prompt skeleton (adapt per provider):
 >
 > **Table 2 — deprecations.** Every model on the vendor's official deprecations page, including models NOT currently in our config. Columns: model, status (deprecated / shutdown / legacy), sunset_date (ISO or null), replaced_by, source URL, notes.
 >
-> Format both tables as compact markdown tables. If a model appears on the pricing page but NOT the deprecations page, treat it as active. If it appears on the deprecations page but NOT the pricing page, treat it as sunset and include it only in Table 2.
+> **Table 3 — inference endpoints.** From the API reference index, every HTTP endpoint that consumes or produces billable tokens (chat, responses, messages, generateContent, interactions, embeddings, batch, count-tokens, and anything new). Columns: method + path, billable (yes / no / async), streaming shape (SSE event name that carries usage, or "n/a"), where usage lives in the response, introduced (date if the changelog says so).
+>
+> Format the tables as compact markdown tables. If a model appears on the pricing page but NOT the deprecations page, treat it as active. If it appears on the deprecations page but NOT the pricing page, treat it as sunset and include it only in Table 2.
 
-Vendor URLs — the subagent MUST read **both** the pricing page and the deprecations page for its provider:
+Vendor URLs — the subagent MUST read the pricing page, the deprecations page, and the API reference index for its provider:
 
-| Provider | Pricing | Deprecations | Secondary |
-|---|---|---|---|
-| OpenAI | `https://platform.openai.com/docs/pricing` | `https://developers.openai.com/api/docs/deprecations` | `https://openai.com/api/pricing/` |
-| Anthropic | `https://docs.anthropic.com/en/docs/about-claude/pricing` | `https://platform.claude.com/docs/en/about-claude/model-deprecations` | `https://www.anthropic.com/pricing` |
-| Google | `https://ai.google.dev/gemini-api/docs/pricing` | `https://ai.google.dev/gemini-api/docs/deprecations` | `https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions` |
+| Provider | Pricing | Deprecations | API reference | Secondary |
+|---|---|---|---|---|
+| OpenAI | `https://platform.openai.com/docs/pricing` | `https://developers.openai.com/api/docs/deprecations` | `https://platform.openai.com/docs/api-reference` | `https://openai.com/api/pricing/` |
+| Anthropic | `https://docs.anthropic.com/en/docs/about-claude/pricing` | `https://platform.claude.com/docs/en/about-claude/model-deprecations` | `https://platform.claude.com/docs/en/api/overview` | `https://www.anthropic.com/pricing` |
+| Google | `https://ai.google.dev/gemini-api/docs/pricing` | `https://ai.google.dev/gemini-api/docs/deprecations` | `https://ai.google.dev/api` and `https://ai.google.dev/gemini-api/docs/changelog` | `https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions` |
 
-The deprecations page is authoritative for sunset dates and replacements. The pricing page is authoritative for current rates. Both must be read.
+The deprecations page is authoritative for sunset dates and replacements. The pricing page is authoritative for current rates. The API reference is authoritative for which paths exist. All must be read.
 
 ### Step 3. Verify surprising findings
 
@@ -93,6 +97,16 @@ For each provider section of `configs/base.yml`, categorize every model:
 | Listed as deprecated on vendor page but pricing page still shows it | Keep in config, add to deprecations list with `sunset_date` if known |
 
 Reuse the `limits` block of a similar existing model rather than inventing new rate-limit numbers — e.g., a new flagship uses the same limits as the previous flagship.
+
+### Step 4b. Endpoint coverage
+
+The proxy only bills paths that `ClassifyEndpoint` in `internal/providers/endpoints.go` returns as `EndpointMetered`; known non-billable paths are `EndpointPassthrough`; anything else is `EndpointUnknown` and is forwarded unbilled. Three sources feed this step:
+
+1. **Vendor API reference (Table 3 from the subagents).** For every billable endpoint, check whether its path suffix is in `meteredSuffixes`. A billable endpoint missing from the list is a `new-endpoint` finding. A non-billable endpoint missing from `passthroughSuffixes`/`passthroughSegments` is a `new-passthrough` finding.
+2. **Live proxy counters.** `GET https://llm.instawork.com/admin/api/model-status` returns `unmetered_total` and `by_unmetered` (`provider:/path/template` → calls today, with daily history when Redis is on). The same data is on the admin Model Status page under "Unmetered endpoint calls". Anything non-zero here is a finding regardless of what the docs say.
+3. **Datadog ELB logs (14 days).** Aggregate `service:elb "llm.instawork.com"` by `http.url_details.path` and compare every provider path against the registry; the Datadog MCP `aggregate_events` tool does this in one call. This catches paths that only the newest client SDK uses.
+
+For each `new-endpoint`, the fix is code, not config: add the suffix to `meteredSuffixes`, add a `looksLike…`/`parse…` branch to that provider's `ParseResponseMetadata` (and `IsStreamingRequest` if the endpoint streams), and add a fixture test plus a row in `TestTokenParsingMiddleware_EndpointCoverage`. Follow the Gemini Interactions branch in `internal/providers/gemini_interactions.go` as the template. Do not mark a billable endpoint passthrough to silence the counter.
 
 ### Step 5. Deprecation output
 
@@ -236,7 +250,8 @@ Per-snapshot override (snapshot priced differently from the alias base):
 
 ## Output format
 
-At the end of the run, produce two artifacts:
+At the end of the run, produce three artifacts:
 
 1. **Pricing changeset** — a list of edits grouped by provider, with old vs new prices. Flag each entry as `fix-stale`, `price-change`, `new-model`, `remove-shutdown`, or `no-op`.
 2. **Deprecations list** — the YAML block above, sourced from each vendor's official deprecations page. Always include it, even if empty (emit `deprecations: {openai: [], anthropic: [], gemini: []}`). Entries with `status: shutdown` SHOULD correspond to `remove-shutdown` entries in the changeset.
+3. **Endpoint coverage** — one table with a row per finding from Step 4b: provider, method + path, class today (`metered` / `passthrough` / `unknown`), evidence (vendor docs / `by_unmetered` count / Datadog 14-day count), and action (`new-endpoint` → needs a parser, `new-passthrough` → add to registry, `ok`). Always include it; if nothing is unmetered, say so explicitly with the counters that prove it.

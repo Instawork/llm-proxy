@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/Instawork/llm-proxy/internal/circuit"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -11,14 +12,16 @@ import (
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 )
 
-// ModelStatusMiddleware short-circuits requests to retired models and records
-// deprecated-model usage before forwarding to upstream providers.
+// ModelStatusMiddleware short-circuits requests to retired models, records
+// deprecated-model usage, and flags provider endpoints the proxy forwards
+// without metering, before forwarding to upstream providers.
 func ModelStatusMiddleware(
 	pm *providers.ProviderManager,
 	cfg *config.YAMLConfig,
 	recorder *modelstatusstats.Recorder,
 	metrics circuit.MetricsSink,
 ) func(http.Handler) http.Handler {
+	var loggedUnmetered sync.Map
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" || r.URL.Path == "/redact" || strings.HasPrefix(r.URL.Path, "/admin/") {
@@ -30,6 +33,15 @@ func ModelStatusMiddleware(
 			if provider == nil {
 				next.ServeHTTP(w, r)
 				return
+			}
+
+			if providers.ClassifyEndpoint(r.URL.Path) == providers.EndpointUnknown {
+				endpoint := providers.EndpointTemplate(r.URL.Path)
+				recorder.RecordUnmetered(provider.GetName(), endpoint)
+				emitMetric(metrics, "endpoint.unmetered_call", "provider:"+provider.GetName(), "endpoint:"+endpoint)
+				if _, seen := loggedUnmetered.LoadOrStore(endpoint, true); !seen {
+					proxylog.Proxy("model status: unmetered endpoint %q for provider %q; usage is not tracked", endpoint, provider.GetName())
+				}
 			}
 
 			model, _ := provider.ExtractRequestModelAndMessages(r)
@@ -66,12 +78,12 @@ func ModelStatusMiddleware(
 }
 
 func emitModelMetric(metrics circuit.MetricsSink, name, provider, model string) {
+	emitMetric(metrics, name, "provider:"+provider, "model:"+model)
+}
+
+func emitMetric(metrics circuit.MetricsSink, name string, tags ...string) {
 	if metrics == nil {
 		return
-	}
-	tags := []string{
-		"provider:" + provider,
-		"model:" + model,
 	}
 	_ = metrics.Incr(name, tags, 1)
 }
