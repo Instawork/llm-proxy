@@ -118,8 +118,9 @@ func (h *handler) globalPIIEnabled() bool {
 }
 
 // validatePIIOffPolicy applies the PII-off Bedrock rule for the current user
-// and leaves an audit line naming whoever turned redaction off for a
-// non-Bedrock key.
+// and leaves an audit line naming whoever authorized redaction off for a
+// non-Bedrock key. The key write itself may still fail afterwards; the store
+// logs the persisted change separately.
 func (h *handler) validatePIIOffPolicy(r *http.Request, provider string, redactPII *bool) error {
 	err := apikeys.ValidatePIIOffBedrockPolicy(h.globalPIIEnabled(), provider, redactPII)
 	if err == nil {
@@ -129,7 +130,7 @@ func (h *handler) validatePIIOffPolicy(r *http.Request, provider string, redactP
 	if userErr != nil || !user.CanBypassPIIOffNonBedrockPolicy {
 		return err
 	}
-	h.deps.Logger.Warn("admin: PII redaction disabled on non-Bedrock key",
+	h.deps.Logger.Warn("admin: authorized PII-off on non-Bedrock key",
 		"admin", user.Email, "provider", provider)
 	return nil
 }
