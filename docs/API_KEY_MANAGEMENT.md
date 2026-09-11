@@ -82,7 +82,7 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 - Personal keys cannot be renamed; the name is fixed at creation and mirrors the upstream credential name
 - Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
 - Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
-- Signed-in viewers resolving a share link must own the underlying key; unsigned share URLs continue to work as capability links
+- Share links are capability URLs: anyone holding the link (signed in or not, any role) can resolve it
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
