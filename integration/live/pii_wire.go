@@ -224,6 +224,65 @@ func (p *ProxyClient) GeminiChatRepeatEmail(ctx context.Context, apiKey, email s
 	}, geminiAssistantContent)
 }
 
+// GeminiInteractionsWithPIIScrub posts to the Gemini Interactions API
+// (POST /v1beta/interactions) with a bare-string input and returns the raw
+// response body; streaming is selected by the top-level "stream" field.
+func (p *ProxyClient) GeminiInteractionsWithPIIScrub(ctx context.Context, apiKey, userMessage string, stream bool) (*ProxyResponse, []byte, error) {
+	payload := map[string]any{
+		"model": geminiWireRestoreModel,
+		"input": userMessage,
+	}
+	if stream {
+		payload["stream"] = true
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, data, err := p.http.DoRaw(ctx, "POST", "/gemini/v1beta/interactions", body, map[string]string{
+		"x-goog-api-key": apiKey,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	pr := ProxyResponse{Status: resp.StatusCode, Headers: resp.Header.Clone(), Trailer: resp.Trailer.Clone()}
+	return &pr, data, nil
+}
+
+func geminiInteractionsModelOutput(body []byte) (string, error) {
+	var root struct {
+		Steps []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return "", err
+	}
+	for _, step := range root.Steps {
+		if step.Type != "model_output" {
+			continue
+		}
+		for _, c := range step.Content {
+			if c.Type == "text" {
+				return c.Text, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no model_output text in gemini interactions response")
+}
+
+// GeminiInteractionsRepeatEmail is GeminiChatRepeatEmail over the
+// Interactions API.
+func (p *ProxyClient) GeminiInteractionsRepeatEmail(ctx context.Context, apiKey, email string, stream bool) (*ProxyResponse, string, error) {
+	return p.chatRepeatEmail(ctx, apiKey, email, stream, func(ctx context.Context, apiKey, userMessage string, _ int64, stream bool) (*ProxyResponse, []byte, error) {
+		return p.GeminiInteractionsWithPIIScrub(ctx, apiKey, userMessage, stream)
+	}, geminiInteractionsModelOutput)
+}
+
 // repeatNamePromptFor asks the model to echo a PERSON-tagged name inside a
 // JSON object it constructs itself. The upstream model only ever sees the
 // MASK placeholder in place of name — it never sees the quote/newline

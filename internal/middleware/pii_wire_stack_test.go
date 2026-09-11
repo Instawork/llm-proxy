@@ -73,6 +73,26 @@ func TestProductionPIIWireStack_RestoresMaskEmail(t *testing.T) {
 			streaming:   true,
 			responseFmt: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"%s\"}]}}]}\n\n",
 		},
+		{
+			name:        "gemini-interactions-non-streaming",
+			path:        "/gemini/v1beta/interactions",
+			responseFmt: `{"object":"interaction","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"%s"}]}]}`,
+		},
+		{
+			name:        "gemini-interactions-streaming",
+			path:        "/gemini/v1beta/interactions",
+			streaming:   true,
+			requestBody: `{"model":"gemini-2.5-flash","stream":true,"input":"hi"}`,
+			responseFmt: "event: step.delta\ndata: {\"event_type\":\"step.delta\",\"index\":1,\"delta\":{\"type\":\"text\",\"text\":\"%s\"}}\n\n",
+		},
+		{
+			name:        "gemini-interactions-streaming-split",
+			path:        "/gemini/v1beta/interactions",
+			streaming:   true,
+			splitChunk:  true,
+			requestBody: `{"model":"gemini-2.5-flash","stream":true,"input":"hi"}`,
+			responseFmt: "event: step.delta\ndata: {\"event_type\":\"step.delta\",\"index\":1,\"delta\":{\"type\":\"text\",\"text\":\"%s\"}}\n\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -141,6 +161,8 @@ func TestPIIRedactWireStack_EndToEnd(t *testing.T) {
 		wireStackOpenAICase(),
 		wireStackAnthropicCase(),
 		wireStackGeminiCase(),
+		wireStackGeminiInteractionsCase(),
+		wireStackGeminiInteractionsToolCase(),
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,6 +244,16 @@ func TestPIIRedactWireStack_MiddleGroundNamePolicy(t *testing.T) {
 		func() wireStackProviderCase {
 			c := wireStackGeminiCase()
 			c.requestBody = wireStackGeminiNamePrompt(prompt)
+			return c
+		}(),
+		func() wireStackProviderCase {
+			c := wireStackGeminiInteractionsCase()
+			c.requestBody = wireStackGeminiInteractionsNamePrompt(prompt)
+			return c
+		}(),
+		func() wireStackProviderCase {
+			c := wireStackGeminiInteractionsToolCase()
+			c.requestBody = wireStackGeminiInteractionsToolNamePrompt(prompt)
 			return c
 		}(),
 	}

@@ -112,6 +112,48 @@ func wireStackGeminiCase() wireStackProviderCase {
 	}
 }
 
+func wireStackGeminiInteractionsResponse(echo string) string {
+	return fmt.Sprintf(
+		`{"object":"interaction","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"%s"}]}]}`,
+		echo,
+	)
+}
+
+// wireStackGeminiInteractionsCase covers the Interactions API's simplest
+// shape: a bare-string `input`.
+func wireStackGeminiInteractionsCase() wireStackProviderCase {
+	return wireStackProviderCase{
+		name: "gemini-interactions",
+		path: "/gemini/v1beta/interactions",
+		requestBody: func(email string) string {
+			return fmt.Sprintf(
+				`{"model":"gemini-2.5-flash","input":"My email is %s. Reply with ONLY that email."}`,
+				email,
+			)
+		},
+		upstreamText: geminiInteractionsInputFromBody,
+		responseBody: wireStackGeminiInteractionsResponse,
+	}
+}
+
+// wireStackGeminiInteractionsToolCase puts the PII under an arbitrary leaf
+// key of a function_result payload, which only the ScrubJSONValue blob rule
+// can reach.
+func wireStackGeminiInteractionsToolCase() wireStackProviderCase {
+	return wireStackProviderCase{
+		name: "gemini-interactions-tool-result",
+		path: "/gemini/v1beta/interactions",
+		requestBody: func(email string) string {
+			return fmt.Sprintf(
+				`{"model":"gemini-2.5-flash","input":[{"type":"function_call","id":"fc1","name":"lookup","arguments":{"q":"latest"}},{"type":"function_result","call_id":"fc1","result":{"note":"My email is %s. Reply with ONLY that email."}}]}`,
+				email,
+			)
+		},
+		upstreamText: geminiInteractionsToolResultNoteFromBody,
+		responseBody: wireStackGeminiInteractionsResponse,
+	}
+}
+
 func userContentFromChatBody(body []byte) string {
 	var root struct {
 		Messages []struct {
@@ -140,6 +182,35 @@ func geminiUserTextFromBody(body []byte) string {
 		return ""
 	}
 	return root.Contents[0].Parts[0].Text
+}
+
+func geminiInteractionsInputFromBody(body []byte) string {
+	var root struct {
+		Input string `json:"input"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return ""
+	}
+	return root.Input
+}
+
+func geminiInteractionsToolResultNoteFromBody(body []byte) string {
+	var root struct {
+		Input []struct {
+			Result struct {
+				Note string `json:"note"`
+			} `json:"result"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return ""
+	}
+	for _, step := range root.Input {
+		if step.Result.Note != "" {
+			return step.Result.Note
+		}
+	}
+	return ""
 }
 
 type wireDetection struct {
@@ -204,6 +275,21 @@ func wireStackGeminiNamePrompt(prompt string) func(string) string {
 	return func(_ string) string {
 		return fmt.Sprintf(
 			`{"contents":[{"parts":[{"text":%q}]}]}`,
+			prompt,
+		)
+	}
+}
+
+func wireStackGeminiInteractionsNamePrompt(prompt string) func(string) string {
+	return func(_ string) string {
+		return fmt.Sprintf(`{"model":"gemini-2.5-flash","input":%q}`, prompt)
+	}
+}
+
+func wireStackGeminiInteractionsToolNamePrompt(prompt string) func(string) string {
+	return func(_ string) string {
+		return fmt.Sprintf(
+			`{"model":"gemini-2.5-flash","input":[{"type":"function_result","call_id":"fc1","result":{"note":%q}}]}`,
 			prompt,
 		)
 	}
