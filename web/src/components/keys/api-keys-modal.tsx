@@ -7,6 +7,7 @@ import {
   providerNeedsUpstreamKey,
   tomorrowDateString,
 } from "../../lib/key-form";
+import { isPersonalKey } from "../../lib/format";
 import type { APIKey, Provider } from "../../types";
 import { ProviderLabel, ProviderSelect } from "../ui/page-header";
 
@@ -266,6 +267,7 @@ export default function ApiKeysModal({
                   rows={2}
                   placeholder="What is this key used for?"
                   value={form.description}
+                  disabled={Boolean(editingKey && isPersonalKey(editingKey))}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -273,6 +275,11 @@ export default function ApiKeysModal({
                     }))
                   }
                 />
+                {editingKey && isPersonalKey(editingKey) ? (
+                  <span className="label-text-alt mt-1 text-base-content/60">
+                    Personal keys can&apos;t be renamed.
+                  </span>
+                ) : null}
               </label>
 
               {!editingKey || canManagePolicy ? (

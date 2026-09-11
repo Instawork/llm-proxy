@@ -41,6 +41,7 @@ import {
   VIEWER_PROVIDERS,
   type KeyFormState,
 } from "../../lib/key-form";
+import { isPersonalKey } from "../../lib/format";
 import { permissions } from "../../lib/permissions";
 import {
   useBYOKeys,
@@ -440,17 +441,18 @@ export default function KeysPage() {
 
     try {
       if (editingKey) {
+        const canRename = !isPersonalKey(editingKey);
         if (!canManagePolicy) {
           await updateKey.mutateAsync({
             key: editingKey.key,
-            body: { description: form.description },
+            body: canRename ? { description: form.description } : {},
           });
           push("Key updated", "success");
         } else {
           await updateKey.mutateAsync({
             key: editingKey.key,
             body: {
-              description: form.description,
+              ...(canRename ? { description: form.description } : {}),
               daily_cost_limit: dailyCostLimit,
               monthly_cost_limit: monthlyCostLimit,
               enabled: form.enabled,

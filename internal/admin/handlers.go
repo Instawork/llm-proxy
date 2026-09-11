@@ -340,6 +340,11 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Description != nil && !permissions.CanRenameKey(existing) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "personal keys cannot be renamed"})
+		return
+	}
+
 	if !permissions.UpdateKeyPolicyFieldsAllowed(role) {
 		if req.Enabled != nil || req.DailyCostLimit != nil || req.MonthlyCostLimit != nil || req.Tags != nil || req.RedactPII.Defined ||
 			req.RateLimitRPM != nil || req.RateLimitTPM != nil || req.RateLimitRPD != nil || req.RateLimitTPD != nil || req.ExpiresAt.Defined {

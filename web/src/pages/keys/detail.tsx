@@ -273,7 +273,7 @@ export default function KeyDetailPage() {
           ) : (
             <span className="inline-flex flex-wrap items-center gap-2">
               <span>{title}</span>
-              {keyRecord && !notFound ? (
+              {keyRecord && !notFound && !isPersonal ? (
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs text-base-content/60"
