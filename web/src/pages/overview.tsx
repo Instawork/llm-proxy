@@ -10,7 +10,7 @@ import { LiveStat, SectionPanel } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
 import { SpendOverview } from "../components/ui/spend-breakdown";
 import { useSpendOverview } from "../hooks/queries";
-import { formatCount, formatMonthYear, formatUsd, scopeLabel } from "../lib/format";
+import { compact, formatCount, formatMonthYear, formatUsd, scopeLabel } from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
 import { CAVEAT_COPY, SPEND_KEY_CARD_LIMIT, UNMETERED_HELP, sortBySpend } from "../lib/spend-overview";
 import type { SpendOverviewResponse, SpendProviderRow, SpendUserRow } from "../types";
@@ -97,8 +97,8 @@ export default function OverviewPage() {
         />
         <LiveStat
           title="Tokens today"
-          value={`${formatCount(data.totals.today.input_tokens)} / ${formatCount(data.totals.today.output_tokens)}`}
-          hint="input / output"
+          value={compact(data.totals.today.input_tokens + data.totals.today.output_tokens)}
+          hint={`${compact(data.totals.today.input_tokens)} in · ${compact(data.totals.today.output_tokens)} out`}
           source={data.totals.today.source}
         />
         <LiveStat title={mine ? "Your keys" : "Keys"} value={keys.length} hint="tracked" source="dynamodb" />
