@@ -446,6 +446,27 @@ func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, by
 	}
 }
 
+// unmeteredDataFromAggregates shapes unmetered-request hashes: by_key fields
+// are "<key_id>|<endpoint>" so the result nests key → endpoint → count.
+func unmeteredDataFromAggregates(totals map[string]float64, byEndpoint, byKey map[string]float64) map[string]interface{} {
+	byKeyOut := make(map[string]map[string]int64)
+	for k, v := range byKey {
+		member, endpoint, ok := parseDimMemberField(k)
+		if !ok {
+			continue
+		}
+		if byKeyOut[member] == nil {
+			byKeyOut[member] = make(map[string]int64)
+		}
+		byKeyOut[member][endpoint] = int64(v)
+	}
+	return map[string]interface{}{
+		"requests_today": int64(totals["requests"]),
+		"by_endpoint":    kvFromNameVals(topNMap(byEndpoint, 0)),
+		"by_key":         byKeyOut,
+	}
+}
+
 func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason map[string]float64) map[string]interface{} {
 	byProvOut := make(map[string]int64, len(byProvider))
 	for k, v := range byProvider {

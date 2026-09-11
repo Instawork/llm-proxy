@@ -584,6 +584,18 @@ export interface KeyPIIRecentEvent {
   outcome: "ok" | "fail_open" | "fail_closed" | "oversize";
 }
 
+export interface UnmeteredEndpoint {
+  endpoint: string;
+  requests: number;
+}
+
+/** Provider requests that returned no token usage, so no spend was recorded. */
+export interface UnmeteredStats {
+  source: "memory" | "redis";
+  requests: number;
+  endpoints: UnmeteredEndpoint[];
+}
+
 export interface KeyStatsResponse {
   masked_key_id: string;
   day: string;
@@ -592,12 +604,72 @@ export interface KeyStatsResponse {
   cost_today: KeyCostStats;
   cost_month: KeyCostMonthStats;
   pii_today: KeyPIIStats;
+  unmetered_today: UnmeteredStats;
   rate_usage?: KeyRateUsageStats[];
   rate_backend?: string;
   cost_history: KeyDayPoint[];
   pii_history: KeyDayPoint[];
   recent_cost: KeyCostRecentEvent[];
   recent_pii: KeyPIIRecentEvent[];
+}
+
+export interface SpendCap {
+  period: "monthly" | "daily";
+  cents: number;
+}
+
+export interface SpendKeyRow {
+  key_id: string;
+  provider: Provider;
+  description: string;
+  owner_email?: string;
+  enabled: boolean;
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+  cap?: SpendCap;
+  unmetered: UnmeteredStats;
+}
+
+export interface SpendProviderRow {
+  name: string;
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+}
+
+export interface SpendUserRow {
+  scope: string;
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+}
+
+export interface SpendDayPoint {
+  day: string;
+  spend_usd: number;
+}
+
+export interface SpendTotals {
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+}
+
+export type SpendCaveat = "rollup_off" | "history_top_n" | "provider_month_partial";
+
+export interface SpendOverviewResponse {
+  scope: "mine" | "fleet";
+  day: string;
+  month: string;
+  rollup_available: boolean;
+  rollup_backend?: string;
+  totals: SpendTotals;
+  keys: SpendKeyRow[];
+  providers: SpendProviderRow[];
+  history: SpendDayPoint[];
+  fleet?: {
+    users: SpendUserRow[];
+    unattributed: SpendTotals;
+  };
+  unmetered: UnmeteredStats;
+  caveats: SpendCaveat[];
 }
 
 export interface BYOBanRecord {

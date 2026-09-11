@@ -22,6 +22,7 @@ const (
 	ShareKey          Permission = "share_key"
 	Provisioning      Permission = "provisioning"
 	KeyStats          Permission = "key_stats"
+	SpendOverview     Permission = "spend_overview"
 	ManageUsers       Permission = "manage_users"
 	ManageBYO         Permission = "manage_byo"
 	ListKeyRequests   Permission = "list_key_requests"
@@ -51,6 +52,7 @@ var minRole = map[Permission]adminusers.Role{
 	ShareKey:          adminusers.RoleViewer,
 	Provisioning:      adminusers.RoleViewer,
 	KeyStats:          adminusers.RoleViewer,
+	SpendOverview:     adminusers.RoleViewer,
 	ManageUsers:       adminusers.RoleAdmin,
 	ManageBYO:         adminusers.RoleAdmin,
 	ListKeyRequests:   adminusers.RoleAdmin,
@@ -82,7 +84,7 @@ func Can(role adminusers.Role, p Permission) bool {
 	case CreateKeyRequest:
 		return role == adminusers.RoleViewer || role == adminusers.RoleEditor
 	case ListKeys, CreateKey, GetKey, UpdateKey, ShareKey, Provisioning, KeyStats,
-		ListMyKeyRequests, UpdateKeyDescription, DeleteOwnKey:
+		SpendOverview, ListMyKeyRequests, UpdateKeyDescription, DeleteOwnKey:
 		return role.AtLeast(adminusers.RoleViewer)
 	default:
 		return false

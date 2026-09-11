@@ -125,3 +125,101 @@ func TestKeyPIIDailySeries(t *testing.T) {
 	require.InDelta(t, 3, series[0].Value, 1e-9)
 	require.InDelta(t, 1, series[len(series)-1].Value, 1e-9)
 }
+
+func TestCostDayBulkReads(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	day := time.Now().UTC().Format("2006-01-02")
+	const keyA, keyB = "iw:aaa…00000001", "iw:bbb…00000002"
+
+	require.NoError(t, store.ApplyDelta(ctx, MetricCost, day, Delta{
+		Totals: map[string]float64{"spend_usd": 3.0},
+		Dimensions: map[string]map[string]float64{
+			"by_key": {
+				dimMemberField(keyA, "spend_usd"): 1.0,
+				dimMemberField(keyA, "requests"):  2,
+				dimMemberField(keyB, "spend_usd"): 2.0,
+			},
+			"by_provider": {
+				dimMemberField("openai", "spend_usd"):    1.0,
+				dimMemberField("openai", "input_tokens"): 500,
+				dimMemberField("anthropic", "spend_usd"): 2.0,
+			},
+			"by_user": {dimMemberField("user:u1", "spend_usd"): 3.0},
+		},
+	}))
+
+	byKey, err := store.CostDayByKey(ctx, day)
+	require.NoError(t, err)
+	require.Len(t, byKey, 2)
+	require.InDelta(t, 1.0, byKey[keyA].SpendUSD, 1e-9)
+	require.Equal(t, int64(2), byKey[keyA].Requests)
+	require.InDelta(t, 2.0, byKey[keyB].SpendUSD, 1e-9)
+
+	byProv, err := store.CostDayByProvider(ctx, day)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), byProv["openai"].InputTokens)
+	require.InDelta(t, 2.0, byProv["anthropic"].SpendUSD, 1e-9)
+
+	byUser, err := store.CostDayByUser(ctx, day)
+	require.NoError(t, err)
+	require.InDelta(t, 3.0, byUser["user:u1"].SpendUSD, 1e-9)
+
+	empty, err := store.CostDayByKey(ctx, "1999-01-01")
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
+func TestMonthlySpendByKey(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	const month = "2026-06"
+
+	require.NoError(t, store.ApplyMonthlyKeySpend(ctx, MetricCost, month, "iw:abc", 1.25))
+	require.NoError(t, store.ApplyMonthlyKeySpend(ctx, MetricCost, month, "iw:abc", 1.25))
+	require.NoError(t, store.ApplyMonthlyKeySpend(ctx, MetricCost, month, "iw:def", 0.5))
+
+	got, err := store.MonthlySpendByKey(ctx, MetricCost, month)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.InDelta(t, 2.5, got["iw:abc"], 1e-9)
+	require.InDelta(t, 0.5, got["iw:def"], 1e-9)
+}
+
+func TestCostDailyHistoryParsesArchives(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	twoDaysAgo := now.AddDate(0, 0, -2).Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+
+	// Archive the shape ArchiveDailyFromAggregates produces, including the
+	// top-N remainder rows that must not surface as members.
+	archived := costDataFromAggregates(
+		map[string]float64{"spend_usd": 4.5, "requests": 7},
+		map[string]float64{dimMemberField("openai", "spend_usd"): 4.5, dimMemberField("openai", "requests"): 7},
+		map[string]float64{
+			dimMemberField("iw:a", "spend_usd"): 3.0,
+			dimMemberField("iw:b", "spend_usd"): 1.0,
+			dimMemberField("iw:c", "spend_usd"): 0.5,
+		},
+		map[string]float64{dimMemberField("user:u1", "spend_usd"): 4.5},
+		TopNCaps{ByKey: 2, ByUser: 100},
+	)
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, yesterday, archived))
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, today, map[string]interface{}{"spend_today_usd": 9.0}))
+
+	history, err := store.CostDailyHistory(ctx)
+	require.NoError(t, err)
+	require.Len(t, history, 1, "only archived prior days; today and %s have no archive", twoDaysAgo)
+
+	day := history[0]
+	require.Equal(t, yesterday, day.Day)
+	require.InDelta(t, 4.5, day.Totals.SpendUSD, 1e-9)
+	require.Equal(t, int64(7), day.Totals.Requests)
+	require.Equal(t, map[string]float64{"iw:a": 3.0, "iw:b": 1.0}, day.ByKeySpend)
+	require.InDelta(t, 4.5, day.ByProvider["openai"].SpendUSD, 1e-9)
+	require.Equal(t, int64(7), day.ByProvider["openai"].Requests)
+	require.Equal(t, map[string]float64{"user:u1": 4.5}, day.ByUserSpend)
+}

@@ -77,6 +77,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/circuit-activity", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handleCircuitActivity)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/rate-limits", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handleRateLimits)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/cost", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handleCost)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/spend-overview", roleHandler(auth, permissions.MinRole(permissions.SpendOverview), h.handleSpendOverview)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/usage", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handleUsage)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/pii", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handlePII)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/model-status", roleHandler(auth, permissions.MinRole(permissions.ViewMonitoring), h.handleModelStatus)).Methods(http.MethodGet, http.MethodOptions)

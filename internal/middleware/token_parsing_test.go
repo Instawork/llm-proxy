@@ -1263,3 +1263,49 @@ func TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary(t *te
 		t.Errorf("expected per-chunk pacing logs; got %s", logOut)
 	}
 }
+
+// ─── TokenParsingMiddleware: unmetered callback ─────────────────────────
+
+func TestTokenParsingMiddleware_UnmeteredCallback(t *testing.T) {
+	metered := &providers.LLMResponseMetadata{Provider: "openai", Model: "gpt-4o", TotalTokens: 12}
+	cases := map[string]struct {
+		method     string
+		path       string
+		provider   *configurableProvider
+		status     int
+		wantCalls  int
+		wantStatus int
+	}{
+		"non-api endpoint":          {"POST", "/openai/v1/embeddings", &configurableProvider{metadata: metered}, 200, 1, 200},
+		"metered chat call":         {"POST", "/openai/v1/chat/completions", &configurableProvider{metadata: metered}, 200, 0, 0},
+		"failed chat call":          {"POST", "/openai/v1/chat/completions", &configurableProvider{parseErr: errors.New("boom")}, 401, 1, 401},
+		"usage-less chat response":  {"POST", "/openai/v1/chat/completions", &configurableProvider{metadata: &providers.LLMResponseMetadata{Provider: "openai"}}, 200, 1, 200},
+		"cors preflight is ignored": {"OPTIONS", "/openai/v1/embeddings", &configurableProvider{metadata: metered}, 204, 0, 0},
+		"late WriteHeader ignored":  {"POST", "/openai/v1/embeddings", &configurableProvider{metadata: metered}, 0, 1, 200},
+		"non-provider route":        {"GET", "/health", &configurableProvider{metadata: metered}, 200, 0, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			pm := providers.NewProviderManager()
+			pm.RegisterProvider(tc.provider)
+			calls, gotStatus := 0, 0
+			onUnmetered := func(_ *http.Request, status int) { calls++; gotStatus = status }
+			chain := TokenParsingMiddlewareWithUnmetered(pm, onUnmetered)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status == 0 { // body first commits 200; the later status must not win
+					_, _ = w.Write([]byte("{}"))
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				w.WriteHeader(tc.status)
+			}))
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewReader([]byte("{}")))
+			_ = captureLogOutput(func() { chain.ServeHTTP(httptest.NewRecorder(), req) })
+			if calls != tc.wantCalls {
+				t.Fatalf("unmetered calls = %d, want %d", calls, tc.wantCalls)
+			}
+			if gotStatus != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", gotStatus, tc.wantStatus)
+			}
+		})
+	}
+}

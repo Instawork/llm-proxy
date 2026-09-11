@@ -14,7 +14,11 @@ export function decodeKeyRouteParam(param: string): string {
 
 /** Safe dashboard URL for a proxy key (masked id, not the secret). */
 export function keyDetailPath(key: string): string {
-  return `/keys/${encodeKeyRouteParam(maskKeyId(key))}`;
+  return keyDetailPathForMaskedId(maskKeyId(key));
+}
+
+export function keyDetailPathForMaskedId(maskedId: string): string {
+  return `/keys/${encodeKeyRouteParam(maskedId)}`;
 }
 
 /** Share-style setup / how-to-use page for a proxy key. */

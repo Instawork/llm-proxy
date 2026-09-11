@@ -10,11 +10,12 @@ export type NavItem = {
 };
 
 export const MONITORING_NAV: NavItem[] = [
-  { to: "/", label: "Overview", minRole: "editor" },
+  { to: "/", label: "Overview", minRole: "viewer" },
+  { to: "/health", label: "Health", minRole: "editor" },
   { to: "/usage", label: "Usage", minRole: "editor" },
   { to: "/circuit", label: "Circuit Breaker", minRole: "editor" },
   { to: "/rate-limits", label: "Rate Limits", minRole: "editor" },
-  { to: "/cost", label: "Cost Tracking", minRole: "editor" },
+  { to: "/cost", label: "Cost details", minRole: "editor" },
   { to: "/pii", label: "PII Redaction", minRole: "editor" },
   { to: "/model-status", label: "Model Status", minRole: "editor" },
 ];
@@ -39,11 +40,8 @@ export function navItemsForRole(role: AdminRole) {
 }
 
 export function defaultPathForRole(role: AdminRole): string {
-  if (role === "viewer") {
-    return "/keys";
-  }
   const { monitoring } = navItemsForRole(role);
-  return monitoring[0]?.to ?? "/usage";
+  return monitoring[0]?.to ?? "/";
 }
 
 export function minRoleForPath(pathname: string): AdminRole | null {
