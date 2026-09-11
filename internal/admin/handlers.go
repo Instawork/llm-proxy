@@ -819,15 +819,6 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user, err := h.auth.currentUser(r); err == nil {
-		if role, roleErr := adminusers.ParseRole(user.Role); roleErr == nil && role == adminusers.RoleViewer {
-			if !strings.EqualFold(record.OwnerEmail, user.Email) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-				return
-			}
-		}
-	}
-
 	// Audit every successful resolution of a public share link. The link hands
 	// out a working credential, so we record who pulled it (client IP), which
 	// link, and the redacted key — never the raw secret.
