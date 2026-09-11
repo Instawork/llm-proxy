@@ -25,6 +25,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleViewer, CreateKeyRequest, true},
 		{adminusers.RoleViewer, ShareKey, true},
 		{adminusers.RoleViewer, DeleteOwnKey, true},
+		{adminusers.RoleViewer, SpendOverview, true},
 		{adminusers.RoleViewer, ViewMonitoring, false},
 		{adminusers.RoleViewer, UpdateKeyPolicy, false},
 		{adminusers.RoleViewer, ViewAllOrgKeys, false},
@@ -82,6 +83,7 @@ func TestMinRoleRouteMatrix(t *testing.T) {
 		{ViewConfig, adminusers.RoleEditor},
 		{ListKeys, adminusers.RoleViewer},
 		{CreateKey, adminusers.RoleViewer},
+		{SpendOverview, adminusers.RoleViewer},
 		{ManageUsers, adminusers.RoleAdmin},
 		{ManageBYO, adminusers.RoleAdmin},
 		{ListKeyRequests, adminusers.RoleAdmin},
@@ -158,7 +160,7 @@ func TestRequiresAutoProvisionMatrix(t *testing.T) {
 func TestAllRoutePermissionsHaveMinRole(t *testing.T) {
 	routePermissions := []Permission{
 		ViewMonitoring, ViewConfig, ListKeys, CreateKey, GetKey, UpdateKey, DeleteKey,
-		ShareKey, Provisioning, KeyStats, ManageUsers, ManageBYO, ListKeyRequests,
+		ShareKey, Provisioning, KeyStats, SpendOverview, ManageUsers, ManageBYO, ListKeyRequests,
 		CreateKeyRequest, ReviewKeyRequest, ListMyKeyRequests,
 	}
 	for _, p := range routePermissions {

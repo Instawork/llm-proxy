@@ -241,16 +241,20 @@ func memoryCostForKey(snap map[string]interface{}, masked, rawKey string) memory
 		if id != masked && id != rawKey {
 			continue
 		}
-		return memoryKeyCost{
-			SpendUSD:       asFloat(row["spend_usd"]),
-			InputSpendUSD:  asFloat(row["input_spend_usd"]),
-			OutputSpendUSD: asFloat(row["output_spend_usd"]),
-			Requests:       int64(asFloat(row["requests"])),
-			InputTokens:    int64(asFloat(row["input_tokens"])),
-			OutputTokens:   int64(asFloat(row["output_tokens"])),
-		}
+		return memoryCostFromRow(row)
 	}
 	return memoryKeyCost{}
+}
+
+func memoryCostFromRow(row map[string]interface{}) memoryKeyCost {
+	return memoryKeyCost{
+		SpendUSD:       asFloat(row["spend_usd"]),
+		InputSpendUSD:  asFloat(row["input_spend_usd"]),
+		OutputSpendUSD: asFloat(row["output_spend_usd"]),
+		Requests:       int64(asFloat(row["requests"])),
+		InputTokens:    int64(asFloat(row["input_tokens"])),
+		OutputTokens:   int64(asFloat(row["output_tokens"])),
+	}
 }
 
 func memoryPIIForKey(summary func() map[string]interface{}, masked string) int64 {
