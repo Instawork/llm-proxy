@@ -197,6 +197,14 @@ func TestIntegration_PIIWireMode_GeminiScrubAndRestore_EndToEnd(t *testing.T) {
 	testIntegrationPIIWireModeScrubAndRestore(t, wireStackGeminiCase())
 }
 
+func TestIntegration_PIIWireMode_GeminiInteractionsScrubAndRestore_EndToEnd(t *testing.T) {
+	testIntegrationPIIWireModeScrubAndRestore(t, wireStackGeminiInteractionsCase())
+}
+
+func TestIntegration_PIIWireMode_GeminiInteractionsToolResultScrubAndRestore_EndToEnd(t *testing.T) {
+	testIntegrationPIIWireModeScrubAndRestore(t, wireStackGeminiInteractionsToolCase())
+}
+
 func testIntegrationPIIWireModeScrubAndRestore(t *testing.T, tc wireStackProviderCase) {
 	t.Helper()
 	analyzerURL := requirePresidioForMiddleware(t)

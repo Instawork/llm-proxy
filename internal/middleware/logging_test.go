@@ -435,7 +435,14 @@ func TestLoggingMiddleware_ProviderHelperFunctions(t *testing.T) {
 		{"Messages endpoint", "/anthropic/v1/messages", true, isAPIEndpoint},
 		{"Generate content endpoint", "/gemini/v1/models/test:generateContent", true, isAPIEndpoint},
 		{"Stream generate content endpoint", "/gemini/v1/models/test:streamGenerateContent", true, isAPIEndpoint},
+		{"Interactions endpoint", "/gemini/v1beta/interactions", true, isAPIEndpoint},
+		// Unmetered but prompt-bearing: must stay PII-eligible.
+		{"Anthropic count_tokens endpoint", "/anthropic/v1/messages/count_tokens", true, isAPIEndpoint},
+		{"Anthropic batches endpoint", "/anthropic/v1/messages/batches", true, isAPIEndpoint},
+		{"Bedrock invoke endpoint", "/bedrock/model/anthropic.claude-3/invoke", true, isAPIEndpoint},
 		{"Models endpoint", "/openai/v1/models", false, isAPIEndpoint},
+		{"Gemini count tokens endpoint", "/gemini/v1beta/models/gemini-2.5-flash:countTokens", false, isAPIEndpoint},
+		{"Files endpoint", "/openai/v1/files", false, isAPIEndpoint},
 		{"Health endpoint", "/health", false, isAPIEndpoint},
 	}
 
