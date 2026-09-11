@@ -155,11 +155,29 @@ func TestHandleUpdateKey_PersonalKeyRenameForbidden(t *testing.T) {
 	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 	rec := httptest.NewRecorder()
 	h.handleUpdateKey(rec, req)
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	var errResp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&errResp))
+	assert.Equal(t, "personal keys cannot be renamed", errResp["error"])
 
 	record, err := store.GetKeyRecord(ctx, key.PK)
 	require.NoError(t, err)
 	assert.Equal(t, "original", record.Description)
+}
+
+func TestHandleUpdateKey_PersonalKeyUnchangedDescriptionAllowed(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+
+	key, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-real", "original", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+
+	body := []byte(`{"description": "original"}`)
+	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, body)
+	req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+	rec := httptest.NewRecorder()
+	h.handleUpdateKey(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
 func TestHandleCreateKey_WithRateLimits(t *testing.T) {

@@ -48,7 +48,9 @@ export default function EditKeyModal({
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   const [form, setForm] = useState<KeyFormState>(() => keyFormFromRecord(keyRecord, "metered"));
-  const [tab, setTab] = useState<KeyFormTab>(initialTab);
+  const [tab, setTab] = useState<KeyFormTab>(
+    canManagePolicy && !isPersonal ? initialTab : "general",
+  );
 
   const piiOffRequiresBedrock = formPiiOffRequiresBedrock(
     form.redact_pii,

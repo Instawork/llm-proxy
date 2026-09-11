@@ -340,7 +340,8 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Description != nil && !permissions.CanRenameKey(existing) {
+	descriptionChanged := req.Description != nil && *req.Description != existing.Description
+	if descriptionChanged && !permissions.CanRenameKey(existing) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "personal keys cannot be renamed"})
 		return
 	}
@@ -443,7 +444,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Description != nil && existing.Provisioned && h.deps.KeyProvisioner != nil {
+	if descriptionChanged && existing.Provisioned && h.deps.KeyProvisioner != nil {
 		res, renameErr := h.deps.KeyProvisioner.Rename(
 			r.Context(),
 			existing.Provider,
