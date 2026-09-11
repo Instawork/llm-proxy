@@ -10,6 +10,7 @@ import { queryClient } from "./client";
 import CircuitPage from "./pages/circuit";
 import ConfigPage from "./pages/config";
 import CostPage from "./pages/cost";
+import HealthPage from "./pages/health";
 import KeyDetailPage from "./pages/keys/detail";
 import KeySetupPage from "./pages/keys/setup";
 import KeysPage from "./pages/keys";
@@ -43,8 +44,16 @@ export default function Router() {
           <Route
             path="/"
             element={shell(
-              <RequireRole minRole="editor">
+              <RequireRole minRole="viewer">
                 <OverviewPage />
+              </RequireRole>,
+            )}
+          />
+          <Route
+            path="/health"
+            element={shell(
+              <RequireRole minRole="editor">
+                <HealthPage />
               </RequireRole>,
             )}
           />

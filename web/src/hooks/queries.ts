@@ -23,6 +23,7 @@ import type {
   RateLimitsResponse,
   ShareCreateResponse,
   ShareInfo,
+  SpendOverviewResponse,
   UpdateAdminUserRoleRequest,
   UpdateAPIKeyRequest,
   ReviewKeyRequestBody,
@@ -38,6 +39,7 @@ export const queryKeys = {
   keys: (provider?: string) => ["admin", "keys", provider ?? "all"] as const,
   key: (key: string) => ["admin", "keys", "detail", key] as const,
   keyStats: (key: string) => ["admin", "keys", "stats", key] as const,
+  spendOverview: ["admin", "spend-overview"] as const,
   config: ["admin", "config"] as const,
   health: ["admin", "health"] as const,
   circuitActivity: ["admin", "circuit-activity"] as const,
@@ -90,6 +92,19 @@ export function useKeyStats(key: string | undefined) {
     queryKey: queryKeys.keyStats(key ?? ""),
     queryFn: () => apiFetch<KeyStatsResponse>(`/admin/api/keys/${encodeURIComponent(key!)}/stats`),
     enabled: Boolean(key) && roleAtLeast(role, "viewer"),
+    refetchInterval,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useSpendOverview() {
+  const { data: me } = useMe();
+  const role = me?.role ?? "viewer";
+  const refetchInterval = usePollInterval();
+  return useQuery({
+    queryKey: queryKeys.spendOverview,
+    queryFn: () => apiFetch<SpendOverviewResponse>("/admin/api/spend-overview"),
+    enabled: roleAtLeast(role, "viewer"),
     refetchInterval,
     refetchIntervalInBackground: true,
   });
@@ -210,6 +225,7 @@ export function useModelStatus() {
 
 function invalidateKeys(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ["admin", "keys"] });
+  queryClient.invalidateQueries({ queryKey: queryKeys.spendOverview });
 }
 
 export function useCreateKey() {
