@@ -60,6 +60,10 @@ features:
       sample_rate: 1.0
   rate_limiting:
     enabled: false
+  email:
+    enabled: true
+    from_address: "llm-proxy-staging@instawork.com"
+    from_name: "LLM Proxy (staging)"
 
 # =============================================================================
 # PROVIDER OVERRIDES

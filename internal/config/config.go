@@ -80,6 +80,21 @@ type FeaturesConfig struct {
 	History          HistoryConfig          `yaml:"history"`
 	ClientGzip       ClientGzipConfig       `yaml:"client_gzip"`
 	Upstream         UpstreamConfig         `yaml:"upstream"`
+	Email            EmailConfig            `yaml:"email"`
+}
+
+// EmailConfig controls SendGrid-backed email alerts (spend limits, key
+// requests, key-request approvals). The SendGrid API key itself is never
+// read from YAML; it comes from the SENDGRID_API_KEY env var.
+type EmailConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// FromAddress is the SendGrid-verified sender address. Required when
+	// Enabled is true.
+	FromAddress string `yaml:"from_address"`
+	FromName    string `yaml:"from_name"`
+	// DevLog logs outgoing emails instead of calling SendGrid. Useful for
+	// local development and CI where no SendGrid API key is configured.
+	DevLog bool `yaml:"dev_log,omitempty"`
 }
 
 // UpstreamConfig configures outbound HTTP behaviour toward LLM providers.

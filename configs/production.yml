@@ -242,6 +242,10 @@ features:
       bucket: instawork-llm-proxy-history
       prefix: llm-proxy
       region: us-west-2
+  email:
+    enabled: true
+    from_address: "llm-proxy@instawork.com"
+    from_name: "LLM Proxy"
 
 # =============================================================================
 # PROVIDER OVERRIDES

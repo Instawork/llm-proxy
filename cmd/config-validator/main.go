@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/config"
 )
@@ -183,6 +184,13 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 					errs = append(errs, fmt.Sprintf("cost_tracking.transports[%d] dynamodb.table_name is required", i))
 				}
 			}
+		}
+	}
+	if cfg.Features.Email.Enabled {
+		if cfg.Features.Email.FromAddress == "" {
+			errs = append(errs, "email.enabled is true but email.from_address is empty")
+		} else if !strings.Contains(cfg.Features.Email.FromAddress, "@") {
+			errs = append(errs, fmt.Sprintf("email.from_address %q does not look like an email address", cfg.Features.Email.FromAddress))
 		}
 	}
 

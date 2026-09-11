@@ -141,6 +141,11 @@ features:
       address: "redis:6379"
       password: ""
       db: 4
+  email:
+    enabled: true
+    dev_log: true
+    from_address: "llm-proxy-dev@example.com"
+    from_name: "LLM Proxy (dev)"
   history:
     backend: local
     role: global

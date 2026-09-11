@@ -112,6 +112,7 @@ type KeyResponse struct {
 	DailyCostLimit   int64             `json:"daily_cost_limit"`
 	MonthlyCostLimit int64             `json:"monthly_cost_limit,omitempty"`
 	OwnerEmail       string            `json:"owner_email,omitempty"`
+	RequesterEmail   string            `json:"requester_email,omitempty"`
 	Enabled          bool              `json:"enabled"`
 	Tags             map[string]string `json:"tags,omitempty"`
 	RedactPII        *bool             `json:"redact_pii,omitempty"`
@@ -147,6 +148,10 @@ type CreateKeyRequest struct {
 	// ExpiresAt optionally sets when the key stops accepting proxy requests
 	// and becomes eligible for the expiry sweeper's cleanup.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// RequesterEmail carries the originating key request's requester email
+	// through to createOrgKey. Set internally by the approval flow only —
+	// json:"-" so it cannot be spoofed via the public create-key body.
+	RequesterEmail string `json:"-"`
 }
 
 // UpdateKeyRequest patches mutable key fields.
@@ -254,6 +259,7 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 		DailyCostLimit:   k.DailyCostLimit,
 		MonthlyCostLimit: k.MonthlyCostLimit,
 		OwnerEmail:       k.OwnerEmail,
+		RequesterEmail:   k.RequesterEmail,
 		Enabled:          k.Enabled,
 		Tags:             k.Tags,
 		RedactPII:        k.RedactPII,

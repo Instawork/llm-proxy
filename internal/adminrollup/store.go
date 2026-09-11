@@ -329,6 +329,17 @@ func (s *Store) TryElectArchiver(ctx context.Context, metric, day, holder string
 	return err == nil && ok
 }
 
+// TryMarkOnce atomically claims name for ttl, returning true the first time
+// it is called for that name and false on every subsequent call until the
+// claim expires. Used to dedupe cluster-wide, one-shot notifications (e.g.
+// "this key hit its daily spend limit") across proxy instances.
+func (s *Store) TryMarkOnce(ctx context.Context, name string, ttl time.Duration) (bool, error) {
+	if s == nil {
+		return true, nil
+	}
+	return s.be.trySetNX(ctx, keyPrefix+"once:"+name, "1", ttl)
+}
+
 // KeySpendUSD reads the fleet-wide spend (USD) recorded for a single masked
 // key in the given metric/day's by_key hash. Used by hard cluster-wide cost
 // limit enforcement, which needs the exact per-key value rather than the

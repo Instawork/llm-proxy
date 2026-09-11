@@ -150,6 +150,30 @@ func TestLoadHistoryMergesToday(t *testing.T) {
 	require.GreaterOrEqual(t, len(history), 2)
 }
 
+func TestStoreTryMarkOnce(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	ok, err := store.TryMarkOnce(ctx, "spend-alert:key1:daily:2026-06-10", time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok, "first claim should succeed")
+
+	ok, err = store.TryMarkOnce(ctx, "spend-alert:key1:daily:2026-06-10", time.Hour)
+	require.NoError(t, err)
+	require.False(t, ok, "second claim of the same name should be rejected")
+
+	ok, err = store.TryMarkOnce(ctx, "spend-alert:key1:monthly:2026-06", time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok, "a different name should claim independently")
+}
+
+func TestNilStoreTryMarkOnce(t *testing.T) {
+	var store *Store
+	ok, err := store.TryMarkOnce(context.Background(), "anything", time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok, "nil store should not block dedupe")
+}
+
 func TestNewStoreDisabled(t *testing.T) {
 	store, err := NewStore(Config{Enabled: false})
 	require.NoError(t, err)

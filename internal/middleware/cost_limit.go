@@ -102,6 +102,12 @@ type CostLimitOptions struct {
 	Estimation providers.YAMLConfigEstimationAdapter
 	// ReservationGrace overrides defaultReservationGrace when > 0.
 	ReservationGrace time.Duration
+
+	// OnLimitReached, when set, is invoked once per blocked request whose
+	// daily or monthly cost limit was just hit (window is "daily" or
+	// "monthly"). Used to fire a one-shot email alert to the key's owner.
+	// Never called for requests that pass through.
+	OnLimitReached func(rec *apikeys.APIKey, window string, limitCents, spendCents int64)
 }
 
 // CostLimitMiddleware blocks provider requests when an iw: key's recorded daily
@@ -162,6 +168,14 @@ func CostLimitMiddleware(pm *providers.ProviderManager, spend KeySpendReader, op
 	}
 }
 
+// notifyLimitReached invokes opt.OnLimitReached, when configured, without
+// blocking the response path.
+func notifyLimitReached(opt CostLimitOptions, rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+	if opt.OnLimitReached != nil {
+		opt.OnLimitReached(rec, window, limitCents, spendCents)
+	}
+}
+
 func hasCostLimit(rec *apikeys.APIKey) bool {
 	return rec.DailyCostLimit > 0 || rec.MonthlyCostLimit > 0
 }
@@ -195,6 +209,7 @@ func tryReserveAndServe(
 		}
 		if !allowed {
 			writeCostBlocked(w, prov, rec, rec.DailyCostLimit, costLimitExceeded, "daily cost limit exceeded")
+			notifyLimitReached(opt, rec, "daily", rec.DailyCostLimit, rec.DailyCostLimit)
 			return true
 		}
 		dailyReserved = true
@@ -219,6 +234,7 @@ func tryReserveAndServe(
 				reserver.AdjustKeyReservation(context.Background(), masked, -estimate)
 			}
 			writeCostBlocked(w, prov, rec, rec.MonthlyCostLimit, costLimitMonthlyExceeded, "monthly cost limit exceeded")
+			notifyLimitReached(opt, rec, "monthly", rec.MonthlyCostLimit, rec.MonthlyCostLimit)
 			return true
 		}
 	}
@@ -293,6 +309,7 @@ func enforceReadOnly(
 		spendCents := int64(math.Ceil(spendUSD * 100))
 		if spendCents >= rec.DailyCostLimit {
 			writeCostBlockedWithSpend(w, prov, rec, rec.DailyCostLimit, spendCents, costLimitExceeded, "daily cost limit exceeded")
+			notifyLimitReached(opt, rec, "daily", rec.DailyCostLimit, spendCents)
 			return
 		}
 	}
@@ -324,6 +341,7 @@ func enforceReadOnly(
 		spendCents := int64(math.Ceil(spendUSD * 100))
 		if spendCents >= rec.MonthlyCostLimit {
 			writeCostBlockedWithSpend(w, prov, rec, rec.MonthlyCostLimit, spendCents, costLimitMonthlyExceeded, "monthly cost limit exceeded")
+			notifyLimitReached(opt, rec, "monthly", rec.MonthlyCostLimit, spendCents)
 			return
 		}
 	}

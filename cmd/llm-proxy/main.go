@@ -30,6 +30,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/keyexpiry"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/modelstatusstats"
+	"github.com/Instawork/llm-proxy/internal/notify"
 	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/ocr"
 	"github.com/Instawork/llm-proxy/internal/pii"
@@ -126,6 +127,7 @@ var (
 	globalAdminUserStore       *adminusers.Store
 	globalAdminUserStoreError  error
 	globalKeyProvisioner       *provision.Manager
+	globalNotifier             *notify.Notifier
 )
 
 // Global rate limiter instance
@@ -871,6 +873,56 @@ func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
 	return store
 }
 
+// rollupOnceMarker adapts the package-level admin rollup store to
+// notify.OnceMarker. It reads globalAdminRollupStore at call time (rather
+// than capturing it at construction), since the rollup store initializes
+// after the notifier does; *adminrollup.Store.TryMarkOnce is nil-receiver
+// safe, so a still-nil store simply disables cluster-wide dedupe.
+type rollupOnceMarker struct{}
+
+func (rollupOnceMarker) TryMarkOnce(ctx context.Context, name string, ttl time.Duration) (bool, error) {
+	return globalAdminRollupStore.TryMarkOnce(ctx, name, ttl)
+}
+
+// initNotifier builds the email-alert Notifier from features.email and the
+// SENDGRID_API_KEY env var. Returns nil when email alerts are disabled.
+func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
+	emailCfg := yamlConfig.Features.Email
+	if !emailCfg.Enabled {
+		logger.Info("📧 Email alerts: disabled")
+		return nil
+	}
+
+	var mailer notify.Mailer
+	apiKey := os.Getenv("SENDGRID_API_KEY")
+	switch {
+	case emailCfg.DevLog:
+		mailer = notify.NewLogMailer(logger)
+		logger.Info("📧 Email alerts: ENABLED (dev_log)")
+	case apiKey != "":
+		mailer = notify.NewSendGrid(apiKey, emailCfg.FromAddress, emailCfg.FromName, "")
+		logger.Info("📧 Email alerts: ENABLED (sendgrid)", "from", emailCfg.FromAddress)
+	default:
+		logProxyError("📧 Email alerts: disabled (SENDGRID_API_KEY unset)")
+		return nil
+	}
+
+	dashboardURL := yamlConfig.Features.AdminDashboard.PublicBaseURL
+	if dashboardURL == "" {
+		dashboardURL = os.Getenv("ADMIN_PUBLIC_BASE_URL")
+	}
+
+	// Pass a nil AdminLister interface (not a typed nil *adminusers.Store)
+	// when the admin user store isn't configured, so Notifier's nil check
+	// on the interface itself works.
+	var admins notify.AdminLister
+	if globalAdminUserStore != nil {
+		admins = globalAdminUserStore
+	}
+
+	return notify.NewNotifier(mailer, admins, rollupOnceMarker{}, dashboardURL, logger)
+}
+
 // piiSummaryFunc returns a snapshot closure for the admin /pii endpoint, or
 // newPerKeyOverrideProvider returns a cached PerKeyOverrideFunc that resolves
 // an iw: key's rate-limit overrides from its DynamoDB record. Results (hits
@@ -1397,6 +1449,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Initialize API key store if enabled
 	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
 	globalAdminUserStore = initializeAdminUserStore(yamlConfig)
+	globalNotifier = initNotifier(yamlConfig)
 
 	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
 	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
@@ -1566,6 +1619,11 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
 		costLimitOpts := middleware.CostLimitOptions{
 			FailClosedOnReadError: yamlConfig.Features.CostTracking.FailClosedOnReadError,
+		}
+		if globalNotifier != nil {
+			costLimitOpts.OnLimitReached = func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+				globalNotifier.SpendLimitReached(context.Background(), rec, window, limitCents, spendCents)
+			}
 		}
 		// When the cost tracker is available, enable synchronous cluster-wide
 		// reservations: estimate a call's cost up front, reserve it atomically
@@ -1858,6 +1916,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			UnmeteredSummary:   unmeteredSummaryFunc(),
 			KeyProvisioner:     globalKeyProvisioner,
 			AdminRollupStore:   globalAdminRollupStore,
+			Notifier:           globalNotifier,
 		})
 		logger.Info("Admin dashboard: ENABLED")
 	}

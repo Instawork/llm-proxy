@@ -8,6 +8,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/notify"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 )
@@ -32,4 +33,5 @@ type Deps struct {
 	ModelStatusSummary func() map[string]interface{}
 	UnmeteredSummary   func() map[string]interface{}
 	KeyProvisioner     *provision.Manager
+	Notifier           *notify.Notifier
 }

@@ -191,6 +191,11 @@ type APIKey struct {
 	UpstreamKind string `dynamodbav:"upstream_kind,omitempty"`
 	// OwnerEmail identifies the viewer who owns a personal key.
 	OwnerEmail string `dynamodbav:"owner_email,omitempty"`
+	// RequesterEmail identifies who requested an org-wide key via the key
+	// request flow (empty for keys created directly by an admin). Used to
+	// email the requester when their key request is approved or the key
+	// later hits a spend limit.
+	RequesterEmail string `dynamodbav:"requester_email,omitempty"`
 	// MonthlyCostLimit is the calendar-month cost cap in cents (0 = unlimited).
 	MonthlyCostLimit int64 `dynamodbav:"monthly_cost_limit,omitempty"`
 	// FirstRequestAt is set once when the proxy observes the first tracked LLM
@@ -515,6 +520,9 @@ type KeyCreateMeta struct {
 	UpstreamKind  string
 	// ExpiresAt optionally sets the key's expiry at creation time.
 	ExpiresAt *time.Time
+	// RequesterEmail carries the originating key request's requester email
+	// onto the created key (org keys created via the approval flow).
+	RequesterEmail string
 }
 
 // normalizeExpiresAt converts an optional expiry to UTC so stored values sort
@@ -576,6 +584,7 @@ func (s *Store) CreateKeyWithMeta(ctx context.Context, provider, actualKey, desc
 		Provisioned:      meta.Provisioned,
 		UpstreamKeyID:    meta.UpstreamKeyID,
 		UpstreamKind:     meta.UpstreamKind,
+		RequesterEmail:   meta.RequesterEmail,
 	}
 
 	// Marshal to DynamoDB attribute values
