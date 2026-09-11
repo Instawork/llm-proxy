@@ -132,12 +132,9 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		Day:         today,
 	}
 
-	memCost := memoryCostForKey(h.deps.CostSummary, masked, record.PK)
-	resp.RecentCost = sanitizeRecentCost(memoryRecentCostForKey(h.deps.CostSummary, masked, record.PK))
+	costSnap := safeSummary(h.deps.CostSummary)
+	resp.RecentCost = sanitizeRecentCost(memoryRecentCostForKeyFromSnap(costSnap, masked, record.PK))
 	resp.RecentPII = sanitizeRecentPII(memoryRecentPIIForKey(h.deps.PIISummary, masked))
-	if len(resp.RecentCost) > 0 {
-		memCost = mergeMemoryKeyCosts(memCost, memoryCostFromRecent(recentCostOnUTCDay(resp.RecentCost, today)))
-	}
 	memPII := memoryPIIForKey(h.deps.PIISummary, masked)
 	if len(resp.RecentPII) > 0 {
 		memPII = maxInt64(memPII, memoryPIIFromRecent(recentPIIOnUTCDay(resp.RecentPII, today)))
@@ -177,7 +174,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp.CostToday = mergeKeyCostStats(memCost, redisCost, redisCostOK, costRollupOK)
+	resp.CostToday = keyCostToday(costSnap, masked, record.PK, today, redisCost, redisCostOK, costRollupOK)
 	resp.CostMonth = keyCostMonthForKey(ctx, h.deps.AdminRollupStore, today, masked, resp.CostToday.SpendUSD, costRollupOK)
 	resp.PIIToday = mergeKeyPIIStats(memPII, redisPII, redisPIIOK, piiRollupOK)
 	if h.deps.RateLimiter != nil {
@@ -220,8 +217,25 @@ func recentRowsFromSnap(snap map[string]interface{}, field string) []map[string]
 	return rows
 }
 
-func memoryCostForKey(summary func() map[string]interface{}, masked, rawKey string) memoryKeyCost {
-	snap := safeSummary(summary)
+// keyCostToday is the single rule for what one key spent today: the in-process
+// by_key row, backfilled from today's in-process recent events, max-merged with
+// the exact Redis row. The key detail page and the spend overview both call it
+// so a key never shows two different figures.
+func keyCostToday(
+	snap map[string]interface{},
+	masked, rawKey, day string,
+	redis adminrollup.KeyCostDayStats,
+	redisOK, rollupBound bool,
+) keyCostStatsResponse {
+	mem := memoryCostForKey(snap, masked, rawKey)
+	recent := sanitizeRecentCost(memoryRecentCostForKeyFromSnap(snap, masked, rawKey))
+	if len(recent) > 0 {
+		mem = mergeMemoryKeyCosts(mem, memoryCostFromRecent(recentCostOnUTCDay(recent, day)))
+	}
+	return mergeKeyCostStats(mem, redis, redisOK, rollupBound)
+}
+
+func memoryCostForKey(snap map[string]interface{}, masked, rawKey string) memoryKeyCost {
 	for _, row := range recentRowsFromSnap(snap, "by_key") {
 		id := asString(row["key_id"])
 		if id != masked && id != rawKey {
@@ -305,8 +319,7 @@ func recentPIIOnUTCDay(events []keyPIIRecentResponse, day string) []keyPIIRecent
 	return out
 }
 
-func memoryRecentCostForKey(summary func() map[string]interface{}, masked, rawKey string) []map[string]interface{} {
-	snap := safeSummary(summary)
+func memoryRecentCostForKeyFromSnap(snap map[string]interface{}, masked, rawKey string) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0)
 	for _, row := range recentRowsFromSnap(snap, "recent") {
 		id := asString(row["key_id"])
@@ -509,19 +522,26 @@ func keyCostMonthForKey(
 	rollupBound bool,
 ) keyCostMonthResponse {
 	month := day[:7]
-	out := keyCostMonthResponse{Month: month, Source: "memory"}
 	if !rollupBound || store == nil {
-		out.SpendUSD = todaySpend
-		return out
+		return keyCostMonth(month, 0, false, false, todaySpend)
 	}
 	spend, err := store.KeyMonthlySpendUSD(ctx, adminrollup.MetricCost, month, masked)
-	if err != nil {
+	return keyCostMonth(month, spend, err == nil, true, todaySpend)
+}
+
+// keyCostMonth applies the "month is never less than today" rule to a monthly
+// hash value and labels its source. readOK is false when the hash read failed.
+func keyCostMonth(month string, monthSpend float64, readOK, rollupBound bool, todaySpend float64) keyCostMonthResponse {
+	out := keyCostMonthResponse{Month: month, Source: "memory", SpendUSD: todaySpend}
+	if !rollupBound {
+		return out
+	}
+	if !readOK {
 		out.Source = "redislive"
-		out.SpendUSD = todaySpend
 		return out
 	}
 	out.Source = "redis"
-	out.SpendUSD = spend
+	out.SpendUSD = monthSpend
 	if todaySpend > out.SpendUSD {
 		out.SpendUSD = todaySpend
 		out.Source = "redislive"
