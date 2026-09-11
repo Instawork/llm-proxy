@@ -7,6 +7,7 @@ import { MaskedKey } from "../ui/masked-key";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { formatKeySpendCap } from "../../lib/format";
+import { formatExpiresAt, isExpired } from "../../lib/key-form";
 import { keySetupPath } from "../../lib/key-routes";
 import type { APIKey, PiiRedactSetting, Provider } from "../../types";
 
@@ -21,19 +22,6 @@ function formatCreatedAt(value?: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString();
-}
-
-function isExpired(expiresAt?: string | null): boolean {
-  if (!expiresAt) return false;
-  const d = new Date(expiresAt);
-  return !Number.isNaN(d.getTime()) && d.getTime() <= Date.now();
-}
-
-function formatExpiresAt(expiresAt?: string | null): string {
-  if (!expiresAt) return "Never";
-  const d = new Date(expiresAt);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString();
 }
 
 interface KeysTableProps {

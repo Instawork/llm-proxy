@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { KeyCostEventsTable, KeyPiiEventsTable, KeyRateUsageTable } from "../../components/keys/key-detail-tables";
@@ -23,11 +23,12 @@ import {
 import { SpendOverview, SpendPeriodPanel } from "../../components/ui/spend-breakdown";
 import { BarChart, ChartCard } from "../../components/charts";
 import { chartPalette } from "../../components/charts/chart-setup";
-import { useKey, useKeyStats, useMe, usePII, useRateLimits, useUpdateKey } from "../../hooks/queries";
+import { useKey, useKeyStats, useMe, usePII, useRateLimits } from "../../hooks/queries";
 import { permissions } from "../../lib/permissions";
-import KeyDetailPolicyEditor from "../../components/keys/key-detail-policy-editor";
+import EditKeyModal from "../../components/keys/edit-key-modal";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import { UNMETERED_HELP } from "../../lib/spend-overview";
+import { formatExpiresAt, isExpired, type KeyFormTab } from "../../lib/key-form";
 import {
   formatDailyCostLimit,
   formatMonthlyCostLimit,
@@ -43,7 +44,6 @@ import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey
 import { dismissKeySetup, isKeySetupDismissed } from "../../lib/key-setup-dismiss";
 import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
 import type { KeyStatsSource } from "../../types";
-import { useToast } from "../../components/ui/toast";
 
 type DetailTab = "cost" | "pii" | "rate-limits" | "usage";
 
@@ -73,7 +73,6 @@ function detailTabClass(active: boolean): string {
 
 export default function KeyDetailPage() {
   const navigate = useNavigate();
-  const { push } = useToast();
   const { key: keyParam } = useParams<{ key: string }>();
   const { data: me } = useMe();
   const isViewer = permissions.isViewer(me?.role);
@@ -83,13 +82,11 @@ export default function KeyDetailPage() {
 
   const keyQuery = useKey(validRoute);
   const statsQuery = useKeyStats(validRoute);
-  const updateKey = useUpdateKey();
   const piiQuery = usePII();
   const rateQuery = useRateLimits();
   const [tab, setTab] = useState<DetailTab>("cost");
   const tabDefaultedRef = useRef(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
+  const [editModalTab, setEditModalTab] = useState<KeyFormTab | null>(null);
 
   const keyRecord = keyQuery.data;
   const proxyKey = keyRecord?.key;
@@ -106,12 +103,6 @@ export default function KeyDetailPage() {
     if (!routeKeyId || !isProxyKey(routeKeyId) || isMaskedKeyRouteParam(routeKeyId)) return;
     navigate(keyDetailPath(routeKeyId), { replace: true });
   }, [routeKeyId, navigate]);
-
-  useEffect(() => {
-    if (keyRecord?.description != null) {
-      setNameDraft(keyRecord.description);
-    }
-  }, [keyRecord?.description]);
 
   const keyError = keyQuery.error;
   const stats = statsQuery.data;
@@ -186,21 +177,6 @@ export default function KeyDetailPage() {
     setSetupDismissed(true);
   };
 
-  const saveName = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!proxyKey || !validRoute) return;
-    try {
-      await updateKey.mutateAsync({
-        key: validRoute,
-        body: { description: nameDraft.trim() },
-      });
-      push("Name updated", "success");
-      setEditingName(false);
-    } catch (err) {
-      push(err instanceof Error ? err.message : "Failed to update name", "error");
-    }
-  };
-
   const sdkBaseUrl = keyRecord?.base_url;
 
   if (!routeKeyId) {
@@ -233,8 +209,6 @@ export default function KeyDetailPage() {
     : 0;
   const monthLabel = formatMonthYear(costMonth?.month);
   const rateRequestTotal = rateUsage.reduce((s, r) => s + r.requests, 0);
-  const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
-  const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   return (
     <div className="space-y-6">
@@ -245,46 +219,7 @@ export default function KeyDetailPage() {
       </div>
 
       <PageHeader
-        title={
-          editingName ? (
-            <form className="flex flex-wrap items-center gap-2" onSubmit={saveName}>
-              <input
-                type="text"
-                className="input input-bordered input-sm w-full max-w-md"
-                value={nameDraft}
-                onChange={(event) => setNameDraft(event.target.value)}
-                placeholder="Key name"
-                autoFocus
-              />
-              <button type="submit" className="btn btn-primary btn-sm" disabled={updateKey.isPending}>
-                Save
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => {
-                  setEditingName(false);
-                  setNameDraft(keyRecord?.description ?? "");
-                }}
-              >
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <span className="inline-flex flex-wrap items-center gap-2">
-              <span>{title}</span>
-              {keyRecord && !notFound ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs text-base-content/60"
-                  onClick={() => setEditingName(true)}
-                >
-                  Rename
-                </button>
-              ) : null}
-            </span>
-          )
-        }
+        title={title}
         description={
           notFound
             ? "This key is not registered (it may have been deleted)."
@@ -294,6 +229,15 @@ export default function KeyDetailPage() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {keyRecord && !notFound ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setEditModalTab("general")}
+              >
+                Edit
+              </button>
+            ) : null}
             {isViewer && keyRecord && !notFound ? (
               <Link to={keySetupPath(keyRecord.key)} className="btn btn-primary btn-sm">
                 How to use
@@ -365,6 +309,14 @@ export default function KeyDetailPage() {
                 </>
               )}
               <Meta label="Created" value={new Date(keyRecord.created_at).toLocaleString()} />
+              <Meta
+                label="Expires"
+                value={
+                  <span className={isExpired(keyRecord.expires_at) ? "text-warning" : undefined}>
+                    {formatExpiresAt(keyRecord.expires_at)}
+                  </span>
+                }
+              />
             </div>
           </div>
         </div>
@@ -538,12 +490,15 @@ export default function KeyDetailPage() {
                         source={costSource}
                       >
                         {canManagePolicy && !isPersonal ? (
-                          <KeyDetailPolicyEditor
-                            keyRecord={keyRecord}
-                            routeKey={validRoute}
-                            section="cost"
-                            editorMaxDollars={editorMaxDollars}
-                          />
+                          <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditModalTab("cost")}
+                            >
+                              Edit settings
+                            </button>
+                          </div>
                         ) : null}
                         <div className="grid gap-4 p-5 lg:grid-cols-2">
                           <SpendPeriodPanel
@@ -634,12 +589,15 @@ export default function KeyDetailPage() {
                         source={piiSource}
                       >
                         {canManagePolicy && !isPersonal ? (
-                          <KeyDetailPolicyEditor
-                            keyRecord={keyRecord}
-                            routeKey={validRoute}
-                            section="pii"
-                            editorMaxDollars={editorMaxDollars}
-                          />
+                          <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditModalTab("pii")}
+                            >
+                              Edit settings
+                            </button>
+                          </div>
                         ) : null}
                         <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
                           <Meta label="Detections today" value={piiToday?.detections ?? 0} />
@@ -663,12 +621,15 @@ export default function KeyDetailPage() {
                       source={rateSource}
                     >
                       {canManagePolicy && !isPersonal ? (
-                        <KeyDetailPolicyEditor
-                          keyRecord={keyRecord}
-                          routeKey={validRoute}
-                          section="rate-limits"
-                          editorMaxDollars={editorMaxDollars}
-                        />
+                        <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setEditModalTab("rate-limits")}
+                          >
+                            Edit settings
+                          </button>
+                        </div>
                       ) : null}
                       <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
                         <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord.rate_limit_rpm)} />
@@ -684,6 +645,15 @@ export default function KeyDetailPage() {
             </>
           )}
         </>
+      ) : null}
+
+      {editModalTab && keyRecord ? (
+        <EditKeyModal
+          keyRecord={keyRecord}
+          routeKey={validRoute}
+          initialTab={editModalTab}
+          onClose={() => setEditModalTab(null)}
+        />
       ) : null}
     </div>
   );

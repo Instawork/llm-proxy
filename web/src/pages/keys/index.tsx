@@ -7,6 +7,7 @@ import BulkGeneratePanel, {
 } from "../../components/keys/bulk-generate-panel";
 import KeyRequestsPanel from "../../components/keys/key-requests-panel";
 import ApiKeysModal from "../../components/keys/api-keys-modal";
+import EditKeyModal from "../../components/keys/edit-key-modal";
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
@@ -33,7 +34,6 @@ import {
   expiresAtFromForm,
   formPiiOffRequiresBedrock,
   formatRateLimits,
-  keyFormFromRecord,
   KEY_PROVIDERS,
   piiFromFormValue,
   providerNeedsUpstreamKey,
@@ -54,7 +54,6 @@ import {
   useMe,
   usePII,
   useProvisioning,
-  useUpdateKey,
 } from "../../hooks/queries";
 import type {
   APIKey,
@@ -175,7 +174,6 @@ export default function KeysPage() {
   const { data: keys = [], isLoading, error } = useKeys();
   const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
-  const updateKey = useUpdateKey();
   const deleteKey = useDeleteKey();
   const createShare = useCreateShare();
 
@@ -190,12 +188,7 @@ export default function KeysPage() {
   const anthropicDefaultTier = anthropicProvisioning?.default_tier ?? "metered";
 
   useEffect(() => {
-    if (
-      !modalOpen ||
-      editingKey ||
-      form.provider !== "anthropic" ||
-      anthropicTierOptions.length === 0
-    ) {
+    if (!modalOpen || form.provider !== "anthropic" || anthropicTierOptions.length === 0) {
       return;
     }
     if (anthropicTierOptions.includes(form.anthropic_tier)) {
@@ -205,28 +198,16 @@ export default function KeysPage() {
       ...current,
       anthropic_tier: anthropicDefaultTier,
     }));
-  }, [
-    modalOpen,
-    editingKey,
-    form.provider,
-    form.anthropic_tier,
-    anthropicTierOptions,
-    anthropicDefaultTier,
-  ]);
+  }, [modalOpen, form.provider, form.anthropic_tier, anthropicTierOptions, anthropicDefaultTier]);
 
   useEffect(() => {
-    if (
-      !modalOpen ||
-      editingKey ||
-      !piiOffRequiresBedrock ||
-      form.provider === "bedrock"
-    ) {
+    if (!modalOpen || !piiOffRequiresBedrock || form.provider === "bedrock") {
       return;
     }
     setForm((current) => ({ ...current, provider: "bedrock" }));
-  }, [modalOpen, editingKey, piiOffRequiresBedrock, form.provider]);
+  }, [modalOpen, piiOffRequiresBedrock, form.provider]);
 
-  const treatAsPersonal = isViewer || (personalMode && !editingKey);
+  const treatAsPersonal = isViewer || personalMode;
 
   const myPersonalProviders = useMemo(() => {
     const set = new Set<Provider>();
@@ -247,9 +228,7 @@ export default function KeysPage() {
     let providers: Provider[];
     if (isViewer) {
       const owned = new Set(keys.map((k) => k.provider));
-      providers = VIEWER_PROVIDERS.filter(
-        (p) => !owned.has(p) || p === editingKey?.provider,
-      );
+      providers = VIEWER_PROVIDERS.filter((p) => !owned.has(p));
     } else if (personalMode) {
       providers = VIEWER_PROVIDERS.filter((p) => !myPersonalProviders.has(p));
     } else if (!piiOffRequiresBedrock) {
@@ -272,7 +251,6 @@ export default function KeysPage() {
     isViewer,
     personalMode,
     keys,
-    editingKey?.provider,
     myPersonalProviders,
     piiOffRequiresBedrock,
     provisionedKeysOnly,
@@ -410,14 +388,14 @@ export default function KeysPage() {
 
   const openEdit = (record: APIKey) => {
     setEditingKey(record);
-    setPersonalMode(false);
-    setForm(keyFormFromRecord(record, anthropicDefaultTier));
-    setModalOpen(true);
+  };
+
+  const closeEditModal = () => {
+    setEditingKey(null);
   };
 
   const closeModal = () => {
     setModalOpen(false);
-    setEditingKey(null);
     setForm(defaultKeyForm);
     setManualKeyEntry(false);
     setPersonalMode(false);
@@ -439,29 +417,7 @@ export default function KeysPage() {
     const redactPii = piiFromFormValue(form.redact_pii);
 
     try {
-      if (editingKey) {
-        if (!canManagePolicy) {
-          await updateKey.mutateAsync({
-            key: editingKey.key,
-            body: { description: form.description },
-          });
-          push("Key updated", "success");
-        } else {
-          await updateKey.mutateAsync({
-            key: editingKey.key,
-            body: {
-              description: form.description,
-              daily_cost_limit: dailyCostLimit,
-              monthly_cost_limit: monthlyCostLimit,
-              enabled: form.enabled,
-              redact_pii: redactPii,
-              expires_at: expiresAtFromForm(form),
-              ...rateLimitsFromForm(form),
-            },
-          });
-          push("Key updated", "success");
-        }
-      } else if (treatAsPersonal) {
+      if (treatAsPersonal) {
         if (providerNeedsUpstreamKey(form.provider) && !useAutoProvision) {
           push(
             "Automatic key provisioning is not available for this provider",
@@ -607,7 +563,7 @@ export default function KeysPage() {
     }
   };
 
-  const saving = createKey.isPending || updateKey.isPending;
+  const saving = createKey.isPending;
   const bulkGenerateBusy = bulkGenerating || createKey.isPending;
 
   const visibleKeys = useMemo(() => {
@@ -856,7 +812,6 @@ export default function KeysPage() {
             onClose={closeModal}
             onSubmit={onSubmit}
             saving={saving}
-            editingKey={editingKey}
             form={form}
             setForm={setForm}
             isViewer={isViewer}
@@ -876,6 +831,15 @@ export default function KeysPage() {
             viewerMonthlyLimitLabel={viewerMonthlyLimitLabel}
             editorMaxDollars={editorMaxDollars}
           />
+
+          {editingKey ? (
+            <EditKeyModal
+              key={editingKey.key}
+              keyRecord={editingKey}
+              routeKey={editingKey.key}
+              onClose={closeEditModal}
+            />
+          ) : null}
 
           {shareResult ? (
             <dialog className="modal modal-open" open>
