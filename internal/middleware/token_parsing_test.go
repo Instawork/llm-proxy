@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/gorilla/mux"
 )
@@ -82,8 +83,8 @@ func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
 		{"/model/anthropic.claude-3/converse-stream", true},
 		{"/bedrock-mantle/anthropic/v1/messages", true},
 		{"/meta/autolabel/bedrock-mantle/anthropic/v1/messages", true},
+		{"/gemini/v1beta/interactions", true},
 
-		{"/gemini/v1beta/interactions", false},
 		{"/gemini/upload/v1beta/files", false},
 		{"/gemini/v1beta/models", false},
 		{"/anthropic/v1/models", false},
@@ -119,6 +120,43 @@ func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
 				t.Fatalf("metered=%v, want %v", fired, tc.metered)
 			}
 		})
+	}
+}
+
+// TestTokenParsingMiddleware_GeminiInteractionsReachesCostCallback drives the
+// real Gemini provider end to end: an Interactions response must produce
+// parsed usage and hand the key-bearing request to the cost callback.
+func TestTokenParsingMiddleware_GeminiInteractionsReachesCostCallback(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewGeminiProxy())
+
+	var got *providers.LLMResponseMetadata
+	var gotKey *apikeys.APIKey
+	chain := TokenParsingMiddleware(pm, func(r *http.Request, md *providers.LLMResponseMetadata) {
+		got = md
+		gotKey, _ = apikeys.FromContext(r.Context())
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"v1_x","object":"interaction","model":"gemini-3.8-flash","status":"completed",` +
+			`"usage":{"total_input_tokens":33720,"total_output_tokens":812,"total_thought_tokens":400,"total_tokens":34932}}`))
+	}))
+
+	req := httptest.NewRequest("POST", "/gemini/v1beta/interactions", strings.NewReader(`{"model":"gemini-3.8-flash","input":"label this"}`))
+	req = req.WithContext(apikeys.WithContext(req.Context(), &apikeys.APIKey{PK: "sk-iw-test"}))
+	rr := httptest.NewRecorder()
+	captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+
+	if got == nil {
+		t.Fatal("cost callback not invoked for /gemini/v1beta/interactions")
+	}
+	if got.Model != "gemini-3.8-flash" || got.InputTokens != 33720 || got.OutputTokens != 812 || got.ThoughtTokens != 400 {
+		t.Fatalf("unexpected metadata: %+v", got)
+	}
+	if gotKey == nil || gotKey.PK != "sk-iw-test" {
+		t.Fatalf("callback request lost the API key record: %+v", gotKey)
+	}
+	if rr.Header().Get("X-LLM-Input-Tokens") != "33720" {
+		t.Fatalf("X-LLM-Input-Tokens=%q", rr.Header().Get("X-LLM-Input-Tokens"))
 	}
 }
 

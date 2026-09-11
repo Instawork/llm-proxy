@@ -44,6 +44,7 @@ var meteredSuffixes = []string{
 	// Gemini.
 	":generateContent",
 	":streamGenerateContent",
+	"/interactions",
 	// Bedrock Converse.
 	"/converse",
 	"/converse-stream",

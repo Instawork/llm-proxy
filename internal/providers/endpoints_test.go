@@ -16,7 +16,7 @@ func TestClassifyEndpoint(t *testing.T) {
 		"/anthropic/v1/messages/count_tokens": EndpointPassthrough,
 		"/openai/v1/realtime/client_secrets":  EndpointPassthrough,
 
-		"/gemini/v1beta/interactions":              EndpointUnknown,
+		"/gemini/v1beta/interactions":              EndpointMetered,
 		"/openai/v1/audio/transcriptions":          EndpointUnknown,
 		"/openai/v1/embeddings":                    EndpointUnknown,
 		"/bedrock/model/anthropic.claude-3/invoke": EndpointUnknown,
