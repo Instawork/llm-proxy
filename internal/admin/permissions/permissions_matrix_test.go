@@ -18,7 +18,7 @@ type canCase struct {
 
 func TestCanPermissionMatrix(t *testing.T) {
 	cases := []canCase{
-		// Viewer: personal keys + rename + key requests; no fleet policy or monitoring.
+		// Viewer: personal keys (not renameable, see CanRenameKey) + key requests; no fleet policy or monitoring.
 		{adminusers.RoleViewer, ListKeys, true},
 		{adminusers.RoleViewer, CreateKey, true},
 		{adminusers.RoleViewer, UpdateKeyDescription, true},
@@ -143,6 +143,16 @@ func TestCanDeleteKeyMatrix(t *testing.T) {
 
 	assert.True(t, CanDeleteKey(adminusers.RoleViewer, "viewer@example.com", personal))
 	assert.False(t, CanDeleteKey(adminusers.RoleViewer, "viewer@example.com", orgKey))
+}
+
+func TestCanRenameKeyMatrix(t *testing.T) {
+	orgKey := &apikeys.APIKey{OwnerEmail: ""}
+	ownedPersonal := &apikeys.APIKey{OwnerEmail: "viewer@example.com"}
+	taggedPersonal := &apikeys.APIKey{Tags: map[string]string{"personal": "true"}}
+
+	assert.True(t, CanRenameKey(orgKey))
+	assert.False(t, CanRenameKey(ownedPersonal))
+	assert.False(t, CanRenameKey(taggedPersonal))
 }
 
 func TestUpdateKeyPolicyFieldsAllowedMatrix(t *testing.T) {

@@ -48,7 +48,9 @@ export default function EditKeyModal({
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   const [form, setForm] = useState<KeyFormState>(() => keyFormFromRecord(keyRecord, "metered"));
-  const [tab, setTab] = useState<KeyFormTab>(initialTab);
+  const [tab, setTab] = useState<KeyFormTab>(
+    canManagePolicy && !isPersonal ? initialTab : "general",
+  );
 
   const piiOffRequiresBedrock = formPiiOffRequiresBedrock(
     form.redact_pii,
@@ -136,6 +138,7 @@ export default function EditKeyModal({
                   rows={2}
                   placeholder="What is this key used for?"
                   value={form.description}
+                  disabled={isPersonal}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -143,6 +146,11 @@ export default function EditKeyModal({
                     }))
                   }
                 />
+                {isPersonal ? (
+                  <span className="label-text-alt mt-1 text-base-content/60">
+                    Personal keys can&apos;t be renamed.
+                  </span>
+                ) : null}
               </label>
 
               {canManagePolicy ? <ExpiryField form={form} setForm={setForm} /> : null}

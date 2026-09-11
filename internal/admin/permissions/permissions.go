@@ -102,6 +102,13 @@ func CanAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) b
 	return strings.EqualFold(key.OwnerEmail, userEmail)
 }
 
+// CanRenameKey reports whether key's description may be changed. Personal
+// keys keep the name they were created with, since it mirrors the upstream
+// credential name.
+func CanRenameKey(key *apikeys.APIKey) bool {
+	return !apikeys.IsPersonalKey(key)
+}
+
 // CanDeleteKey reports whether the user may delete the key.
 func CanDeleteKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
 	if !CanAccessKey(role, userEmail, key) {
