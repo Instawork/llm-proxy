@@ -16,6 +16,9 @@ import (
 
 const KeyRequestPrefix = "keyreq:"
 
+// MaxKeyRequestNameLen is the maximum length of a slugified key request name.
+const MaxKeyRequestNameLen = 40
+
 const (
 	KeyRequestStatusPending   = "pending"
 	KeyRequestStatusApproving = "approving"
@@ -34,6 +37,7 @@ type KeyRequest struct {
 	PK              string     `dynamodbav:"pk"`
 	RequesterEmail  string     `dynamodbav:"requester_email"`
 	Provider        string     `dynamodbav:"req_provider"`
+	Name            string     `dynamodbav:"key_name,omitempty"`
 	Description     string     `dynamodbav:"description"`
 	DailyCostLimit  int64      `dynamodbav:"daily_cost_limit,omitempty"`
 	Status          string     `dynamodbav:"status"`
@@ -53,8 +57,36 @@ func (k *KeyRequest) ID() string {
 type CreateKeyRequestInput struct {
 	RequesterEmail string
 	Provider       string
+	Name           string
 	Description    string
 	DailyCostLimit int64
+}
+
+// SlugifyKeyName makes a short, url/tag-safe slug from a free-form key name.
+// It lowercases, keeps only a-z0-9, collapses any other run of characters
+// into a single hyphen, trims leading/trailing hyphens, and caps the length
+// at MaxKeyRequestNameLen.
+func SlugifyKeyName(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevHyphen := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > MaxKeyRequestNameLen {
+		out = strings.TrimRight(out[:MaxKeyRequestNameLen], "-")
+	}
+	return out
 }
 
 func keyRequestPendingLockPK(requesterEmail, provider string) string {
@@ -94,8 +126,12 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 	in.RequesterEmail = strings.TrimSpace(strings.ToLower(in.RequesterEmail))
 	in.Provider = strings.TrimSpace(strings.ToLower(in.Provider))
 	in.Description = strings.TrimSpace(in.Description)
+	in.Name = SlugifyKeyName(in.Name)
 	if in.RequesterEmail == "" || in.Provider == "" || in.Description == "" {
 		return nil, fmt.Errorf("requester_email, provider, and description are required")
+	}
+	if in.Name == "" {
+		return nil, fmt.Errorf("name must contain at least one letter or number")
 	}
 
 	if err := s.acquireKeyRequestPendingLock(ctx, in.RequesterEmail, in.Provider); err != nil {
@@ -113,6 +149,7 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 		PK:             KeyRequestPrefix + id,
 		RequesterEmail: in.RequesterEmail,
 		Provider:       in.Provider,
+		Name:           in.Name,
 		Description:    in.Description,
 		DailyCostLimit: in.DailyCostLimit,
 		Status:         KeyRequestStatusPending,

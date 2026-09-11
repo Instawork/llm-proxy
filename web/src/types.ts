@@ -47,6 +47,7 @@ export interface KeyRequestRecord {
   id: string;
   requester_email: string;
   provider: Provider;
+  name: string;
   description: string;
   daily_cost_limit?: number;
   status: KeyRequestStatus;
@@ -60,6 +61,7 @@ export interface KeyRequestRecord {
 
 export interface CreateKeyRequestBody {
   provider: Provider;
+  name: string;
   description: string;
   daily_cost_limit?: number;
 }

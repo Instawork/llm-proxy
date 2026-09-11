@@ -47,6 +47,10 @@ func (h *handler) handleCreateKeyRequest(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "description is required"})
 		return
 	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
 
 	dailyLimit := req.DailyCostLimit
 	if dailyLimit <= 0 {
@@ -60,6 +64,7 @@ func (h *handler) handleCreateKeyRequest(w http.ResponseWriter, r *http.Request)
 	keyReq, err := h.deps.APIKeyStore.CreateKeyRequest(r.Context(), apikeys.CreateKeyRequestInput{
 		RequesterEmail: user.Email,
 		Provider:       req.Provider,
+		Name:           req.Name,
 		Description:    req.Description,
 		DailyCostLimit: dailyLimit,
 	})
@@ -184,10 +189,16 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	name := claimed.Name
+	if name == "" {
+		// Pending requests created before key names existed have none; derive one.
+		name = apikeys.SlugifyKeyName(claimed.Description)
+	}
+
 	createReq := CreateKeyRequest{
 		Provider:       claimed.Provider,
 		AutoProvision:  true,
-		Description:    claimed.Description,
+		Description:    name,
 		DailyCostLimit: dailyLimit,
 	}
 
