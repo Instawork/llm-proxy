@@ -11,11 +11,12 @@ const BedrockProvider = "bedrock"
 // defaultPIIOffNonBedrockBypassAdmins is the built-in allowlist used when the
 // deployment config does not override it (see SetPIIOffNonBedrockBypassAdmins).
 //
-// It ships EMPTY on purpose: the bypass lets an admin create keys that send
-// un-redacted PII to a non-Bedrock provider, so the safe default is that
-// nobody can. Operators opt specific admins in via
-// features.admin_dashboard.pii_off_bypass_admins in YAML, which keeps the
-// roster out of source control and avoids a code deploy on every change.
+// Admins can always bypass; this list extends the bypass to specific
+// non-admin users. It ships EMPTY on purpose: the bypass lets a user create
+// keys that send un-redacted PII to a non-Bedrock provider. Operators opt
+// users in via features.admin_dashboard.pii_off_bypass_admins in YAML, which
+// keeps the roster out of source control and avoids a code deploy on every
+// change.
 var defaultPIIOffNonBedrockBypassAdmins = []string{}
 
 var (
@@ -51,8 +52,9 @@ func SetPIIOffNonBedrockBypassAdmins(emails []string) {
 	piiOffBypassMu.Unlock()
 }
 
-// CanBypassPIIOffNonBedrockPolicy reports whether an admin may create or update
-// keys with PII redaction disabled on a non-Bedrock provider.
+// CanBypassPIIOffNonBedrockPolicy reports whether email is allowlisted to
+// create or update keys with PII redaction disabled on a non-Bedrock provider.
+// Admins bypass regardless of this list.
 func CanBypassPIIOffNonBedrockPolicy(email string) bool {
 	piiOffBypassMu.RLock()
 	defer piiOffBypassMu.RUnlock()
@@ -74,27 +76,15 @@ func ShouldEnforceBedrockForPIIOff(globalEnabled bool, key *APIKey) bool {
 }
 
 // ValidatePIIOffBedrockPolicy rejects non-Bedrock providers when PII
-// redaction is off under the policy above. adminBypass skips the check for
-// allowlisted admins in the dashboard.
-func ValidatePIIOffBedrockPolicy(globalEnabled bool, provider string, redactPII *bool, adminBypass bool) error {
-	if adminBypass {
-		return nil
-	}
+// redaction is off under the policy above. The dashboard lets admins (and
+// allowlisted users, see CanBypassPIIOffNonBedrockPolicy) override a
+// rejection after confirming the choice.
+func ValidatePIIOffBedrockPolicy(globalEnabled bool, provider string, redactPII *bool) error {
 	key := &APIKey{Provider: provider, RedactPII: redactPII}
-	return enforcePIIOffBedrockProvider(globalEnabled, key)
-}
-
-// EnforcePIIOffBedrockProvider rejects requests for keys that violate the
-// PII-off Bedrock policy. Used at request time (no admin bypass).
-func EnforcePIIOffBedrockProvider(globalEnabled bool, key *APIKey) error {
-	return enforcePIIOffBedrockProvider(globalEnabled, key)
-}
-
-func enforcePIIOffBedrockProvider(globalEnabled bool, key *APIKey) error {
 	if !ShouldEnforceBedrockForPIIOff(globalEnabled, key) {
 		return nil
 	}
-	if key != nil && strings.EqualFold(key.Provider, BedrockProvider) {
+	if strings.EqualFold(provider, BedrockProvider) {
 		return nil
 	}
 	return fmt.Errorf("keys with PII redaction disabled must use the bedrock provider")

@@ -264,12 +264,7 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
 	}
 
-	if err := apikeys.ValidatePIIOffBedrockPolicy(
-		h.globalPIIEnabled(),
-		req.Provider,
-		req.RedactPII,
-		h.adminBypassPIIBedrockPolicy(r),
-	); err != nil {
+	if err := h.validatePIIOffPolicy(r, req.Provider, req.RedactPII); err != nil {
 		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
 	}
 

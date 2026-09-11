@@ -8,6 +8,9 @@ import BulkGeneratePanel, {
 import KeyRequestsPanel from "../../components/keys/key-requests-panel";
 import ApiKeysModal from "../../components/keys/api-keys-modal";
 import EditKeyModal from "../../components/keys/edit-key-modal";
+import PiiOffConfirmDialog, {
+  needsPiiOffConfirmation,
+} from "../../components/keys/pii-off-confirm-dialog";
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
@@ -163,6 +166,7 @@ export default function KeysPage() {
   const [editingKey, setEditingKey] = useState<APIKey | null>(null);
   const [form, setForm] = useState<KeyFormState>(defaultKeyForm);
   const [manualKeyEntry, setManualKeyEntry] = useState(false);
+  const [piiOffConfirmOpen, setPiiOffConfirmOpen] = useState(false);
   const [personalMode, setPersonalMode] = useState(false);
   const [shareResult, setShareResult] = useState<ShareCreateResponse | null>(
     null,
@@ -401,8 +405,19 @@ export default function KeysPage() {
     setPersonalMode(false);
   };
 
-  const onSubmit = async (event: FormEvent) => {
+  const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (
+      !treatAsPersonal &&
+      needsPiiOffConfirmation(form.provider, piiFromFormValue(form.redact_pii))
+    ) {
+      setPiiOffConfirmOpen(true);
+      return;
+    }
+    void submitCreate();
+  };
+
+  const submitCreate = async () => {
     const { daily_cost_limit: dailyCostLimit, monthly_cost_limit: monthlyCostLimit } =
       costLimitsFromForm(form);
     const activeCostLimit =
@@ -831,6 +846,17 @@ export default function KeysPage() {
             viewerMonthlyLimitLabel={viewerMonthlyLimitLabel}
             editorMaxDollars={editorMaxDollars}
           />
+
+          {piiOffConfirmOpen ? (
+            <PiiOffConfirmDialog
+              provider={form.provider}
+              pending={createKey.isPending}
+              onCancel={() => setPiiOffConfirmOpen(false)}
+              onConfirm={() => {
+                void submitCreate().finally(() => setPiiOffConfirmOpen(false));
+              }}
+            />
+          ) : null}
 
           {editingKey ? (
             <EditKeyModal

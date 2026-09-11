@@ -142,9 +142,10 @@ features:
     enabled: false
     allowed_domain: "example.com"
     dev_cors_origin: "http://localhost:5173"
-    # Admin emails allowed to create/update keys with PII redaction disabled on
-    # a non-Bedrock provider. Ships empty (no one can bypass) — list the admins
-    # here so roster changes don't require a code deploy.
+    # Non-admin emails allowed to create/update keys with PII redaction disabled
+    # on a non-Bedrock provider (admins always can, after confirming in the
+    # dashboard). Ships empty — list users here so roster changes don't require
+    # a code deploy.
     # pii_off_bypass_admins:
     #   - "admin@example.com"
     rollups:
