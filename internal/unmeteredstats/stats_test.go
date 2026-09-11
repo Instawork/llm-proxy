@@ -58,6 +58,16 @@ func TestRecorderCapsEndpointsPerKey(t *testing.T) {
 	assert.Equal(t, int64(5), byKey[otherEndpoint])
 }
 
+func TestRecorderCapsGlobalEndpoints(t *testing.T) {
+	r := NewRecorder()
+	for i := 0; i < maxEndpoints+5; i++ {
+		r.RecordRequest("", fmt.Sprintf("/v1/junk-%d (HTTP 404)", i))
+	}
+	byEndpoint := adminrollup.NameCountMapFromSnap(r.Snapshot()["by_endpoint"])
+	assert.Len(t, byEndpoint, maxEndpoints+1)
+	assert.Equal(t, int64(5), byEndpoint[otherEndpoint])
+}
+
 func TestRecorderMergesFleetRollup(t *testing.T) {
 	store, err := adminrollup.NewStore(adminrollup.Config{Enabled: true, Backend: "memory"})
 	require.NoError(t, err)

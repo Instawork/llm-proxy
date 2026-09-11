@@ -1170,6 +1170,7 @@ func TestTokenParsingMiddleware_UnmeteredCallback(t *testing.T) {
 		"failed chat call":          {"POST", "/openai/v1/chat/completions", &configurableProvider{parseErr: errors.New("boom")}, 401, 1, 401},
 		"usage-less chat response":  {"POST", "/openai/v1/chat/completions", &configurableProvider{metadata: &providers.LLMResponseMetadata{Provider: "openai"}}, 200, 1, 200},
 		"cors preflight is ignored": {"OPTIONS", "/openai/v1/embeddings", &configurableProvider{metadata: metered}, 204, 0, 0},
+		"late WriteHeader ignored":  {"POST", "/openai/v1/embeddings", &configurableProvider{metadata: metered}, 0, 1, 200},
 		"non-provider route":        {"GET", "/health", &configurableProvider{metadata: metered}, 200, 0, 0},
 	}
 	for name, tc := range cases {
@@ -1179,6 +1180,11 @@ func TestTokenParsingMiddleware_UnmeteredCallback(t *testing.T) {
 			calls, gotStatus := 0, 0
 			onUnmetered := func(_ *http.Request, status int) { calls++; gotStatus = status }
 			chain := TokenParsingMiddlewareWithUnmetered(pm, onUnmetered)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status == 0 { // body first commits 200; the later status must not win
+					_, _ = w.Write([]byte("{}"))
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 				w.WriteHeader(tc.status)
 			}))
 			req := httptest.NewRequest(tc.method, tc.path, bytes.NewReader([]byte("{}")))

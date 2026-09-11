@@ -12,8 +12,11 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 )
 
-// maxEndpointsPerKey bounds label cardinality per key; extra labels fold into "other".
-const maxEndpointsPerKey = 25
+// Label cardinality bounds; labels beyond them fold into "other".
+const (
+	maxEndpointsPerKey = 25
+	maxEndpoints       = 200
+)
 
 const otherEndpoint = "other"
 
@@ -173,6 +176,13 @@ func (r *Recorder) publishLocked() {
 	r.mu.Lock()
 }
 
+func boundedEndpoint(seen map[string]int64, endpoint string, limit int) string {
+	if _, ok := seen[endpoint]; ok || len(seen) < limit {
+		return endpoint
+	}
+	return otherEndpoint
+}
+
 // keyEndpointLocked returns the endpoint to count under for keyID, folding
 // into "other" once the key already tracks maxEndpointsPerKey labels.
 func (r *Recorder) keyEndpointLocked(keyID, endpoint string) string {
@@ -201,7 +211,7 @@ func (r *Recorder) RecordRequest(keyID, endpoint string) {
 	r.mu.Lock()
 	r.maybeRollDay(time.Now())
 	r.total++
-	r.byEndpoint[endpoint]++
+	r.byEndpoint[boundedEndpoint(r.byEndpoint, endpoint, maxEndpoints)]++
 	if keyID != "" {
 		r.byKey[adminrollup.DimMemberField(keyID, r.keyEndpointLocked(keyID, endpoint))]++
 	}

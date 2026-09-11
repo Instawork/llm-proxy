@@ -275,8 +275,11 @@ type responseCapture struct {
 	sseDataTypes   map[string]int64
 }
 
+// WriteHeader keeps the first committed status, as net/http does.
 func (rc *responseCapture) WriteHeader(code int) {
-	rc.status = code
+	if rc.status == 0 {
+		rc.status = code
+	}
 	rc.ResponseWriter.WriteHeader(code)
 }
 
@@ -288,6 +291,9 @@ func (rc *responseCapture) statusCode() int {
 }
 
 func (rc *responseCapture) Write(b []byte) (int, error) {
+	if rc.status == 0 {
+		rc.status = http.StatusOK
+	}
 	now := time.Now()
 	if len(b) > 0 {
 		rc.ttfbOnce.Do(func() {
