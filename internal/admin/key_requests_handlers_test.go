@@ -32,6 +32,7 @@ func TestHandleCreateKeyRequest(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "finch-worker",
 		Description: "finch-worker staging",
 	})
 	req := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -44,6 +45,20 @@ func TestHandleCreateKeyRequest(t *testing.T) {
 	assert.Equal(t, "pending", resp.Status)
 	assert.Equal(t, "viewer@example.com", resp.RequesterEmail)
 	assert.Equal(t, "openai", resp.Provider)
+	assert.Equal(t, "finch-worker", resp.Name)
+}
+
+func TestHandleCreateKeyRequestMissingName(t *testing.T) {
+	h := testViewerHandler(t)
+
+	body, _ := json.Marshal(CreateKeyRequestBody{
+		Provider:    "openai",
+		Description: "finch-worker staging",
+	})
+	req := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateKeyRequest(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestHandleCreateKeyRequestRejectsInflatedDailyLimit(t *testing.T) {
@@ -51,6 +66,7 @@ func TestHandleCreateKeyRequestRejectsInflatedDailyLimit(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:       "openai",
+		Name:           "oversized-budget",
 		Description:    "oversized budget",
 		DailyCostLimit: 999999,
 	})
@@ -65,6 +81,7 @@ func TestHandleCreateKeyRequestAdminRejected(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "admin-direct",
 		Description: "admin should create directly",
 	})
 	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -78,6 +95,7 @@ func TestHandleListMyKeyRequests(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "mine-only",
 		Description: "mine only",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -100,6 +118,7 @@ func TestHandleCreateKeyRequestDuplicatePending(t *testing.T) {
 	h := testViewerHandler(t)
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "first-request",
 		Description: "first request",
 	})
 
@@ -119,6 +138,7 @@ func TestHandleListKeyRequestsAdmin(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "anthropic",
+		Name:        "service-key",
 		Description: "service key please",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -143,6 +163,7 @@ func TestHandleApproveKeyRequest(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "approved-service",
 		Description: "approved-service",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -164,6 +185,10 @@ func TestHandleApproveKeyRequest(t *testing.T) {
 	require.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &approved))
 	assert.Equal(t, apikeys.KeyRequestStatusApproved, approved.Status)
 	assert.NotEmpty(t, approved.CreatedKey)
+
+	key, err := h.deps.APIKeyStore.GetKey(patchReq.Context(), approved.CreatedKey)
+	require.NoError(t, err)
+	assert.Equal(t, "approved-service", key.Description)
 }
 
 func TestHandleRejectKeyRequest(t *testing.T) {
@@ -171,6 +196,7 @@ func TestHandleRejectKeyRequest(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "gemini",
+		Name:        "reject-me",
 		Description: "reject me",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -202,6 +228,7 @@ func TestHandleReviewKeyRequestInvalidAction(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "invalid-action-test",
 		Description: "invalid action test",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)
@@ -226,6 +253,7 @@ func TestHandleApproveKeyRequestTwice(t *testing.T) {
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
+		Name:        "double-approve",
 		Description: "double approve",
 	})
 	createReq := authenticatedViewerRequest(t, h, http.MethodPost, "/admin/api/key-requests", body)

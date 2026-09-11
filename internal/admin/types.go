@@ -59,6 +59,7 @@ type KeyRequestResponse struct {
 	ID              string     `json:"id"`
 	RequesterEmail  string     `json:"requester_email"`
 	Provider        string     `json:"provider"`
+	Name            string     `json:"name"`
 	Description     string     `json:"description"`
 	DailyCostLimit  int64      `json:"daily_cost_limit,omitempty"`
 	Status          string     `json:"status"`
@@ -73,6 +74,7 @@ type KeyRequestResponse struct {
 // CreateKeyRequestBody submits a new org key request.
 type CreateKeyRequestBody struct {
 	Provider       string `json:"provider"`
+	Name           string `json:"name"`
 	Description    string `json:"description"`
 	DailyCostLimit int64  `json:"daily_cost_limit,omitempty"`
 }
@@ -88,6 +90,7 @@ func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 		ID:              req.ID(),
 		RequesterEmail:  req.RequesterEmail,
 		Provider:        req.Provider,
+		Name:            req.Name,
 		Description:     req.Description,
 		DailyCostLimit:  req.DailyCostLimit,
 		Status:          req.Status,
