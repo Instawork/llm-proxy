@@ -148,6 +148,46 @@ function trafficColumns(showReplacement: boolean, showRetiredDate: boolean): Col
   return cols;
 }
 
+interface EndpointRow {
+  id: string;
+  provider: string;
+  endpoint: string;
+  calls: number;
+}
+
+function endpointRows(counts: NameCount[]): EndpointRow[] {
+  return counts.map((row) => {
+    const { provider, model } = splitScope(row.name);
+    return { id: row.name, provider, endpoint: model, calls: row.count };
+  });
+}
+
+function endpointColumns(): ColumnDef<EndpointRow, unknown>[] {
+  return [
+    {
+      id: "provider",
+      accessorKey: "provider",
+      header: "Provider",
+      cell: ({ getValue }) => {
+        const provider = getValue<string>();
+        return provider ? <ProviderBadge provider={provider} /> : "—";
+      },
+    },
+    {
+      id: "endpoint",
+      accessorKey: "endpoint",
+      header: "Endpoint",
+      cell: ({ getValue }) => <code className="text-sm">{getValue<string>()}</code>,
+    },
+    {
+      id: "calls",
+      accessorKey: "calls",
+      header: "Calls",
+      cell: ({ getValue }) => getValue<number>().toLocaleString(),
+    },
+  ];
+}
+
 export default function ModelStatusPage() {
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useModelStatus();
   const [range, setRange] = useState<RangeKey>("today");
@@ -175,6 +215,12 @@ export default function ModelStatusPage() {
     "unknown_total",
     hasRedis,
   );
+  const unmeteredPick = pickToday(
+    stats?.available ? stats?.unmetered_total : undefined,
+    history,
+    "unmetered_total",
+    hasRedis,
+  );
 
   const retiredValue =
     range === "today" ? retiredPick.value : sumScalarField(history, range, "retired_total");
@@ -182,6 +228,8 @@ export default function ModelStatusPage() {
     range === "today" ? deprecatedPick.value : sumScalarField(history, range, "deprecated_total");
   const unknownValue =
     range === "today" ? unknownPick.value : sumScalarField(history, range, "unknown_total");
+  const unmeteredValue =
+    range === "today" ? unmeteredPick.value : sumScalarField(history, range, "unmetered_total");
   const summarySource: DataSource =
     range === "today" ? retiredPick.source : hasRedis ? "redis" : "memory";
 
@@ -207,6 +255,9 @@ export default function ModelStatusPage() {
   const byUnknown = hasRedis || range !== "today"
     ? aggNameCount(history, range, "by_unknown")
     : toNameCount(stats?.by_unknown);
+  const byUnmetered = hasRedis || range !== "today"
+    ? aggNameCount(history, range, "by_unmetered")
+    : toNameCount(stats?.by_unmetered);
 
   const retiredRows = useMemo(
     () => trafficRows(byRetired, "retired", registry?.retired),
@@ -220,10 +271,12 @@ export default function ModelStatusPage() {
     () => trafficRows(byUnknown, "unknown", undefined),
     [byUnknown],
   );
+  const unmeteredRows = useMemo(() => endpointRows(byUnmetered), [byUnmetered]);
 
   const retiredColumns = useMemo(() => trafficColumns(true, true), []);
   const deprecatedColumns = useMemo(() => trafficColumns(true, false), []);
   const unknownColumns = useMemo(() => trafficColumns(false, false), []);
+  const unmeteredColumns = useMemo(() => endpointColumns(), []);
 
   if (isLoading) return <LoadingBlock />;
   if (error) {
@@ -237,7 +290,7 @@ export default function ModelStatusPage() {
     <div className="space-y-6">
       <PageHeader
         title="Model Status"
-        description="Retired, deprecated, and unrecognized model traffic."
+        description="Retired, deprecated, and unrecognized model traffic, plus endpoints the proxy forwards without metering."
         actions={
           <div className="flex items-center gap-3">
             <RangeToggle value={range} options={RANGE_OPTIONS} onChange={setRange} />
@@ -252,7 +305,7 @@ export default function ModelStatusPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <LiveStat
           title="Retired calls"
           value={retiredValue.toLocaleString()}
@@ -269,6 +322,12 @@ export default function ModelStatusPage() {
           title="Unknown models"
           value={unknownValue.toLocaleString()}
           hint={`unregistered slugs · ${rangeLabel(range)}`}
+          source={summarySource}
+        />
+        <LiveStat
+          title="Unmetered endpoints"
+          value={unmeteredValue.toLocaleString()}
+          hint={`forwarded, usage not billed · ${rangeLabel(range)}`}
           source={summarySource}
         />
       </div>
@@ -359,6 +418,20 @@ export default function ModelStatusPage() {
           columns={unknownColumns}
           searchPlaceholder="Filter models…"
           emptyMessage="No unknown model calls in this window"
+          getRowId={(row) => row.id}
+        />
+      </SectionPanel>
+
+      <SectionPanel
+        title="Unmetered endpoint calls"
+        subtitle={`Provider paths with no token parser; add them to the endpoint registry · ${rangeLabel(range)}`}
+        source={breakdownSource}
+      >
+        <DataTable
+          data={unmeteredRows}
+          columns={unmeteredColumns}
+          searchPlaceholder="Filter endpoints…"
+          emptyMessage="Every provider endpoint seen in this window is metered or passthrough"
           getRowId={(row) => row.id}
         />
       </SectionPanel>

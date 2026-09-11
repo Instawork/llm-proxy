@@ -14,12 +14,19 @@ func TestRecorder_SnapshotCounts(t *testing.T) {
 	rec.RecordRetired("openai", "o1-mini")
 	rec.RecordDeprecated("anthropic", "claude-2")
 	rec.RecordUnknown("gemini", "typo-model")
+	rec.RecordUnmetered("openai", "/openai/v1/audio/transcriptions")
 
 	snap := rec.Snapshot()
 	require.Equal(t, true, snap["available"])
 	assert.Equal(t, int64(2), snap["retired_total"])
 	assert.Equal(t, int64(1), snap["deprecated_total"])
 	assert.Equal(t, int64(1), snap["unknown_total"])
+	assert.Equal(t, int64(1), snap["unmetered_total"])
+
+	byUnmetered, ok := snap["by_unmetered"].([]kv)
+	require.True(t, ok)
+	require.Len(t, byUnmetered, 1)
+	assert.Equal(t, "openai:/openai/v1/audio/transcriptions", byUnmetered[0].Name)
 
 	byRetired, ok := snap["by_retired"].([]kv)
 	require.True(t, ok)

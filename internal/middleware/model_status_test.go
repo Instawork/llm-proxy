@@ -99,3 +99,41 @@ func TestModelStatusMiddleware_RetiredModelAliasShortCircuits(t *testing.T) {
 		t.Fatalf("status=%d want 404", rec.Code)
 	}
 }
+
+func TestModelStatusMiddleware_RecordsUnmeteredEndpoint(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	recorder := modelstatusstats.NewRecorder()
+	metrics := &fakeDogstatsd{}
+
+	called := 0
+	chain := ModelStatusMiddleware(pm, &config.YAMLConfig{}, recorder, metrics)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called++ }),
+	)
+
+	for _, path := range []string{"/openai/v1/audio/transcriptions", "/openai/v1/audio/transcriptions", "/openai/v1/chat/completions", "/openai/v1/models"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-5.5"}`))
+		chain.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	if called != 4 {
+		t.Fatalf("unmetered endpoints must still be forwarded; next ran %d times", called)
+	}
+	snap := recorder.Snapshot()
+	if snap["unmetered_total"] != int64(2) {
+		t.Fatalf("unmetered_total=%v want 2", snap["unmetered_total"])
+	}
+	byUnmetered, _ := json.Marshal(snap["by_unmetered"])
+	if !strings.Contains(string(byUnmetered), `"openai:/openai/v1/audio/transcriptions"`) {
+		t.Fatalf("by_unmetered=%s", byUnmetered)
+	}
+	got := 0
+	for _, c := range metrics.calls {
+		if c == "endpoint.unmetered_call" {
+			got++
+		}
+	}
+	if got != 2 {
+		t.Fatalf("endpoint.unmetered_call emitted %d times, want 2", got)
+	}
+}

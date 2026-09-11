@@ -137,6 +137,12 @@ func (g *GeminiProxy) IsStreamingRequest(req *http.Request) bool {
 	if req.Method == "POST" && isChatCompletionsPath(req.URL.Path) {
 		return requestBodyHasStreamTrue(req, "gemini")
 	}
+	// The Interactions API likewise signals streaming with "stream": true.
+	// Its bodies are JSON (uploads go through /upload/), so inspecting them
+	// is safe.
+	if req.Method == "POST" && strings.HasSuffix(strings.TrimSuffix(req.URL.Path, "/"), "/interactions") {
+		return requestBodyHasStreamTrue(req, "gemini")
+	}
 
 	// For Gemini generateContent endpoints, rely on explicit streaming indicators
 	// via the URL path (streamGenerateContent) rather than inspecting the body.
@@ -263,6 +269,9 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 	if looksLikeOpenAIChatJSON(bodyBytes) {
 		return parseOpenAICompatMetadata(bodyBytes, false, "gemini")
 	}
+	if looksLikeInteractionsJSON(bodyBytes) {
+		return parseInteractionsMetadata(bodyBytes)
+	}
 
 	var response GeminiResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
@@ -325,6 +334,13 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 			return nil, fmt.Errorf("failed to read streaming response: %w", err)
 		}
 		return parseOpenAICompatMetadata(data, true, "gemini")
+	}
+	if looksLikeInteractionsStream(head) {
+		data, err := io.ReadAll(buffered)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read streaming response: %w", err)
+		}
+		return parseInteractionsStream(data)
 	}
 
 	// :streamGenerateContent WITHOUT alt=sse returns a plain JSON array of

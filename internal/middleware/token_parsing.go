@@ -89,15 +89,7 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 
 			next.ServeHTTP(captureWriter, r)
 
-			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
-				strings.Contains(r.URL.Path, "/completions") ||
-				strings.Contains(r.URL.Path, "/messages") ||
-				strings.Contains(r.URL.Path, ":generateContent") ||
-				strings.Contains(r.URL.Path, ":streamGenerateContent") ||
-				strings.Contains(r.URL.Path, "/converse") ||
-				strings.Contains(r.URL.Path, "/responses")
-
-			if provider == nil || !isAPIEndpoint {
+			if provider == nil || providers.ClassifyEndpoint(r.URL.Path) != providers.EndpointMetered {
 				return
 			}
 

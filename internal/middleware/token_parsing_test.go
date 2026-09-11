@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/gorilla/mux"
 )
@@ -47,6 +48,116 @@ func (m *configurableProvider) ExtractRequestModelAndMessages(req *http.Request)
 
 func (m *configurableProvider) ParseResponseMetadata(body io.Reader, isStreaming bool) (*providers.LLMResponseMetadata, error) {
 	return m.metadata, m.parseErr
+}
+
+// namedProvider is a configurableProvider registered under an arbitrary
+// provider name so route-to-provider resolution can be exercised.
+type namedProvider struct {
+	configurableProvider
+	name string
+}
+
+func (m *namedProvider) GetName() string { return m.name }
+
+// TestTokenParsingMiddleware_EndpointCoverage pins which provider paths fire
+// the metadata callbacks (and so reach cost tracking) and which pass through
+// unmetered. Every path seen in production traffic belongs here.
+func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
+	cases := []struct {
+		path    string
+		metered bool
+	}{
+		{"/openai/v1/chat/completions", true},
+		{"/openai/v1/completions", true},
+		{"/openai/v1/responses", true},
+		{"/meta/autolabel/openai/v1/responses", true},
+		{"/anthropic/v1/messages", true},
+		{"/anthropic/v1/chat/completions", true},
+		{"/meta/autolabel/anthropic/v1/messages", true},
+		{"/gemini/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/gemini/v1beta/models/gemini-3.6-flash:streamGenerateContent", true},
+		{"/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/meta/autolabel/gemini/v1beta/models/gemini-3.6-flash:generateContent", true},
+		{"/gemini/v1beta/openai/chat/completions", true},
+		{"/bedrock/model/anthropic.claude-3/converse", true},
+		{"/model/anthropic.claude-3/converse-stream", true},
+		{"/bedrock-mantle/anthropic/v1/messages", true},
+		{"/meta/autolabel/bedrock-mantle/anthropic/v1/messages", true},
+		{"/gemini/v1beta/interactions", true},
+
+		{"/gemini/upload/v1beta/files", false},
+		{"/gemini/v1beta/models", false},
+		{"/anthropic/v1/models", false},
+		{"/openai/v1/models", false},
+		{"/openai/v1/realtime/client_secrets", false},
+		{"/openai/v1/audio/transcriptions", false},
+		{"/openai/v1/embeddings", false},
+		{"/bedrock/model/anthropic.claude-3/invoke", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			pm := providers.NewProviderManager()
+			for _, name := range []string{"openai", "anthropic", "gemini", "bedrock", "bedrock-mantle"} {
+				pm.RegisterProvider(&namedProvider{
+					name:                 name,
+					configurableProvider: configurableProvider{metadata: &providers.LLMResponseMetadata{Provider: name, InputTokens: 1}},
+				})
+			}
+			fired := false
+			chain := TokenParsingMiddleware(pm, func(*http.Request, *providers.LLMResponseMetadata) { fired = true })(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{}`))
+				}),
+			)
+
+			req := httptest.NewRequest("POST", tc.path, bytes.NewReader([]byte("{}")))
+			rr := httptest.NewRecorder()
+			captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+
+			if fired != tc.metered {
+				t.Fatalf("metered=%v, want %v", fired, tc.metered)
+			}
+		})
+	}
+}
+
+// TestTokenParsingMiddleware_GeminiInteractionsReachesCostCallback drives the
+// real Gemini provider end to end: an Interactions response must produce
+// parsed usage and hand the key-bearing request to the cost callback.
+func TestTokenParsingMiddleware_GeminiInteractionsReachesCostCallback(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewGeminiProxy())
+
+	var got *providers.LLMResponseMetadata
+	var gotKey *apikeys.APIKey
+	chain := TokenParsingMiddleware(pm, func(r *http.Request, md *providers.LLMResponseMetadata) {
+		got = md
+		gotKey, _ = apikeys.FromContext(r.Context())
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"v1_x","object":"interaction","model":"gemini-3.8-flash","status":"completed",` +
+			`"usage":{"total_input_tokens":33720,"total_output_tokens":812,"total_thought_tokens":400,"total_tokens":34932}}`))
+	}))
+
+	req := httptest.NewRequest("POST", "/gemini/v1beta/interactions", strings.NewReader(`{"model":"gemini-3.8-flash","input":"label this"}`))
+	req = req.WithContext(apikeys.WithContext(req.Context(), &apikeys.APIKey{PK: "sk-iw-test"}))
+	rr := httptest.NewRecorder()
+	captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+
+	if got == nil {
+		t.Fatal("cost callback not invoked for /gemini/v1beta/interactions")
+	}
+	if got.Model != "gemini-3.8-flash" || got.InputTokens != 33720 || got.OutputTokens != 812 || got.ThoughtTokens != 400 {
+		t.Fatalf("unexpected metadata: %+v", got)
+	}
+	if gotKey == nil || gotKey.PK != "sk-iw-test" {
+		t.Fatalf("callback request lost the API key record: %+v", gotKey)
+	}
+	if rr.Header().Get("X-LLM-Input-Tokens") != "33720" {
+		t.Fatalf("X-LLM-Input-Tokens=%q", rr.Header().Get("X-LLM-Input-Tokens"))
+	}
 }
 
 // driveTokenParsing wraps handler in TokenParsingMiddleware (with the given
