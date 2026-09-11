@@ -38,6 +38,7 @@ type spendKeyRow struct {
 	Today       keyCostStatsResponse `json:"today"`
 	Month       keyCostMonthResponse `json:"month"`
 	Cap         *spendCapResponse    `json:"cap,omitempty"`
+	Unmetered   unmeteredResponse    `json:"unmetered"`
 }
 
 type spendProviderRow struct {
@@ -78,6 +79,7 @@ type spendOverviewResponse struct {
 	Providers       []spendProviderRow  `json:"providers"`
 	History         []spendDayPoint     `json:"history"`
 	Fleet           *fleetSpendResponse `json:"fleet,omitempty"`
+	Unmetered       unmeteredResponse   `json:"unmetered"`
 	Caveats         []string            `json:"caveats"`
 }
 
@@ -89,6 +91,7 @@ type spendKeyLister interface {
 type spendOverviewService struct {
 	keys               spendKeyLister
 	costSummary        func() map[string]interface{}
+	unmeteredSummary   func() map[string]interface{}
 	rollup             *adminrollup.Store
 	now                func() time.Time
 	personalMonthlyCap int64
@@ -103,6 +106,7 @@ type spendInputs struct {
 	day, month      string
 	keys            []*apikeys.APIKey
 	snap            map[string]interface{}
+	unmetered       map[string]interface{}
 	rollupBackend   string
 	rollupOK        bool
 	redisByKey      map[string]adminrollup.KeyCostDayStats
@@ -143,6 +147,7 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 		return spendInputs{}, err
 	}
 	in.snap = safeSummary(s.costSummary)
+	in.unmetered = safeSummary(s.unmeteredSummary)
 
 	if s.rollup == nil {
 		return in, nil
@@ -205,6 +210,7 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 			Today:       today,
 			Month:       keyCostMonth(in.month, in.monthByKey[masked], in.rollupOK, in.rollupOK, today.SpendUSD),
 			Cap:         resolveSpendCap(k, in.personalCap),
+			Unmetered:   unmeteredForKey(in.unmetered, masked),
 		}
 		if in.scope == spendScopeFleet {
 			row.OwnerEmail = k.OwnerEmail
@@ -224,8 +230,14 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 
 	if in.scope == spendScopeMine {
 		buildMineSpend(&resp, in)
+		perKey := make([]unmeteredResponse, 0, len(resp.Keys))
+		for _, row := range resp.Keys {
+			perKey = append(perKey, row.Unmetered)
+		}
+		resp.Unmetered = sumUnmetered(unmeteredSource(in.unmetered), perKey)
 	} else {
 		buildFleetSpend(&resp, in)
+		resp.Unmetered = unmeteredFleet(in.unmetered)
 	}
 
 	if in.rollupOK {
@@ -489,6 +501,7 @@ func (h *handler) spendOverviewService() spendOverviewService {
 	return spendOverviewService{
 		keys:               h.deps.APIKeyStore,
 		costSummary:        h.deps.CostSummary,
+		unmeteredSummary:   h.deps.UnmeteredSummary,
 		rollup:             h.deps.AdminRollupStore,
 		now:                time.Now,
 		personalMonthlyCap: h.viewerPersonalMonthlyLimit(),

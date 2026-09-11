@@ -77,6 +77,7 @@ type keyStatsResponse struct {
 	CostToday       keyCostStatsResponse    `json:"cost_today"`
 	CostMonth       keyCostMonthResponse    `json:"cost_month"`
 	PIIToday        keyPIIStatsResponse     `json:"pii_today"`
+	UnmeteredToday  unmeteredResponse       `json:"unmetered_today"`
 	RateUsage       []keyRateUsageResponse  `json:"rate_usage,omitempty"`
 	RateBackend     string                  `json:"rate_backend,omitempty"`
 	CostHistory     []keyDayPointResponse   `json:"cost_history"`
@@ -177,6 +178,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 	resp.CostToday = keyCostToday(costSnap, masked, record.PK, today, redisCost, redisCostOK, costRollupOK)
 	resp.CostMonth = keyCostMonthForKey(ctx, h.deps.AdminRollupStore, today, masked, resp.CostToday.SpendUSD, costRollupOK)
 	resp.PIIToday = mergeKeyPIIStats(memPII, redisPII, redisPIIOK, piiRollupOK)
+	resp.UnmeteredToday = unmeteredForKey(safeSummary(h.deps.UnmeteredSummary), masked)
 	if h.deps.RateLimiter != nil {
 		if snapshotter, ok := h.deps.RateLimiter.(ratelimit.Snapshotter); ok {
 			snap := snapshotter.Snapshot(time.Now())

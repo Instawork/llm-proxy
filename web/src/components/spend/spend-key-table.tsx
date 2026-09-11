@@ -7,7 +7,7 @@ import { MaskedCredentialId } from "../ui/masked-credential-id";
 import { ProviderBadge } from "../ui/page-header";
 import { formatCount, formatUsd } from "../../lib/format";
 import { keyDetailPathForMaskedId } from "../../lib/key-routes";
-import { capFraction } from "../../lib/spend-overview";
+import { UNMETERED_HELP, capFraction, unmeteredEndpointSummary } from "../../lib/spend-overview";
 import type { SpendKeyRow } from "../../types";
 
 export default function SpendKeyTable({
@@ -73,6 +73,21 @@ export default function SpendKeyTable({
         header: "Requests today",
         meta: { alignRight: true },
         cell: ({ getValue }) => formatCount(getValue<number>()),
+      },
+      {
+        id: "unmetered",
+        accessorFn: (row) => row.unmetered.requests,
+        header: "Unmetered",
+        meta: { alignRight: true },
+        cell: ({ row }) => {
+          const stats = row.original.unmetered;
+          if (stats.requests === 0) return <span className="text-base-content/40">0</span>;
+          return (
+            <span title={`${unmeteredEndpointSummary(stats, 5)}\n\n${UNMETERED_HELP}`}>
+              {formatCount(stats.requests)}
+            </span>
+          );
+        },
       },
       {
         id: "cap",

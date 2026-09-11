@@ -25,6 +25,11 @@ import (
 // to process LLM response metadata.
 type MetadataCallback func(r *http.Request, metadata *providers.LLMResponseMetadata)
 
+// UnmeteredCallback receives provider requests that finished without token
+// usage — unsupported endpoints, unparseable bodies, or failed calls — and so
+// never reach the cost tracker.
+type UnmeteredCallback func(r *http.Request, status int)
+
 // GetProviderFromRequest determines which provider to use based on the
 // request path. Recognized prefixes:
 //   - /meta/<userID>/<provider>/...   meta-routing for user-scoped requests
@@ -73,6 +78,12 @@ func GetProviderFromRequest(providerManager *providers.ProviderManager, req *htt
 // the caller.  The measurement is attached to the parsed LLMResponseMetadata so
 // that registered callbacks (e.g. the cost tracker) can record it.
 func TokenParsingMiddleware(providerManager *providers.ProviderManager, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
+	return TokenParsingMiddlewareWithUnmetered(providerManager, nil, callbacks...)
+}
+
+// TokenParsingMiddlewareWithUnmetered is TokenParsingMiddleware that also
+// reports provider requests which produced no token usage to onUnmetered.
+func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderManager, onUnmetered UnmeteredCallback, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			provider := GetProviderFromRequest(providerManager, r)
@@ -89,6 +100,15 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 
 			next.ServeHTTP(captureWriter, r)
 
+			if provider == nil {
+				return
+			}
+			unmetered := func() {
+				if onUnmetered != nil && r.Method != http.MethodOptions {
+					onUnmetered(r, captureWriter.statusCode())
+				}
+			}
+
 			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
 				strings.Contains(r.URL.Path, "/completions") ||
 				strings.Contains(r.URL.Path, "/messages") ||
@@ -97,7 +117,8 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 				strings.Contains(r.URL.Path, "/converse") ||
 				strings.Contains(r.URL.Path, "/responses")
 
-			if provider == nil || !isAPIEndpoint {
+			if !isAPIEndpoint {
+				unmetered()
 				return
 			}
 
@@ -126,10 +147,12 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 						}
 					}
 				}
+				unmetered()
 				return
 			}
 
 			if metadata == nil {
+				unmetered()
 				return
 			}
 
@@ -199,6 +222,10 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 					callback(r, metadata)
 				}
 			}
+			// Mirrors the cost tracker's TotalTokens > 0 guard.
+			if metadata.TotalTokens == 0 {
+				unmetered()
+			}
 		})
 	}
 }
@@ -217,6 +244,7 @@ type responseCapture struct {
 	http.ResponseWriter
 
 	body         *bytes.Buffer
+	status       int
 	captureFull  bool // false once the capture buffer is at the cap
 	isStreaming  bool
 	provider     providers.Provider
@@ -245,6 +273,18 @@ type responseCapture struct {
 	sseLeftover    []byte
 	sseEventCounts map[string]int64
 	sseDataTypes   map[string]int64
+}
+
+func (rc *responseCapture) WriteHeader(code int) {
+	rc.status = code
+	rc.ResponseWriter.WriteHeader(code)
+}
+
+func (rc *responseCapture) statusCode() int {
+	if rc.status == 0 {
+		return http.StatusOK
+	}
+	return rc.status
 }
 
 func (rc *responseCapture) Write(b []byte) (int, error) {

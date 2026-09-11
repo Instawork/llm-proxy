@@ -1,4 +1,4 @@
-import type { SpendCaveat, SpendKeyRow } from "../types";
+import type { SpendCaveat, SpendKeyRow, UnmeteredStats } from "../types";
 
 /** Above this many keys the overview switches from cards to a table. */
 export const SPEND_KEY_CARD_LIMIT = 6;
@@ -37,4 +37,15 @@ export function sortBySpend<T extends { today: { spend_usd: number }; month: { s
     if (b.today.spend_usd !== a.today.spend_usd) return b.today.spend_usd - a.today.spend_usd;
     return id(a).localeCompare(id(b));
   });
+}
+
+export const UNMETERED_HELP =
+  "Requests that reached the provider but returned no token usage, so nothing was billed to the key — embeddings, model listings, and calls that failed (shown with their HTTP status).";
+
+/** Short endpoint list for compact rows: "/v1/embeddings, /v1/models +2 more". */
+export function unmeteredEndpointSummary(stats: Pick<UnmeteredStats, "endpoints">, max = 2): string {
+  const names = stats.endpoints.map((e) => e.endpoint);
+  const shown = names.slice(0, max).join(", ");
+  const rest = names.length - max;
+  return rest > 0 ? `${shown} +${rest} more` : shown;
 }

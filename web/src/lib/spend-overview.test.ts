@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { capFraction, sortBySpend } from "./spend-overview";
+import { capFraction, sortBySpend, unmeteredEndpointSummary } from "./spend-overview";
 import type { KeyCostMonthStats, KeyCostStats } from "../types";
 
 function today(spend: number): KeyCostStats {
@@ -49,5 +49,24 @@ describe("sortBySpend", () => {
     const sorted = sortBySpend(rows, (r) => r.id);
     expect(sorted.map((r) => r.id)).toEqual(["d", "c", "a", "b"]);
     expect(rows.map((r) => r.id)).toEqual(["b", "c", "a", "d"]);
+  });
+});
+
+describe("unmeteredEndpointSummary", () => {
+  const endpoints = [
+    { endpoint: "/v1/embeddings", requests: 5 },
+    { endpoint: "/v1/models", requests: 2 },
+    { endpoint: "/v1/chat/completions (HTTP 401)", requests: 1 },
+  ];
+
+  it("lists the busiest endpoints and counts the rest", () => {
+    expect(unmeteredEndpointSummary({ endpoints })).toBe("/v1/embeddings, /v1/models +1 more");
+  });
+
+  it("omits the overflow note when everything fits", () => {
+    expect(unmeteredEndpointSummary({ endpoints }, 3)).toBe(
+      "/v1/embeddings, /v1/models, /v1/chat/completions (HTTP 401)",
+    );
+    expect(unmeteredEndpointSummary({ endpoints: [] })).toBe("");
   });
 });

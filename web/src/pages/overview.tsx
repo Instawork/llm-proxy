@@ -5,13 +5,14 @@ import { chartPalette } from "../components/charts/chart-setup";
 import SpendKeyCard from "../components/spend/spend-key-card";
 import SpendKeyTable from "../components/spend/spend-key-table";
 import SpendPeriodTable from "../components/spend/spend-period-table";
+import { UnmeteredEndpointList } from "../components/spend/unmetered-calls";
 import { LiveStat, SectionPanel } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
 import { SpendOverview } from "../components/ui/spend-breakdown";
 import { useSpendOverview } from "../hooks/queries";
 import { formatCount, formatMonthYear, formatUsd, scopeLabel } from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
-import { CAVEAT_COPY, SPEND_KEY_CARD_LIMIT, sortBySpend } from "../lib/spend-overview";
+import { CAVEAT_COPY, SPEND_KEY_CARD_LIMIT, UNMETERED_HELP, sortBySpend } from "../lib/spend-overview";
 import type { SpendOverviewResponse, SpendProviderRow, SpendUserRow } from "../types";
 
 const PROVIDER_COLORS = [
@@ -87,7 +88,7 @@ export default function OverviewPage() {
         showMonthlyLimit={false}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <LiveStat
           title="Requests today"
           value={formatCount(data.totals.today.requests)}
@@ -106,6 +107,12 @@ export default function OverviewPage() {
           value={providersWithSpend.length}
           hint="with spend today"
           source={data.totals.today.source}
+        />
+        <LiveStat
+          title="Unmetered calls"
+          value={formatCount(data.unmetered.requests)}
+          hint="no token usage, not billed"
+          source={data.unmetered.source}
         />
       </div>
 
@@ -136,6 +143,14 @@ export default function OverviewPage() {
           </div>
         )}
       </section>
+
+      <SectionPanel
+        title="Unmetered calls"
+        subtitle={UNMETERED_HELP}
+        source={data.unmetered.source}
+      >
+        <UnmeteredEndpointList stats={data.unmetered} />
+      </SectionPanel>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <ChartCard

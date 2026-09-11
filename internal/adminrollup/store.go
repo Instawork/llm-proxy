@@ -27,6 +27,7 @@ const (
 	MetricCircuitActivity = "circuit_activity"
 	MetricRateLimit       = "ratelimit"
 	MetricModelStatus     = "model_status"
+	MetricUnmetered       = "unmetered"
 
 	keyPrefix = "llm:admin:"
 
@@ -399,6 +400,10 @@ func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps Top
 		byDeprecated, _ := s.loadHash(ctx, dimKey(metric, day, "by_deprecated"))
 		byUnknown, _ := s.loadHash(ctx, dimKey(metric, day, "by_unknown"))
 		return modelStatusDataFromAggregates(totals, byRetired, byDeprecated, byUnknown, caps), true
+	case MetricUnmetered:
+		byEndpoint, _ := s.loadHash(ctx, dimKey(metric, day, "by_endpoint"))
+		byKey, _ := s.loadHash(ctx, dimKey(metric, day, "by_key"))
+		return unmeteredDataFromAggregates(totals, byEndpoint, byKey), true
 	case MetricRateLimit:
 		byProv, _ := s.loadHash(ctx, dimKey(metric, day, "by_provider"))
 		byReason, _ := s.loadHash(ctx, dimKey(metric, day, "by_reason"))

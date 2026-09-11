@@ -30,5 +30,6 @@ type Deps struct {
 	RateLimitSummary   func() map[string]interface{}
 	CircuitActivity    func() map[string]interface{}
 	ModelStatusSummary func() map[string]interface{}
+	UnmeteredSummary   func() map[string]interface{}
 	KeyProvisioner     *provision.Manager
 }

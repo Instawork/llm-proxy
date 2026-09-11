@@ -4,6 +4,7 @@ import { DataSourceBadge } from "../ui/data-source";
 import { MaskedCredentialId } from "../ui/masked-credential-id";
 import { ProviderBadge } from "../ui/page-header";
 import { SpendLimitProgress } from "../ui/spend-limit-progress";
+import { UnmeteredNote } from "./unmetered-calls";
 import { formatCount, formatUsd } from "../../lib/format";
 import { keyDetailPathForMaskedId } from "../../lib/key-routes";
 import { capFraction } from "../../lib/spend-overview";
@@ -44,6 +45,7 @@ export default function SpendKeyCard({ row, monthLabel }: { row: SpendKeyRow; mo
         </div>
       </div>
 
+      <UnmeteredNote stats={row.unmetered} className="mt-3" />
       {cap ? <SpendLimitProgress spentUsd={cap.spentUsd} limitCents={cap.limitCents} label={cap.label} /> : null}
     </Link>
   );

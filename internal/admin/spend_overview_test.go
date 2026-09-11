@@ -13,6 +13,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/middleware"
+	"github.com/Instawork/llm-proxy/internal/unmeteredstats"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -261,6 +262,11 @@ func TestHandleSpendOverview_ViewerSeesOnlyOwnKeys(t *testing.T) {
 	costRec := coststats.NewRecorder()
 	costRec.RecordRequest("openai", middleware.MaskKeyID(mine.PK), "u", "gpt", 0.02, 0.01, 0.01, 20, 10)
 	h.deps.CostSummary = costRec.Snapshot
+	unmeteredRec := unmeteredstats.NewRecorder()
+	unmeteredRec.RecordRequest(middleware.MaskKeyID(mine.PK), "/v1/embeddings")
+	unmeteredRec.RecordRequest(middleware.MaskKeyID(mine.PK), "/v1/embeddings")
+	unmeteredRec.RecordRequest("iw:someone-else", "/v1/models")
+	h.deps.UnmeteredSummary = unmeteredRec.Snapshot
 
 	rec, body := spendOverviewRequest(t, h, "viewer@example.com")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -270,6 +276,9 @@ func TestHandleSpendOverview_ViewerSeesOnlyOwnKeys(t *testing.T) {
 	assert.Equal(t, middleware.MaskKeyID(mine.PK), body.Keys[0].KeyID)
 	assert.Equal(t, &spendCapResponse{Period: "monthly", Cents: 2000}, body.Keys[0].Cap)
 	assert.InDelta(t, 0.02, body.Keys[0].Today.SpendUSD, 1e-9)
+	wantUnmetered := unmeteredResponse{Source: "memory", Requests: 2, Endpoints: []unmeteredEndpointResponse{{Endpoint: "/v1/embeddings", Requests: 2}}}
+	assert.Equal(t, wantUnmetered, body.Keys[0].Unmetered)
+	assert.Equal(t, wantUnmetered, body.Unmetered)
 	require.Len(t, body.Providers, 1)
 	assert.Equal(t, "openai", body.Providers[0].Name)
 	assert.Contains(t, body.Caveats, spendCaveatRollupOff)
@@ -303,6 +312,12 @@ func TestHandleSpendOverview_EditorGetsFleetAndMatchesKeyStats(t *testing.T) {
 	costRec.RecordRequest("anthropic", middleware.MaskKeyID(personal.PK), "bob", "claude", 0.1, 0.05, 0.05, 10, 10)
 	h.deps.AdminRollupStore = rollup
 	h.deps.CostSummary = costRec.Snapshot
+	unmeteredRec := unmeteredstats.NewRecorder()
+	unmeteredRec.BindRollup(rollup, adminrollup.NewPersister(rollup, adminrollup.MetricUnmetered))
+	unmeteredRec.RecordRequest(orgMasked, "/v1/chat/completions (HTTP 401)")
+	unmeteredRec.RecordRequest("", "/v1/models")
+	unmeteredRec.FlushRollup()
+	h.deps.UnmeteredSummary = unmeteredRec.Snapshot
 
 	rec, body := spendOverviewRequest(t, h, "editor@example.com")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -314,12 +329,18 @@ func TestHandleSpendOverview_EditorGetsFleetAndMatchesKeyStats(t *testing.T) {
 	assert.Equal(t, "viewer@example.com", body.Keys[1].OwnerEmail)
 	assert.InDelta(t, 3.0, body.Totals.Month.SpendUSD, 1e-9)
 	assert.Len(t, body.Fleet.Users, 2)
+	assert.Equal(t, unmeteredResponse{Source: "redis", Requests: 2, Endpoints: []unmeteredEndpointResponse{
+		{Endpoint: "/v1/chat/completions (HTTP 401)", Requests: 1},
+		{Endpoint: "/v1/models", Requests: 1},
+	}}, body.Unmetered)
 
 	// The row a user sees on the landing page must equal the key detail page.
 	statsRec, stats := keyStatsRequest(t, h, "editor@example.com", org.PK)
 	require.Equal(t, http.StatusOK, statsRec.Code)
 	assert.Equal(t, stats.CostToday, body.Keys[0].Today)
 	assert.Equal(t, stats.CostMonth, body.Keys[0].Month)
+	assert.Equal(t, int64(1), stats.UnmeteredToday.Requests)
+	assert.Equal(t, stats.UnmeteredToday, body.Keys[0].Unmetered)
 }
 
 func TestHandleSpendOverview_KeyStoreUnavailable(t *testing.T) {

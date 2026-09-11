@@ -581,6 +581,18 @@ export interface KeyPIIRecentEvent {
   outcome: "ok" | "fail_open" | "fail_closed" | "oversize";
 }
 
+export interface UnmeteredEndpoint {
+  endpoint: string;
+  requests: number;
+}
+
+/** Provider requests that returned no token usage, so no spend was recorded. */
+export interface UnmeteredStats {
+  source: "memory" | "redis";
+  requests: number;
+  endpoints: UnmeteredEndpoint[];
+}
+
 export interface KeyStatsResponse {
   masked_key_id: string;
   day: string;
@@ -589,6 +601,7 @@ export interface KeyStatsResponse {
   cost_today: KeyCostStats;
   cost_month: KeyCostMonthStats;
   pii_today: KeyPIIStats;
+  unmetered_today: UnmeteredStats;
   rate_usage?: KeyRateUsageStats[];
   rate_backend?: string;
   cost_history: KeyDayPoint[];
@@ -611,6 +624,7 @@ export interface SpendKeyRow {
   today: KeyCostStats;
   month: KeyCostMonthStats;
   cap?: SpendCap;
+  unmetered: UnmeteredStats;
 }
 
 export interface SpendProviderRow {
@@ -651,6 +665,7 @@ export interface SpendOverviewResponse {
     users: SpendUserRow[];
     unattributed: SpendTotals;
   };
+  unmetered: UnmeteredStats;
   caveats: SpendCaveat[];
 }
 

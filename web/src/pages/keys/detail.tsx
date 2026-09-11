@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { KeyCostEventsTable, KeyPiiEventsTable, KeyRateUsageTable } from "../../components/keys/key-detail-tables";
 import { ProxyKeyUsagePanel } from "../../components/keys/proxy-key-usage-panel";
+import { UnmeteredEndpointList } from "../../components/spend/unmetered-calls";
 import { CopyButton } from "../../components/ui/copy-button";
 import { MaskedKey } from "../../components/ui/masked-key";
 import { MaskedCredentialId } from "../../components/ui/masked-credential-id";
@@ -26,6 +27,7 @@ import { useKey, useKeyStats, useMe, usePII, useRateLimits, useUpdateKey } from 
 import { permissions } from "../../lib/permissions";
 import KeyDetailPolicyEditor from "../../components/keys/key-detail-policy-editor";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
+import { UNMETERED_HELP } from "../../lib/spend-overview";
 import {
   formatDailyCostLimit,
   formatMonthlyCostLimit,
@@ -131,6 +133,7 @@ export default function KeyDetailPage() {
   const costToday = stats?.cost_today;
   const costMonth = stats?.cost_month;
   const piiToday = stats?.pii_today;
+  const unmeteredToday = stats?.unmetered_today;
   const costSource = statsSource(costToday?.source ?? "memory");
   const monthSource = statsSource(costMonth?.source ?? "memory");
   const piiSource = statsSource(piiToday?.source ?? "memory");
@@ -159,6 +162,7 @@ export default function KeyDetailPage() {
     keyRecord?.first_request_at
     || (statsLoaded && (
       requestsToday > 0
+      || (unmeteredToday?.requests ?? 0) > 0
       || (costMonth?.spend_usd ?? 0) > 0
       || recentCost.length > 0
     )),
@@ -590,6 +594,16 @@ export default function KeyDetailPage() {
                         </div>
                         <KeyCostEventsTable rows={recentCost} />
                       </DetailSection>
+
+                      {unmeteredToday ? (
+                        <DetailSection
+                          title="Unmetered calls"
+                          subtitle={UNMETERED_HELP}
+                          source={unmeteredToday.source}
+                        >
+                          <UnmeteredEndpointList stats={unmeteredToday} />
+                        </DetailSection>
+                      ) : null}
                     </>
                   ) : null}
 

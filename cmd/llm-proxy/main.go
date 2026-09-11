@@ -40,6 +40,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/ratelimitstats"
 	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/Instawork/llm-proxy/internal/redactapi"
+	"github.com/Instawork/llm-proxy/internal/unmeteredstats"
 	"github.com/Instawork/llm-proxy/internal/usagestats"
 	"github.com/gorilla/mux"
 )
@@ -164,6 +165,9 @@ var globalCircuitStatsRecorder *circuitstats.Recorder
 
 // In-process model status (retired, deprecated, unknown) for the admin UI.
 var globalModelStatusRecorder *modelstatusstats.Recorder
+
+// In-process unmetered provider requests (no token usage, no cost) for the admin UI.
+var globalUnmeteredRecorder *unmeteredstats.Recorder
 
 // Resolved circuit-breaker config after Defaults() is applied.  Captured at
 // startup so /health can surface the effective mode / backend / thresholds
@@ -971,6 +975,13 @@ func modelStatusSummaryFunc() func() map[string]interface{} {
 	return globalModelStatusRecorder.Snapshot
 }
 
+func unmeteredSummaryFunc() func() map[string]interface{} {
+	if globalUnmeteredRecorder == nil {
+		return nil
+	}
+	return globalUnmeteredRecorder.Snapshot
+}
+
 func initHistory(yamlConfig *config.YAMLConfig) {
 	hc := yamlConfig.Features.History
 	if hc.Backend == "" || strings.EqualFold(hc.Backend, "none") {
@@ -1044,6 +1055,9 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	}
 	if globalModelStatusRecorder != nil {
 		globalModelStatusRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricModelStatus))
+	}
+	if globalUnmeteredRecorder != nil {
+		globalUnmeteredRecorder.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUnmetered))
 	}
 	if globalCircuitStore != nil {
 		globalAdminRollupStop = make(chan struct{})
@@ -1545,6 +1559,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	globalModelStatusRecorder = modelstatusstats.NewRecorder()
+	globalUnmeteredRecorder = unmeteredstats.NewRecorder()
 	modelStatusMetrics := initializeCircuitMetrics(yamlConfig)
 	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, globalModelStatusRecorder, modelStatusMetrics))
 
@@ -1768,7 +1783,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		callbacks = append(callbacks, costTrackingCallback)
 	}
 
-	r.Use(middleware.TokenParsingMiddleware(globalProviderManager, callbacks...)) // Add token parsing middleware with callbacks
+	unmeteredCallback := func(r *http.Request, status int) {
+		keyID := ""
+		if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
+			keyID = middleware.MaskKeyID(keyRecord.PK)
+		}
+		globalUnmeteredRecorder.RecordRequest(keyID, unmeteredstats.EndpointLabel(r.URL.Path, status))
+	}
+	r.Use(middleware.TokenParsingMiddlewareWithUnmetered(globalProviderManager, unmeteredCallback, callbacks...))
 	r.Use(middleware.PIIResponseRestoreMiddleware(globalProviderManager))
 	r.Use(middleware.StreamingMiddleware(globalProviderManager))
 
@@ -1833,6 +1855,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			RateLimitSummary:   rateLimitSummaryFunc(),
 			CircuitActivity:    circuitActivitySummaryFunc(),
 			ModelStatusSummary: modelStatusSummaryFunc(),
+			UnmeteredSummary:   unmeteredSummaryFunc(),
 			KeyProvisioner:     globalKeyProvisioner,
 			AdminRollupStore:   globalAdminRollupStore,
 		})
@@ -1996,6 +2019,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalModelStatusRecorder != nil {
 		globalModelStatusRecorder.FlushRollup()
+	}
+	if globalUnmeteredRecorder != nil {
+		globalUnmeteredRecorder.FlushRollup()
 	}
 	if globalHistorySink != nil {
 		logger.Info("🔄 Flushing history sink...")
