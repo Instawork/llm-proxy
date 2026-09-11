@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
 // Label cardinality bounds; labels beyond them fold into "other".
@@ -21,10 +22,6 @@ const (
 const otherEndpoint = "other"
 
 const maxLabelLen = 120
-
-var providerPrefixes = []string{"/openai/", "/anthropic/", "/gemini/", "/bedrock-mantle/", "/bedrock/"}
-
-var idPrefixes = []string{"file-", "batch_", "msg_", "msgbatch_", "thread_", "run_", "step_", "asst_", "vs_", "resp_", "ftjob-"}
 
 type flushed struct {
 	total      int64
@@ -57,40 +54,11 @@ func NewRecorder() *Recorder {
 	}
 }
 
-// EndpointLabel turns a proxied request path into a stable, low-cardinality
-// label: the /meta/<user> and provider prefixes are dropped, model names and
-// resource ids are replaced by placeholders, and failed responses carry the
-// HTTP status so a rejected chat call is not confused with a metered one.
+// EndpointLabel turns a proxied request path into a bounded label using the
+// shared endpoint template, and adds the HTTP status to failed responses so a
+// rejected chat call is not confused with a metered one.
 func EndpointLabel(path string, status int) string {
-	if strings.HasPrefix(path, "/meta/") {
-		if idx := strings.Index(path[len("/meta/"):], "/"); idx >= 0 {
-			path = path[len("/meta/")+idx:]
-		}
-	}
-	for _, p := range providerPrefixes {
-		if strings.HasPrefix(path, p) {
-			path = path[len(p)-1:]
-			break
-		}
-	}
-	segs := strings.Split(path, "/")
-	for i := 1; i < len(segs); i++ {
-		prev := segs[i-1]
-		switch {
-		case segs[i] == "":
-		case prev == "models": // Gemini: models/<name>:<action>
-			action := ""
-			if idx := strings.IndexByte(segs[i], ':'); idx >= 0 {
-				action = segs[i][idx:]
-			}
-			segs[i] = "{model}" + action
-		case prev == "model": // Bedrock: model/<id>/invoke
-			segs[i] = "{model}"
-		case looksLikeID(segs[i]):
-			segs[i] = "{id}"
-		}
-	}
-	label := strings.Join(segs, "/")
+	label := providers.EndpointTemplate(path)
 	if len(label) > maxLabelLen {
 		label = label[:maxLabelLen]
 	}
@@ -98,28 +66,6 @@ func EndpointLabel(path string, status int) string {
 		label = fmt.Sprintf("%s (HTTP %d)", label, status)
 	}
 	return label
-}
-
-func looksLikeID(seg string) bool {
-	for _, p := range idPrefixes {
-		if strings.HasPrefix(seg, p) {
-			return true
-		}
-	}
-	if len(seg) < 20 {
-		return false
-	}
-	hasDigit := false
-	for _, c := range seg {
-		switch {
-		case c >= '0' && c <= '9':
-			hasDigit = true
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-', c == '_':
-		default:
-			return false
-		}
-	}
-	return hasDigit
 }
 
 func intMapDelta(cur, prev map[string]int64) map[string]float64 {

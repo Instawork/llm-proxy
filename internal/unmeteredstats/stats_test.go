@@ -16,14 +16,11 @@ func TestEndpointLabel(t *testing.T) {
 		status int
 		want   string
 	}{
-		"strips provider prefix":        {"/openai/v1/embeddings", 200, "/v1/embeddings"},
-		"strips meta and provider":      {"/meta/user-42/anthropic/v1/models", 200, "/v1/models"},
-		"gemini model with action":      {"/gemini/v1beta/models/gemini-2.0-flash:embedContent", 200, "/v1beta/models/{model}:embedContent"},
-		"bedrock model id":              {"/bedrock/model/anthropic.claude-3-haiku-20240307-v1:0/invoke", 200, "/model/{model}/invoke"},
-		"resource ids collapse":         {"/openai/v1/files/file-abc123XYZ/content", 200, "/v1/files/{id}/content"},
-		"long opaque ids collapse":      {"/openai/v1/batches/a1b2c3d4e5f6a7b8c9d0e1f2", 200, "/v1/batches/{id}"},
-		"failed call carries status":    {"/openai/v1/chat/completions", 401, "/v1/chat/completions (HTTP 401)"},
-		"unknown prefix left untouched": {"/v1/models/gemini-pro:countTokens", 200, "/v1/models/{model}:countTokens"},
+		"meta name collapses":        {"/meta/user-42/anthropic/v1/models", 200, "/meta/{name}/anthropic/v1/models"},
+		"gemini model keeps action":  {"/gemini/v1beta/models/gemini-2.0-flash:embedContent", 200, "/gemini/v1beta/models/{model}:embedContent"},
+		"bedrock model id":           {"/bedrock/model/anthropic.claude-3-haiku-20240307-v1:0/invoke", 200, "/bedrock/model/{model}/invoke"},
+		"opaque ids collapse":        {"/openai/v1/batches/a1b2c3d4e5f6a7b8c9d0e1f2", 200, "/openai/v1/batches/{id}"},
+		"failed call carries status": {"/openai/v1/chat/completions", 401, "/openai/v1/chat/completions (HTTP 401)"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

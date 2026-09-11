@@ -19,13 +19,15 @@ type statusFlushed struct {
 	retiredTotal    int64
 	deprecatedTotal int64
 	unknownTotal    int64
+	unmeteredTotal  int64
 	retired         map[string]int64
 	deprecated      map[string]int64
 	unknown         map[string]int64
+	unmetered       map[string]int64
 }
 
-// Recorder accumulates retired, deprecated, and unknown model call counts
-// in-process and publishes deltas to admin rollups for fleet-wide visibility.
+// Recorder accumulates retired, deprecated, and unknown model call counts,
+// plus calls to provider endpoints the proxy does not meter, in-process and publishes deltas to admin rollups for fleet-wide visibility.
 type Recorder struct {
 	mu        sync.RWMutex
 	startedAt time.Time
@@ -34,10 +36,12 @@ type Recorder struct {
 	retiredTotal    int64
 	deprecatedTotal int64
 	unknownTotal    int64
+	unmeteredTotal  int64
 
 	retired    map[string]int64
 	deprecated map[string]int64
 	unknown    map[string]int64
+	unmetered  map[string]int64
 
 	flushed statusFlushed
 
@@ -53,6 +57,7 @@ func NewRecorder() *Recorder {
 		retired:    make(map[string]int64),
 		deprecated: make(map[string]int64),
 		unknown:    make(map[string]int64),
+		unmetered:  make(map[string]int64),
 	}
 }
 
@@ -110,9 +115,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.retiredTotal = 0
 	r.deprecatedTotal = 0
 	r.unknownTotal = 0
+	r.unmeteredTotal = 0
 	r.retired = make(map[string]int64)
 	r.deprecated = make(map[string]int64)
 	r.unknown = make(map[string]int64)
+	r.unmetered = make(map[string]int64)
 }
 
 func (r *Recorder) bumpLocked(counter map[string]int64, provider, model string) {
@@ -128,11 +135,13 @@ func (r *Recorder) statusDeltaLocked() adminrollup.Delta {
 			"retired_total":    float64(r.retiredTotal - r.flushed.retiredTotal),
 			"deprecated_total": float64(r.deprecatedTotal - r.flushed.deprecatedTotal),
 			"unknown_total":    float64(r.unknownTotal - r.flushed.unknownTotal),
+			"unmetered_total":  float64(r.unmeteredTotal - r.flushed.unmeteredTotal),
 		},
 		Dimensions: map[string]map[string]float64{
 			"by_retired":    intMapDelta(r.retired, r.flushed.retired),
 			"by_deprecated": intMapDelta(r.deprecated, r.flushed.deprecated),
 			"by_unknown":    intMapDelta(r.unknown, r.flushed.unknown),
+			"by_unmetered":  intMapDelta(r.unmetered, r.flushed.unmetered),
 		},
 	}
 }
@@ -141,9 +150,11 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.retiredTotal = r.retiredTotal
 	r.flushed.deprecatedTotal = r.deprecatedTotal
 	r.flushed.unknownTotal = r.unknownTotal
+	r.flushed.unmeteredTotal = r.unmeteredTotal
 	r.flushed.retired = copyIntMap(r.retired)
 	r.flushed.deprecated = copyIntMap(r.deprecated)
 	r.flushed.unknown = copyIntMap(r.unknown)
+	r.flushed.unmetered = copyIntMap(r.unmetered)
 }
 
 func (r *Recorder) publishLocked() {
@@ -183,6 +194,12 @@ func (r *Recorder) RecordUnknown(provider, model string) {
 	r.record(&r.unknownTotal, r.unknown, provider, model)
 }
 
+// RecordUnmetered increments the counter for a provider endpoint template
+// the proxy forwards without parsing token usage.
+func (r *Recorder) RecordUnmetered(provider, endpoint string) {
+	r.record(&r.unmeteredTotal, r.unmetered, provider, endpoint)
+}
+
 // Snapshot returns a JSON-serialisable view for the admin API.
 func (r *Recorder) Snapshot() map[string]interface{} {
 	if r == nil {
@@ -196,15 +213,17 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	localActive := bucketDay == today
 	startedAt := r.startedAt
 
-	var retiredTotal, deprecatedTotal, unknownTotal int64
-	var localRetired, localDeprecated, localUnknown map[string]int64
+	var retiredTotal, deprecatedTotal, unknownTotal, unmeteredTotal int64
+	var localRetired, localDeprecated, localUnknown, localUnmetered map[string]int64
 	if localActive {
 		retiredTotal = r.retiredTotal
 		deprecatedTotal = r.deprecatedTotal
 		unknownTotal = r.unknownTotal
+		unmeteredTotal = r.unmeteredTotal
 		localRetired = copyIntMap(r.retired)
 		localDeprecated = copyIntMap(r.deprecated)
 		localUnknown = copyIntMap(r.unknown)
+		localUnmetered = copyIntMap(r.unmetered)
 	}
 
 	backend := "memory"
@@ -219,15 +238,17 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		"retired_total":    retiredTotal,
 		"deprecated_total": deprecatedTotal,
 		"unknown_total":    unknownTotal,
+		"unmetered_total":  unmeteredTotal,
 		"by_retired":       topN(localRetired, 0),
 		"by_deprecated":    topN(localDeprecated, 0),
 		"by_unknown":       topN(localUnknown, 0),
+		"by_unmetered":     topN(localUnmetered, 0),
 	}
 	r.mu.RUnlock()
 
 	r.MergeToday(adminrollup.MetricModelStatus, today, snap, modelStatusRollupCaps)
 	if localActive {
-		mergeLocalModelStatusIntoSnap(snap, retiredTotal, deprecatedTotal, unknownTotal, localRetired, localDeprecated, localUnknown)
+		mergeLocalModelStatusIntoSnap(snap, retiredTotal, deprecatedTotal, unknownTotal, unmeteredTotal, localRetired, localDeprecated, localUnknown, localUnmetered)
 	}
 	r.MergeHistory(adminrollup.MetricModelStatus, snap)
 	r.MergeHourly(adminrollup.MetricModelStatus, snap)
@@ -236,15 +257,17 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 
 func mergeLocalModelStatusIntoSnap(
 	snap map[string]interface{},
-	retiredTotal, deprecatedTotal, unknownTotal int64,
-	localRetired, localDeprecated, localUnknown map[string]int64,
+	retiredTotal, deprecatedTotal, unknownTotal, unmeteredTotal int64,
+	localRetired, localDeprecated, localUnknown, localUnmetered map[string]int64,
 ) {
 	adminrollup.MergeSnapInt64Max(snap, "retired_total", retiredTotal)
 	adminrollup.MergeSnapInt64Max(snap, "deprecated_total", deprecatedTotal)
 	adminrollup.MergeSnapInt64Max(snap, "unknown_total", unknownTotal)
+	adminrollup.MergeSnapInt64Max(snap, "unmetered_total", unmeteredTotal)
 	mergeModelStatusNameCounts(snap, "by_retired", localRetired, 0)
 	mergeModelStatusNameCounts(snap, "by_deprecated", localDeprecated, 0)
 	mergeModelStatusNameCounts(snap, "by_unknown", localUnknown, 0)
+	mergeModelStatusNameCounts(snap, "by_unmetered", localUnmetered, 0)
 }
 
 func mergeModelStatusNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {

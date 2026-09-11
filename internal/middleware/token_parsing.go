@@ -109,15 +109,7 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 				}
 			}
 
-			isAPIEndpoint := strings.Contains(r.URL.Path, "/chat/completions") ||
-				strings.Contains(r.URL.Path, "/completions") ||
-				strings.Contains(r.URL.Path, "/messages") ||
-				strings.Contains(r.URL.Path, ":generateContent") ||
-				strings.Contains(r.URL.Path, ":streamGenerateContent") ||
-				strings.Contains(r.URL.Path, "/converse") ||
-				strings.Contains(r.URL.Path, "/responses")
-
-			if !isAPIEndpoint {
+			if providers.ClassifyEndpoint(r.URL.Path) != providers.EndpointMetered {
 				unmetered()
 				return
 			}
