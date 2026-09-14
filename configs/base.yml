@@ -481,7 +481,7 @@ providers:
           input: 2.50
           output: 10.00
           overrides:
-            "gpt-4o-2024-05-13":
+            "gpt-4o-2024-05-13": # vendor shutdown 2026-10-23; later snapshots stay active
               input: 5.00
               output: 15.00
       "gpt-4o-mini":
@@ -499,7 +499,7 @@ providers:
           output: 0.60
       "gpt-3.5-turbo":
         enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
+        deprecated: true # vendor shutdown 2026-10-23 (gpt-3.5-turbo-1106 on 2026-09-28)
         replacement: "gpt-5.6-terra"
         aliases:
           ["gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-16k"]
@@ -758,6 +758,26 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.40
             output: 1.80
+      # GPT-6 flagship (API GA 2026-09-04). Same 5.6-generation billing shape:
+      # no dated snapshot, >272K input bills 2x input / 1.5x output for the
+      # full request, cache writes at 1.25x input.
+      "gpt-6-astra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 10.00
+            output: 50.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 20.00
+            output: 75.00
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -1225,6 +1245,12 @@ providers:
       "anthropic.claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4-8"]
+        pricing:
+          input: 5.50
+          output: 27.50
+      "anthropic.claude-opus-5":
+        enabled: true
+        aliases: ["claude-opus-5"]
         pricing:
           input: 5.50
           output: 27.50
