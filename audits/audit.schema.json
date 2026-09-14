@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Instawork/llm-proxy/audits/audit.schema.json",
+  "title": "LLM vendor model audit",
+  "description": "Snapshot of what OpenAI, Anthropic, Google, and AWS Bedrock publish about their models: lineup, list pricing, deprecations, and billable endpoints. Written by the vendor-audit automation as audits/audit-MM-DD-YYYY.json and consumed by the llm-price-update skill (this repo) and the model-audit skill (finch). Every value must be read from the vendor pages listed in `sources`; nothing is filled from model memory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["generated_at", "previous_audit", "sources", "providers"],
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Run date, YYYY-MM-DD (UTC). Consumers pick the latest audit by this field, not by filename."
+    },
+    "previous_audit": {
+      "type": ["string", "null"],
+      "pattern": "^audit-\\d{2}-\\d{2}-\\d{4}\\.json$",
+      "description": "Filename of the audit this run was diffed against to compute new_since_previous_audit. null for the first run."
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" },
+      "description": "Every vendor page read during the run. Each provider needs at least a pricing and a deprecations source."
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["openai", "anthropic", "gemini", "bedrock"],
+      "properties": {
+        "openai": { "$ref": "#/$defs/provider" },
+        "anthropic": { "$ref": "#/$defs/provider" },
+        "gemini": { "$ref": "#/$defs/provider" },
+        "bedrock": { "$ref": "#/$defs/provider" }
+      }
+    }
+  },
+  "$defs": {
+    "date": { "type": ["string", "null"], "format": "date" },
+    "providerName": { "enum": ["openai", "anthropic", "gemini", "bedrock"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "kind", "url"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/providerName" },
+        "kind": {
+          "enum": ["pricing", "deprecations", "api_reference", "changelog", "model_card", "secondary"]
+        },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["models", "endpoints"],
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/model" },
+          "description": "Every model on the vendor's pricing page plus every model on its deprecations page, whether or not we ship it."
+        },
+        "endpoints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/endpoint" },
+          "description": "Every HTTP endpoint in the vendor API reference that consumes or produces tokens (chat, responses, messages, generateContent, interactions, embeddings, batch, count-tokens, ...). Empty for bedrock."
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "aliases",
+        "status",
+        "release_date",
+        "deprecated_date",
+        "sunset_date",
+        "replaced_by",
+        "ga_equivalent",
+        "pricing",
+        "promo_pricing",
+        "context_window",
+        "max_output_tokens",
+        "capabilities",
+        "new_since_previous_audit",
+        "source",
+        "verified_by",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical vendor API model id (gpt-5.6, claude-sonnet-5, gemini-3.5-flash, us.anthropic.claude-sonnet-5). Never a marketing name."
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Other API ids for the SAME version only: dated snapshots, -latest pointers, punctuation variants, same-version preview SKUs. A different version number or a -mini/-lite/-pro sibling is a separate model, never an alias."
+        },
+        "status": {
+          "enum": ["active", "preview", "deprecated", "shutdown", "legacy"],
+          "description": "active: on the pricing page, not on the deprecations page. preview: vendor labels it preview/experimental. deprecated: on the deprecations page with a future or unannounced sunset. shutdown: sunset_date is in the past or the API returns model_not_found. legacy: vendor still serves it but no longer recommends it and has not announced a sunset."
+        },
+        "release_date": { "$ref": "#/$defs/date" },
+        "deprecated_date": {
+          "$ref": "#/$defs/date",
+          "description": "Date the vendor announced the deprecation."
+        },
+        "sunset_date": {
+          "$ref": "#/$defs/date",
+          "description": "Vendor-announced shutdown date. null when none is announced; never inferred or estimated."
+        },
+        "replaced_by": {
+          "type": ["string", "null"],
+          "description": "Vendor-recommended replacement id. Must be the id or alias of another model in the same provider."
+        },
+        "ga_equivalent": {
+          "type": ["string", "null"],
+          "description": "For preview SKUs only: the GA id once the vendor ships it. null while the model is still preview-only or is not a preview."
+        },
+        "pricing": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/tier" },
+          "description": "Standard-tier list price in USD per 1M tokens (not cached, not batch, not promotional). Flat pricing is a single tier with up_to_tokens null. Prompt-length tiers are listed ascending and the last tier has up_to_tokens null."
+        },
+        "promo_pricing": {
+          "anyOf": [{ "$ref": "#/$defs/promo" }, { "type": "null" }],
+          "description": "Time-limited introductory rate, if the vendor publishes one. Recorded for comments only; consumers encode the list price."
+        },
+        "context_window": { "type": ["integer", "null"], "minimum": 1 },
+        "max_output_tokens": { "type": ["integer", "null"], "minimum": 1 },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "new_since_previous_audit": {
+          "type": "boolean",
+          "description": "true when the id did not appear in previous_audit."
+        },
+        "source": {
+          "type": "string",
+          "format": "uri",
+          "description": "Vendor page the row was read from."
+        },
+        "verified_by": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "uniqueItems": true,
+          "description": "Independent URLs that confirmed the row. Required to be non-empty when the model is new, its status changed, or a price moved by more than 20% since previous_audit."
+        },
+        "notes": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "new_since_previous_audit": { "const": true } } },
+          "then": { "properties": { "verified_by": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "shutdown" } } },
+          "then": { "properties": { "sunset_date": { "type": "string" } } }
+        }
+      ]
+    },
+    "tier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["up_to_tokens", "input", "output"],
+      "properties": {
+        "up_to_tokens": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Inclusive prompt-token ceiling for this tier; null means no ceiling."
+        },
+        "input": { "type": "number", "minimum": 0 },
+        "output": { "type": "number", "minimum": 0 }
+      }
+    },
+    "promo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "ends_on"],
+      "properties": {
+        "input": { "type": "number", "minimum": 0 },
+        "output": { "type": "number", "minimum": 0 },
+        "ends_on": {
+          "$ref": "#/$defs/date",
+          "description": "null when the vendor says 'at least through' without an end date."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vision", "function_calling", "reasoning"],
+      "properties": {
+        "vision": { "type": ["boolean", "null"] },
+        "function_calling": { "type": ["boolean", "null"] },
+        "reasoning": {
+          "type": ["boolean", "null"],
+          "description": "Exposes extended thinking / reasoning tokens."
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "billable", "streaming_usage_event", "usage_location", "introduced", "source"],
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Path template as documented, e.g. /v1/responses or /v1beta/models/{model}:generateContent."
+        },
+        "billable": {
+          "enum": ["yes", "no", "async"],
+          "description": "async: tokens are billed when the job completes, not on this request (batch, background)."
+        },
+        "streaming_usage_event": {
+          "type": ["string", "null"],
+          "description": "SSE event that carries usage when streaming; null when the endpoint does not stream."
+        },
+        "usage_location": {
+          "type": ["string", "null"],
+          "description": "JSON path of the usage object in the response, e.g. usage, usageMetadata."
+        },
+        "introduced": {
+          "$ref": "#/$defs/date",
+          "description": "Date the changelog says the endpoint shipped; null when unknown."
+        },
+        "source": { "type": "string", "format": "uri" }
+      }
+    }
+  }
+}
