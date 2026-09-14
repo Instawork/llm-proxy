@@ -164,12 +164,15 @@ features:
     viewer_limits:
       personal_monthly_cost_limit_cents: 2000
   # ---------------------------------------------------------------------------
-  # Email alerts (SendGrid) — spend limits, key requests, key-request approvals
+  # Notifications — spend limits, key requests, key-request approvals.
+  # email.provider selects the backend: "sendgrid", "ses", or "log" (dev/test).
   # ---------------------------------------------------------------------------
-  email:
+  notifications:
     enabled: false
-    from_address: ""
-    from_name: "LLM Proxy"
+    email:
+      provider: "sendgrid"
+      from_address: ""
+      from_name: "LLM Proxy"
   # ---------------------------------------------------------------------------
   # Row history (gzipped JSONL archive — independent of Redis rollups)
   # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import (
 
 const defaultSendGridBaseURL = "https://api.sendgrid.com"
 
-// SendGrid sends email via the SendGrid v3 Mail Send API.
+// SendGrid sends notifications as email via the SendGrid v3 Mail Send API.
 type SendGrid struct {
 	apiKey      string
 	fromAddress string
@@ -58,20 +58,21 @@ type sendGridRequest struct {
 	Content          []sendGridContent         `json:"content"`
 }
 
-// Send posts msg to SendGrid's /v3/mail/send endpoint.
-func (s *SendGrid) Send(ctx context.Context, msg Message) error {
-	if len(msg.To) == 0 {
-		return fmt.Errorf("sendgrid: message has no recipients")
+// Send posts n to SendGrid's /v3/mail/send endpoint. Each recipient gets its
+// own personalization so recipients never see each other's addresses.
+func (s *SendGrid) Send(ctx context.Context, n Notification) error {
+	if len(n.To) == 0 {
+		return fmt.Errorf("sendgrid: notification has no recipients")
 	}
-	to := make([]sendGridEmail, 0, len(msg.To))
-	for _, addr := range msg.To {
-		to = append(to, sendGridEmail{Email: addr})
+	personalizations := make([]sendGridPersonalization, 0, len(n.To))
+	for _, addr := range n.To {
+		personalizations = append(personalizations, sendGridPersonalization{To: []sendGridEmail{{Email: addr}}})
 	}
 	body := sendGridRequest{
-		Personalizations: []sendGridPersonalization{{To: to}},
+		Personalizations: personalizations,
 		From:             sendGridEmail{Email: s.fromAddress, Name: s.fromName},
-		Subject:          msg.Subject,
-		Content:          []sendGridContent{{Type: "text/plain", Value: msg.Text}},
+		Subject:          n.Title,
+		Content:          []sendGridContent{{Type: "text/plain", Value: n.Body}},
 	}
 
 	payload, err := json.Marshal(body)

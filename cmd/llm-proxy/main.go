@@ -884,26 +884,39 @@ func (rollupOnceMarker) TryMarkOnce(ctx context.Context, name string, ttl time.D
 	return globalAdminRollupStore.TryMarkOnce(ctx, name, ttl)
 }
 
-// initNotifier builds the email-alert Notifier from features.email and the
-// SENDGRID_API_KEY env var. Returns nil when email alerts are disabled.
+// initNotifier builds the transactional Notifier from features.notifications.
+// Returns nil when notifications are disabled or misconfigured.
 func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
-	emailCfg := yamlConfig.Features.Email
-	if !emailCfg.Enabled {
-		logger.Info("📧 Email alerts: disabled")
+	notifyCfg := yamlConfig.Features.Notifications
+	if !notifyCfg.Enabled {
+		logger.Info("🔔 Notifications: disabled")
 		return nil
 	}
 
-	var mailer notify.Mailer
-	apiKey := os.Getenv("SENDGRID_API_KEY")
-	switch {
-	case emailCfg.DevLog:
-		mailer = notify.NewLogMailer(logger)
-		logger.Info("📧 Email alerts: ENABLED (dev_log)")
-	case apiKey != "":
-		mailer = notify.NewSendGrid(apiKey, emailCfg.FromAddress, emailCfg.FromName, "")
-		logger.Info("📧 Email alerts: ENABLED (sendgrid)", "from", emailCfg.FromAddress)
+	emailCfg := notifyCfg.Email
+	var sender notify.Sender
+	switch emailCfg.Provider {
+	case "log":
+		sender = notify.NewLogSender(logger)
+		logger.Info("🔔 Notifications: ENABLED (log)")
+	case "sendgrid":
+		apiKey := os.Getenv("SENDGRID_API_KEY")
+		if apiKey == "" {
+			logProxyError("🔔 Notifications: disabled (SENDGRID_API_KEY unset)")
+			return nil
+		}
+		sender = notify.NewSendGrid(apiKey, emailCfg.FromAddress, emailCfg.FromName, "")
+		logger.Info("🔔 Notifications: ENABLED (sendgrid)", "from", emailCfg.FromAddress)
+	case "ses":
+		ses, err := notify.NewSES(emailCfg.Region, emailCfg.FromAddress, emailCfg.FromName)
+		if err != nil {
+			logProxyError(fmt.Sprintf("🔔 Notifications: disabled (ses init failed: %v)", err))
+			return nil
+		}
+		sender = ses
+		logger.Info("🔔 Notifications: ENABLED (ses)", "from", emailCfg.FromAddress, "region", emailCfg.Region)
 	default:
-		logProxyError("📧 Email alerts: disabled (SENDGRID_API_KEY unset)")
+		logProxyError(fmt.Sprintf("🔔 Notifications: disabled (unknown email provider %q)", emailCfg.Provider))
 		return nil
 	}
 
@@ -920,7 +933,7 @@ func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
 		admins = globalAdminUserStore
 	}
 
-	return notify.NewNotifier(mailer, admins, rollupOnceMarker{}, dashboardURL, logger)
+	return notify.NewNotifier(sender, admins, rollupOnceMarker{}, dashboardURL, logger)
 }
 
 // piiSummaryFunc returns a snapshot closure for the admin /pii endpoint, or

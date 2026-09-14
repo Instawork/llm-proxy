@@ -186,11 +186,19 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 			}
 		}
 	}
-	if cfg.Features.Email.Enabled {
-		if cfg.Features.Email.FromAddress == "" {
-			errs = append(errs, "email.enabled is true but email.from_address is empty")
-		} else if !strings.Contains(cfg.Features.Email.FromAddress, "@") {
-			errs = append(errs, fmt.Sprintf("email.from_address %q does not look like an email address", cfg.Features.Email.FromAddress))
+	if cfg.Features.Notifications.Enabled {
+		email := cfg.Features.Notifications.Email
+		switch email.Provider {
+		case "sendgrid", "ses", "log":
+		default:
+			errs = append(errs, fmt.Sprintf("notifications.email.provider %q must be one of: sendgrid, ses, log", email.Provider))
+		}
+		if email.Provider == "sendgrid" || email.Provider == "ses" {
+			if email.FromAddress == "" {
+				errs = append(errs, "notifications.enabled is true but notifications.email.from_address is empty")
+			} else if !strings.Contains(email.FromAddress, "@") {
+				errs = append(errs, fmt.Sprintf("notifications.email.from_address %q does not look like an email address", email.FromAddress))
+			}
 		}
 	}
 

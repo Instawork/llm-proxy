@@ -24,10 +24,10 @@ func TestSendGrid_Send(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sg := NewSendGrid("test-api-key", "proxy@example.com", "LLM Proxy", srv.URL)
-	err := sg.Send(context.Background(), Message{
-		To:      []string{"user@example.com"},
-		Subject: "Test subject",
-		Text:    "Test body",
+	err := sg.Send(context.Background(), Notification{
+		To:    []string{"user@example.com"},
+		Title: "Test subject",
+		Body:  "Test body",
 	})
 	require.NoError(t, err)
 
@@ -41,6 +41,31 @@ func TestSendGrid_Send(t *testing.T) {
 	assert.Equal(t, "Test body", gotBody.Content[0].Value)
 }
 
+func TestSendGrid_Send_MultipleRecipients_SeparatePersonalizations(t *testing.T) {
+	t.Parallel()
+
+	var gotBody sendGridRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+
+	sg := NewSendGrid("test-api-key", "proxy@example.com", "LLM Proxy", srv.URL)
+	err := sg.Send(context.Background(), Notification{
+		To:    []string{"admin1@example.com", "admin2@example.com"},
+		Title: "Test subject",
+		Body:  "Test body",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, gotBody.Personalizations, 2)
+	require.Len(t, gotBody.Personalizations[0].To, 1)
+	require.Len(t, gotBody.Personalizations[1].To, 1)
+	assert.Equal(t, "admin1@example.com", gotBody.Personalizations[0].To[0].Email)
+	assert.Equal(t, "admin2@example.com", gotBody.Personalizations[1].To[0].Email)
+}
+
 func TestSendGrid_Send_ErrorStatus(t *testing.T) {
 	t.Parallel()
 
@@ -51,7 +76,7 @@ func TestSendGrid_Send_ErrorStatus(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sg := NewSendGrid("bad-key", "proxy@example.com", "", srv.URL)
-	err := sg.Send(context.Background(), Message{To: []string{"user@example.com"}, Subject: "s", Text: "t"})
+	err := sg.Send(context.Background(), Notification{To: []string{"user@example.com"}, Title: "s", Body: "t"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -59,6 +84,6 @@ func TestSendGrid_Send_ErrorStatus(t *testing.T) {
 func TestSendGrid_Send_NoRecipients(t *testing.T) {
 	t.Parallel()
 	sg := NewSendGrid("key", "proxy@example.com", "", "http://unused.invalid")
-	err := sg.Send(context.Background(), Message{Subject: "s", Text: "t"})
+	err := sg.Send(context.Background(), Notification{Title: "s", Body: "t"})
 	require.Error(t, err)
 }

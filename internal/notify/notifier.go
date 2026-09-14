@@ -32,11 +32,11 @@ type OnceMarker interface {
 	TryMarkOnce(ctx context.Context, name string, ttl time.Duration) (bool, error)
 }
 
-// Notifier sends the proxy's transactional emails. A nil *Notifier is safe
-// to call; every method becomes a no-op so callers do not need to guard on
-// whether email alerts are configured.
+// Notifier sends the proxy's transactional notifications. A nil *Notifier is
+// safe to call; every method becomes a no-op so callers do not need to guard
+// on whether notifications are configured.
 type Notifier struct {
-	mailer       Mailer
+	sender       Sender
 	admins       AdminLister
 	once         OnceMarker
 	dashboardURL string
@@ -47,10 +47,10 @@ type Notifier struct {
 
 // NewNotifier builds a Notifier. admins, once, and dashboardURL may be left
 // zero-valued: admin lookups are then skipped, dedupe is process-local only,
-// and dashboard links are omitted from email bodies.
-func NewNotifier(mailer Mailer, admins AdminLister, once OnceMarker, dashboardURL string, logger *slog.Logger) *Notifier {
+// and dashboard links are omitted from notification bodies.
+func NewNotifier(sender Sender, admins AdminLister, once OnceMarker, dashboardURL string, logger *slog.Logger) *Notifier {
 	return &Notifier{
-		mailer:       mailer,
+		sender:       sender,
 		admins:       admins,
 		once:         once,
 		dashboardURL: strings.TrimRight(dashboardURL, "/"),
@@ -58,14 +58,14 @@ func NewNotifier(mailer Mailer, admins AdminLister, once OnceMarker, dashboardUR
 	}
 }
 
-// send fires msg on a background goroutine so callers never block on
-// SendGrid latency or errors.
-func (n *Notifier) send(msg Message) {
+// send fires n on a background goroutine so callers never block on the
+// underlying provider's latency or errors.
+func (n *Notifier) send(msg Notification) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
-		if err := n.mailer.Send(ctx, msg); err != nil {
-			n.logger.Error("notify: send failed", "to", msg.To, "subject", msg.Subject, "error", err)
+		if err := n.sender.Send(ctx, msg); err != nil {
+			n.logger.Error("notify: send failed", "to", msg.To, "title", msg.Title, "error", err)
 		}
 	}()
 }
@@ -109,10 +109,11 @@ func (n *Notifier) KeyRequested(ctx context.Context, req apikeys.KeyRequest) {
 		fmt.Fprintf(&body, "\nReview it at %s/keys\n", n.dashboardURL)
 	}
 
-	n.send(Message{
-		To:      recipients,
-		Subject: fmt.Sprintf("New LLM proxy key request from %s", req.RequesterEmail),
-		Text:    body.String(),
+	n.send(Notification{
+		Kind:  KindKeyRequested,
+		To:    recipients,
+		Title: fmt.Sprintf("New LLM proxy key request from %s", req.RequesterEmail),
+		Body:  body.String(),
 	})
 }
 
@@ -137,10 +138,11 @@ func (n *Notifier) KeyRequestApproved(ctx context.Context, req apikeys.KeyReques
 		fmt.Fprintf(&body, "\nRetrieve it at %s/keys\n", n.dashboardURL)
 	}
 
-	n.send(Message{
-		To:      []string{req.RequesterEmail},
-		Subject: fmt.Sprintf("Your %s API key request was approved", req.Provider),
-		Text:    body.String(),
+	n.send(Notification{
+		Kind:  KindKeyRequestApproved,
+		To:    []string{req.RequesterEmail},
+		Title: fmt.Sprintf("Your %s API key request was approved", req.Provider),
+		Body:  body.String(),
 	})
 }
 
@@ -180,10 +182,11 @@ func (n *Notifier) SpendLimitReached(ctx context.Context, rec *apikeys.APIKey, w
 		body += fmt.Sprintf("\nView usage at %s/keys\n", n.dashboardURL)
 	}
 
-	n.send(Message{
-		To:      []string{recipient},
-		Subject: fmt.Sprintf("LLM proxy key hit its %s spend limit", window),
-		Text:    body,
+	n.send(Notification{
+		Kind:  KindSpendLimitReached,
+		To:    []string{recipient},
+		Title: fmt.Sprintf("LLM proxy key hit its %s spend limit", window),
+		Body:  body,
 	})
 }
 

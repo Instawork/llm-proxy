@@ -17,18 +17,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeMailer records sent messages for assertions and never touches the network.
-type fakeMailer struct {
+// fakeSender records sent messages for assertions and never touches the network.
+type fakeSender struct {
 	mu   sync.Mutex
-	sent []notify.Message
+	sent []notify.Notification
 	sig  chan struct{}
 }
 
-func newFakeMailer() *fakeMailer {
-	return &fakeMailer{sig: make(chan struct{}, 16)}
+func newFakeSender() *fakeSender {
+	return &fakeSender{sig: make(chan struct{}, 16)}
 }
 
-func (m *fakeMailer) Send(_ context.Context, msg notify.Message) error {
+func (m *fakeSender) Send(_ context.Context, msg notify.Notification) error {
 	m.mu.Lock()
 	m.sent = append(m.sent, msg)
 	m.mu.Unlock()
@@ -36,7 +36,7 @@ func (m *fakeMailer) Send(_ context.Context, msg notify.Message) error {
 	return nil
 }
 
-func (m *fakeMailer) waitForSend(t *testing.T) {
+func (m *fakeSender) waitForSend(t *testing.T) {
 	t.Helper()
 	select {
 	case <-m.sig:
@@ -45,22 +45,22 @@ func (m *fakeMailer) waitForSend(t *testing.T) {
 	}
 }
 
-func (m *fakeMailer) messages() []notify.Message {
+func (m *fakeSender) messages() []notify.Notification {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]notify.Message, len(m.sent))
+	out := make([]notify.Notification, len(m.sent))
 	copy(out, m.sent)
 	return out
 }
 
-// testViewerHandlerWithMailer builds a viewer-authenticated handler wired to
-// a fake mailer, so KeyRequested/KeyRequestApproved emails can be asserted.
-func testViewerHandlerWithMailer(t *testing.T) (*handler, *fakeMailer) {
+// testViewerHandlerWithSender builds a viewer-authenticated handler wired to
+// a fake sender, so KeyRequested/KeyRequestApproved emails can be asserted.
+func testViewerHandlerWithSender(t *testing.T) (*handler, *fakeSender) {
 	t.Helper()
 	h := testViewerHandler(t)
-	mailer := newFakeMailer()
-	h.deps.Notifier = notify.NewNotifier(mailer, h.deps.UserStore, nil, "", h.deps.Logger)
-	return h, mailer
+	sender := newFakeSender()
+	h.deps.Notifier = notify.NewNotifier(sender, h.deps.UserStore, nil, "", h.deps.Logger)
+	return h, sender
 }
 
 func testViewerHandler(t *testing.T) *handler {
@@ -242,7 +242,7 @@ func TestHandleApproveKeyRequest(t *testing.T) {
 }
 
 func TestHandleCreateKeyRequest_NotifiesAdmins(t *testing.T) {
-	h, mailer := testViewerHandlerWithMailer(t)
+	h, sender := testViewerHandlerWithSender(t)
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
 		Provider:    "openai",
@@ -254,15 +254,15 @@ func TestHandleCreateKeyRequest_NotifiesAdmins(t *testing.T) {
 	h.handleCreateKeyRequest(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	mailer.waitForSend(t)
-	msgs := mailer.messages()
+	sender.waitForSend(t)
+	msgs := sender.messages()
 	require.Len(t, msgs, 1)
 	assert.Equal(t, []string{"admin@example.com"}, msgs[0].To)
-	assert.Contains(t, msgs[0].Subject, "viewer@example.com")
+	assert.Contains(t, msgs[0].Title, "viewer@example.com")
 }
 
 func TestHandleApproveKeyRequest_NotifiesRequesterAndPersistsEmail(t *testing.T) {
-	h, mailer := testViewerHandlerWithMailer(t)
+	h, sender := testViewerHandlerWithSender(t)
 	withTestProvisioner(t, h, "openai")
 
 	body, _ := json.Marshal(CreateKeyRequestBody{
@@ -274,7 +274,7 @@ func TestHandleApproveKeyRequest_NotifiesRequesterAndPersistsEmail(t *testing.T)
 	createRec := httptest.NewRecorder()
 	h.handleCreateKeyRequest(createRec, createReq)
 	require.Equal(t, http.StatusCreated, createRec.Code)
-	mailer.waitForSend(t) // drain the KeyRequested admin notification
+	sender.waitForSend(t) // drain the KeyRequested admin notification
 
 	var created KeyRequestResponse
 	require.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created))
@@ -289,8 +289,8 @@ func TestHandleApproveKeyRequest_NotifiesRequesterAndPersistsEmail(t *testing.T)
 	var approved KeyRequestResponse
 	require.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &approved))
 
-	mailer.waitForSend(t)
-	msgs := mailer.messages()
+	sender.waitForSend(t)
+	msgs := sender.messages()
 	require.Len(t, msgs, 2)
 	assert.Equal(t, []string{"viewer@example.com"}, msgs[1].To)
 
