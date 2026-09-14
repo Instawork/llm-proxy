@@ -568,6 +568,13 @@ func collectImageDataStrings(v any, out *[]string) {
 				*out = append(*out, data)
 			}
 		}
+		// Gemini Interactions media Content: {"type":"image","data":"<b64>"}.
+		switch typ, _ := val["type"].(string); typ {
+		case "image", "audio", "document", "video":
+			if data, ok := val["data"].(string); ok {
+				*out = append(*out, data)
+			}
+		}
 		for _, child := range val {
 			collectImageDataStrings(child, out)
 		}

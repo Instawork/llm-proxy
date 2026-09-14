@@ -191,22 +191,13 @@ func TestKeyToResponse_IncludesRateLimits(t *testing.T) {
 	assert.Equal(t, 20, resp.RateLimitTPM)
 }
 
-func TestHandleGetShare_ViewerScoped(t *testing.T) {
+// A share link is a capability URL: a signed-in viewer resolves it the same
+// way an anonymous holder does, even for keys they don't own.
+func TestHandleGetShare_ViewerResolvesAnyLink(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()
 	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
 	require.NoError(t, err)
-
-	ownKey, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
-	require.NoError(t, err)
-	ownLink, err := store.CreateShareLink(ctx, ownKey.PK, "viewer@example.com")
-	require.NoError(t, err)
-
-	ownReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/share/"+ownLink.ID(), nil)
-	ownReq = mux.SetURLVars(ownReq, map[string]string{"id": ownLink.ID()})
-	ownRec := httptest.NewRecorder()
-	h.handleGetShare(ownRec, ownReq)
-	require.Equal(t, http.StatusOK, ownRec.Code)
 
 	orgKey, err := store.CreateKey(ctx, "anthropic", "sk-org", "", 0, nil, nil)
 	require.NoError(t, err)
@@ -217,7 +208,7 @@ func TestHandleGetShare_ViewerScoped(t *testing.T) {
 	orgReq = mux.SetURLVars(orgReq, map[string]string{"id": orgLink.ID()})
 	orgRec := httptest.NewRecorder()
 	h.handleGetShare(orgRec, orgReq)
-	assert.Equal(t, http.StatusForbidden, orgRec.Code)
+	require.Equal(t, http.StatusOK, orgRec.Code)
 
 	publicReq := httptest.NewRequest(http.MethodGet, "/admin/api/share/"+orgLink.ID(), nil)
 	publicReq = mux.SetURLVars(publicReq, map[string]string{"id": orgLink.ID()})

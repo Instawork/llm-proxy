@@ -55,23 +55,12 @@ func TestShouldEnforceBedrockForPIIOff(t *testing.T) {
 }
 
 func TestValidatePIIOffBedrockPolicy(t *testing.T) {
-	err := ValidatePIIOffBedrockPolicy(true, "openai", boolPtr(false), false)
+	err := ValidatePIIOffBedrockPolicy(true, "openai", boolPtr(false))
 	require.Error(t, err)
 
-	err = ValidatePIIOffBedrockPolicy(true, "bedrock", boolPtr(false), false)
+	err = ValidatePIIOffBedrockPolicy(true, "bedrock", boolPtr(false))
 	require.NoError(t, err)
 
-	err = ValidatePIIOffBedrockPolicy(true, "openai", boolPtr(false), true)
+	err = ValidatePIIOffBedrockPolicy(false, "openai", nil)
 	require.NoError(t, err)
-
-	err = ValidatePIIOffBedrockPolicy(false, "openai", nil, false)
-	require.NoError(t, err)
-}
-
-func TestEnforcePIIOffBedrockProvider(t *testing.T) {
-	key := &APIKey{Provider: "openai", RedactPII: boolPtr(false)}
-	require.Error(t, EnforcePIIOffBedrockProvider(true, key))
-
-	key.Provider = BedrockProvider
-	require.NoError(t, EnforcePIIOffBedrockProvider(true, key))
 }

@@ -599,6 +599,10 @@ func TestStripImageDataForAnalysis_StripsAndRestores(t *testing.T) {
 			name: "gemini inlineData",
 			body: `{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"` + img + `"}}]}]}`,
 		},
+		{
+			name: "gemini interactions typed media inside a tool result",
+			body: `{"input":[{"type":"function_result","call_id":"fc1","result":[{"type":"text","text":"hi"},{"type":"image","mime_type":"image/png","data":"` + img + `"}]}]}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

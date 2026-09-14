@@ -28,11 +28,14 @@ func isProviderRoute(path string) bool {
 		strings.HasPrefix(path, "/v1beta/models/gemini")
 }
 
-// isAPIEndpoint checks if the request is for an API endpoint that should be
-// cost tracked. Bedrock's Converse / InvokeModel endpoints are recognized
-// via path suffix.
+// isAPIEndpoint reports whether the request body may carry prompt content
+// (it gates PII redaction and the ID gate via shouldRedactRequest). Every
+// metered endpoint qualifies; the substring list keeps the unmetered
+// prompt-bearing routes (/messages/count_tokens, /messages/batches,
+// Bedrock /invoke*) eligible.
 func isAPIEndpoint(path string) bool {
-	return strings.Contains(path, "/chat/completions") ||
+	return providers.ClassifyEndpoint(path) == providers.EndpointMetered ||
+		strings.Contains(path, "/chat/completions") ||
 		strings.Contains(path, "/completions") ||
 		strings.Contains(path, "/messages") ||
 		strings.Contains(path, ":generateContent") ||

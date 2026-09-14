@@ -88,6 +88,100 @@ func TestContentAdapter_Gemini_ToolCallAndResponse(t *testing.T) {
 	}
 }
 
+// TestContentAdapter_Gemini_InteractionsInputShapes guards the Gemini
+// Interactions API (POST /v1beta/interactions), whose request puts user text
+// under `input` (string | Content | Content[] | Step[]) and a top-level
+// string `system_instruction`, and spells tool payloads `arguments`/`result`.
+func TestContentAdapter_Gemini_InteractionsInputShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "input string",
+			body: `{"model":"gemini-2.5-flash","input":"my ssn is 222-33-4444"}`,
+			want: []string{"222-33-4444"},
+		},
+		{
+			name:    "input content object",
+			body:    `{"input":{"type":"text","text":"call 555-867-5309"}}`,
+			want:    []string{"555-867-5309"},
+			notWant: []string{"text"},
+		},
+		{
+			name: "input content array with media",
+			body: `{"input":[{"type":"text","text":"alice.real@gmail.com"},{"type":"image","mime_type":"image/png","data":"AAAA"}]}`,
+			want: []string{"alice.real@gmail.com"},
+			// data is stripped before analysis, never selected as text.
+			notWant: []string{"AAAA", "image/png"},
+		},
+		{
+			name: "system_instruction both spellings",
+			body: `{"system_instruction":"You help Alice Johnson","systemInstruction":"and Bob Smith","input":"hi"}`,
+			want: []string{"Alice Johnson", "Bob Smith", "hi"},
+		},
+		{
+			name: "user_input and model_output steps",
+			body: `{"input":[
+				{"type":"user_input","content":"my email is alice.real@gmail.com"},
+				{"type":"model_output","content":[{"type":"text","text":"noted, 222-33-4444"}]},
+				{"type":"user_input","content":[{"type":"text","text":"and 555-867-5309"}]}
+			]}`,
+			want:    []string{"alice.real@gmail.com", "222-33-4444", "555-867-5309"},
+			notWant: []string{"user_input", "model_output"},
+		},
+		{
+			name: "function_call arguments object and function_result variants",
+			body: `{"input":[
+				{"type":"function_call","id":"fc1","name":"save_user","arguments":{"ssn":"222-33-4444"}},
+				{"type":"function_result","call_id":"fc1","name":"save_user","result":"saved alice.real@gmail.com"},
+				{"type":"function_result","call_id":"fc2","result":{"phone":"555-867-5309"}},
+				{"type":"function_result","call_id":"fc3","result":[{"type":"text","text":"bob.real@gmail.com"}]}
+			]}`,
+			want:    []string{"222-33-4444", "alice.real@gmail.com", "555-867-5309", "bob.real@gmail.com"},
+			notWant: []string{"fc1", "save_user"},
+		},
+		{
+			name:    "metadata untouched",
+			body:    `{"model":"gemini-2.5-flash","store":true,"previous_interaction_id":"v1_abc","generation_config":{"temperature":0.2},"input":"hi"}`,
+			want:    []string{"hi"},
+			notWant: []string{"gemini-2.5-flash", "v1_abc"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var tasks []jsonScrubTask
+			var root any
+			if err := json.Unmarshal([]byte(tc.body), &root); err != nil {
+				t.Fatal(err)
+			}
+			collectJSONScrubTasks(root, nil, &tasks, geminiContentAdapter{})
+			texts := taskTexts(tasks)
+			if !containsAll(texts, tc.want...) {
+				t.Fatalf("want %v selected, tasks = %v", tc.want, texts)
+			}
+			for _, nw := range tc.notWant {
+				if containsAll(texts, nw) {
+					t.Fatalf("%q must not be selected, tasks = %v", nw, texts)
+				}
+			}
+		})
+	}
+
+	// Native GenerateContent has no `input` key, so it must yield exactly
+	// the tasks it did before the Interactions rules were added.
+	body := `{"systemInstruction":{"parts":[{"text":"be brief"}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}],"generationConfig":{"stopSequences":["input"]}}`
+	var tasks []jsonScrubTask
+	var root any
+	_ = json.Unmarshal([]byte(body), &root)
+	collectJSONScrubTasks(root, nil, &tasks, geminiContentAdapter{})
+	if texts := taskTexts(tasks); len(texts) != 2 || !containsAll(texts, "be brief", "hello") {
+		t.Fatalf("native GenerateContent selection changed: %v", texts)
+	}
+}
+
 func TestContentAdapter_Anthropic_SystemBlockText(t *testing.T) {
 	body := `{"system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":"hi"}]}`
 	var tasks []jsonScrubTask

@@ -480,17 +480,16 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 		out = append(out, skipResult("pii", "wire-seal", "Presidio sidecar not reachable"))
 		return out
 	}
-	if r.cfg.OpenAIKey == "" {
+	if r.cfg.OpenAIKey != "" {
+		out = append(out, r.runPIIRedaction(ctx, piiCfg)...)
+		out = append(out, r.runPIIWireRestore(ctx)...)
+	} else {
 		out = append(out, skipResult("pii", "redaction", "OPENAI_API_KEY not set"))
 		out = append(out, skipResult("pii", "entities", "OPENAI_API_KEY not set"))
 		out = append(out, skipResult("pii", "recent-events", "OPENAI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore", "OPENAI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-seal", "OPENAI_API_KEY not set"))
-		return out
 	}
-
-	out = append(out, r.runPIIRedaction(ctx, piiCfg)...)
-	out = append(out, r.runPIIWireRestore(ctx)...)
 	if r.cfg.AnthropicKey != "" {
 		out = append(out, r.runPIIWireRestoreAnthropic(ctx)...)
 	} else {
@@ -500,11 +499,14 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 	if r.cfg.GeminiKey != "" {
 		out = append(out, r.runPIIWireRestoreGemini(ctx)...)
 		out = append(out, r.runPIIWireRestoreGeminiJSONSafety(ctx)...)
+		out = append(out, r.runPIIWireRestoreGeminiInteractions(ctx)...)
 	} else {
 		out = append(out, skipResult("pii", "wire-restore-gemini", "GEMINI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-gemini-stream", "GEMINI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-gemini-json-safety", "GEMINI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-gemini-json-safety-stream", "GEMINI_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-gemini-interactions", "GEMINI_API_KEY not set"))
+		out = append(out, skipResult("pii", "wire-restore-gemini-interactions-stream", "GEMINI_API_KEY not set"))
 	}
 	return out
 }
@@ -677,6 +679,23 @@ func (r *Runner) runPIIWireRestoreGemini(ctx context.Context) []Result {
 	})
 }
 
+func (r *Runner) runPIIWireRestoreGeminiInteractions(ctx context.Context) []Result {
+	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
+		provider:    "gemini",
+		actualKey:   r.cfg.GeminiKey,
+		keyDesc:     "live-pii-wire-gemini-interactions",
+		suitePrefix: "wire-restore-gemini-interactions",
+		repeatEmail: r.proxy.GeminiInteractionsRepeatEmail,
+	})
+}
+
+// liveTestEmail returns a unique address on a domain the redactor's
+// test-email allowlist does not cover; @example.com addresses pass through
+// unmasked (allow_test_emails), which made the restore checks vacuous.
+func liveTestEmail(prefix string) string {
+	return fmt.Sprintf("%s-%d@pii-livetest.instawork.com", prefix, time.Now().UnixNano())
+}
+
 type piiWireRestoreProviderSpec struct {
 	provider    string
 	actualKey   string
@@ -702,7 +721,7 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	}
 	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
 
-	email := fmt.Sprintf("%s-%d@example.com", spec.suitePrefix, time.Now().UnixNano())
+	email := liveTestEmail(spec.suitePrefix)
 	pr, content, err := spec.repeatEmail(ctx, key.Key, email, false)
 	if err != nil {
 		return []Result{failResult("pii", spec.suitePrefix, err.Error())}
@@ -719,13 +738,19 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	} else if leaked, ok := PIIMaskLeaked(pr.Headers, pr.Trailer); ok && leaked > 0 {
 		out = append(out, failResult("pii", spec.suitePrefix,
 			fmt.Sprintf("MASK placeholder leaked to client on %s non-streaming path (X-LLM-PII-Leaked=%d)", spec.provider, leaked)))
+	} else if restored, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Restored"); !ok || restored <= 0 {
+		// The model echoes a raw email just as happily as a restored one, so
+		// without this the case passes when redaction never ran.
+		out = append(out, failResult("pii", spec.suitePrefix,
+			fmt.Sprintf("email reached client but X-LLM-PII-Restored=%q — request was never masked",
+				pr.Headers.Get("X-LLM-PII-Restored"))))
 	} else {
 		out = append(out, passResult("pii", spec.suitePrefix,
 			fmt.Sprintf("MASK email restored (%s)", truncate(content, 80)), elapsed(start)))
 	}
 
 	start = time.Now()
-	streamEmail := fmt.Sprintf("%s-stream-%d@example.com", spec.suitePrefix, time.Now().UnixNano())
+	streamEmail := liveTestEmail(spec.suitePrefix + "-stream")
 	pr, streamBody, err := spec.repeatEmail(ctx, key.Key, streamEmail, true)
 	if err != nil {
 		out = append(out, failResult("pii", spec.suitePrefix+"-stream", err.Error()))
@@ -742,6 +767,12 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 	} else if leaked, ok := PIIMaskLeaked(pr.Headers, pr.Trailer); ok && leaked > 0 {
 		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("MASK placeholder leaked to client on %s streaming path (X-LLM-PII-Leaked=%d)", spec.provider, leaked)))
+	} else if masked, ok := piiHeaderCount(pr.Headers, "X-LLM-PII-Masked"); !ok || masked <= 0 {
+		// Streams omit X-LLM-PII-Restored; the early Masked header is the
+		// only proof the request was scrubbed.
+		out = append(out, failResult("pii", spec.suitePrefix+"-stream",
+			fmt.Sprintf("email reached client but X-LLM-PII-Masked=%q — request was never masked",
+				pr.Headers.Get("X-LLM-PII-Masked"))))
 	} else {
 		out = append(out, passResult("pii", spec.suitePrefix+"-stream",
 			fmt.Sprintf("MASK email restored in stream (%s)", truncate(streamBody, 80)), elapsed(start)))

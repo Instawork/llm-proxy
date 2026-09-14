@@ -18,9 +18,10 @@ import {
 import { isPersonalKey } from "../../lib/format";
 import { permissions } from "../../lib/permissions";
 import { useConfig, useMe, useUpdateKey } from "../../hooks/queries";
-import type { APIKey } from "../../types";
+import type { APIKey, UpdateAPIKeyRequest } from "../../types";
 import { useToast } from "../ui/toast";
 import { ProviderBadge } from "../ui/page-header";
+import PiiOffConfirmDialog, { needsPiiOffConfirmation } from "./pii-off-confirm-dialog";
 
 type EditKeyModalProps = {
   keyRecord: APIKey;
@@ -48,7 +49,10 @@ export default function EditKeyModal({
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   const [form, setForm] = useState<KeyFormState>(() => keyFormFromRecord(keyRecord, "metered"));
-  const [tab, setTab] = useState<KeyFormTab>(initialTab);
+  const [tab, setTab] = useState<KeyFormTab>(
+    canManagePolicy && !isPersonal ? initialTab : "general",
+  );
+  const [pendingPiiOffUpdate, setPendingPiiOffUpdate] = useState<UpdateAPIKeyRequest | null>(null);
 
   const piiOffRequiresBedrock = formPiiOffRequiresBedrock(
     form.redact_pii,
@@ -82,6 +86,14 @@ export default function EditKeyModal({
       return;
     }
 
+    if (needsPiiOffConfirmation(keyRecord.provider, update.redact_pii ?? null)) {
+      setPendingPiiOffUpdate(update);
+      return;
+    }
+    await submitUpdate(update);
+  };
+
+  const submitUpdate = async (update: UpdateAPIKeyRequest) => {
     try {
       await updateKey.mutateAsync({ key: routeKey, body: update });
       push("Key updated", "success");
@@ -136,6 +148,7 @@ export default function EditKeyModal({
                   rows={2}
                   placeholder="What is this key used for?"
                   value={form.description}
+                  disabled={isPersonal}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -143,6 +156,11 @@ export default function EditKeyModal({
                     }))
                   }
                 />
+                {isPersonal ? (
+                  <span className="label-text-alt mt-1 text-base-content/60">
+                    Personal keys can&apos;t be renamed.
+                  </span>
+                ) : null}
               </label>
 
               {canManagePolicy ? <ExpiryField form={form} setForm={setForm} /> : null}
@@ -189,6 +207,14 @@ export default function EditKeyModal({
       <form method="dialog" className="modal-backdrop">
         <button type="button" aria-label="Close" onClick={onClose} />
       </form>
+      {pendingPiiOffUpdate ? (
+        <PiiOffConfirmDialog
+          provider={keyRecord.provider}
+          pending={updateKey.isPending}
+          onCancel={() => setPendingPiiOffUpdate(null)}
+          onConfirm={() => void submitUpdate(pendingPiiOffUpdate)}
+        />
+      ) : null}
     </dialog>
   );
 }
