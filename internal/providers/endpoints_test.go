@@ -4,23 +4,23 @@ import "testing"
 
 func TestClassifyEndpoint(t *testing.T) {
 	cases := map[string]EndpointClass{
-		"/openai/v1/chat/completions":                            EndpointMetered,
-		"/openai/v1/responses":                                   EndpointMetered,
-		"/anthropic/v1/messages":                                 EndpointMetered,
-		"/gemini/v1beta/models/gemini-3.6-flash:generateContent": EndpointMetered,
-		"/bedrock/model/anthropic.claude-3/converse-stream":      EndpointMetered,
-		"/bedrock/model/anthropic.claude-3/invoke":               EndpointMetered,
+		"/openai/v1/chat/completions":                                   EndpointMetered,
+		"/openai/v1/responses":                                          EndpointMetered,
+		"/anthropic/v1/messages":                                        EndpointMetered,
+		"/gemini/v1beta/models/gemini-3.6-flash:generateContent":        EndpointMetered,
+		"/bedrock/model/anthropic.claude-3/converse-stream":             EndpointMetered,
+		"/bedrock/model/anthropic.claude-3/invoke":                      EndpointMetered,
 		"/bedrock/model/anthropic.claude-3/invoke-with-response-stream": EndpointMetered,
-		"/openai/v1/chat/completions/":                           EndpointMetered,
+		"/openai/v1/chat/completions/":                                  EndpointMetered,
 
 		"/gemini/v1beta/models":               EndpointPassthrough,
 		"/gemini/upload/v1beta/files":         EndpointPassthrough,
 		"/anthropic/v1/messages/count_tokens": EndpointPassthrough,
 		"/openai/v1/realtime/client_secrets":  EndpointPassthrough,
 
-		"/gemini/v1beta/interactions":              EndpointMetered,
-		"/openai/v1/audio/transcriptions":          EndpointUnknown,
-		"/openai/v1/embeddings":                    EndpointUnknown,
+		"/gemini/v1beta/interactions":     EndpointMetered,
+		"/openai/v1/audio/transcriptions": EndpointUnknown,
+		"/openai/v1/embeddings":           EndpointUnknown,
 	}
 	for path, want := range cases {
 		if got := ClassifyEndpoint(path); got != want {
