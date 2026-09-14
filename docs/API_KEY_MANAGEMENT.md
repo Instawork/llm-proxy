@@ -79,7 +79,7 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 - **One key per provider** (`openai`, `anthropic`, `gemini`; Bedrock is not available)
 - **Monthly spend cap** (default **$20/month**, configured via `admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents` in `configs/base.yml`)
 - **No daily cap** on personal keys (`daily_cost_limit` is `0`)
-- Personal keys cannot be renamed; the name is fixed at creation and mirrors the upstream credential name
+- Personal keys cannot be renamed; the name is fixed at creation and mirrors the upstream credential name. Editors and admins can still change their spend limit, PII setting, rate limits, expiry, and status
 - Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
 - Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
 - Share links are capability URLs: anyone holding the link (signed in or not, any role) can resolve it

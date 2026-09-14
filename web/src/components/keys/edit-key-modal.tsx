@@ -49,9 +49,7 @@ export default function EditKeyModal({
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
 
   const [form, setForm] = useState<KeyFormState>(() => keyFormFromRecord(keyRecord, "metered"));
-  const [tab, setTab] = useState<KeyFormTab>(
-    canManagePolicy && !isPersonal ? initialTab : "general",
-  );
+  const [tab, setTab] = useState<KeyFormTab>(canManagePolicy ? initialTab : "general");
   const [pendingPiiOffUpdate, setPendingPiiOffUpdate] = useState<UpdateAPIKeyRequest | null>(null);
 
   const piiOffRequiresBedrock = formPiiOffRequiresBedrock(
@@ -60,9 +58,7 @@ export default function EditKeyModal({
     canBypassPiiBedrockPolicy,
   );
 
-  const policyTabs: KeyFormTab[] = canManagePolicy && !isPersonal
-    ? ["cost", "pii", "rate-limits"]
-    : [];
+  const policyTabs: KeyFormTab[] = canManagePolicy ? ["cost", "pii", "rate-limits"] : [];
   const visibleTabs: KeyFormTab[] = ["general", ...policyTabs];
 
   const onSubmit = async (event: FormEvent) => {
@@ -165,13 +161,11 @@ export default function EditKeyModal({
 
               {canManagePolicy ? <ExpiryField form={form} setForm={setForm} /> : null}
 
-              {canManagePolicy && !isPersonal ? (
-                <KeyStatusToggle form={form} setForm={setForm} />
-              ) : null}
+              {canManagePolicy ? <KeyStatusToggle form={form} setForm={setForm} /> : null}
             </>
           ) : null}
 
-          {tab === "cost" && canManagePolicy && !isPersonal ? (
+          {tab === "cost" && canManagePolicy ? (
             <CostFields
               form={form}
               setForm={setForm}
@@ -180,7 +174,7 @@ export default function EditKeyModal({
             />
           ) : null}
 
-          {tab === "pii" && canManagePolicy && !isPersonal ? (
+          {tab === "pii" && canManagePolicy ? (
             <PiiFields
               form={form}
               setForm={setForm}
@@ -189,7 +183,7 @@ export default function EditKeyModal({
             />
           ) : null}
 
-          {tab === "rate-limits" && canManagePolicy && !isPersonal ? (
+          {tab === "rate-limits" && canManagePolicy ? (
             <RateLimitFields form={form} setForm={setForm} />
           ) : null}
 
