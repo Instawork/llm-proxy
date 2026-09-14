@@ -1202,9 +1202,14 @@
           "ga_equivalent": null,
           "pricing": [
             {
-              "up_to_tokens": null,
+              "up_to_tokens": 272000,
               "input": 12.5,
               "output": 75.0
+            },
+            {
+              "up_to_tokens": null,
+              "input": 25.0,
+              "output": 112.5
             }
           ],
           "promo_pricing": null,
@@ -1217,8 +1222,10 @@
           },
           "new_since_previous_audit": false,
           "source": "https://platform.openai.com/docs/models/gpt-5.6-cyber",
-          "verified_by": [],
-          "notes": "Pricing page maps the moving pointer gpt-daybreak-red-latest to this model today (not recorded as an alias: it can re-target another version). Daybreak Red program model; requires separate approval. Pricing page shows '-' for long context, but the model card text says prompts >272K input are priced at 2x/1.5x - encoded flat per the pricing page (context window is 400K). gpt-daybreak-red-latest currently points here (pricing page) - moving pointer. Release: changelog entry under the Aug 20, 2026 heading. Listed on the deprecations page (announced None, shutdown None)."
+          "verified_by": [
+            "https://platform.openai.com/docs/models/gpt-5.6-cyber"
+          ],
+          "notes": "Model card (re-fetched by the orchestrator 2026-09-14): 'Prompts with >272K input tokens are priced at 2x input and 1.5x output for the full request'; the pricing page shows '-' for long context. 400K context, so the tier is reachable and is encoded. Pricing page maps the moving pointer gpt-daybreak-red-latest to this model today (not recorded as an alias: it can re-target another version). Daybreak Red program model; requires separate approval. Pricing page shows '-' for long context, but the model card text says prompts >272K input are priced at 2x/1.5x - encoded flat per the pricing page (context window is 400K). gpt-daybreak-red-latest currently points here (pricing page) - moving pointer. Release: changelog entry under the Aug 20, 2026 heading. Listed on the deprecations page (announced None, shutdown None)."
         },
         {
           "id": "gpt-5.5",
