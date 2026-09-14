@@ -14,7 +14,7 @@ The vendor research (reading pricing, deprecations, and API-reference pages for 
 1. **The audit file is the only source of vendor data.** Never fill a price, date, alias, or model name from model knowledge. If the latest audit lacks something you need, record it as an open question in the output and leave the config untouched for that model; do not look it up yourself and do not guess.
 2. **Refuse a stale audit.** If the latest audit's `generated_at` is more than 14 days old, stop and tell the user to run the vendor-audit automation (Cursor dashboard → Automations) before continuing. Prices and sunset dates move weekly; applying an old snapshot can re-introduce a price the vendor already changed.
 3. **Never add aliases for models that are actually different versions.** Aliases are only for the same underlying model (e.g., `claude-opus-4-1` ↔ `claude-opus-4-1-20250805`, `gpt-4o` ↔ `gpt-4o-2024-11-20`). Never alias `gpt-5` to `gpt-5.1`, `claude-opus-4-0` to `claude-opus-4-1`, `gemini-2.5-pro` to `gemini-3-pro`, etc. Different version numbers = different models = separate entries. The audit's `aliases` arrays follow the same rule; if one does not, treat it as an audit bug and flag it rather than copying it.
-4. **Always encode tiered pricing when the audit has more than one tier.** This is not optional. If a model's `pricing` array has two or more tiers (Gemini Pro ≤200k vs >200k, GPT-5.6 ≤272k vs >272k, Anthropic Sonnet 4.x ≤200k vs >200k), the model MUST be configured as a `PricingTier` list — never collapsed to flat `{input, output}`. Flat pricing silently under-bills long-prompt traffic.
+4. **Always encode tiered pricing when the audit has more than one tier.** This is not optional. If a model's `pricing` array has two or more tiers (Gemini Pro ≤200k vs >200k, GPT-5.6 ≤272k vs >272k, Anthropic Sonnet 4.x ≤200k vs >200k), the model MUST be configured as a `PricingTier` list — never collapsed to flat `{input, output}`. Flat pricing silently under-bills long-prompt traffic. A vendor sentence such as "prompts with >272K input tokens are priced at 2x input / 1.5x output" on a model card **is** a published tier even when the pricing table shows "–" for long context — encode it (and fix the audit row) whenever the model's context window exceeds the threshold.
 5. **Encode list price, not promo price.** `promo_pricing` in the audit is recorded so you can leave a comment; the `pricing` block always gets the list rate so cost tracking never under-bills after the promo lapses.
 6. **Always produce a deprecations list** alongside the pricing diff so it can be consumed by downstream callers (e.g., client UI, docs). See "Deprecation output" below.
 7. **Always audit endpoint coverage.** A model whose price is right is still billed at $0 if the request path is not in the metered list of `internal/providers/endpoints.go`. Every run diffs the audit's `endpoints` arrays against that registry and checks live traffic for unmetered paths (see "Step 4b"). This is how the Gemini Interactions API ran unbilled for a day: the model was known, the endpoint was not.
@@ -30,6 +30,7 @@ Task progress:
 - [ ] 2. Load the latest audits/audit-MM-DD-YYYY.json; stop if stale or invalid
 - [ ] 3. Map audit fields onto base.yml shapes (tiers, aliases, retired_models)
 - [ ] 4. Diff audit models against configs/base.yml (pricing + deprecations)
+- [ ] 4a. Re-verify every non-no-op row at its `source` URL / AWS card; probe GetModelPricing for changed ids
 - [ ] 4b. Diff audit endpoints against internal/providers/endpoints.go; check by_unmetered and Datadog for live unmetered traffic
 - [ ] 5. Build pricing changeset + deprecations list + endpoint-coverage report
 - [ ] 6. Present plan (or apply, depending on mode)
@@ -106,6 +107,27 @@ For each provider section of `configs/base.yml`, categorize every model:
 | In the config but absent from the audit entirely | Open question — the vendor no longer publishes it, but the audit did not confirm a shutdown. Do not remove it. |
 
 Reuse the `limits` block of a similar existing model rather than inventing new rate-limit numbers — e.g., a new flagship uses the same limits as the previous flagship.
+
+Bedrock rows need one extra decision — **which provider section the id belongs to**:
+
+| Audit id shape | Config section | Why |
+|---|---|---|
+| bare `anthropic.<model>` / `openai.<model>` | `bedrock-mantle` (In-Region, `/anthropic/v1/messages`, `/openai/v1/*`) | Mantle only accepts the bare id |
+| `us.` / `eu.` / `au.` / `jp.` / `in.` geo profile | `bedrock` (bedrock-runtime) | runtime requires a profile id for these models; geo bills list +10% |
+| `global.` profile | `bedrock`, priced **separately** | Global CRIS bills the plain list rate (~10% below geo); on a flat entry use `overrides: {"global.…": {input, output}}`, on a tiered entry make it its own model entry — `overrides` only works with flat pricing |
+
+Never alias a `global.` id onto a geo-priced entry, and never put runtime profile ids under `bedrock-mantle`.
+
+### Step 4a. Re-verify every row you are about to change (mandatory)
+
+The audit is research output and has been wrong before (a promo encoded as list price; a long-context tier dropped because the pricing page showed "–" while the model card spelled it out; Bedrock profile ids filed under the wrong endpoint). Before editing `configs/base.yml`, open the audit row's `source` URL (and, for Bedrock, the AWS model card) for **every** row in the changeset that is not `no-op`, and confirm:
+
+1. the number(s) you are about to write appear verbatim on that page (per-1M list rate, not batch / flex / cached / promo);
+2. the tier shape: if the page or card says anything like *"prompts with >272K input tokens are priced at 2x input and 1.5x output"* and the context window exceeds that threshold, the entry is tiered even when the audit row has one tier — fix the audit row too;
+3. for Bedrock, which endpoint/profile the id is documented for and whether the card prints different In-Region / Geo / Global prices;
+4. for a `deprecated` / `shutdown` change, the sunset date and replacement on the deprecations page.
+
+Then prove the resolved prices with a throwaway test in `internal/config/` (delete it afterwards) that calls `GetModelPricing(provider, model, tokens)` for each changed id and alias at 1k and 300k input tokens, and paste the output into the PR's Verification section. Anything that fails re-verification becomes an open question, not a config edit.
 
 ### Step 4b. Endpoint coverage
 
