@@ -400,7 +400,7 @@ providers:
         enabled: true
         deprecated: true # vendor shutdown 2026-10-23
         replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-0613"]
+        aliases: ["gpt-4-0613", "gpt-4-0613-completions", "gpt-4-completions"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -415,7 +415,7 @@ providers:
         enabled: true
         deprecated: true # vendor shutdown 2026-10-23
         replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-turbo-2024-04-09"]
+        aliases: ["gpt-4-turbo-2024-04-09", "gpt-4-turbo-completions"]
         limits:
           tokens_per_minute: 450_000
           requests_per_minute: 5_000
@@ -502,7 +502,12 @@ providers:
         deprecated: true # vendor shutdown 2026-10-23 (gpt-3.5-turbo-1106 on 2026-09-28)
         replacement: "gpt-5.6-terra"
         aliases:
-          ["gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-16k"]
+          [
+            "gpt-3.5-turbo-0125",
+            "gpt-3.5-turbo-1106",
+            "gpt-3.5-turbo-16k",
+            "gpt-3.5-turbo-completions",
+          ]
         limits:
           tokens_per_minute: 2_000_000
           requests_per_minute: 5_000
@@ -778,6 +783,54 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 20.00
             output: 75.00
+      # GPT-5.6 Cyber (2026-08-20): gated behind Trusted Access for Cyber. 400K
+      # context; the pricing page publishes a single rate and no long-context
+      # tier (audit-09-14-2026). The pricing page maps the moving pointer
+      # gpt-daybreak-red-latest here today; not recorded as an alias because it
+      # can re-target another version.
+      "gpt-5.6-cyber":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 12.50
+          output: 75.00
+      # Codex line: gpt-5.3-codex is the current model (Responses API); the
+      # gpt-5/5.1/5.2-codex snapshots shut down 2026-07-23.
+      "gpt-5.3-codex":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 1.75
+          output: 14.00
+      # Rolling ChatGPT-tuned pointer (replaces the retired gpt-5.x-chat-latest
+      # snapshots). 400K context, flat pricing per the models index.
+      "chat-latest":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 5.00
+          output: 30.00
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -1064,6 +1117,10 @@ providers:
         aliases:
           [
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "jp.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "claude-sonnet-4-5-bedrock",
             "claude-sonnet-4.5-bedrock",
             "claude-sonnet-bedrock",
@@ -1086,6 +1143,10 @@ providers:
         aliases:
           [
             "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "au.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
             "claude-haiku-4-5-bedrock",
             "claude-haiku-4.5-bedrock",
             "claude-haiku-bedrock",
@@ -1131,6 +1192,9 @@ providers:
         aliases:
           [
             "anthropic.claude-sonnet-5",
+            "eu.anthropic.claude-sonnet-5",
+            "au.anthropic.claude-sonnet-5",
+            "global.anthropic.claude-sonnet-5",
             "claude-sonnet-5-bedrock",
             "claude-sonnet-5-bedrock-thinking",
           ]
@@ -1151,6 +1215,10 @@ providers:
         aliases:
           [
             "anthropic.claude-sonnet-4-6",
+            "eu.anthropic.claude-sonnet-4-6",
+            "au.anthropic.claude-sonnet-4-6",
+            "jp.anthropic.claude-sonnet-4-6",
+            "global.anthropic.claude-sonnet-4-6",
             "claude-sonnet-4-6-bedrock",
             "claude-sonnet-4.6-bedrock",
             "claude-sonnet-4-6-bedrock-thinking",
@@ -1172,6 +1240,10 @@ providers:
         aliases:
           [
             "anthropic.claude-opus-4-8",
+            "eu.anthropic.claude-opus-4-8",
+            "jp.anthropic.claude-opus-4-8",
+            "au.anthropic.claude-opus-4-8",
+            "global.anthropic.claude-opus-4-8",
             "claude-opus-4-8-bedrock",
             "claude-opus-4.8-bedrock",
             "claude-opus-4-8-bedrock-thinking",
@@ -1202,22 +1274,91 @@ providers:
       # them through a project pinned to "default" retention (data stays inside
       # AWS, not shared with OpenAI). project_id is env-driven per account; unset
       # -> no OpenAI-Project header -> account default applies.
-      # Bedrock serves these In-Region only and bills at OpenAI's data-residency
-      # tier (1.1x list); 272K context, so no long-context tier.
+      # Bedrock bills these at OpenAI's data-residency tier (1.1x list). The AWS
+      # model cards (audit-09-14-2026) publish a 1M context window and a >272K
+      # input tier at 2x input / 1.5x output for the whole request, so the
+      # In-Region price is encoded as two tiers like the native gpt-5.4+ entries.
       "openai.gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-bedrock"]
         project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
         pricing:
-          input: 2.75
-          output: 16.50
+          - threshold: 272_000
+            input: 2.75
+            output: 16.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 5.50
+            output: 24.75
       "openai.gpt-5.5":
         enabled: true
         aliases: ["gpt-5.5-bedrock"]
         project_id: "${LLM_PROXY_BEDROCK_MANTLE_OPENAI_PROJECT_ID}"
         pricing:
-          input: 5.50
-          output: 33.00
+          - threshold: 272_000
+            input: 5.50
+            output: 33.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 11.00
+            output: 49.50
+      # GPT-5.6 Sol/Terra/Luna on Bedrock (GA 2026-07-13) and GPT-6 Astra
+      # (2026-09-08). In-Region / geo cross-region price from the AWS model cards;
+      # the global.* profile is ~10% cheaper (Sol 4.00/20.00, Terra 2.00/12.00,
+      # Luna 0.20/1.20) and is not encoded. Astra is not yet on the Bedrock
+      # pricing page in any locale; its card is the only source. No project_id:
+      # whether these SKUs allow zero-data-retention is not in the audit, so the
+      # account-level retention policy stays in force until confirmed.
+      "openai.gpt-5.6-sol":
+        enabled: true
+        aliases: ["gpt-5.6-sol-bedrock", "us.openai.gpt-5.6-sol", "global.openai.gpt-5.6-sol"]
+        pricing:
+          - threshold: 272_000
+            input: 4.40
+            output: 22.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 8.80
+            output: 33.00
+      "openai.gpt-5.6-terra":
+        enabled: true
+        aliases:
+          [
+            "gpt-5.6-terra-bedrock",
+            "us.openai.gpt-5.6-terra",
+            "in.openai.gpt-5.6-terra",
+            "global.openai.gpt-5.6-terra",
+          ]
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 13.20
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 19.80
+      "openai.gpt-5.6-luna":
+        enabled: true
+        aliases:
+          [
+            "gpt-5.6-luna-bedrock",
+            "us.openai.gpt-5.6-luna",
+            "in.openai.gpt-5.6-luna",
+            "global.openai.gpt-5.6-luna",
+          ]
+        pricing:
+          - threshold: 272_000
+            input: 0.22
+            output: 1.32
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 0.44
+            output: 1.98
+      "openai.gpt-6-astra":
+        enabled: true
+        aliases: ["gpt-6-astra-bedrock", "us.openai.gpt-6-astra", "global.openai.gpt-6-astra"]
+        pricing:
+          - threshold: 272_000
+            input: 11.00
+            output: 55.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 22.00
+            output: 82.50
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
