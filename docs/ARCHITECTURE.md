@@ -58,6 +58,7 @@ callbacks feed the cost tracker, usage stats, and (indirectly) admin rollups.
 | `cmd/llm-proxy-keys/` | CLI for API key management |
 | `cmd/llm-proxy-users/` | CLI for admin user roster |
 | `cmd/config-validator/` | Validates merged YAML configs (`--validate-config`) |
+| `cmd/endpoint-coverage/` | Classifies 14 days of Datadog ELB paths with `providers.ClassifyEndpoint` (vendor-audit step 4b) |
 | `internal/` | All production logic |
 | `configs/` | Layered YAML (`base.yml` + env overlay + optional profile) |
 | `web/` | React admin dashboard (Vite); embedded at build time with `-tags embed_ui` |

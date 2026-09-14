@@ -405,11 +405,52 @@ func TestLoggingMiddleware_NonTrackedProviderRoutes(t *testing.T) {
 				if !strings.Contains(logOutput, tc.expected) {
 					t.Errorf("Expected log message '%s' not found in output: %s", tc.expected, logOutput)
 				}
+				for _, attr := range []string{"endpoint_class=", "endpoint_template="} {
+					if !strings.Contains(logOutput, attr) {
+						t.Errorf("Expected %s in provider route summary log: %s", attr, logOutput)
+					}
+				}
 			}
 
 			// Check response
 			if recorder.Code != http.StatusOK {
 				t.Errorf("Expected status 200, got %d", recorder.Code)
+			}
+		})
+	}
+}
+
+func TestLoggingMiddleware_EndpointClassAttributes(t *testing.T) {
+	manager := providers.NewProviderManager()
+	manager.RegisterProvider(&MockProvider{name: "gemini"})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	loggingHandler := LoggingMiddleware(manager)(handler)
+
+	testCases := []struct {
+		path     string
+		class    string
+		template string
+	}{
+		{"/gemini/v1beta/models/gemini-3.5-flash:generateContent", "metered", "/gemini/v1beta/models/{model}:generateContent"},
+		{"/gemini/v1beta/models/gemini-3.5-flash:countTokens", "passthrough", "/gemini/v1beta/models/{model}:countTokens"},
+		{"/gemini/v1beta/tunedModels", "unknown", "/gemini/v1beta/tunedModels"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.path, func(t *testing.T) {
+			req := httptest.NewRequest("POST", tc.path, nil)
+			recorder := httptest.NewRecorder()
+			logOutput := captureLogOutput(func() {
+				loggingHandler.ServeHTTP(recorder, req)
+			})
+			if !strings.Contains(logOutput, "endpoint_class="+tc.class) {
+				t.Errorf("expected endpoint_class=%s in output: %s", tc.class, logOutput)
+			}
+			if !strings.Contains(logOutput, "endpoint_template="+tc.template) {
+				t.Errorf("expected endpoint_template=%s in output: %s", tc.template, logOutput)
 			}
 		})
 	}

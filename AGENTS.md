@@ -15,7 +15,8 @@ Gorilla Mux; module path is `github.com/Instawork/llm-proxy` (Go 1.24).
 ## Repository layout
 
 - `cmd/llm-proxy/` — server entrypoint; other `cmd/` dirs are CLIs
-  (`config-validator`, `llm-proxy-keys`, `llm-proxy-users`, lint helpers)
+  (`config-validator`, `endpoint-coverage`, `llm-proxy-keys`,
+  `llm-proxy-users`, lint helpers)
 - `internal/` — all application code: `providers/` (per-provider proxy logic),
   `middleware/`, `circuit/`, `ratelimit/`, `cost/`, `pii/`, `config/`,
   `admin/`, plus per-domain `*stats/` recorders

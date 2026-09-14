@@ -138,17 +138,26 @@ func LoggingMiddleware(providerManager *providers.ProviderManager) func(http.Han
 					slog.Bool("streaming", false))
 			}
 
-			// Summary log for provider routes
+			// Summary log for provider routes. endpoint_class/endpoint_template
+			// let Datadog group provider traffic by registry class without
+			// re-implementing ClassifyEndpoint (see the llm-price-update skill,
+			// step 4b).
 			if isProvRoute {
+				endpointClass := providers.ClassifyEndpoint(r.URL.Path).String()
+				endpointTemplate := providers.EndpointTemplate(r.URL.Path)
 				if willBeTracked {
 					slog.Info("Provider route tracked",
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
+						slog.String("endpoint_class", endpointClass),
+						slog.String("endpoint_template", endpointTemplate),
 						slog.Bool("cost_tracked", true))
 				} else {
 					slog.Warn(proxylog.ProxyMsg("Provider route not tracked"),
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
+						slog.String("endpoint_class", endpointClass),
+						slog.String("endpoint_template", endpointTemplate),
 						slog.Bool("cost_tracked", false))
 				}
 			}
