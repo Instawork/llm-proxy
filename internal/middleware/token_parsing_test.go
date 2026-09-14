@@ -81,6 +81,8 @@ func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
 		{"/gemini/v1beta/openai/chat/completions", true},
 		{"/bedrock/model/anthropic.claude-3/converse", true},
 		{"/model/anthropic.claude-3/converse-stream", true},
+		{"/bedrock/model/anthropic.claude-3/invoke", true},
+		{"/bedrock/model/anthropic.claude-3/invoke-with-response-stream", true},
 		{"/bedrock-mantle/anthropic/v1/messages", true},
 		{"/meta/autolabel/bedrock-mantle/anthropic/v1/messages", true},
 		{"/gemini/v1beta/interactions", true},
@@ -92,7 +94,6 @@ func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
 		{"/openai/v1/realtime/client_secrets", false},
 		{"/openai/v1/audio/transcriptions", false},
 		{"/openai/v1/embeddings", false},
-		{"/bedrock/model/anthropic.claude-3/invoke", false},
 	}
 
 	for _, tc := range cases {

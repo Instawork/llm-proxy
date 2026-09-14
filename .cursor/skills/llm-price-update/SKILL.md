@@ -16,6 +16,7 @@ Audit and update model pricing in [configs/base.yml](../../../configs/base.yml) 
 5. **Always consult each vendor's official deprecations page.** Do not rely on the pricing page alone — models often linger on the pricing page after sunset, and new sunsets are announced on the deprecations page first. Cross-reference every model in `configs/base.yml` against the URLs in "Vendor URLs" below, and surface any retired/sunset model in the deprecations output.
 6. **Always produce a deprecations list** alongside the pricing diff so it can be consumed by downstream callers (e.g., client UI, docs). See "Deprecation output" below.
 7. **Always audit endpoint coverage.** A model whose price is right is still billed at $0 if the request path is not in the metered list of `internal/providers/endpoints.go`. Every run diffs the vendor API reference against that registry and checks live traffic for unmetered paths (see "Step 4b"). This is how the Gemini Interactions API ran unbilled for a day: the model was known, the endpoint was not.
+8. **Never remove existing aliases.** An alias that the vendor no longer lists (or never listed) is harmless and may still be pinned by a client, a saved prompt, or an admin-dashboard row; dropping it breaks that caller's pricing lookup for no gain. Aliases only leave `configs/base.yml` when the whole model moves to `retired_models`, and then they move with it.
 
 ## Workflow
 
@@ -197,6 +198,8 @@ Examples that are **NEVER** aliases (always separate entries), because the versi
 - Any model and its `-mini`/`-nano`/`-lite`/`-pro` sibling
 
 When in doubt, create a separate entry. Over-aliasing silently routes traffic to the wrong model's pricing and rate limits, and masks deprecations.
+
+Existing aliases are append-only (hard rule 8). A vendor de-listing a snapshot ID is not a reason to drop it from `aliases:`; a subagent reporting "vendor does not list this snapshot" is informational, not an action item.
 
 ## Snippet templates
 

@@ -9,6 +9,8 @@ func TestClassifyEndpoint(t *testing.T) {
 		"/anthropic/v1/messages":                                 EndpointMetered,
 		"/gemini/v1beta/models/gemini-3.6-flash:generateContent": EndpointMetered,
 		"/bedrock/model/anthropic.claude-3/converse-stream":      EndpointMetered,
+		"/bedrock/model/anthropic.claude-3/invoke":               EndpointMetered,
+		"/bedrock/model/anthropic.claude-3/invoke-with-response-stream": EndpointMetered,
 		"/openai/v1/chat/completions/":                           EndpointMetered,
 
 		"/gemini/v1beta/models":               EndpointPassthrough,
@@ -19,7 +21,6 @@ func TestClassifyEndpoint(t *testing.T) {
 		"/gemini/v1beta/interactions":              EndpointMetered,
 		"/openai/v1/audio/transcriptions":          EndpointUnknown,
 		"/openai/v1/embeddings":                    EndpointUnknown,
-		"/bedrock/model/anthropic.claude-3/invoke": EndpointUnknown,
 	}
 	for path, want := range cases {
 		if got := ClassifyEndpoint(path); got != want {

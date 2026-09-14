@@ -45,9 +45,11 @@ var meteredSuffixes = []string{
 	":generateContent",
 	":streamGenerateContent",
 	"/interactions",
-	// Bedrock Converse.
+	// Bedrock Converse and InvokeModel (model-native bodies; see bedrock.go).
 	"/converse",
 	"/converse-stream",
+	"/invoke",
+	"/invoke-with-response-stream",
 }
 
 // passthroughSuffixes are known vendor paths that never bill tokens.
