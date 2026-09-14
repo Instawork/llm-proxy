@@ -553,6 +553,12 @@ validate-config:
 	@go run ./cmd/config-validator/
 	@echo "$(GREEN)✓ Config validation passed$(NC)"
 
+# Datadog ELB path aggregate classified with providers.ClassifyEndpoint
+# (llm-price-update skill, step 4b). Needs DD_API_KEY + DD_APPLICATION_KEY.
+.PHONY: endpoint-coverage
+endpoint-coverage:
+	@go run ./cmd/endpoint-coverage/ -format markdown
+
 # Run go vet
 .PHONY: vet
 vet:
