@@ -26,6 +26,9 @@ Gorilla Mux; module path is `github.com/Instawork/llm-proxy` (Go 1.24).
 - `integration/` — fuzz scenarios and live integration tooling
 - `docs/` — [ARCHITECTURE.md](docs/ARCHITECTURE.md) plus feature deep-dives
   (API key management, PII redaction, redact API)
+- `audits/` — dated vendor model audits (`audit-MM-DD-YYYY.json`, schema in
+  `audit.schema.json`) written by the vendor-audit automation; the
+  `llm-price-update` skill applies the latest one to `configs/base.yml`
 
 ## Setup and run
 
