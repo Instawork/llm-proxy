@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs the CI lint job's gofmt -s and gofumpt checks on staged Go files.
+# Install with: make install-hooks
+set -euo pipefail
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+[ -z "$files" ] && exit 0
+
+if ! command -v gofumpt >/dev/null 2>&1; then
+	echo "gofumpt not installed; run: make install-gofumpt" >&2
+	exit 1
+fi
+
+# shellcheck disable=SC2086
+unformatted=$(gofmt -s -l $files; gofumpt -l $files)
+if [ -n "$unformatted" ]; then
+	echo "Go code is not formatted (gofmt -s / gofumpt):" >&2
+	echo "$unformatted" | sort -u >&2
+	echo "Run: make fmt-strict, then re-stage." >&2
+	exit 1
+fi

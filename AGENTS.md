@@ -39,7 +39,8 @@ make docker-compose-up # full dev stack: proxy + redis + dynamodb + web UI
 
 `make ci` runs the same gates as CI (format check, vet, PII log lint, config
 validation, race-enabled unit tests). To auto-fix formatting first, run
-`make ci-fix`.
+`make ci-fix`. `make install-hooks` enables a pre-commit hook that runs the
+gofmt/gofumpt checks on staged Go files so formatting failures never reach CI.
 
 CI enforces, exactly:
 

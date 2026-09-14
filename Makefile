@@ -116,6 +116,7 @@ help:
 	@echo "  fmt            - Format Go code (go fmt)"
 	@echo "  fmt-strict     - Apply gofmt -s and gofumpt (what CI enforces)"
 	@echo "  fmt-check      - Verify gofmt -s and gofumpt (no writes)"
+	@echo "  install-hooks  - Enable the pre-commit format check (.githooks/)"
 	@echo "  lint           - Run golint"
 	@echo "  validate-config - Validate configs/*.yml"
 	@echo ""
@@ -540,6 +541,12 @@ fmt-check: install-gofumpt
 	fi; \
 	echo "$(GREEN)✓ Format check passed$(NC)"
 
+# Point git at the tracked hooks so the CI format check runs on every commit.
+.PHONY: install-hooks
+install-hooks: install-gofumpt
+	@git config core.hooksPath .githooks
+	@echo "$(GREEN)✓ Git hooks installed (core.hooksPath=.githooks)$(NC)"
+
 .PHONY: validate-config
 validate-config:
 	@echo "$(BLUE)Validating configs/*.yml...$(NC)"
@@ -700,7 +707,7 @@ quick-start: install build
 
 # Development setup
 .PHONY: setup
-setup: install
+setup: install install-hooks
 	@echo "$(BLUE)Setting up development environment...$(NC)"
 	@go install golang.org/x/lint/golint@latest || echo "$(YELLOW)Could not install golint$(NC)"
 	@echo "$(GREEN)✓ Development environment setup completed$(NC)"
