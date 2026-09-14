@@ -242,6 +242,12 @@ features:
       bucket: instawork-llm-proxy-history
       prefix: llm-proxy
       region: us-west-2
+  notifications:
+    enabled: true
+    email:
+      provider: "sendgrid"
+      from_address: "llm-proxy@instawork.com"
+      from_name: "LLM Proxy"
 
 # =============================================================================
 # PROVIDER OVERRIDES

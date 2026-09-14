@@ -78,6 +78,8 @@ func (h *handler) handleCreateKeyRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	h.deps.Notifier.KeyRequested(r.Context(), *keyReq)
+
 	writeJSON(w, http.StatusCreated, keyRequestToResponse(keyReq))
 }
 
@@ -200,6 +202,7 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 		AutoProvision:  true,
 		Description:    name,
 		DailyCostLimit: dailyLimit,
+		RequesterEmail: claimed.RequesterEmail,
 	}
 
 	key, err := h.createOrgKey(r, adminusers.RoleAdmin, createReq)
@@ -225,6 +228,8 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to finalize key request approval"})
 		return
 	}
+
+	h.deps.Notifier.KeyRequestApproved(r.Context(), *updated, key)
 
 	writeJSON(w, http.StatusOK, keyRequestToResponse(updated))
 }
@@ -319,6 +324,7 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 		}
 	}
 	meta.ExpiresAt = req.ExpiresAt
+	meta.RequesterEmail = req.RequesterEmail
 
 	key, err := h.deps.APIKeyStore.CreateKeyWithMeta(
 		r.Context(),

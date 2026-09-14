@@ -59,6 +59,101 @@ func TestCostLimitMiddleware_BlocksAtCap(t *testing.T) {
 	}
 }
 
+func TestCostLimitMiddleware_OnLimitReachedFiresOnDailyBlock(t *testing.T) {
+	rec := coststats.NewRecorder()
+	masked := MaskKeyID("iw:abc123456789")
+	rec.RecordRequest("openai", masked, "", "gpt-4o-mini", 1.0, 0, 0, 10, 10)
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	var calls []onLimitReachedCall
+	key := &apikeys.APIKey{PK: "iw:abc123456789", DailyCostLimit: 100}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	CostLimitMiddleware(pm, rec, CostLimitOptions{
+		OnLimitReached: func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+			calls = append(calls, onLimitReachedCall{rec, window, limitCents, spendCents})
+		},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("next should not be called")
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", rr.Code)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one OnLimitReached call, got %d", len(calls))
+	}
+	if calls[0].window != "daily" || calls[0].limitCents != 100 {
+		t.Fatalf("unexpected call: %+v", calls[0])
+	}
+}
+
+func TestCostLimitMiddleware_OnLimitReachedFiresOnMonthlyBlock(t *testing.T) {
+	reader := monthlySpendReader{monthlyUSD: 11.0}
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	var calls []onLimitReachedCall
+	key := &apikeys.APIKey{PK: "iw:abc123456789", MonthlyCostLimit: 1000}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	CostLimitMiddleware(pm, reader, CostLimitOptions{
+		OnLimitReached: func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+			calls = append(calls, onLimitReachedCall{rec, window, limitCents, spendCents})
+		},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("next should not be called")
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", rr.Code)
+	}
+	if len(calls) != 1 || calls[0].window != "monthly" {
+		t.Fatalf("expected exactly one monthly OnLimitReached call, got %+v", calls)
+	}
+}
+
+func TestCostLimitMiddleware_OnLimitReachedDoesNotFireOnPassThrough(t *testing.T) {
+	rec := coststats.NewRecorder()
+	masked := MaskKeyID("iw:abc123456789")
+	rec.RecordRequest("openai", masked, "", "gpt-4o-mini", 0.0005, 0, 0, 10, 10)
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	var calls []onLimitReachedCall
+	key := &apikeys.APIKey{PK: "iw:abc123456789", DailyCostLimit: 100}
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+	req = req.WithContext(apikeys.WithContext(req.Context(), key))
+	rr := httptest.NewRecorder()
+	CostLimitMiddleware(pm, rec, CostLimitOptions{
+		OnLimitReached: func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+			calls = append(calls, onLimitReachedCall{rec, window, limitCents, spendCents})
+		},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("expected no OnLimitReached calls on pass-through, got %+v", calls)
+	}
+}
+
+type onLimitReachedCall struct {
+	rec        *apikeys.APIKey
+	window     string
+	limitCents int64
+	spendCents int64
+}
+
 func TestCostLimitMonthlyExceeded(t *testing.T) {
 	reader := monthlySpendReader{monthlyUSD: 11.0}
 

@@ -80,6 +80,30 @@ type FeaturesConfig struct {
 	History          HistoryConfig          `yaml:"history"`
 	ClientGzip       ClientGzipConfig       `yaml:"client_gzip"`
 	Upstream         UpstreamConfig         `yaml:"upstream"`
+	Notifications    NotificationsConfig    `yaml:"notifications"`
+}
+
+// NotificationsConfig controls transactional alerts (spend limits, key
+// requests, key-request approvals).
+type NotificationsConfig struct {
+	Enabled bool                    `yaml:"enabled"`
+	Email   NotificationEmailConfig `yaml:"email"`
+}
+
+// NotificationEmailConfig selects and configures the email provider used for
+// notifications. Provider credentials are never read from YAML: SendGrid
+// takes its API key from the SENDGRID_API_KEY env var, and SES uses the
+// standard AWS credential provider chain.
+type NotificationEmailConfig struct {
+	// Provider selects the email backend: "sendgrid", "ses", or "log" (logs
+	// instead of sending; used in dev/test).
+	Provider string `yaml:"provider"`
+	// FromAddress is the verified sender address. Required for sendgrid/ses.
+	FromAddress string `yaml:"from_address"`
+	FromName    string `yaml:"from_name"`
+	// Region is the AWS region for the ses provider. Empty falls back to the
+	// environment's default region (AWS_REGION or instance configuration).
+	Region string `yaml:"region,omitempty"`
 }
 
 // UpstreamConfig configures outbound HTTP behaviour toward LLM providers.

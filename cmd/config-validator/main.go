@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 
@@ -182,6 +183,21 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 				if t.DynamoDB.TableName == "" {
 					errs = append(errs, fmt.Sprintf("cost_tracking.transports[%d] dynamodb.table_name is required", i))
 				}
+			}
+		}
+	}
+	if cfg.Features.Notifications.Enabled {
+		email := cfg.Features.Notifications.Email
+		switch email.Provider {
+		case "sendgrid", "ses", "log":
+		default:
+			errs = append(errs, fmt.Sprintf("notifications.email.provider %q must be one of: sendgrid, ses, log", email.Provider))
+		}
+		if email.Provider == "sendgrid" || email.Provider == "ses" {
+			if email.FromAddress == "" {
+				errs = append(errs, "notifications.enabled is true but notifications.email.from_address is empty")
+			} else if _, err := mail.ParseAddress(email.FromAddress); err != nil {
+				errs = append(errs, fmt.Sprintf("notifications.email.from_address %q is not a valid email address: %v", email.FromAddress, err))
 			}
 		}
 	}

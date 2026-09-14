@@ -66,6 +66,12 @@ features:
     wire_placeholders: true
   redact_api:
     enabled: false
+  notifications:
+    enabled: true
+    email:
+      provider: "log"
+      from_address: "llm-proxy-fuzz@example.com"
+      from_name: "LLM Proxy (fuzz)"
   rate_limiting:
     enabled: true
     backend: "redis"

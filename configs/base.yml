@@ -164,6 +164,16 @@ features:
     viewer_limits:
       personal_monthly_cost_limit_cents: 2000
   # ---------------------------------------------------------------------------
+  # Notifications — spend limits, key requests, key-request approvals.
+  # email.provider selects the backend: "sendgrid", "ses", or "log" (dev/test).
+  # ---------------------------------------------------------------------------
+  notifications:
+    enabled: false
+    email:
+      provider: "sendgrid"
+      from_address: ""
+      from_name: "LLM Proxy"
+  # ---------------------------------------------------------------------------
   # Row history (gzipped JSONL archive — independent of Redis rollups)
   # ---------------------------------------------------------------------------
   # Off by default. When enabled, raw per-request events are buffered and
