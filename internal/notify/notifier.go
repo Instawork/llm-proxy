@@ -58,14 +58,14 @@ func NewNotifier(sender Sender, admins AdminLister, once OnceMarker, dashboardUR
 	}
 }
 
-// send fires n on a background goroutine so callers never block on the
-// underlying provider's latency or errors.
-func (n *Notifier) send(msg Notification) {
+// send fires notification on a background goroutine so callers never block
+// on the underlying provider's latency or errors.
+func (n *Notifier) send(notification Notification) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
-		if err := n.sender.Send(ctx, msg); err != nil {
-			n.logger.Error("notify: send failed", "to", msg.To, "title", msg.Title, "error", err)
+		if err := n.sender.Send(ctx, notification); err != nil {
+			n.logger.Error("notify: send failed", "to", notification.To, "title", notification.Title, "error", err)
 		}
 	}()
 }

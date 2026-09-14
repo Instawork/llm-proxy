@@ -84,8 +84,7 @@ type FeaturesConfig struct {
 }
 
 // NotificationsConfig controls transactional alerts (spend limits, key
-// requests, key-request approvals). Additional channels (e.g. Slack) would
-// be added as siblings of Email.
+// requests, key-request approvals).
 type NotificationsConfig struct {
 	Enabled bool                    `yaml:"enabled"`
 	Email   NotificationEmailConfig `yaml:"email"`

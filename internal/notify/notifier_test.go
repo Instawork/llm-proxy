@@ -101,6 +101,7 @@ func TestNotifier_KeyRequested_OnlyAdmins(t *testing.T) {
 
 	msgs := sender.messages()
 	require.Len(t, msgs, 1)
+	assert.Equal(t, KindKeyRequested, msgs[0].Kind)
 	assert.Equal(t, []string{"admin@example.com"}, msgs[0].To)
 	assert.Contains(t, msgs[0].Title, "requester@example.com")
 	assert.Contains(t, msgs[0].Body, "openai")
@@ -138,6 +139,7 @@ func TestNotifier_KeyRequestApproved_UsesRedactedKey(t *testing.T) {
 
 	msgs := sender.messages()
 	require.Len(t, msgs, 1)
+	assert.Equal(t, KindKeyRequestApproved, msgs[0].Kind)
 	assert.Equal(t, []string{"requester@example.com"}, msgs[0].To)
 	assert.NotContains(t, msgs[0].Body, key.PK)
 	assert.Contains(t, msgs[0].Body, apikeys.RedactKey(key.PK))
@@ -154,6 +156,7 @@ func TestNotifier_SpendLimitReached_PrefersOwnerThenRequester(t *testing.T) {
 	sender.waitForSend(t)
 	msgs := sender.messages()
 	require.Len(t, msgs, 1)
+	assert.Equal(t, KindSpendLimitReached, msgs[0].Kind)
 	assert.Equal(t, []string{"owner@example.com"}, msgs[0].To)
 
 	requested := &apikeys.APIKey{PK: "sk-iw-requested000000000000000000000000", RequesterEmail: "requester@example.com"}
