@@ -489,7 +489,7 @@ export default function KeyDetailPage() {
                         }
                         source={costSource}
                       >
-                        {canManagePolicy && !isPersonal ? (
+                        {canManagePolicy ? (
                           <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
                             <button
                               type="button"
@@ -588,7 +588,7 @@ export default function KeyDetailPage() {
                         }
                         source={piiSource}
                       >
-                        {canManagePolicy && !isPersonal ? (
+                        {canManagePolicy ? (
                           <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
                             <button
                               type="button"
@@ -620,7 +620,7 @@ export default function KeyDetailPage() {
                       subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
                       source={rateSource}
                     >
-                      {canManagePolicy && !isPersonal ? (
+                      {canManagePolicy ? (
                         <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
                           <button
                             type="button"
