@@ -655,7 +655,10 @@ func (r *Runner) circuitTransientRetry(ctx context.Context) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, TestMode: "force_transient_recover"})
+	// The retry reaches the fake upstream; without this it inherits the
+	// configured chaos rate and can randomly fail the attempt meant to succeed.
+	zero := 0.0
+	res := r.proxy.OpenAIChat(ctx, ChatOpts{APIKey: key, ChaosRate: &zero, TestMode: "force_transient_recover"})
 	if res.Status != http.StatusOK {
 		return false, fmt.Sprintf("want 200 after retry got %d body=%s", res.Status, truncate(res.Body, 120))
 	}
