@@ -149,7 +149,10 @@ features:
     # plus per-100KiB scaling covers tool-result payloads (Redshift ACLs).
     timeout_ms: 8000
     timeout_ms_per_100kb: 2000
-    timeout_ms_max: 30000
+    # Must cover the largest body max_body_bytes admits: 8 MiB scales to
+    # 8s + 80 * 2s = 168s under the formula above. Stays well under the
+    # dedicated ALB's 300s idle_timeout so the upstream call still fits.
+    timeout_ms_max: 180000
     analyze_concurrency: 4
     # Presidio's spaCy NER is single-threaded per /analyze call, so one large
     # field (e.g. a big tool-result string) pins a single sidecar worker for
@@ -161,10 +164,12 @@ features:
     # Without this, max_body_bytes falls back to the 1 MiB default. With
     # fail_mode "closed" any body over the limit 503s instead of skipping
     # redaction, and a caller that retries an oversized payload keeps
-    # hitting 503 on every attempt. 2 MiB clears the largest observed
-    # production payload (a 1,092,866-byte Anthropic tool-result body) with
-    # headroom.
-    max_body_bytes: 2097152
+    # hitting 503 on every attempt. 8 MiB lets 1M-token-window models
+    # (Gemini 3.5, GPT-5.4) fill their window -- ~4.5 MB of prose -- so the
+    # provider's own context-length error is what callers see, not a proxy
+    # 503. The largest observed organic production payload is still a
+    # 1,092,866-byte Anthropic tool-result body.
+    max_body_bytes: 8388608
     allow_per_key_override: false
     analyze_cache:
       enabled: true
