@@ -2,6 +2,8 @@ package notify
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -59,13 +61,15 @@ func NewNotifier(sender Sender, admins AdminLister, once OnceMarker, dashboardUR
 }
 
 // send fires notification on a background goroutine so callers never block
-// on the underlying provider's latency or errors.
+// on the underlying provider's latency or errors. Recipient addresses and
+// subjects/bodies are never logged: production logs are JSON on stderr, and
+// those fields can carry PII.
 func (n *Notifier) send(notification Notification) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
 		if err := n.sender.Send(ctx, notification); err != nil {
-			n.logger.Error("notify: send failed", "to", notification.To, "title", notification.Title, "error", err)
+			n.logger.Error("notify: send failed", "kind", notification.Kind, "recipients", len(notification.To), "error", err)
 		}
 	}()
 }
@@ -73,10 +77,13 @@ func (n *Notifier) send(notification Notification) {
 // tryOnce reports whether name has already fired within ttl, marking it as
 // fired when it has not. It checks (and sets) the in-process map first so a
 // hot key never round-trips to the shared store more than once per process.
+// The local claim is evicted after ttl so localOnce does not grow without
+// bound over the life of a long-running process.
 func (n *Notifier) tryOnce(ctx context.Context, name string, ttl time.Duration) bool {
 	if _, loaded := n.localOnce.LoadOrStore(name, struct{}{}); loaded {
 		return false
 	}
+	time.AfterFunc(ttl, func() { n.localOnce.Delete(name) })
 	if n.once == nil {
 		return true
 	}
@@ -95,7 +102,7 @@ func (n *Notifier) KeyRequested(ctx context.Context, req apikeys.KeyRequest) {
 	}
 	recipients := n.adminEmails(ctx)
 	if len(recipients) == 0 {
-		n.logger.Warn("notify: no admin recipients for key request", "requester", req.RequesterEmail)
+		n.logger.Warn("notify: no admin recipients for key request")
 		return
 	}
 
@@ -169,7 +176,11 @@ func (n *Notifier) SpendLimitReached(ctx context.Context, rec *apikeys.APIKey, w
 		period = time.Now().UTC().Format("2006-01")
 		ttl = 32 * 24 * time.Hour
 	}
-	dedupeName := fmt.Sprintf("spend-alert:%s:%s:%s", apikeys.RedactKey(rec.PK), window, period)
+	// Hash the full key, not RedactKey's 8-character suffix: RedactKey alone
+	// gives the dedupe identity only 32 bits, enough to collide across
+	// unrelated keys and suppress one key's alert with another's.
+	keyHash := sha256.Sum256([]byte(rec.PK))
+	dedupeName := fmt.Sprintf("spend-alert:%s:%s:%s", hex.EncodeToString(keyHash[:]), window, period)
 	if !n.tryOnce(ctx, dedupeName, ttl) {
 		return
 	}

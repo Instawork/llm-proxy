@@ -39,6 +39,9 @@ func NewSES(region, fromAddress, fromName string) (*SES, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ses: load aws config: %w", err)
 	}
+	if awsCfg.Region == "" {
+		return nil, errors.New("ses: aws region is required (set notifications.email.region or AWS_REGION)")
+	}
 
 	return newSESWithClient(sesv2.NewFromConfig(awsCfg), fromAddress, fromName), nil
 }
