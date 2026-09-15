@@ -19,6 +19,8 @@ except ImportError:
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA = REPO / "audits" / "audit.schema.json"
 FILENAME = re.compile(r"^audit-(\d{2})-(\d{2})-(\d{4})\.json$")
+# "priced at 2x input and 1.5x output", "2x/1.5x", ">272K ... 2x input" — the vendors' long-context wording.
+LONG_CONTEXT_NOTE = re.compile(r"(?<![\d.])2x\s*(input|/\s*1\.5x)", re.IGNORECASE)
 
 
 def semantic_errors(path: Path, audit: dict) -> list[str]:
@@ -59,6 +61,21 @@ def semantic_errors(path: Path, audit: dict) -> list[str]:
                 errors.append(f"{where}: only the last pricing tier may have up_to_tokens null")
             elif ceilings[:-1] != sorted(ceilings[:-1]):
                 errors.append(f"{where}: pricing tiers must be ordered by ascending up_to_tokens")
+
+            # A row whose notes describe a long-context multiplier must carry the tier
+            # itself; "the pricing page shows '-'" is not a reason to collapse it.
+            if len(tiers) == 1 and LONG_CONTEXT_NOTE.search(model["notes"]):
+                errors.append(f"{where}: notes describe a long-context multiplier but pricing has a single tier")
+
+            # A time-limited rate belongs in promo_pricing; the list rate stays in pricing.
+            if model["promo_pricing"] and any(
+                t["input"] == model["promo_pricing"]["input"] and t["output"] == model["promo_pricing"]["output"]
+                for t in tiers
+            ):
+                errors.append(f"{where}: promo_pricing equals a pricing tier; pricing must hold the list rate")
+
+            if model["status"] == "legacy" and model["sunset_date"]:
+                errors.append(f"{where}: legacy rows have no announced sunset; use deprecated when sunset_date is set")
 
             sunset = model["sunset_date"]
             if sunset and date.fromisoformat(sunset) <= generated_at and model["status"] != "shutdown":
