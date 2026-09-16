@@ -2,6 +2,7 @@ package admin
 
 import (
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -96,20 +97,23 @@ func (l *shareRateLimiter) middleware(next http.Handler) http.Handler {
 }
 
 // clientIP returns the best-effort client address for rate-limiting and audit
-// logging: the last hop of X-Forwarded-For when present, else the connection
-// RemoteAddr with the port stripped. The ALB in front of the proxy appends
-// the address it accepted the connection from, so only the last entry is
-// trustworthy; earlier entries are whatever the caller chose to send.
+// logging. X-Forwarded-For is only consulted when the immediate peer is a
+// private or loopback address, i.e. the ALB (or a local reverse proxy) that
+// appends the address it accepted the connection from; then the last hop is
+// the trustworthy one and earlier hops are whatever the caller sent. A peer
+// reaching the listener directly gets keyed on its own RemoteAddr.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		hops := strings.Split(xff, ",")
-		if last := strings.TrimSpace(hops[len(hops)-1]); last != "" {
-			return last
+	peer := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(peer); err == nil {
+		peer = h
+	}
+	if ip := net.ParseIP(peer); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			hops := strings.Split(xff, ",")
+			if last := strings.TrimSpace(hops[len(hops)-1]); last != "" {
+				return last
+			}
 		}
 	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	return host
+	return peer
 }
