@@ -67,15 +67,18 @@ func (l *tokenBucketLimiter) allow(key string, now time.Time) bool {
 	return true
 }
 
-// sweepLocked evicts buckets idle past idleTTL so memory stays bounded under a
-// churn of distinct client IPs. Caller must hold l.mu.
+// sweepLocked evicts idle buckets so memory stays bounded under a churn of
+// distinct keys. A bucket is only dropped once it has been idle long enough
+// to have refilled completely, so eviction never hands a depleted key a
+// fresh burst early. Caller must hold l.mu.
 func (l *tokenBucketLimiter) sweepLocked(now time.Time) {
 	if now.Sub(l.lastSweep) < l.idleTTL {
 		return
 	}
 	l.lastSweep = now
 	for k, b := range l.buckets {
-		if now.Sub(b.last) > l.idleTTL {
+		idle := now.Sub(b.last)
+		if idle > l.idleTTL && b.tokens+idle.Seconds()*l.rate >= l.burst {
 			delete(l.buckets, k)
 		}
 	}

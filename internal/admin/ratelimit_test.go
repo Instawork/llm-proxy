@@ -40,6 +40,34 @@ func TestTokenBucketLimiter_IsolatesClients(t *testing.T) {
 	assert.True(t, l.allow("2.2.2.2", now))
 }
 
+// The idle sweep must not turn a slow-refilling bucket back into a full one:
+// a depleted key stays depleted until its tokens would have refilled anyway.
+func TestTokenBucketLimiter_SweepKeepsDepletedBuckets(t *testing.T) {
+	l := newTokenBucketLimiter(personalKeyIssuanceRefillPerSec, 2)
+	now := time.Now()
+
+	assert.True(t, l.allow("owner", now))
+	assert.True(t, l.allow("owner", now))
+	assert.False(t, l.allow("owner", now))
+
+	// Well past idleTTL, another key triggers a sweep.
+	later := now.Add(l.idleTTL + time.Hour)
+	assert.True(t, l.allow("someone-else", later))
+	_, kept := l.buckets["owner"]
+	assert.True(t, kept, "depleted bucket must survive the sweep")
+
+	// Only one token has refilled in that time, not a fresh burst of two.
+	assert.True(t, l.allow("owner", later))
+	assert.False(t, l.allow("owner", later))
+
+	// Once idle long enough to be full again, eviction is indistinguishable
+	// from keeping it, so the sweep may drop it.
+	full := later.Add(3 * time.Hour)
+	assert.True(t, l.allow("someone-else", full))
+	_, kept = l.buckets["owner"]
+	assert.False(t, kept, "refilled bucket should be evicted")
+}
+
 func TestTokenBucketLimiter_Middleware429(t *testing.T) {
 	l := newTokenBucketLimiter(1, 1)
 	h := l.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
