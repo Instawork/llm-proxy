@@ -20,13 +20,27 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Personal-key auto-provisioning mints a real upstream credential each time.
+// Deleting and re-creating a key would otherwise let one owner mint without
+// bound, so each owner gets a small burst that refills slowly.
+const (
+	personalKeyIssuanceBurst         = 5
+	personalKeyIssuanceRefillPerHour = 1.0
+	personalKeyIssuanceRefillPerSec  = personalKeyIssuanceRefillPerHour / 3600
+)
+
 type handler struct {
-	deps *Deps
-	auth *authenticator
+	deps     *Deps
+	auth     *authenticator
+	issuance *tokenBucketLimiter
 }
 
 func newHandler(deps Deps, auth *authenticator) *handler {
-	return &handler{deps: &deps, auth: auth}
+	return &handler{
+		deps:     &deps,
+		auth:     auth,
+		issuance: newTokenBucketLimiter(personalKeyIssuanceRefillPerSec, personalKeyIssuanceBurst),
+	}
 }
 
 func (h *handler) corsMiddleware(next http.Handler) http.Handler {
@@ -189,6 +203,12 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{
 					"error": "auto_provision is not available for provider " + req.Provider,
 				})
+				return
+			}
+			if !h.issuance.allow(strings.ToLower(user.Email), time.Now()) {
+				h.deps.Logger.Warn("admin: personal key issuance rate limited", "email", user.Email, "provider", req.Provider)
+				w.Header().Set("Retry-After", "3600")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many keys provisioned recently; try again later"})
 				return
 			}
 			provName := "llm-proxy:" + provision.SanitizeName(req.Description)

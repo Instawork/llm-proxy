@@ -8,13 +8,12 @@ import (
 	"time"
 )
 
-// shareRateLimiter is a tiny per-client token-bucket limiter guarding the
-// public, unauthenticated share-read endpoint. Guessing a share UUID is
-// already infeasible (122-bit crypto/rand v4), so this is abuse/DoS hygiene —
-// it caps how fast a single client can hammer the endpoint — not the primary
-// access control. It is memory-only and per-instance (not shared across
-// replicas), which is acceptable for this low-volume endpoint.
-type shareRateLimiter struct {
+// tokenBucketLimiter is a tiny keyed token-bucket limiter. It guards the
+// public, unauthenticated share-read endpoint per client IP and caps how
+// fast one owner can mint upstream keys. Both are abuse hygiene, not the
+// primary access control. It is memory-only and per-instance (not shared
+// across replicas), which is acceptable for these low-volume paths.
+type tokenBucketLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*tokenBucket
 	rate    float64 // tokens added per second
@@ -29,10 +28,10 @@ type tokenBucket struct {
 	last   time.Time
 }
 
-// newShareRateLimiter builds a limiter allowing `burst` immediate requests per
+// newTokenBucketLimiter builds a limiter allowing `burst` immediate requests per
 // client, refilling at `ratePerSec` tokens/second.
-func newShareRateLimiter(ratePerSec, burst float64) *shareRateLimiter {
-	return &shareRateLimiter{
+func newTokenBucketLimiter(ratePerSec, burst float64) *tokenBucketLimiter {
+	return &tokenBucketLimiter{
 		buckets:   make(map[string]*tokenBucket),
 		rate:      ratePerSec,
 		burst:     burst,
@@ -43,7 +42,7 @@ func newShareRateLimiter(ratePerSec, burst float64) *shareRateLimiter {
 
 // allow reports whether a request from key is permitted at time now,
 // consuming one token when it is.
-func (l *shareRateLimiter) allow(key string, now time.Time) bool {
+func (l *tokenBucketLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -70,7 +69,7 @@ func (l *shareRateLimiter) allow(key string, now time.Time) bool {
 
 // sweepLocked evicts buckets idle past idleTTL so memory stays bounded under a
 // churn of distinct client IPs. Caller must hold l.mu.
-func (l *shareRateLimiter) sweepLocked(now time.Time) {
+func (l *tokenBucketLimiter) sweepLocked(now time.Time) {
 	if now.Sub(l.lastSweep) < l.idleTTL {
 		return
 	}
@@ -84,7 +83,7 @@ func (l *shareRateLimiter) sweepLocked(now time.Time) {
 
 // middleware rejects requests from a client that has exhausted its bucket with
 // a 429, otherwise passes through.
-func (l *shareRateLimiter) middleware(next http.Handler) http.Handler {
+func (l *tokenBucketLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !l.allow(clientIP(r), time.Now()) {
 			w.Header().Set("Retry-After", "1")

@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestShareRateLimiter_BurstThenBlock(t *testing.T) {
-	l := newShareRateLimiter(1, 5)
+func TestTokenBucketLimiter_BurstThenBlock(t *testing.T) {
+	l := newTokenBucketLimiter(1, 5)
 	now := time.Now()
 
 	for i := 0; i < 5; i++ {
@@ -19,8 +19,8 @@ func TestShareRateLimiter_BurstThenBlock(t *testing.T) {
 	assert.False(t, l.allow("1.2.3.4", now), "request beyond burst should be blocked")
 }
 
-func TestShareRateLimiter_RefillsOverTime(t *testing.T) {
-	l := newShareRateLimiter(1, 1)
+func TestTokenBucketLimiter_RefillsOverTime(t *testing.T) {
+	l := newTokenBucketLimiter(1, 1)
 	now := time.Now()
 
 	assert.True(t, l.allow("1.2.3.4", now))
@@ -30,8 +30,8 @@ func TestShareRateLimiter_RefillsOverTime(t *testing.T) {
 	assert.False(t, l.allow("1.2.3.4", now.Add(time.Second)))
 }
 
-func TestShareRateLimiter_IsolatesClients(t *testing.T) {
-	l := newShareRateLimiter(1, 1)
+func TestTokenBucketLimiter_IsolatesClients(t *testing.T) {
+	l := newTokenBucketLimiter(1, 1)
 	now := time.Now()
 
 	assert.True(t, l.allow("1.1.1.1", now))
@@ -40,8 +40,8 @@ func TestShareRateLimiter_IsolatesClients(t *testing.T) {
 	assert.True(t, l.allow("2.2.2.2", now))
 }
 
-func TestShareRateLimiter_Middleware429(t *testing.T) {
-	l := newShareRateLimiter(1, 1)
+func TestTokenBucketLimiter_Middleware429(t *testing.T) {
+	l := newTokenBucketLimiter(1, 1)
 	h := l.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
