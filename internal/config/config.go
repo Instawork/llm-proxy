@@ -313,8 +313,9 @@ type RedactAPIConfig struct {
 	// MaxBodyBytes caps request body size. 0 inherits 1048576 (1 MiB).
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
 
-	// DevAllowUnauthenticated skips iw-* auth on POST /redact. Allowed only when
-	// ENVIRONMENT=dev and features.admin_dashboard.dev_bypass_login is true.
+	// DevAllowUnauthenticated skips iw-* auth on POST /redact. Allowed only in
+	// local environments (see isLocalEnvironment) and only when
+	// features.admin_dashboard.dev_bypass_login is true.
 	DevAllowUnauthenticated bool `yaml:"dev_allow_unauthenticated,omitempty"`
 }
 
@@ -338,7 +339,8 @@ type AdminDashboardConfig struct {
 	// DevCORSOrigin allows the Vite dev server to call the admin API.
 	DevCORSOrigin string `yaml:"dev_cors_origin"`
 	// DevBypassLogin enables POST /admin/auth/dev-login for local development
-	// without Google OAuth. Must stay false outside dev configs.
+	// without Google OAuth. Validate rejects it unless ENVIRONMENT is a local
+	// or fuzz environment (see isLocalEnvironment).
 	DevBypassLogin bool `yaml:"dev_bypass_login"`
 	// PublicBaseURL is the externally-visible origin of the proxy
 	// (e.g. https://llm.example.com). Used for SDK/proxy base URLs in share
@@ -1235,12 +1237,8 @@ func (c *YAMLConfig) Validate() error {
 		}
 	}
 
-	if c.Features.AdminDashboard.EditorLimits.MaxDailyCostLimitCents < 0 {
-		return fmt.Errorf("invalid admin_dashboard configuration: editor_limits.max_daily_cost_limit_cents cannot be negative")
-	}
-
-	if c.Features.AdminDashboard.ViewerLimits.PersonalMonthlyCostLimitCents < 0 {
-		return fmt.Errorf("invalid admin_dashboard configuration: viewer_limits.personal_monthly_cost_limit_cents cannot be negative")
+	if err := c.validateAdminDashboardConfig(); err != nil {
+		return fmt.Errorf("invalid admin_dashboard configuration: %w", err)
 	}
 
 	if err := c.validateRetiredModels(); err != nil {
@@ -1462,12 +1460,8 @@ func (c *YAMLConfig) validateRedactAPIConfig() error {
 		return fmt.Errorf("max_body_bytes cannot be negative")
 	}
 	if r.DevAllowUnauthenticated {
-		env := os.Getenv("ENVIRONMENT")
-		if env == "" {
-			env = "dev"
-		}
-		if env != "dev" {
-			return fmt.Errorf("dev_allow_unauthenticated is only allowed when ENVIRONMENT=dev (got %q)", env)
+		if env := os.Getenv("ENVIRONMENT"); !isLocalEnvironment(env) {
+			return fmt.Errorf("dev_allow_unauthenticated is only allowed in local environments (got ENVIRONMENT=%q)", env)
 		}
 		if !c.Features.AdminDashboard.DevBypassLogin {
 			return fmt.Errorf("dev_allow_unauthenticated requires features.admin_dashboard.dev_bypass_login")
@@ -1475,6 +1469,35 @@ func (c *YAMLConfig) validateRedactAPIConfig() error {
 	}
 	if !c.Features.APIKeyManagement.Enabled && !r.DevAllowUnauthenticated {
 		return fmt.Errorf("api_key_management must be enabled when redact_api is enabled")
+	}
+	return nil
+}
+
+// isLocalEnvironment reports whether ENVIRONMENT names a local or fuzz
+// deployment, the only places dev-only auth bypasses may be enabled.
+func isLocalEnvironment(env string) bool {
+	switch env {
+	case "", "dev", "local", "fuzz", "fuzz-mem":
+		return true
+	}
+	return false
+}
+
+// validateAdminDashboardConfig validates admin_dashboard limits and refuses
+// dev_bypass_login outside local environments: dev-login mints an admin
+// session with a caller-chosen role and has no place in staging or prod.
+func (c *YAMLConfig) validateAdminDashboardConfig() error {
+	ad := c.Features.AdminDashboard
+	if ad.EditorLimits.MaxDailyCostLimitCents < 0 {
+		return fmt.Errorf("editor_limits.max_daily_cost_limit_cents cannot be negative")
+	}
+	if ad.ViewerLimits.PersonalMonthlyCostLimitCents < 0 {
+		return fmt.Errorf("viewer_limits.personal_monthly_cost_limit_cents cannot be negative")
+	}
+	if ad.DevBypassLogin {
+		if env := os.Getenv("ENVIRONMENT"); !isLocalEnvironment(env) {
+			return fmt.Errorf("dev_bypass_login is only allowed in local environments (got ENVIRONMENT=%q)", env)
+		}
 	}
 	return nil
 }

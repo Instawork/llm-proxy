@@ -267,6 +267,44 @@ func TestValidate_RedactAPI(t *testing.T) {
 	require.Error(t, c.Validate())
 }
 
+// dev_bypass_login mints an admin session with a caller-chosen role, so the
+// validator (which runs at boot) must refuse it outside local environments.
+func TestValidate_DevBypassLoginRequiresLocalEnvironment(t *testing.T) {
+	for _, env := range []string{"production", "staging"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", env)
+			c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+			require.NoError(t, c.Validate())
+
+			c.Features.AdminDashboard.DevBypassLogin = true
+			err := c.Validate()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "dev_bypass_login")
+		})
+	}
+	for _, env := range []string{"", "dev", "local", "fuzz", "fuzz-mem"} {
+		t.Run("allowed/"+env, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", env)
+			c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+			c.Features.AdminDashboard.DevBypassLogin = true
+			require.NoError(t, c.Validate())
+		})
+	}
+}
+
+func TestValidate_DevAllowUnauthenticatedRequiresLocalEnvironment(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "staging")
+	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
+	c.Features.RedactAPI.Enabled = true
+	c.Features.RedactAPI.DevAllowUnauthenticated = true
+	c.Features.AdminDashboard.DevBypassLogin = true
+	require.Error(t, c.Validate())
+
+	t.Setenv("ENVIRONMENT", "dev")
+	require.NoError(t, c.Validate())
+}
+
 func TestValidate_IDGate(t *testing.T) {
 	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
 	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
