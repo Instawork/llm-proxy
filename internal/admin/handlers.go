@@ -795,7 +795,43 @@ func (h *handler) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIKeyStoreUnavailable(w)
 		return
 	}
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
 	id := mux.Vars(r)["id"]
+	link, err := h.deps.APIKeyStore.GetShareLinkRecord(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})
+			return
+		}
+		h.deps.Logger.Error("admin: load share link failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete share link"})
+		return
+	}
+	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), link.APIKey)
+	if err != nil {
+		if !strings.Contains(err.Error(), "not found") {
+			h.deps.Logger.Error("admin: load shared key failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete share link"})
+			return
+		}
+		record = nil
+	}
+	// Same oracle rule as key routes: a link the caller may not revoke looks missing.
+	if !canDeleteShareLink(role, user.Email, link, record) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})
+		return
+	}
+
 	if err := h.deps.APIKeyStore.DeleteShareLink(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") || strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})

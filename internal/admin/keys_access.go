@@ -59,6 +59,16 @@ func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyI
 	return record, user, role, true
 }
 
+// canDeleteShareLink allows anyone who may access the shared key, plus the
+// link's creator (so a viewer can always revoke a link they minted). key is
+// nil when the shared key no longer exists.
+func canDeleteShareLink(role adminusers.Role, userEmail string, link *apikeys.ShareLink, key *apikeys.APIKey) bool {
+	if canAccessKey(role, userEmail, key) {
+		return true
+	}
+	return strings.TrimSpace(link.CreatedBy) != "" && strings.EqualFold(link.CreatedBy, userEmail)
+}
+
 func filterKeysForUser(role adminusers.Role, email string, keys []*apikeys.APIKey) []*apikeys.APIKey {
 	if role != adminusers.RoleViewer {
 		return keys

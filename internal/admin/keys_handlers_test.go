@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/provision"
+	"github.com/Instawork/llm-proxy/internal/testhelpers/dynamodbfake"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -428,6 +430,117 @@ func TestHandleDeleteShare(t *testing.T) {
 
 	_, err = store.GetShareLink(ctx, link.ID())
 	require.Error(t, err)
+}
+
+func deleteShareAs(t *testing.T, h *handler, email, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := authenticatedRequestAs(t, h, email, http.MethodDelete, "/admin/api/share/"+id, nil)
+	req = mux.SetURLVars(req, map[string]string{"id": id})
+	rec := httptest.NewRecorder()
+	h.handleDeleteShare(rec, req)
+	return rec
+}
+
+// Revoking a share requires access to the shared key or having minted the
+// link. Anything else is reported as 404, the same as a missing link.
+func TestHandleDeleteShare_Authorization(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	for _, u := range []struct {
+		email string
+		role  adminusers.Role
+	}{
+		{"viewer@example.com", adminusers.RoleViewer},
+		{"other-viewer@example.com", adminusers.RoleViewer},
+		{"editor@example.com", adminusers.RoleEditor},
+	} {
+		_, err := h.deps.UserStore.CreateUser(ctx, u.email, u.role)
+		require.NoError(t, err)
+	}
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("viewer cannot revoke another owner's share", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		missing := deleteShareAs(t, h, "viewer@example.com", "00000000-0000-0000-0000-000000000000")
+		assert.Equal(t, missing.Body.String(), rec.Body.String())
+
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.NoError(t, err, "link must survive the viewer's attempt")
+	})
+
+	t.Run("creator revokes own share of a key they cannot access", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+		require.NoError(t, store.DeleteShareLink(ctx, link.ID()))
+		// Mint a link attributed to the viewer, as if an earlier policy allowed it.
+		link, err = store.CreateShareLink(ctx, orgKey.PK, "viewer@example.com")
+		require.NoError(t, err)
+
+		other := deleteShareAs(t, h, "other-viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNotFound, other.Code)
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.Error(t, err)
+	})
+
+	t.Run("editor revokes any share", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "editor@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.Error(t, err)
+	})
+
+	t.Run("viewer revokes share of own personal key", func(t *testing.T) {
+		personal, err := store.CreatePersonalKey(ctx, "viewer@example.com", "gemini", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+		require.NoError(t, err)
+		link, err := store.CreateShareLink(ctx, personal.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+}
+
+func TestHandleDeleteShare_ExpiredLinkStillRevocable(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	personal, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+
+	expiredID := "11111111-2222-3333-4444-555555555555"
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	fake.InjectItem("test-keys", apikeys.ShareKeyPrefix+expiredID, map[string]any{
+		"pk":               map[string]any{"S": apikeys.ShareKeyPrefix + expiredID},
+		"share_api_key":    map[string]any{"S": personal.PK},
+		"share_provider":   map[string]any{"S": "openai"},
+		"share_created_by": map[string]any{"S": "admin@example.com"},
+		"created_at":       map[string]any{"S": time.Now().Add(-25 * time.Hour).Format(time.RFC3339Nano)},
+		"expires_at":       map[string]any{"S": past},
+	})
+	_, err = store.GetShareLink(ctx, expiredID)
+	require.Error(t, err, "precondition: link is expired")
+
+	rec := deleteShareAs(t, h, "viewer@example.com", expiredID)
+	assert.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+
+	_, err = store.GetShareLinkRecord(ctx, expiredID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestHandleDeleteShare_NotFound(t *testing.T) {
