@@ -88,8 +88,8 @@ func TestTokenBucketLimiter_Middleware429(t *testing.T) {
 
 // A caller cannot reset their bucket by rotating a forged first hop; the
 // ALB-appended last hop is the key.
-func TestShareRateLimiter_SpoofedForwardedForDoesNotBypass(t *testing.T) {
-	l := newShareRateLimiter(1, 1)
+func TestTokenBucketLimiter_SpoofedForwardedForDoesNotBypass(t *testing.T) {
+	l := newTokenBucketLimiter(1, 1)
 	h := l.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
