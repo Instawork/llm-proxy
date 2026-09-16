@@ -196,6 +196,38 @@ func TestProductionYAML_PIIRedactSetsExplicitMaxBodyBytes(t *testing.T) {
 	}
 }
 
+// TestDeployedYAML_NoDevCORSOrigin guards against dev_cors_origin leaking
+// into a deploy from base.yml: it enables credentialed CORS for the Vite
+// origin on the admin API and puts the admin URL helpers into dev mode.
+func TestDeployedYAML_NoDevCORSOrigin(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	for _, env := range []string{"production", "staging"} {
+		merged, err := config.LoadAndMergeConfigs([]string{
+			filepath.Join(configsDir, "base.yml"),
+			filepath.Join(configsDir, env+".yml"),
+		})
+		if err != nil {
+			t.Fatalf("load %s configs: %v", env, err)
+		}
+		if got := merged.Features.AdminDashboard.DevCORSOrigin; got != "" {
+			t.Fatalf("%s.yml must not carry dev_cors_origin, got %q", env, got)
+		}
+	}
+	merged, err := config.LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "dev.yml"),
+	})
+	if err != nil {
+		t.Fatalf("load dev configs: %v", err)
+	}
+	if merged.Features.AdminDashboard.DevCORSOrigin == "" {
+		t.Fatal("dev.yml must keep dev_cors_origin for the Vite dev server")
+	}
+}
+
 // TestSidecarProfile_WritesRollupsWithoutDashboard locks in the sidecar
 // contract: the dashboard HTTP server is OFF, but rollup writing stays ON so
 // sidecars publish usage/cost/etc to the shared Redis the standalone dashboard

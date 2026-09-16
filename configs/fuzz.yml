@@ -46,6 +46,7 @@ features:
   admin_dashboard:
     enabled: true
     dev_bypass_login: true
+    dev_cors_origin: "http://localhost:5173"
     users:
       dynamodb:
         table_name: "llm-proxy-admin-users-fuzz"
