@@ -96,15 +96,16 @@ func (l *shareRateLimiter) middleware(next http.Handler) http.Handler {
 }
 
 // clientIP returns the best-effort client address for rate-limiting and audit
-// logging: the first hop of X-Forwarded-For when present (the proxy runs
-// behind an ALB that sets it), else the connection RemoteAddr with the port
-// stripped.
+// logging: the last hop of X-Forwarded-For when present, else the connection
+// RemoteAddr with the port stripped. The ALB in front of the proxy appends
+// the address it accepted the connection from, so only the last entry is
+// trustworthy; earlier entries are whatever the caller chose to send.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first, _, found := strings.Cut(xff, ","); found {
-			return strings.TrimSpace(first)
+		hops := strings.Split(xff, ",")
+		if last := strings.TrimSpace(hops[len(hops)-1]); last != "" {
+			return last
 		}
-		return strings.TrimSpace(xff)
 	}
 	host := r.RemoteAddr
 	if i := strings.LastIndex(host, ":"); i >= 0 {

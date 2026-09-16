@@ -58,6 +58,28 @@ func TestShareRateLimiter_Middleware429(t *testing.T) {
 	assert.NotEmpty(t, second.Header().Get("Retry-After"))
 }
 
+// A caller cannot reset their bucket by rotating a forged first hop; the
+// ALB-appended last hop is the key.
+func TestShareRateLimiter_SpoofedForwardedForDoesNotBypass(t *testing.T) {
+	l := newShareRateLimiter(1, 1)
+	h := l.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for i, forged := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
+		req := httptest.NewRequest(http.MethodGet, "/admin/api/share/x", nil)
+		req.RemoteAddr = "10.0.0.1:5555"
+		req.Header.Set("X-Forwarded-For", forged+", 203.0.113.7")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if i == 0 {
+			assert.Equal(t, http.StatusOK, rec.Code)
+		} else {
+			assert.Equal(t, http.StatusTooManyRequests, rec.Code, "forged hop %s must not get a fresh bucket", forged)
+		}
+	}
+}
+
 func TestClientIP(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -66,7 +88,10 @@ func TestClientIP(t *testing.T) {
 		want   string
 	}{
 		{"xff single", "203.0.113.7", "10.0.0.1:1234", "203.0.113.7"},
-		{"xff first hop", "203.0.113.7, 10.0.0.1", "10.0.0.1:1234", "203.0.113.7"},
+		// The ALB appends the peer it accepted from; anything before it is caller-supplied.
+		{"xff last hop wins", "1.1.1.1, 203.0.113.7", "10.0.0.1:1234", "203.0.113.7"},
+		{"xff spoofed prefix ignored", "spoofed, 8.8.8.8, 203.0.113.7", "10.0.0.1:1234", "203.0.113.7"},
+		{"xff trailing comma falls back", "203.0.113.7,", "192.0.2.5:9999", "192.0.2.5"},
 		{"remote addr fallback", "", "192.0.2.5:9999", "192.0.2.5"},
 	}
 	for _, tc := range tests {
