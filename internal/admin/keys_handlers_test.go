@@ -669,6 +669,52 @@ func TestPublicBaseURL_YAMLOverride(t *testing.T) {
 	assert.Equal(t, "https://llm.example.com", h.publicBaseURL(req))
 }
 
+// A viewer cannot mint upstream keys without bound by deleting and
+// re-creating: after the burst the next auto-provision is 429, while another
+// owner is unaffected and validation failures never consume a token.
+func TestViewerPersonalKeys_IssuanceRateLimited(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	ctx := context.Background()
+	withTestProvisioner(t, h, "openai")
+	for _, email := range []string{"viewer@example.com", "other@example.com"} {
+		_, err := h.deps.UserStore.CreateUser(ctx, email, adminusers.RoleViewer)
+		require.NoError(t, err)
+	}
+
+	createBody, _ := json.Marshal(CreateKeyRequest{Provider: "openai", Description: "mine", AutoProvision: true})
+	create := func(email string) *httptest.ResponseRecorder {
+		req := authenticatedRequestAs(t, h, email, http.MethodPost, "/admin/api/keys", createBody)
+		rec := httptest.NewRecorder()
+		h.handleCreateKey(rec, req)
+		return rec
+	}
+	del := func(email, key string) {
+		req := authenticatedRequestAs(t, h, email, http.MethodDelete, "/admin/api/keys/"+key, nil)
+		req = mux.SetURLVars(req, map[string]string{"key": key})
+		rec := httptest.NewRecorder()
+		h.handleDeleteKey(rec, req)
+		require.Equal(t, http.StatusNoContent, rec.Code)
+	}
+
+	for i := 0; i < personalKeyIssuanceBurst; i++ {
+		rec := create("viewer@example.com")
+		require.Equal(t, http.StatusCreated, rec.Code, "mint %d: %s", i, rec.Body.String())
+		var created KeyResponse
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+		// A duplicate is rejected before provisioning and must not spend a token.
+		dup := create("viewer@example.com")
+		require.Equal(t, http.StatusConflict, dup.Code)
+		del("viewer@example.com", created.Key)
+	}
+
+	rec := create("viewer@example.com")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+
+	other := create("other@example.com")
+	assert.Equal(t, http.StatusCreated, other.Code, other.Body.String())
+}
+
 func TestViewerPersonalKeys(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()
