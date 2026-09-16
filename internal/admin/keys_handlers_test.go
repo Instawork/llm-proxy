@@ -3,15 +3,18 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/provision"
+	"github.com/Instawork/llm-proxy/internal/testhelpers/dynamodbfake"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -430,6 +433,117 @@ func TestHandleDeleteShare(t *testing.T) {
 	require.Error(t, err)
 }
 
+func deleteShareAs(t *testing.T, h *handler, email, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := authenticatedRequestAs(t, h, email, http.MethodDelete, "/admin/api/share/"+id, nil)
+	req = mux.SetURLVars(req, map[string]string{"id": id})
+	rec := httptest.NewRecorder()
+	h.handleDeleteShare(rec, req)
+	return rec
+}
+
+// Revoking a share requires access to the shared key or having minted the
+// link. Anything else is reported as 404, the same as a missing link.
+func TestHandleDeleteShare_Authorization(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	for _, u := range []struct {
+		email string
+		role  adminusers.Role
+	}{
+		{"viewer@example.com", adminusers.RoleViewer},
+		{"other-viewer@example.com", adminusers.RoleViewer},
+		{"editor@example.com", adminusers.RoleEditor},
+	} {
+		_, err := h.deps.UserStore.CreateUser(ctx, u.email, u.role)
+		require.NoError(t, err)
+	}
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("viewer cannot revoke another owner's share", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		missing := deleteShareAs(t, h, "viewer@example.com", "00000000-0000-0000-0000-000000000000")
+		assert.Equal(t, missing.Body.String(), rec.Body.String())
+
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.NoError(t, err, "link must survive the viewer's attempt")
+	})
+
+	t.Run("creator revokes own share of a key they cannot access", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+		require.NoError(t, store.DeleteShareLink(ctx, link.ID()))
+		// Mint a link attributed to the viewer, as if an earlier policy allowed it.
+		link, err = store.CreateShareLink(ctx, orgKey.PK, "viewer@example.com")
+		require.NoError(t, err)
+
+		other := deleteShareAs(t, h, "other-viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNotFound, other.Code)
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.Error(t, err)
+	})
+
+	t.Run("editor revokes any share", func(t *testing.T) {
+		link, err := store.CreateShareLink(ctx, orgKey.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "editor@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+		_, err = store.GetShareLink(ctx, link.ID())
+		require.Error(t, err)
+	})
+
+	t.Run("viewer revokes share of own personal key", func(t *testing.T) {
+		personal, err := store.CreatePersonalKey(ctx, "viewer@example.com", "gemini", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+		require.NoError(t, err)
+		link, err := store.CreateShareLink(ctx, personal.PK, "admin@example.com")
+		require.NoError(t, err)
+
+		rec := deleteShareAs(t, h, "viewer@example.com", link.ID())
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+}
+
+func TestHandleDeleteShare_ExpiredLinkStillRevocable(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	personal, err := store.CreatePersonalKey(ctx, "viewer@example.com", "openai", "sk-own", "", 1000, apikeys.KeyCreateMeta{})
+	require.NoError(t, err)
+
+	expiredID := "11111111-2222-3333-4444-555555555555"
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	fake.InjectItem("test-keys", apikeys.ShareKeyPrefix+expiredID, map[string]any{
+		"pk":               map[string]any{"S": apikeys.ShareKeyPrefix + expiredID},
+		"share_api_key":    map[string]any{"S": personal.PK},
+		"share_provider":   map[string]any{"S": "openai"},
+		"share_created_by": map[string]any{"S": "admin@example.com"},
+		"created_at":       map[string]any{"S": time.Now().Add(-25 * time.Hour).Format(time.RFC3339Nano)},
+		"expires_at":       map[string]any{"S": past},
+	})
+	_, err = store.GetShareLink(ctx, expiredID)
+	require.Error(t, err, "precondition: link is expired")
+
+	rec := deleteShareAs(t, h, "viewer@example.com", expiredID)
+	assert.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+
+	_, err = store.GetShareLinkRecord(ctx, expiredID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 func TestHandleDeleteShare_NotFound(t *testing.T) {
 	h, _ := testAdminHandler(t)
 
@@ -438,6 +552,109 @@ func TestHandleDeleteShare_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.handleDeleteShare(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// A viewer must not be able to tell "exists but not mine" from "does not
+// exist": every key object route answers both with the same 404 body.
+func TestKeyRoutes_InaccessibleKeyIndistinguishableFromMissing(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+	missingKey := apikeys.KeyPrefix + "0000000000000000000000000000000000000000000000000000000000000000"
+
+	routes := []struct {
+		name string
+		call func(key string) *httptest.ResponseRecorder
+	}{
+		{"get", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+key, nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleGetKey(rec, req)
+			return rec
+		}},
+		{"update", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+key, []byte(`{"description":"x"}`))
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleUpdateKey(rec, req)
+			return rec
+		}},
+		{"delete", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+key, nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleDeleteKey(rec, req)
+			return rec
+		}},
+		{"stats", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+key+"/stats", nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleKeyStats(rec, req)
+			return rec
+		}},
+		{"share", func(key string) *httptest.ResponseRecorder {
+			body, _ := json.Marshal(map[string]string{"key": key})
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/share", body)
+			rec := httptest.NewRecorder()
+			h.handleCreateShare(rec, req)
+			return rec
+		}},
+	}
+
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			other := rt.call(orgKey.PK)
+			missing := rt.call(missingKey)
+			assert.Equal(t, http.StatusNotFound, other.Code, "other owner's key: %s", other.Body.String())
+			assert.Equal(t, http.StatusNotFound, missing.Code, "missing key: %s", missing.Body.String())
+			assert.Equal(t, missing.Body.String(), other.Body.String())
+		})
+	}
+
+	// The org key is untouched by the viewer's delete attempt.
+	_, err = store.GetKeyRecord(ctx, orgKey.PK)
+	require.NoError(t, err)
+}
+
+// Caller mistakes stay 400; backend failures are logged and become a generic
+// 500 so wrapped DynamoDB errors never reach the client.
+func TestKeyRoutes_LookupErrorClasses(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	h, store := testAdminHandler(t)
+	key, err := store.CreateKey(context.Background(), "openai", "sk", "", 0, nil, nil)
+	require.NoError(t, err)
+
+	// Masked ids resolve via Scan, which the session lookup never issues, so a
+	// one-shot Scan failure armed after the session exists hits only the key
+	// lookup.
+	masked := apikeys.MaskKeyID(key.PK)
+	getKey := func(id string, storeErr error) *httptest.ResponseRecorder {
+		req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/keys/"+id, nil)
+		req = mux.SetURLVars(req, map[string]string{"key": id})
+		if storeErr != nil {
+			fake.FailOnce("Scan", storeErr)
+		}
+		rec := httptest.NewRecorder()
+		h.handleGetKey(rec, req)
+		return rec
+	}
+
+	rec := getKey("not-a-key-id", nil)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+	rec = getKey(masked, errors.New("InternalServerError"))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"error":"failed to load key"}`, rec.Body.String())
+
+	rec = getKey(masked, nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestPublicBaseURL_YAMLOverride(t *testing.T) {
@@ -517,7 +734,7 @@ func TestViewerPersonalKeys(t *testing.T) {
 	getOrgReq = mux.SetURLVars(getOrgReq, map[string]string{"key": orgKey.PK})
 	getOrgRec := httptest.NewRecorder()
 	h.handleGetKey(getOrgRec, getOrgReq)
-	assert.Equal(t, http.StatusForbidden, getOrgRec.Code)
+	assert.Equal(t, http.StatusNotFound, getOrgRec.Code)
 
 	delReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+created.Key, nil)
 	delReq = mux.SetURLVars(delReq, map[string]string{"key": created.Key})

@@ -281,25 +281,8 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID := mux.Vars(r)["key"]
-	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-	role, err := adminusers.ParseRole(user.Role)
-	if err != nil || !canAccessKey(role, user.Email, record) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	record, _, _, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	if !ok {
 		return
 	}
 
@@ -325,28 +308,8 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-	role, err := adminusers.ParseRole(user.Role)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-		return
-	}
-
-	existing, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if !canAccessKey(role, user.Email, existing) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	existing, _, role, ok := h.loadAccessibleKey(w, r, keyID)
+	if !ok {
 		return
 	}
 
@@ -489,25 +452,8 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID := mux.Vars(r)["key"]
-	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-	role, err := adminusers.ParseRole(user.Role)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	if !ok {
 		return
 	}
 	if !permissions.CanDeleteKey(role, user.Email, record) {
@@ -746,34 +692,12 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-	role, err := adminusers.ParseRole(user.Role)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	record, user, _, ok := h.loadAccessibleKey(w, r, req.Key)
+	if !ok {
 		return
 	}
 
-	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), req.Key)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if !canAccessKey(role, user.Email, record) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-		return
-	}
-
-	createdBy := user.Email
-
-	link, err := h.deps.APIKeyStore.CreateShareLink(r.Context(), req.Key, createdBy)
+	link, err := h.deps.APIKeyStore.CreateShareLink(r.Context(), record.PK, user.Email)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
@@ -871,7 +795,43 @@ func (h *handler) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIKeyStoreUnavailable(w)
 		return
 	}
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
 	id := mux.Vars(r)["id"]
+	link, err := h.deps.APIKeyStore.GetShareLinkRecord(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})
+			return
+		}
+		h.deps.Logger.Error("admin: load share link failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete share link"})
+		return
+	}
+	record, err := h.deps.APIKeyStore.GetKeyRecord(r.Context(), link.APIKey)
+	if err != nil {
+		if !strings.Contains(err.Error(), "not found") {
+			h.deps.Logger.Error("admin: load shared key failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete share link"})
+			return
+		}
+		record = nil
+	}
+	// Same oracle rule as key routes: a link the caller may not revoke looks missing.
+	if !canDeleteShareLink(role, user.Email, link, record) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})
+		return
+	}
+
 	if err := h.deps.APIKeyStore.DeleteShareLink(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "ConditionalCheckFailed") || strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})

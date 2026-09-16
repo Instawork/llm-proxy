@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,6 +25,53 @@ func isViewerPersonalProvider(provider string) bool {
 
 func canAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
 	return permissions.CanAccessKey(role, userEmail, key)
+}
+
+// loadAccessibleKey resolves the caller, loads keyID, and checks the caller
+// may access it. On failure it writes the response and returns ok=false. The
+// store is never read before the caller is authenticated, and a key the
+// caller may not access is reported as 404 so viewers cannot probe which
+// key IDs exist.
+func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyID string) (*apikeys.APIKey, *UserResponse, adminusers.Role, bool) {
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return nil, nil, "", false
+	}
+	role, err := adminusers.ParseRole(user.Role)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return nil, nil, "", false
+	}
+
+	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "not found"):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		case errors.Is(err, apikeys.ErrInvalidKeyID):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		default:
+			h.deps.Logger.Error("admin: key lookup failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load key"})
+		}
+		return nil, nil, "", false
+	}
+	if !canAccessKey(role, user.Email, record) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		return nil, nil, "", false
+	}
+	return record, user, role, true
+}
+
+// canDeleteShareLink allows anyone who may access the shared key, plus the
+// link's creator (so a viewer can always revoke a link they minted). key is
+// nil when the shared key no longer exists.
+func canDeleteShareLink(role adminusers.Role, userEmail string, link *apikeys.ShareLink, key *apikeys.APIKey) bool {
+	if canAccessKey(role, userEmail, key) {
+		return true
+	}
+	return strings.TrimSpace(link.CreatedBy) != "" && strings.EqualFold(link.CreatedBy, userEmail)
 }
 
 func filterKeysForUser(role adminusers.Role, email string, keys []*apikeys.APIKey) []*apikeys.APIKey {

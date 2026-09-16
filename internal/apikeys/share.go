@@ -188,8 +188,9 @@ func (s *Store) listShareLinksForKey(ctx context.Context, apiKey string) ([]*Sha
 	return links, nil
 }
 
-// GetShareLink resolves a share UUID to its link record. Enforces expiry.
-func (s *Store) GetShareLink(ctx context.Context, id string) (*ShareLink, error) {
+// GetShareLinkRecord loads a share link by UUID without enforcing expiry, so
+// an expired link can still be inspected or revoked.
+func (s *Store) GetShareLinkRecord(ctx context.Context, id string) (*ShareLink, error) {
 	id = strings.TrimPrefix(id, ShareKeyPrefix)
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.tableName),
@@ -208,13 +209,19 @@ func (s *Store) GetShareLink(ctx context.Context, id string) (*ShareLink, error)
 	if err := attributevalue.UnmarshalMap(result.Item, &link); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal share link: %w", err)
 	}
-	if link.ExpiresAt != nil && link.ExpiresAt.Before(time.Now()) {
-		return nil, fmt.Errorf("share link has expired")
-	}
-	if link.ExpiresAt == nil && !link.isActive(time.Now()) {
-		return nil, fmt.Errorf("share link has expired")
-	}
 	return &link, nil
+}
+
+// GetShareLink resolves a share UUID to its link record. Enforces expiry.
+func (s *Store) GetShareLink(ctx context.Context, id string) (*ShareLink, error) {
+	link, err := s.GetShareLinkRecord(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !link.isActive(time.Now()) {
+		return nil, fmt.Errorf("share link has expired")
+	}
+	return link, nil
 }
 
 // DeleteShareLink revokes a share link by UUID.

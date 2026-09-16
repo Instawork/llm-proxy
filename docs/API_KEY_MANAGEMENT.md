@@ -82,7 +82,9 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 - Personal keys cannot be renamed; the name is fixed at creation and mirrors the upstream credential name. Editors and admins can still change their spend limit, PII setting, rate limits, expiry, and status
 - Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
 - Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
+- Key routes (`GET`/`PATCH`/`DELETE /admin/api/keys/{key}`, `/stats`, and `POST /admin/api/share`) return `404` for any key the caller may not access, so a key's existence cannot be probed
 - Share links are capability URLs: anyone holding the link (signed in or not, any role) can resolve it
+- Revoking a share link (`DELETE /admin/api/share/{id}`) requires access to the shared key or having created the link; otherwise the route returns `404`
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
