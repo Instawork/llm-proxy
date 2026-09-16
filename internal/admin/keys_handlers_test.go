@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -619,6 +620,41 @@ func TestKeyRoutes_InaccessibleKeyIndistinguishableFromMissing(t *testing.T) {
 	// The org key is untouched by the viewer's delete attempt.
 	_, err = store.GetKeyRecord(ctx, orgKey.PK)
 	require.NoError(t, err)
+}
+
+// Caller mistakes stay 400; backend failures are logged and become a generic
+// 500 so wrapped DynamoDB errors never reach the client.
+func TestKeyRoutes_LookupErrorClasses(t *testing.T) {
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	h, store := testAdminHandler(t)
+	key, err := store.CreateKey(context.Background(), "openai", "sk", "", 0, nil, nil)
+	require.NoError(t, err)
+
+	// Masked ids resolve via Scan, which the session lookup never issues, so a
+	// one-shot Scan failure armed after the session exists hits only the key
+	// lookup.
+	masked := apikeys.MaskKeyID(key.PK)
+	getKey := func(id string, storeErr error) *httptest.ResponseRecorder {
+		req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/keys/"+id, nil)
+		req = mux.SetURLVars(req, map[string]string{"key": id})
+		if storeErr != nil {
+			fake.FailOnce("Scan", storeErr)
+		}
+		rec := httptest.NewRecorder()
+		h.handleGetKey(rec, req)
+		return rec
+	}
+
+	rec := getKey("not-a-key-id", nil)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+	rec = getKey(masked, errors.New("InternalServerError"))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"error":"failed to load key"}`, rec.Body.String())
+
+	rec = getKey(masked, nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestPublicBaseURL_YAMLOverride(t *testing.T) {

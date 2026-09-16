@@ -2,9 +2,14 @@ package apikeys
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrInvalidKeyID marks a malformed or ambiguous key identifier supplied by
+// the caller, as opposed to a store failure while resolving a valid one.
+var ErrInvalidKeyID = errors.New("invalid key identifier")
 
 // MaskKeyID returns a short dashboard identifier for a proxy key: a 12-char
 // prefix plus an FNV-1a/32 hash of the whole key. Safe for URLs and logs.
@@ -22,7 +27,7 @@ func MaskKeyID(key string) string {
 func (s *Store) GetKeyRecordByID(ctx context.Context, id string) (*APIKey, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("empty key identifier")
+		return nil, fmt.Errorf("%w: empty", ErrInvalidKeyID)
 	}
 	if IsProxyMaskedKeyID(id) && (strings.Contains(id, maskedIDSplit) || strings.Contains(id, "...")) {
 		return s.getKeyRecordByMaskedID(ctx, id)
@@ -31,7 +36,7 @@ func (s *Store) GetKeyRecordByID(ctx context.Context, id string) (*APIKey, error
 		return s.GetKeyRecord(ctx, id)
 	}
 	if !IsProxyMaskedKeyID(id) {
-		return nil, fmt.Errorf("invalid key identifier")
+		return nil, ErrInvalidKeyID
 	}
 	return s.getKeyRecordByMaskedID(ctx, id)
 }
@@ -39,7 +44,7 @@ func (s *Store) GetKeyRecordByID(ctx context.Context, id string) (*APIKey, error
 func (s *Store) getKeyRecordByMaskedID(ctx context.Context, id string) (*APIKey, error) {
 	hash, err := ParseCredentialHashFromMaskedID(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidKeyID, err)
 	}
 	head := MaskedIDHead(id)
 	keys, err := s.ListKeys(ctx, "")
@@ -60,7 +65,7 @@ func (s *Store) getKeyRecordByMaskedID(ctx context.Context, id string) (*APIKey,
 		return nil, fmt.Errorf("API key not found")
 	}
 	if len(matches) > 1 {
-		return nil, fmt.Errorf("ambiguous key identifier")
+		return nil, fmt.Errorf("%w: ambiguous", ErrInvalidKeyID)
 	}
 	return matches[0], nil
 }

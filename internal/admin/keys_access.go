@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -45,11 +46,15 @@ func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyI
 
 	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		switch {
+		case strings.Contains(err.Error(), "not found"):
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return nil, nil, "", false
+		case errors.Is(err, apikeys.ErrInvalidKeyID):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		default:
+			h.deps.Logger.Error("admin: key lookup failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load key"})
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return nil, nil, "", false
 	}
 	if !canAccessKey(role, user.Email, record) {
