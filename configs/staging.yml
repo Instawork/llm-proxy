@@ -44,7 +44,7 @@ features:
     hang_disconnect_failure_seconds: 60
     # Match production's bypass and rollup configuration so staging
     # validates the same wiring + log lines before prod is flipped.
-    bypass_allowed: true
+    bypass_allowed: false
     bypass_reason_allowlist:
       - no_fallback_configured
       - manual_debug

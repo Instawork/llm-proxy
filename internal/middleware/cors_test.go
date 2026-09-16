@@ -65,6 +65,39 @@ func TestCORSMiddleware_BasicHeaders(t *testing.T) {
 	}
 }
 
+// The admin dashboard owns its CORS policy; the wildcard must not reach it,
+// and its OPTIONS preflights must fall through to the admin router.
+func TestCORSMiddleware_SkipsAdminRoutes(t *testing.T) {
+	manager := providers.NewProviderManager()
+	for _, path := range []string{"/admin", "/admin/", "/admin/api/keys", "/admin/api/share/abc"} {
+		for _, method := range []string{"GET", "OPTIONS"} {
+			called := false
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusNoContent)
+			})
+			req := httptest.NewRequest(method, path, nil)
+			recorder := httptest.NewRecorder()
+			CORSMiddleware(manager)(handler).ServeHTTP(recorder, req)
+
+			if !called {
+				t.Errorf("%s %s: next handler must be invoked", method, path)
+			}
+			if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+				t.Errorf("%s %s: expected no Access-Control-Allow-Origin, got %q", method, path, got)
+			}
+		}
+	}
+
+	// A provider path that merely starts with "admin" is still covered.
+	req := httptest.NewRequest("GET", "/administrative-provider/v1", nil)
+	recorder := httptest.NewRecorder()
+	CORSMiddleware(manager)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(recorder, req)
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Error("non-admin path should still receive the wildcard origin")
+	}
+}
+
 func TestCORSMiddleware_OptionsRequest(t *testing.T) {
 	// Create a mock provider manager
 	manager := providers.NewProviderManager()

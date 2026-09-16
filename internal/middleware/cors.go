@@ -2,11 +2,15 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
-// CORSMiddleware adds CORS headers with streaming support.
+// CORSMiddleware adds CORS headers with streaming support to the provider
+// routes. The admin dashboard under /admin is cookie-authenticated and sets
+// its own origin-restricted CORS policy, so it is left untouched here: a
+// wildcard origin on those routes would be wrong even without credentials.
 //
 // Access-Control-Allow-Headers must include every provider-auth header a
 // browser-based client might send, otherwise the browser silently fails the
@@ -17,6 +21,10 @@ import (
 func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isAdminPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers",
@@ -37,4 +45,8 @@ func CORSMiddleware(providerManager *providers.ProviderManager) func(http.Handle
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func isAdminPath(path string) bool {
+	return path == "/admin" || strings.HasPrefix(path, "/admin/")
 }

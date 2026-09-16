@@ -141,7 +141,9 @@ features:
   admin_dashboard:
     enabled: false
     allowed_domain: "example.com"
-    dev_cors_origin: "http://localhost:5173"
+    # dev_cors_origin is set only in the local overlays (dev, fuzz, fuzz-mem):
+    # it turns on credentialed CORS for the Vite dev server and flips the
+    # admin URL helpers into dev mode, neither of which belongs in a deploy.
     # Non-admin emails allowed to create/update keys with PII redaction disabled
     # on a non-Bedrock provider (admins always can, after confirming in the
     # dashboard). Ships empty — list users here so roster changes don't require
