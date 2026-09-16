@@ -490,6 +490,22 @@ func isFakeModeAllowed(yc *config.YAMLConfig) bool {
 		os.Getenv("LLM_PROXY_ALLOW_FAKE_MODE") == "1"
 }
 
+// isExplicitLocalDev reports whether the process is opted in to degraded
+// local-dev startup (LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 or a dev/local/empty
+// ENVIRONMENT). Startup failures that would be fatal elsewhere are downgraded
+// to warnings here.
+func isExplicitLocalDev() bool {
+	env := os.Getenv("ENVIRONMENT")
+	return os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
+}
+
+// apiKeyStoreFailureIsFatal reports whether a nil key store must abort
+// startup: key management is on, so serving without the validation
+// middleware would leave every provider route unauthenticated.
+func apiKeyStoreFailureIsFatal(yc *config.YAMLConfig, store providers.APIKeyStore, localDev bool) bool {
+	return yc.Features.APIKeyManagement.Enabled && store == nil && !localDev
+}
+
 func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
 	fu := yc.Features.FakeUpstream
 	est := providers.NewYAMLConfigEstimationAdapter(yc.Features.RateLimiting.Estimation)
@@ -1461,6 +1477,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// Initialize API key store if enabled
 	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
+	if apiKeyStoreFailureIsFatal(yamlConfig, globalAPIKeyStore, isExplicitLocalDev()) {
+		logProxyError("🔑 API Key Store: key management is enabled but the store is unavailable; refusing to serve provider routes unauthenticated",
+			"error", globalAPIKeyStoreInitError, "environment", os.Getenv("ENVIRONMENT"),
+			"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to run without key validation (dev only)")
+		os.Exit(1)
+	}
 	globalAdminUserStore = initializeAdminUserStore(yamlConfig)
 	globalNotifier = initNotifier(yamlConfig)
 
@@ -2165,11 +2187,9 @@ func main() {
 	// deploy must be visible at startup, not 15 minutes into traffic.
 	yamlConfig, err := config.LoadEnvironmentConfig()
 	if err != nil {
-		env := os.Getenv("ENVIRONMENT")
-		allowDefault := os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
-		if !allowDefault {
+		if !isExplicitLocalDev() {
 			logProxyError("Failed to load environment config; refusing to start with in-binary defaults",
-				"error", err, "environment", env,
+				"error", err, "environment", os.Getenv("ENVIRONMENT"),
 				"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to opt in to default config")
 			os.Exit(1)
 		}

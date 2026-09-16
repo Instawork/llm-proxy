@@ -79,8 +79,10 @@ The root struct is `config.YAMLConfig`:
   breaker, PII redaction, fake upstream, admin dashboard, row history
 - `providers.*` — per-vendor enable flags, model lists, pricing tiers, aliases
 
-Outside explicit local dev (`ENVIRONMENT=dev` or `LLM_PROXY_ALLOW_DEFAULT_CONFIG=1`),
-a config load failure is fatal at startup.
+Outside explicit local dev (`ENVIRONMENT` unset, `dev`, or `local`, or
+`LLM_PROXY_ALLOW_DEFAULT_CONFIG=1`), a config load failure is fatal at startup, and so is failing to initialize the
+API key store while `features.api_key_management.enabled` is true (otherwise
+the proxy would serve provider routes without key validation).
 
 ## Packages
 

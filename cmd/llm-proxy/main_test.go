@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
 // TestCircuitConfigFromYAML_ExpandsRedisURLEnvVar nails down the env-var
@@ -227,5 +229,65 @@ func TestSidecarProfile_WritesRollupsWithoutDashboard(t *testing.T) {
 	}
 	if admin.Rollups.Redis == nil || admin.Rollups.Redis.DB != 6 {
 		t.Fatalf("sidecar: rollups must target the shared Redis db 6, got %+v", admin.Rollups.Redis)
+	}
+}
+
+type stubAPIKeyStore struct{}
+
+func (stubAPIKeyStore) ValidateAndGetActualKey(context.Context, string) (string, string, error) {
+	return "", "", nil
+}
+
+// TestAPIKeyStoreFailureIsFatal pins the fail-closed rule: with key
+// management enabled, a nil store outside local dev must abort startup
+// instead of silently serving provider routes without key validation.
+func TestAPIKeyStoreFailureIsFatal(t *testing.T) {
+	cfgWith := func(enabled bool) *config.YAMLConfig {
+		yc := config.GetDefaultYAMLConfig()
+		yc.Features.APIKeyManagement.Enabled = enabled
+		return yc
+	}
+
+	tests := []struct {
+		name     string
+		enabled  bool
+		store    providers.APIKeyStore
+		localDev bool
+		want     bool
+	}{
+		{name: "enabled, nil store, prod", enabled: true, store: nil, localDev: false, want: true},
+		{name: "enabled, nil store, local dev", enabled: true, store: nil, localDev: true, want: false},
+		{name: "disabled, nil store, prod", enabled: false, store: nil, localDev: false, want: false},
+		{name: "enabled, store present, prod", enabled: true, store: stubAPIKeyStore{}, localDev: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := apiKeyStoreFailureIsFatal(cfgWith(tt.enabled), tt.store, tt.localDev); got != tt.want {
+				t.Fatalf("apiKeyStoreFailureIsFatal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsExplicitLocalDev(t *testing.T) {
+	tests := []struct {
+		env, allowDefault string
+		want              bool
+	}{
+		{env: "", allowDefault: "", want: true},
+		{env: "dev", allowDefault: "", want: true},
+		{env: "local", allowDefault: "", want: true},
+		{env: "production", allowDefault: "", want: false},
+		{env: "staging", allowDefault: "", want: false},
+		{env: "production", allowDefault: "1", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env+"/allow="+tt.allowDefault, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", tt.env)
+			t.Setenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG", tt.allowDefault)
+			if got := isExplicitLocalDev(); got != tt.want {
+				t.Fatalf("isExplicitLocalDev() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
