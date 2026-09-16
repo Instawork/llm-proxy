@@ -84,7 +84,7 @@ func TestHandleKeyStats_RedisDirectRead(t *testing.T) {
 	require.Equal(t, "redis", body.CostToday.Source)
 }
 
-func TestHandleKeyStats_ForbiddenForOtherUsersKey(t *testing.T) {
+func TestHandleKeyStats_NotFoundForOtherUsersKey(t *testing.T) {
 	h, store := testAdminHandler(t)
 	ctx := context.Background()
 	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
@@ -94,7 +94,7 @@ func TestHandleKeyStats_ForbiddenForOtherUsersKey(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, _ := keyStatsRequest(t, h, "viewer@example.com", orgKey.PK)
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestHandleKeyStats_ViewerOwnKey(t *testing.T) {

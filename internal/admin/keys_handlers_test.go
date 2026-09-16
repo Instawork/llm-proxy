@@ -440,6 +440,74 @@ func TestHandleDeleteShare_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+// A viewer must not be able to tell "exists but not mine" from "does not
+// exist": every key object route answers both with the same 404 body.
+func TestKeyRoutes_InaccessibleKeyIndistinguishableFromMissing(t *testing.T) {
+	h, store := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "viewer@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	orgKey, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+	missingKey := apikeys.KeyPrefix + "0000000000000000000000000000000000000000000000000000000000000000"
+
+	routes := []struct {
+		name string
+		call func(key string) *httptest.ResponseRecorder
+	}{
+		{"get", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+key, nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleGetKey(rec, req)
+			return rec
+		}},
+		{"update", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+key, []byte(`{"description":"x"}`))
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleUpdateKey(rec, req)
+			return rec
+		}},
+		{"delete", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+key, nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleDeleteKey(rec, req)
+			return rec
+		}},
+		{"stats", func(key string) *httptest.ResponseRecorder {
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodGet, "/admin/api/keys/"+key+"/stats", nil)
+			req = mux.SetURLVars(req, map[string]string{"key": key})
+			rec := httptest.NewRecorder()
+			h.handleKeyStats(rec, req)
+			return rec
+		}},
+		{"share", func(key string) *httptest.ResponseRecorder {
+			body, _ := json.Marshal(map[string]string{"key": key})
+			req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/share", body)
+			rec := httptest.NewRecorder()
+			h.handleCreateShare(rec, req)
+			return rec
+		}},
+	}
+
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			other := rt.call(orgKey.PK)
+			missing := rt.call(missingKey)
+			assert.Equal(t, http.StatusNotFound, other.Code, "other owner's key: %s", other.Body.String())
+			assert.Equal(t, http.StatusNotFound, missing.Code, "missing key: %s", missing.Body.String())
+			assert.Equal(t, missing.Body.String(), other.Body.String())
+		})
+	}
+
+	// The org key is untouched by the viewer's delete attempt.
+	_, err = store.GetKeyRecord(ctx, orgKey.PK)
+	require.NoError(t, err)
+}
+
 func TestPublicBaseURL_YAMLOverride(t *testing.T) {
 	h := &handler{deps: &Deps{YAMLConfig: &config.YAMLConfig{
 		Features: config.FeaturesConfig{
@@ -517,7 +585,7 @@ func TestViewerPersonalKeys(t *testing.T) {
 	getOrgReq = mux.SetURLVars(getOrgReq, map[string]string{"key": orgKey.PK})
 	getOrgRec := httptest.NewRecorder()
 	h.handleGetKey(getOrgRec, getOrgReq)
-	assert.Equal(t, http.StatusForbidden, getOrgRec.Code)
+	assert.Equal(t, http.StatusNotFound, getOrgRec.Code)
 
 	delReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodDelete, "/admin/api/keys/"+created.Key, nil)
 	delReq = mux.SetURLVars(delReq, map[string]string{"key": created.Key})

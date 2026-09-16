@@ -28,7 +28,9 @@ func canAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) b
 
 // loadAccessibleKey resolves the caller, loads keyID, and checks the caller
 // may access it. On failure it writes the response and returns ok=false. The
-// store is never read before the caller is authenticated.
+// store is never read before the caller is authenticated, and a key the
+// caller may not access is reported as 404 so viewers cannot probe which
+// key IDs exist.
 func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyID string) (*apikeys.APIKey, *UserResponse, adminusers.Role, bool) {
 	user, err := h.auth.currentUser(r)
 	if err != nil {
@@ -51,7 +53,7 @@ func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyI
 		return nil, nil, "", false
 	}
 	if !canAccessKey(role, user.Email, record) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 		return nil, nil, "", false
 	}
 	return record, user, role, true

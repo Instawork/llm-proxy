@@ -239,5 +239,5 @@ func TestHandleCreateShare_ViewerOwnKeyOnly(t *testing.T) {
 	orgReq := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPost, "/admin/api/share", orgBody)
 	orgRec := httptest.NewRecorder()
 	h.handleCreateShare(orgRec, orgReq)
-	assert.Equal(t, http.StatusForbidden, orgRec.Code)
+	assert.Equal(t, http.StatusNotFound, orgRec.Code)
 }
