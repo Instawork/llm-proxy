@@ -20,6 +20,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
+		deps.Logger = logger
 	}
 
 	adminCfg := config.AdminDashboardConfig{}
