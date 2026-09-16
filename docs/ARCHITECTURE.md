@@ -281,17 +281,24 @@ Partitioned object keys support Athena JSON SerDe queries. Disabled by default
 
 ### User attribution is not authenticated
 
-The user identity attached to a request is resolved in order from
-`/meta/{userID}/…`, the `X-User-ID` header, and provider-specific body
-fields. All three are caller-supplied and none is bound to the API key, so
-any key holder can label traffic as any user. Only when none is present does
-the proxy fall back to the connection's client IP, which the caller does not
-choose but which groups everyone behind the same NAT. Treat the value as an
-attribution field for cost rows, logs, and dashboards. The `user` rate-limit
-scope keys on it too, so user-scoped limits are advisory: a caller can rotate
-the label to sidestep them. Limits that must hold are the per-key cost caps
-and the key-scoped rate limits, which derive from the authenticated `iw-*`
-key.
+The user identity attached to a request (`ExtractUserIDFromRequest` in
+`internal/middleware/token_parsing.go`) is resolved in this order:
+
+1. `/meta/{userID}/…` in the path (also carried on the context after rewriting)
+2. the `X-User-ID` header
+3. provider-specific body fields (e.g. OpenAI `user`)
+4. the `llm_user_id` query parameter
+5. `token:` plus the first eight characters of a `Authorization: Bearer` value
+6. `ip:` plus the client address (`X-Forwarded-For` verbatim when present,
+   else `X-Real-IP`, else the connection address)
+
+Every source is caller-supplied or caller-influenced and none is bound to the
+API key, so any key holder can label traffic as any user. Treat the value as
+an attribution field for cost rows, logs, and dashboards. The `user`
+rate-limit scope keys on it too, so user-scoped limits are advisory: a caller
+can rotate the label to sidestep them. Limits that must hold are the per-key
+cost caps and the key-scoped rate limits, which derive from the authenticated
+`iw-*` key.
 
 ## Binaries and build
 

@@ -217,7 +217,7 @@ that the client computes and the proxy forwards verbatim.
 - Supports provisional token estimation with post-response reconciliation using `X-LLM-Input-Tokens` (input tokens only).
 - Returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers when throttled.
 - Set `backend: "redis"` and configure `redis.url` (or `redis.address` for dev) for multi-instance rate limiting. Dev docker-compose uses logical DB 4 on the bundled Redis service; production uses `${REDIS_URL}` from SSM (`/llm-proxy/redis_url`).
-- The `user` scope keys on the caller-supplied user ID (`/meta/{userID}/…`, `X-User-ID`, or body fields), falling back to the client IP when none is given. The label is not bound to the API key, so user-scoped limits are advisory; use per-key limits and cost caps for anything that must hold.
+- The `user` scope keys on the caller-supplied user ID (`/meta/{userID}/…`, `X-User-ID`, body fields, `llm_user_id`, a Bearer-token prefix, then the client address; see "User attribution is not authenticated" in `docs/ARCHITECTURE.md`). The label is not bound to the API key, so user-scoped limits are advisory; use per-key limits and cost caps for anything that must hold.
 
 Minimal dev example (see `configs/dev.yml` for a full setup):
 
