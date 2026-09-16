@@ -281,14 +281,17 @@ Partitioned object keys support Athena JSON SerDe queries. Disabled by default
 
 ### User attribution is not authenticated
 
-The user identity attached to a request (`/meta/{userID}/…`, then the
-`X-User-ID` header, then provider-specific body fields, then the client IP)
-is whatever the caller supplies. It is not bound to the API key, so any key
-holder can label traffic as any user. Treat it as an attribution field for
-cost rows, logs, and dashboards. The `user` rate-limit scope keys on this
-value too, so user-scoped limits are advisory: a caller can rotate the label
-to sidestep them. Limits that must hold are the per-key cost caps and the
-key-scoped rate limits, which derive from the authenticated `iw-*` key.
+The user identity attached to a request is resolved in order from
+`/meta/{userID}/…`, the `X-User-ID` header, and provider-specific body
+fields. All three are caller-supplied and none is bound to the API key, so
+any key holder can label traffic as any user. Only when none is present does
+the proxy fall back to the connection's client IP, which the caller does not
+choose but which groups everyone behind the same NAT. Treat the value as an
+attribution field for cost rows, logs, and dashboards. The `user` rate-limit
+scope keys on it too, so user-scoped limits are advisory: a caller can rotate
+the label to sidestep them. Limits that must hold are the per-key cost caps
+and the key-scoped rate limits, which derive from the authenticated `iw-*`
+key.
 
 ## Binaries and build
 
