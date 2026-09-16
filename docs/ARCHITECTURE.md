@@ -275,9 +275,20 @@ Partitioned object keys support Athena JSON SerDe queries. Disabled by default
 | `GET /health` | Provider status + circuit breaker state |
 | `POST /redact` | Standalone PII API (optional) |
 | `/{provider}/*` | Reverse proxy to upstream |
-| `/meta/{userID}/{provider}/*` | Rewritten to `/{provider}/*` |
+| `/meta/{userID}/{provider}/*` | Rewritten to `/{provider}/*`; `userID` is a caller-chosen label (see below) |
 | `/admin/*` | Dashboard SPA + API |
 | Provider extras | Gemini `/v1/models/gemini…`; Bedrock `/model/…` |
+
+### User attribution is not authenticated
+
+The user identity attached to a request (`/meta/{userID}/…`, then the
+`X-User-ID` header, then provider-specific body fields, then the client IP)
+is whatever the caller supplies. It is not bound to the API key, so any key
+holder can label traffic as any user. Treat it as an attribution field for
+cost rows, logs, and dashboards. The `user` rate-limit scope keys on this
+value too, so user-scoped limits are advisory: a caller can rotate the label
+to sidestep them. Limits that must hold are the per-key cost caps and the
+key-scoped rate limits, which derive from the authenticated `iw-*` key.
 
 ## Binaries and build
 
