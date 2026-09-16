@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
-	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
@@ -98,29 +97,8 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.auth.currentUser(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-	role, err := adminusers.ParseRole(user.Role)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-		return
-	}
-
-	record, err := h.deps.APIKeyStore.GetKeyRecordByID(r.Context(), keyID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-			return
-		}
-		h.deps.Logger.Error("admin: key stats lookup failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load key"})
-		return
-	}
-	if !canAccessKey(role, user.Email, record) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	record, _, _, ok := h.loadAccessibleKey(w, r, keyID)
+	if !ok {
 		return
 	}
 
