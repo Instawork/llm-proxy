@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -44,6 +45,12 @@ func formatNumber(n int64) string {
 type YAMLConfig struct {
 	// Global settings
 	Enabled bool `yaml:"enabled"`
+
+	// BindAddress is the interface the HTTP server listens on. Empty means
+	// every interface. The sidecar profile pins it to 127.0.0.1 so a
+	// co-located proxy that trusts task networking is not reachable on the
+	// task ENI from the rest of the VPC.
+	BindAddress string `yaml:"bind_address,omitempty"`
 
 	// Features configuration
 	Features FeaturesConfig `yaml:"features"`
@@ -1184,6 +1191,9 @@ func (c *YAMLConfig) Validate() error {
 	if c.Providers == nil {
 		return fmt.Errorf("providers configuration is required")
 	}
+	if c.BindAddress != "" && net.ParseIP(c.BindAddress) == nil {
+		return fmt.Errorf("bind_address must be an IP address (got %q)", c.BindAddress)
+	}
 
 	// Validate transport configuration if cost tracking is enabled
 	if c.Features.CostTracking.Enabled {
@@ -1474,10 +1484,12 @@ func (c *YAMLConfig) validateRedactAPIConfig() error {
 }
 
 // isLocalEnvironment reports whether ENVIRONMENT names a local or fuzz
-// deployment, the only places dev-only auth bypasses may be enabled.
+// deployment, the only places dev-only auth bypasses may be enabled. An unset
+// ENVIRONMENT is not local: a deployed image that lost the variable must fail
+// validation rather than come up with dev bypasses on.
 func isLocalEnvironment(env string) bool {
 	switch env {
-	case "", "dev", "local", "fuzz", "fuzz-mem":
+	case "dev", "local", "fuzz", "fuzz-mem":
 		return true
 	}
 	return false

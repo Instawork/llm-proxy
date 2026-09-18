@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1637,11 +1638,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// API key validation runs before PII redaction so per-key redact_pii
 	// overrides can be resolved from the DynamoDB record stashed in context.
+	r.Use(middleware.VendorPathPolicyMiddleware(globalProviderManager))
+	authFailures := middleware.NewAuthFailureGuard()
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(
 			globalProviderManager,
 			globalAPIKeyStore,
 			yamlConfig.Features.BYOKeys.Enabled,
+			authFailures,
 		))
 	}
 
@@ -1740,7 +1744,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			if ocrTimeout <= 0 {
 				ocrTimeout = 30 * time.Second
 			}
-			ocrClient := ocr.New(ocrURL, ocrTimeout)
+			ocrToken := os.Getenv("OCR_SIDECAR_TOKEN")
+			if ocrToken == "" {
+				logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
+				os.Exit(1)
+			}
+			ocrClient := ocr.New(ocrURL, ocrToken, ocrTimeout)
 			idGateFailClosed := idGateCfg.FailMode == "closed"
 			scoreThreshold := idGateCfg.ScoreThreshold
 			if scoreThreshold <= 0 {
@@ -1905,6 +1914,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			r.Handle("/redact", redactapi.NewHandler(redactor, keyLookup, redactapi.Config{
 				MaxBodyBytes:         maxBody,
 				AllowUnauthenticated: allowUnauth,
+				AuthFailures:         authFailures,
 			}, logger)).Methods(http.MethodPost, http.MethodOptions)
 			logger.Info("🔒 POST /redact API enabled",
 				"fail_mode", redactAPICfg.FailMode,
@@ -1991,7 +2001,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 
-	logger.Info("Health check available", "url", "http://0.0.0.0:"+port+"/health")
+	bindAddr := yamlConfig.BindAddress
+	if bindAddr == "" {
+		bindAddr = "0.0.0.0"
+	}
+	listenAddr := net.JoinHostPort(bindAddr, port)
+	logger.Info("Health check available", "url", "http://"+listenAddr+"/health")
 
 	// Log cost tracking status
 	if globalCostTracker != nil {
@@ -2005,16 +2020,16 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		logger.Info("Registered provider", "provider", name)
 	}
 
-	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
-	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
-	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
+	logger.Info("OpenAI API endpoints available", "url", "http://"+listenAddr+"/openai/")
+	logger.Info("Anthropic API endpoints available", "url", "http://"+listenAddr+"/anthropic/")
+	logger.Info("Gemini API endpoints available", "url", "http://"+listenAddr+"/gemini/")
 	if bedrockProvider != nil {
-		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
+		logger.Info("Bedrock API endpoints available", "url", "http://"+listenAddr+"/bedrock/", "region", bedrockProvider.Region())
 	}
 	if bedrockMantleProvider != nil {
-		logger.Info("Bedrock Mantle API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
+		logger.Info("Bedrock Mantle API endpoints available", "url", "http://"+listenAddr+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
 	}
-	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
+	logger.Info("Meta routes with user ID available", "pattern", "http://"+listenAddr+"/meta/{userID}/{provider}/")
 
 	// Server-level timeouts to bound resource usage and avoid Slowloris-style
 	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
@@ -2028,7 +2043,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// zero target 5xx). Per AWS guidance the target's keep-alive idle timeout
 	// must outlive the load balancer's so the ALB always closes first.
 	server := &http.Server{
-		Addr:              "0.0.0.0:" + port,
+		Addr:              listenAddr,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -2039,7 +2054,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Set up graceful shutdown
 	serverErrChan := make(chan error, 1)
 	go func() {
-		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
+		logger.Info("🚀 Starting server", "address", listenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrChan <- err
 		}

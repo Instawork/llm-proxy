@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
@@ -29,6 +30,7 @@ const (
 	sessionUserPicture   = "user_picture"
 	sessionOAuthState    = "oauth_state"
 	sessionOAuthRedirect = "oauth_redirect"
+	sessionIssuedAt      = "issued_at"
 )
 
 type authConfig struct {
@@ -77,13 +79,22 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		}
 	}
 
+	// Secure by default; only plain-http local dev (dev bypass) or an explicit
+	// LLM_PROXY_ADMIN_SESSION_SECURE=0 turns it off.
+	secureCookie := !adminCfg.DevBypassLogin
+	switch os.Getenv("LLM_PROXY_ADMIN_SESSION_SECURE") {
+	case "1":
+		secureCookie = true
+	case "0":
+		secureCookie = false
+	}
 	sessionStore := sessions.NewCookieStore([]byte(sessionSecret))
 	sessionStore.Options = &sessions.Options{
 		Path:     "/",
 		MaxAge:   86400 * 7,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   os.Getenv("LLM_PROXY_ADMIN_SESSION_SECURE") == "1",
+		Secure:   secureCookie,
 	}
 
 	auth := &authenticator{
@@ -233,6 +244,7 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	session.Values[sessionUserEmail] = email
 	session.Values[sessionUserName] = "Dev User"
 	session.Values[sessionUserPicture] = devUserPicture("Dev User")
+	session.Values[sessionIssuedAt] = time.Now().UnixNano()
 
 	if a.userStore != nil {
 		user, _, err := a.userStore.EnsureUser(r.Context(), email, "Dev User", devUserPicture("Dev User"))
@@ -293,9 +305,6 @@ func sanitizeRedirect(raw, devOrigin string) (bool, string) {
 		if err == nil && strings.EqualFold(u.Scheme, dev.Scheme) && strings.EqualFold(u.Host, dev.Host) {
 			return true, raw
 		}
-	}
-	if strings.EqualFold(u.Hostname(), "localhost") || strings.EqualFold(u.Hostname(), "127.0.0.1") {
-		return true, raw
 	}
 	return false, ""
 }
@@ -382,6 +391,7 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	session.Values[sessionUserEmail] = claims.Email
 	session.Values[sessionUserName] = claims.Name
 	session.Values[sessionUserPicture] = claims.Picture
+	session.Values[sessionIssuedAt] = time.Now().UnixNano()
 	if err := session.Save(r, w); err != nil {
 		a.logger.Error("admin auth: session save failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -402,12 +412,51 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !a.sameOriginRequest(r) {
+		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		return
+	}
 	session, err := a.sessionStore.Get(r, sessionName)
 	if err == nil {
+		// The cookie is self-contained, so clearing it client-side is not enough:
+		// stamp the user so every copy issued before now stops validating.
+		if email, _ := session.Values[sessionUserEmail].(string); email != "" && a.userStore != nil {
+			if err := a.userStore.RevokeSessions(r.Context(), email, time.Now()); err != nil {
+				a.logger.Error("admin auth: session revocation failed", "error", err, "email", email)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+		}
 		session.Options.MaxAge = -1
 		_ = session.Save(r, w)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sameOriginRequest rejects state-changing requests a third-party page could
+// have triggered with the ambient session cookie. Browsers send
+// Sec-Fetch-Site on every request; older ones send Origin on POST. The dev
+// frontend origin is allowed because the Vite UI calls the API cross-origin.
+func (a *authenticator) sameOriginRequest(r *http.Request) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Browsers always send Origin on POST; a bare request is a non-browser client.
+		return true
+	}
+	if a.devFrontendOrigin != "" && strings.EqualFold(strings.TrimRight(origin, "/"), strings.TrimRight(a.devFrontendOrigin, "/")) {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+// sessionRevoked reports whether a cookie issued at issuedAt (unix nanos)
+// predates the user's last revocation.
+func sessionRevoked(issuedAt int64, revokedAt time.Time) bool {
+	return !revokedAt.IsZero() && !time.Unix(0, issuedAt).After(revokedAt)
 }
 
 func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
@@ -427,6 +476,10 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 		u, err := a.userStore.GetUser(r.Context(), email)
 		if err != nil {
 			return nil, fmt.Errorf("user lookup failed: %w", err)
+		}
+		issuedAt, _ := session.Values[sessionIssuedAt].(int64)
+		if sessionRevoked(issuedAt, u.SessionsRevokedAt) {
+			return nil, fmt.Errorf("session revoked")
 		}
 		role = string(u.Role)
 		if u.Name != "" {

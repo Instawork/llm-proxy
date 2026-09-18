@@ -120,7 +120,7 @@ func newCostTrackingEnv(t *testing.T) *costTrackingEnv {
 	}
 
 	r := mux.NewRouter()
-	r.Use(middleware.APIKeyValidationMiddleware(pm, store, false))
+	r.Use(middleware.APIKeyValidationMiddleware(pm, store, false, nil))
 	r.Use(middleware.TokenParsingMiddleware(pm, costCallback))
 	for name, provider := range pm.GetAllProviders() {
 		r.PathPrefix("/" + name + "/").Handler(provider.Proxy())
