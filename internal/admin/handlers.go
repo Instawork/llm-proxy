@@ -15,6 +15,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/keyexpiry"
+	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
@@ -32,14 +33,14 @@ const (
 type handler struct {
 	deps     *Deps
 	auth     *authenticator
-	issuance *tokenBucketLimiter
+	issuance *middleware.TokenBucketLimiter
 }
 
 func newHandler(deps Deps, auth *authenticator) *handler {
 	return &handler{
 		deps:     &deps,
 		auth:     auth,
-		issuance: newTokenBucketLimiter(personalKeyIssuanceRefillPerSec, personalKeyIssuanceBurst),
+		issuance: middleware.NewTokenBucketLimiter(personalKeyIssuanceRefillPerSec, personalKeyIssuanceBurst),
 	}
 }
 
@@ -205,7 +206,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			if !h.issuance.allow(strings.ToLower(user.Email), time.Now()) {
+			if !h.issuance.Allow(strings.ToLower(user.Email), time.Now()) {
 				h.deps.Logger.Warn("admin: personal key issuance rate limited", "email", user.Email, "provider", req.Provider)
 				w.Header().Set("Retry-After", "3600")
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many keys provisioned recently; try again later"})
@@ -776,7 +777,7 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		"id", link.ID(),
 		"key", apikeys.RedactKey(record.PK),
 		"provider", record.Provider,
-		"client_ip", clientIP(r),
+		"client_ip", middleware.TrustedClientIP(r),
 		"created_by", link.CreatedBy,
 	)
 

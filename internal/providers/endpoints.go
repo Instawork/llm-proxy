@@ -68,6 +68,28 @@ var passthroughSegments = []string{
 	"/realtime/", // OpenAI Realtime
 }
 
+// blockedSegments are vendor account-administration surfaces. The proxy only
+// brokers inference, so a proxy key must never reach the org/admin APIs the
+// shared upstream credential is entitled to.
+var blockedSegments = []string{
+	"/organization/",  // OpenAI Admin API: projects, users, admin keys, audit logs
+	"/fine_tuning/",   // OpenAI fine-tuning jobs billed to the org account
+	"/organizations/", // Anthropic Admin API: members, workspaces, api keys
+	"/tunedModels/",   // Gemini tuned-model management
+}
+
+// IsBlockedVendorPath reports whether path targets a vendor administration
+// surface the proxy refuses to forward.
+func IsBlockedVendorPath(path string) bool {
+	p := strings.TrimSuffix(path, "/") + "/"
+	for _, s := range blockedSegments {
+		if strings.Contains(p, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyEndpoint reports how the proxy treats a provider request path.
 func ClassifyEndpoint(path string) EndpointClass {
 	path = strings.TrimSuffix(path, "/")

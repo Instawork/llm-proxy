@@ -202,7 +202,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	if len(apiKey.Tags) > 0 {
 		fmt.Printf("Tags:        %v\n", apiKey.Tags)
 	}
-	fmt.Printf("\n🔑 Use this key in your API requests by replacing your provider key with: %s\n", apiKey.PK)
+	fmt.Printf("\n🔑 Send this key in place of your provider key (Authorization: Bearer / x-api-key / x-goog-api-key), never in the URL.\n")
 }
 
 // handleList lists all API keys

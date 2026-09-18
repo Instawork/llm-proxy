@@ -21,8 +21,9 @@ type byoBanChecker interface {
 
 // APIKeyValidationMiddleware validates and potentially replaces API keys for
 // all providers. byoKeysEnabled is features.byo_keys.enabled — when false, raw provider
-// credentials are rejected and callers must use proxy iw-* keys.
-func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, byoKeysEnabled bool) func(http.Handler) http.Handler {
+// credentials are rejected and callers must use proxy iw-* keys. authFailures
+// (nil to disable) throttles clients that keep presenting rejected keys.
+func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyStore providers.APIKeyStore, byoKeysEnabled bool, authFailures *AuthFailureGuard) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" || r.URL.Path == "/redact" || strings.HasPrefix(r.URL.Path, "/admin/") {
@@ -42,9 +43,27 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 			}
 
 			if keyStore != nil {
+				if authFailures.Blocked(r) {
+					proxylog.Proxy("API key validation: client throttled after repeated failures on %s", provider.GetName())
+					authFailures.WriteBlocked(w)
+					return
+				}
+				rejectUnauthorized := func(msg string) {
+					authFailures.RecordFailure(r)
+					proxylog.WriteProxyJSONError(w, http.StatusUnauthorized, msg)
+				}
+
 				// Capture the inbound iw: key before ValidateAPIKey may swap it
 				// for the upstream provider credential.
 				inboundKey := extractInboundProxyKey(r)
+
+				// A proxy key in the URL lands in every access log between the
+				// client and this process (ALB, WAF); only headers are accepted.
+				if apikeys.HasKeyPrefix(inboundKey) && proxyKeyOnlyInQuery(r, inboundKey) {
+					proxylog.Proxy("API key validation: proxy key sent in query string for %s", provider.GetName())
+					rejectUnauthorized("Invalid API key: proxy keys must be sent in a header (Authorization: Bearer or x-goog-api-key), not the ?key= query string")
+					return
+				}
 
 				if inboundKey != "" && !apikeys.HasKeyPrefix(inboundKey) {
 					if !byoKeysEnabled {
@@ -74,7 +93,7 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 
 				if err := provider.ValidateAPIKey(r, keyStore); err != nil {
 					proxylog.Proxy("API key validation failed for %s: %v", provider.GetName(), err)
-					proxylog.WriteProxyJSONError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid API key: %s", err.Error()))
+					rejectUnauthorized(fmt.Sprintf("Invalid API key: %s", err.Error()))
 					return
 				}
 
@@ -88,7 +107,7 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 						// as their only gate, so a swallowed error here would let a
 						// revoked key keep working.
 						proxylog.Proxy("proxy key lookup failed for %s: %v", provider.GetName(), err)
-						proxylog.WriteProxyJSONError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid API key: %s", err.Error()))
+						rejectUnauthorized(fmt.Sprintf("Invalid API key: %s", err.Error()))
 						return
 					}
 					if record != nil {
@@ -124,6 +143,14 @@ func extractInboundProxyKey(r *http.Request) string {
 		return k
 	}
 	return r.URL.Query().Get("key")
+}
+
+// proxyKeyOnlyInQuery reports whether key reached us solely via ?key=.
+func proxyKeyOnlyInQuery(r *http.Request, key string) bool {
+	if extractBearerToken(r) != "" || r.Header.Get("x-api-key") != "" || r.Header.Get("x-goog-api-key") != "" {
+		return false
+	}
+	return r.URL.Query().Get("key") == key
 }
 
 func extractBearerToken(r *http.Request) string {

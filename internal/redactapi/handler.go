@@ -27,10 +27,20 @@ type ProxyKeyLookup interface {
 	LookupProxyKey(ctx context.Context, bearer string) (*apikeys.APIKey, error)
 }
 
+// AuthFailureGuard throttles clients that keep presenting rejected keys so
+// anonymous callers cannot drive unbounded key-store lookups.
+type AuthFailureGuard interface {
+	Blocked(r *http.Request) bool
+	RecordFailure(r *http.Request)
+	WriteBlocked(w http.ResponseWriter)
+}
+
 // Config controls POST /redact runtime behaviour.
 type Config struct {
 	MaxBodyBytes         int
 	AllowUnauthenticated bool
+	// AuthFailures may be nil to disable failed-credential throttling.
+	AuthFailures AuthFailureGuard
 }
 
 // Handler serves POST /redact.
@@ -85,12 +95,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if h.cfg.AuthFailures != nil && h.cfg.AuthFailures.Blocked(r) {
+			h.cfg.AuthFailures.WriteBlocked(w)
+			return
+		}
 		bearer := extractCredential(r)
 		if bearer == "" || !apikeys.HasKeyPrefix(bearer) {
+			h.recordAuthFailure(r)
 			writeJSONError(w, http.StatusUnauthorized, "missing or invalid API key")
 			return
 		}
 		if _, err := h.keys.LookupProxyKey(r.Context(), bearer); err != nil {
+			h.recordAuthFailure(r)
 			writeJSONError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
@@ -178,15 +194,20 @@ func parseInputBody(mode string, body []byte) (string, error) {
 	return string(body), nil
 }
 
+func (h *Handler) recordAuthFailure(r *http.Request) {
+	if h.cfg.AuthFailures != nil {
+		h.cfg.AuthFailures.RecordFailure(r)
+	}
+}
+
+// extractCredential reads the caller's key from a header. Query-string keys
+// are deliberately ignored: they land in every access log on the path.
 func extractCredential(r *http.Request) string {
 	const bearerPrefix = "Bearer "
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, bearerPrefix) {
 		return strings.TrimPrefix(auth, bearerPrefix)
 	}
-	if k := r.Header.Get("x-api-key"); k != "" {
-		return k
-	}
-	return r.URL.Query().Get("key")
+	return r.Header.Get("x-api-key")
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
