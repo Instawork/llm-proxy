@@ -1,5 +1,4 @@
 import asyncio
-import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -7,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import onnxruntime as ort
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from onnxtr.io import DocumentFile
 from onnxtr.models import ocr_predictor
@@ -56,16 +55,6 @@ OCR_INFER_TIMEOUT_SEC = _env_float("OCR_INFER_TIMEOUT_SEC", 30.0)
 # entrypoint.sh sets this explicitly and derives worker count from it.
 OCR_ORT_INTRA_THREADS = _env_int("OCR_ORT_INTRA_THREADS", 4)
 OCR_ORT_INTER_THREADS = _env_int("OCR_ORT_INTER_THREADS", 1)
-
-# The sidecar sits on an internal ALB reachable from the whole VPC, so every
-# caller must present the shared token llm-proxy sends in X-OCR-Token. Startup
-# refuses to run without one rather than silently accepting anonymous uploads.
-OCR_SIDECAR_TOKEN = os.getenv("OCR_SIDECAR_TOKEN", "").strip()
-if not OCR_SIDECAR_TOKEN:
-    raise SystemExit("OCR_SIDECAR_TOKEN is required")
-# Cap the upload before it is buffered; matches id_gate.max_image_bytes upstream.
-OCR_MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
-_READ_CHUNK = 1024 * 1024
 
 
 def _engine_cfg() -> EngineConfig:
@@ -125,31 +114,13 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def _read_capped(image: UploadFile) -> bytes:
-    chunks: list[bytes] = []
-    total = 0
-    while chunk := await image.read(_READ_CHUNK):
-        total += len(chunk)
-        if total > OCR_MAX_IMAGE_BYTES:
-            raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
 @app.post("/extract-text")
-async def extract_text(
-    image: UploadFile = File(...),
-    x_ocr_token: str = Header(default=""),
-) -> JSONResponse:
-    if not hmac.compare_digest(x_ocr_token, OCR_SIDECAR_TOKEN):
-        raise HTTPException(status_code=401, detail="missing or invalid X-OCR-Token")
+async def extract_text(image: UploadFile = File(...)) -> JSONResponse:
     if predictor is None or executor is None or gate is None:
         raise HTTPException(status_code=503, detail="OCR service not ready")
 
     try:
-        img_bytes = await _read_capped(image)
-    except HTTPException:
-        raise
+        img_bytes = await image.read()
     except Exception as exc:
         logger.exception("failed to read upload")
         raise HTTPException(status_code=400, detail=f"invalid upload: {exc}") from exc

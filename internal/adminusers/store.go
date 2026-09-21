@@ -244,6 +244,9 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			CreatedAt:   existing.CreatedAt,
 			UpdatedAt:   now,
 			LastLoginAt: now,
+			// Carry the revocation forward: a fresh login must not resurrect
+			// cookies issued before the last logout.
+			SessionsRevokedAt: existing.SessionsRevokedAt,
 		}
 		av, err := attributevalue.MarshalMap(item)
 		if err != nil {
@@ -291,6 +294,7 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			item.CreatedAt = existing.CreatedAt
 			item.UpdatedAt = now
 			item.LastLoginAt = now
+			item.SessionsRevokedAt = existing.SessionsRevokedAt
 			av, err := attributevalue.MarshalMap(item)
 			if err != nil {
 				return User{}, false, err

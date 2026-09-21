@@ -337,7 +337,6 @@ test-ocr-up:
 validate-id-gate-pipeline: test-ocr-up test-pii-up
 	@echo "$(BLUE)Validating OCR + Presidio against committed testdata...$(NC)"
 	@OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
-		OCR_SIDECAR_TOKEN="$${OCR_SIDECAR_TOKEN:-dev-ocr-token}" \
 		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
 		python3 ocr_sidecar/scripts/validate_pipeline.py
 	@echo "$(GREEN)✓ Pipeline validation passed$(NC)"
@@ -348,7 +347,6 @@ test-id-gate: test-ocr-up test-pii-up
 	@LLM_PROXY_ID_GATE_INTEGRATION=1 \
 		LLM_PROXY_PII_INTEGRATION=1 \
 		OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
-		OCR_SIDECAR_TOKEN="$${OCR_SIDECAR_TOKEN:-dev-ocr-token}" \
 		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
 		go test -race -v ./internal/middleware/... \
 		-run 'TestIntegration_IDGate|TestIntegration_OCR' \

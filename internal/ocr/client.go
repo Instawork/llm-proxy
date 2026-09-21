@@ -13,7 +13,6 @@ import (
 
 type Client struct {
 	baseURL string
-	token   string
 	client  *http.Client
 }
 
@@ -21,15 +20,12 @@ type extractTextResponse struct {
 	Text string `json:"text"`
 }
 
-// New builds a client for the OCR sidecar. token is sent as X-OCR-Token; the
-// sidecar rejects requests without it.
-func New(baseURL, token string, timeout time.Duration) *Client {
+func New(baseURL string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	return &Client{
 		baseURL: baseURL,
-		token:   token,
 		client:  &http.Client{Timeout: timeout},
 	}
 }
@@ -65,7 +61,6 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 		return "", fmt.Errorf("ocr: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("X-OCR-Token", c.token)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

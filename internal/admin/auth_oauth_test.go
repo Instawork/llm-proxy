@@ -569,6 +569,7 @@ func TestHandleLogout_RejectsCrossSite(t *testing.T) {
 		"sec-fetch-site cross-site": {"Sec-Fetch-Site": {"cross-site"}},
 		"foreign origin":            {"Origin": {"https://evil.example.net"}},
 		"null origin":               {"Origin": {"null"}},
+		"same host, http scheme":    {"Origin": {"http://llm.example.com"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "https://llm.example.com/admin/auth/logout", nil)

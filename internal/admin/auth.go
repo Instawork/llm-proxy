@@ -450,7 +450,17 @@ func (a *authenticator) sameOriginRequest(r *http.Request) bool {
 		return true
 	}
 	u, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
+	if err != nil || !strings.EqualFold(u.Host, r.Host) {
+		return false
+	}
+	scheme := r.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+	}
+	return strings.EqualFold(u.Scheme, scheme)
 }
 
 // sessionRevoked reports whether a cookie issued at issuedAt (unix nanos)
