@@ -205,6 +205,7 @@ that the client computes and the proxy forwards verbatim.
 - `ENVIRONMENT`: Selects the deploy overlay YAML (`configs/{ENVIRONMENT}.yml`, default `dev`).
 - `LLM_PROXY_CONFIG_PROFILE`: Optional second overlay merged after the env file (e.g. `sidecar` for co-located containers in the same task — keeps `ENVIRONMENT=production` while disabling PII redaction and the admin dashboard via `configs/sidecar.yml`).
 - `PORT`: Environment variable to set the server port (default: 9002)
+- `bind_address` (YAML, top level): interface the server listens on; empty means all. `configs/sidecar.yml` pins `127.0.0.1` so a co-located proxy is only reachable over the task's localhost.
 - `AWS_REGION`: Region for the upstream Bedrock endpoint host (default:
   `us-west-2`). Only consulted when `providers.bedrock.enabled` is true.
   Bedrock pricing keys live under `providers.bedrock.models.*` in the YAML

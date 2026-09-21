@@ -342,3 +342,16 @@ func TestValidatePIIRedactConfig_ProductionDisallowsLegacyWireMode(t *testing.T)
 	}
 	require.Error(t, c.validatePIIRedactConfig())
 }
+
+func TestValidate_BindAddress(t *testing.T) {
+	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
+	require.NoError(t, c.Validate(), "empty bind_address listens on every interface")
+
+	c.BindAddress = "127.0.0.1"
+	require.NoError(t, c.Validate())
+
+	c.BindAddress = "localhost"
+	err := c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bind_address")
+}
