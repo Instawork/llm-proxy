@@ -66,7 +66,6 @@ if not OCR_SIDECAR_TOKEN:
     raise SystemExit("OCR_SIDECAR_TOKEN is required")
 # Cap the upload before it is buffered; matches id_gate.max_image_bytes upstream.
 OCR_MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
-_READ_CHUNK = 1024 * 1024
 # Slack for multipart boundaries and part headers when checking Content-Length.
 _MULTIPART_OVERHEAD = 16 * 1024
 
@@ -128,36 +127,53 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def _read_capped(image: UploadFile) -> bytes:
-    chunks: list[bytes] = []
+class _BodyTooLarge(Exception):
+    pass
+
+
+def _capped_receive(receive, limit: int):
+    """Wrap the ASGI receive so the body is rejected as it streams in.
+
+    Content-Length may be absent (chunked) or wrong, so the cap has to be
+    enforced on bytes actually received, before Starlette spools any part.
+    """
     total = 0
-    while chunk := await image.read(_READ_CHUNK):
-        total += len(chunk)
-        if total > OCR_MAX_IMAGE_BYTES:
-            raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
-        chunks.append(chunk)
-    return b"".join(chunks)
+
+    async def inner():
+        nonlocal total
+        message = await receive()
+        if message["type"] == "http.request":
+            total += len(message.get("body", b""))
+            if total > limit:
+                raise _BodyTooLarge()
+        return message
+
+    return inner
 
 
 @app.post("/extract-text")
 async def extract_text(request: Request) -> JSONResponse:
-    # Authenticate and size-check from headers alone, before the multipart
-    # body is parsed; a declared UploadFile parameter would spool the upload
-    # first and let anonymous callers burn disk and CPU.
+    # Authenticate from headers alone, before the multipart body is parsed; a
+    # declared UploadFile parameter would spool the upload first and let
+    # anonymous callers burn disk and CPU.
     if not hmac.compare_digest(request.headers.get("x-ocr-token", ""), OCR_SIDECAR_TOKEN):
         raise HTTPException(status_code=401, detail="missing or invalid X-OCR-Token")
+    body_limit = OCR_MAX_IMAGE_BYTES + _MULTIPART_OVERHEAD
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > OCR_MAX_IMAGE_BYTES + _MULTIPART_OVERHEAD:
+    if declared is not None and declared.isdigit() and int(declared) > body_limit:
         raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
     if predictor is None or executor is None or gate is None:
         raise HTTPException(status_code=503, detail="OCR service not ready")
 
+    capped = Request(request.scope, _capped_receive(request.receive, body_limit))
     try:
-        form = await request.form()
+        form = await capped.form()
         image = form.get("image")
         if not isinstance(image, UploadFile):
             raise HTTPException(status_code=400, detail="multipart field 'image' is required")
-        img_bytes = await _read_capped(image)
+        img_bytes = await image.read()
+    except _BodyTooLarge as exc:
+        raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES") from exc
     except HTTPException:
         raise
     except Exception as exc:

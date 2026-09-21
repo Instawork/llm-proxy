@@ -1727,6 +1727,13 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		}
 	}
 
+	// Checked before the redactor branch so a misconfigured deploy fails at
+	// startup even when the ID gate ends up disabled for another reason.
+	ocrToken := os.Getenv("OCR_SIDECAR_TOKEN")
+	if idGateCfg.Enabled && ocrToken == "" {
+		logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
+		os.Exit(1)
+	}
 	if idGateCfg.Enabled {
 		if redactor == nil {
 			logProxyError("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
@@ -1739,11 +1746,6 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			ocrTimeout := time.Duration(idGateCfg.TimeoutMs) * time.Millisecond
 			if ocrTimeout <= 0 {
 				ocrTimeout = 30 * time.Second
-			}
-			ocrToken := os.Getenv("OCR_SIDECAR_TOKEN")
-			if ocrToken == "" {
-				logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
-				os.Exit(1)
 			}
 			ocrClient := ocr.New(ocrURL, ocrToken, ocrTimeout)
 			idGateFailClosed := idGateCfg.FailMode == "closed"
