@@ -21,6 +21,7 @@ docker run -d --name ocr-fargate-bench \
   -e OCR_MAX_WORKERS=1 \
   -e OCR_MAX_CONCURRENCY=1 \
   -e OMP_NUM_THREADS=1 \
+  -e OCR_SIDECAR_TOKEN="${OCR_SIDECAR_TOKEN:-dev-ocr-token}" \
   -p "${PORT}:8000" \
   "$IMAGE"
 
