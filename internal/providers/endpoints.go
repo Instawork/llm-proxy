@@ -66,6 +66,7 @@ var passthroughSuffixes = []string{
 var passthroughSegments = []string{
 	"/upload/",   // Gemini resumable upload
 	"/realtime/", // OpenAI Realtime
+	"/files/",    // Gemini files.get / files.delete, OpenAI file retrieve / content
 }
 
 // ClassifyEndpoint reports how the proxy treats a provider request path.
@@ -95,6 +96,9 @@ var (
 	modelIDRe     = regexp.MustCompile(`/models?/[^/:]+(:[0-9]+)?`)
 	opaqueIDRe    = regexp.MustCompile(`/[A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]{15,}`)
 	modelIDPrefix = regexp.MustCompile(`^/models?/`)
+	// Gemini file names (files/t66gxk29np7q) are shorter than opaqueIDRe's
+	// floor, so collapse them by position instead of shape.
+	fileIDRe = regexp.MustCompile(`/files/[^/]+`)
 )
 
 // EndpointTemplate collapses per-request identifiers (meta names, model ids,
@@ -105,5 +109,6 @@ func EndpointTemplate(path string) string {
 	path = modelIDRe.ReplaceAllStringFunc(path, func(m string) string {
 		return modelIDPrefix.FindString(m) + "{model}"
 	})
+	path = fileIDRe.ReplaceAllString(path, "/files/{id}")
 	return opaqueIDRe.ReplaceAllString(path, "/{id}")
 }
