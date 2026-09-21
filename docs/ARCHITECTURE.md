@@ -129,10 +129,13 @@ Every vendor implements `providers.Provider`:
 | --- | --- | --- |
 | `openai` | `api.openai.com` | `Authorization: Bearer` pass-through |
 | `anthropic` | `api.anthropic.com` | `x-api-key` pass-through |
-| `gemini` | Google Generative Language API | `?key=` or header |
+| `gemini` | Google Generative Language API | `x-goog-api-key` header (`?key=` only for BYO Google keys) |
 | `bedrock` | `bedrock-runtime.{region}.amazonaws.com` | SigV4 passthrough — proxy strips `/bedrock` only |
 
 `CreateGenericDirector` strips `/<provider>` from the path before forwarding.
+`VendorPathPolicyMiddleware` refuses vendor account-administration paths
+(`/organization/`, `/fine_tuning/`, `/organizations/`, `/tunedModels/`) so a
+proxy key never reaches the org APIs the shared upstream credential can use.
 Bedrock is opt-in via `providers.bedrock.enabled: true`.
 
 ### `LLMResponseMetadata`

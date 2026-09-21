@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,7 @@ func TestCircuitBreaker_EnvConfigsLoad(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.file, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", strings.TrimSuffix(tc.file, ".yml"))
 			envPath := filepath.Join(configsDir, tc.file)
 			// Env configs are delta-merged atop base.yml at runtime;
 			// validating the merged result is what actually matters.

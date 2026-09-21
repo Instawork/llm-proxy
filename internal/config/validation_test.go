@@ -238,6 +238,7 @@ func TestValidate_PIIRedactGatedByEnabled(t *testing.T) {
 }
 
 func TestValidate_RedactAPI(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "dev")
 	c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
 	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
 	c.Features.APIKeyManagement.Enabled = true
@@ -270,8 +271,10 @@ func TestValidate_RedactAPI(t *testing.T) {
 // dev_bypass_login mints an admin session with a caller-chosen role, so the
 // validator (which runs at boot) must refuse it outside local environments.
 func TestValidate_DevBypassLoginRequiresLocalEnvironment(t *testing.T) {
-	for _, env := range []string{"production", "staging"} {
-		t.Run(env, func(t *testing.T) {
+	// An unset ENVIRONMENT is deliberately not local: a deployed image that
+	// lost the variable must fail rather than come up with the bypass on.
+	for _, env := range []string{"production", "staging", ""} {
+		t.Run("rejected/"+env, func(t *testing.T) {
 			t.Setenv("ENVIRONMENT", env)
 			c := &YAMLConfig{Providers: map[string]ProviderConfig{}}
 			require.NoError(t, c.Validate())
@@ -282,7 +285,7 @@ func TestValidate_DevBypassLoginRequiresLocalEnvironment(t *testing.T) {
 			require.Contains(t, err.Error(), "dev_bypass_login")
 		})
 	}
-	for _, env := range []string{"", "dev", "local", "fuzz", "fuzz-mem"} {
+	for _, env := range []string{"dev", "local", "fuzz", "fuzz-mem"} {
 		t.Run("allowed/"+env, func(t *testing.T) {
 			t.Setenv("ENVIRONMENT", env)
 			c := &YAMLConfig{Providers: map[string]ProviderConfig{}}

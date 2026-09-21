@@ -474,7 +474,7 @@ run: build
 	@echo "$(YELLOW)Server will be available at: http://localhost:9002$(NC)"
 	@echo "$(YELLOW)Health check: http://localhost:9002/health$(NC)"
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
-	@LOG_LEVEL=debug $(BINARY_PATH)
+	@ENVIRONMENT=$${ENVIRONMENT:-dev} LOG_LEVEL=debug $(BINARY_PATH)
 
 # Run in development mode
 .PHONY: dev
@@ -482,7 +482,7 @@ dev:
 	@echo "$(BLUE)Starting development server...$(NC)"
 	@echo "$(YELLOW)Server will be available at: http://localhost:9002$(NC)"
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
-	@LOG_LEVEL=debug go run $(MAIN_PATH)
+	@ENVIRONMENT=$${ENVIRONMENT:-dev} LOG_LEVEL=debug go run $(MAIN_PATH)
 
 # golint is deprecated upstream but still serves as a useful style gate
 # in CI. We pin to a known-good commit so adding new lints does not silently

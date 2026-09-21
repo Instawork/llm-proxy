@@ -1638,11 +1638,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 
 	// API key validation runs before PII redaction so per-key redact_pii
 	// overrides can be resolved from the DynamoDB record stashed in context.
+	r.Use(middleware.VendorPathPolicyMiddleware(globalProviderManager))
+	authFailures := middleware.NewAuthFailureGuard()
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(
 			globalProviderManager,
 			globalAPIKeyStore,
 			yamlConfig.Features.BYOKeys.Enabled,
+			authFailures,
 		))
 	}
 
@@ -1906,6 +1909,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			r.Handle("/redact", redactapi.NewHandler(redactor, keyLookup, redactapi.Config{
 				MaxBodyBytes:         maxBody,
 				AllowUnauthenticated: allowUnauth,
+				AuthFailures:         authFailures,
 			}, logger)).Methods(http.MethodPost, http.MethodOptions)
 			logger.Info("🔒 POST /redact API enabled",
 				"fail_mode", redactAPICfg.FailMode,

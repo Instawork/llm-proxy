@@ -78,7 +78,8 @@ curl -X POST http://localhost:9002/anthropic/v1/messages \
   }'
 
 # Gemini Generate Content
-curl -X POST http://localhost:9002/gemini/v1/models/gemini-pro:generateContent?key=YOUR_API_KEY \
+curl -X POST http://localhost:9002/gemini/v1/models/gemini-pro:generateContent \
+  -H "x-goog-api-key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "contents": [{"parts": [{"text": "Hello!"}]}]
@@ -202,7 +203,7 @@ that the client computes and the proxy forwards verbatim.
 
 ## Configuration
 
-- `ENVIRONMENT`: Selects the deploy overlay YAML (`configs/{ENVIRONMENT}.yml`, default `dev`).
+- `ENVIRONMENT`: Selects the deploy overlay YAML (`configs/{ENVIRONMENT}.yml`, default `dev`). Only `dev`, `local`, `fuzz` and `fuzz-mem` may enable dev-only auth bypasses; an unset value loads `dev.yml` but is treated as non-local, so `make dev`/`make run` export `ENVIRONMENT=dev`.
 - `LLM_PROXY_CONFIG_PROFILE`: Optional second overlay merged after the env file (e.g. `sidecar` for co-located containers in the same task — keeps `ENVIRONMENT=production` while disabling PII redaction and the admin dashboard via `configs/sidecar.yml`).
 - `PORT`: Environment variable to set the server port (default: 9002)
 - `bind_address` (YAML, top level): interface the server listens on; empty means all. `configs/sidecar.yml` pins `127.0.0.1` so a co-located proxy is only reachable over the task's localhost.

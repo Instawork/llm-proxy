@@ -250,10 +250,16 @@ curl "https://proxy.example.com/gemini/v1/models/gemini-pro:generateContent?key=
 Use:
 
 ```bash
-curl "https://proxy.example.com/gemini/v1/models/gemini-pro:generateContent?key=YOUR_PROXY_KEY" \
+curl "https://proxy.example.com/gemini/v1/models/gemini-pro:generateContent" \
+  -H "x-goog-api-key: YOUR_PROXY_KEY" \
   -H "Content-Type: application/json" \
   -d '{"contents": [...]}'
 ```
+
+Proxy keys are only accepted in headers (`Authorization: Bearer`, `x-api-key`,
+or `x-goog-api-key`). A proxy key in the `?key=` query string is rejected with
+401, because the URL is written to every access log between the client and the
+proxy.
 
 ## Security Considerations
 

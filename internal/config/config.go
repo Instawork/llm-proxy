@@ -1484,10 +1484,12 @@ func (c *YAMLConfig) validateRedactAPIConfig() error {
 }
 
 // isLocalEnvironment reports whether ENVIRONMENT names a local or fuzz
-// deployment, the only places dev-only auth bypasses may be enabled.
+// deployment, the only places dev-only auth bypasses may be enabled. An unset
+// ENVIRONMENT is not local: a deployed image that lost the variable must fail
+// validation rather than come up with dev bypasses on.
 func isLocalEnvironment(env string) bool {
 	switch env {
-	case "", "dev", "local", "fuzz", "fuzz-mem":
+	case "dev", "local", "fuzz", "fuzz-mem":
 		return true
 	}
 	return false

@@ -6,6 +6,7 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/config"
 )
@@ -39,7 +40,9 @@ func main() {
 			cfg, loadErr = config.LoadYAMLConfig(file)
 		} else {
 			// Environment-specific configs are partial overlays; validate them
-			// merged on top of base.yml so the full resulting config is checked.
+			// merged on top of base.yml so the full resulting config is checked,
+			// under the ENVIRONMENT that would select this overlay at runtime.
+			os.Setenv("ENVIRONMENT", strings.TrimSuffix(filepath.Base(file), ".yml"))
 			cfg, loadErr = config.LoadAndMergeConfigs([]string{baseConfig, file})
 		}
 

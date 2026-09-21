@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -315,6 +316,7 @@ func TestRealEnvConfigs_FeatureKeysNotMisnestedUnderProviders(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.file, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", strings.TrimSuffix(tc.file, ".yml"))
 			envPath := filepath.Join(configsDir, tc.file)
 			cfg, err := LoadAndMergeConfigs([]string{basePath, envPath})
 			require.NoError(t, err, "load %s", tc.file)
@@ -359,6 +361,7 @@ func TestDevConfig_PerUserOverridesNotMisnested(t *testing.T) {
 		t.Skipf("configs dir not found (%s) — skipping", configsDir)
 	}
 
+	t.Setenv("ENVIRONMENT", "dev")
 	basePath := filepath.Join(configsDir, "base.yml")
 	devPath := filepath.Join(configsDir, "dev.yml")
 	cfg, err := LoadAndMergeConfigs([]string{basePath, devPath})
@@ -380,6 +383,7 @@ func TestRealEnvConfigs_DevAllowsBYOKeys(t *testing.T) {
 		t.Skipf("configs dir not found (%s) — skipping", configsDir)
 	}
 
+	t.Setenv("ENVIRONMENT", "dev")
 	basePath := filepath.Join(configsDir, "base.yml")
 	devPath := filepath.Join(configsDir, "dev.yml")
 	cfg, err := LoadAndMergeConfigs([]string{basePath, devPath})
