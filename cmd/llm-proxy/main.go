@@ -1740,7 +1740,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			if ocrTimeout <= 0 {
 				ocrTimeout = 30 * time.Second
 			}
-			ocrClient := ocr.New(ocrURL, ocrTimeout)
+			ocrToken := os.Getenv("OCR_SIDECAR_TOKEN")
+			if ocrToken == "" {
+				logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
+				os.Exit(1)
+			}
+			ocrClient := ocr.New(ocrURL, ocrToken, ocrTimeout)
 			idGateFailClosed := idGateCfg.FailMode == "closed"
 			scoreThreshold := idGateCfg.ScoreThreshold
 			if scoreThreshold <= 0 {
