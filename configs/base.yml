@@ -1530,6 +1530,17 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 22.00
             output: 82.50
+      # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
+      # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
+      # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
+      # context window and a single short-context In-Region price, so no >272K
+      # tier applies here (unlike the native gpt-5.6-cyber entry).
+      "openai.gpt-5.6-cyber":
+        enabled: true
+        aliases: ["gpt-5.6-cyber-bedrock"]
+        pricing:
+          input: 13.75
+          output: 82.50
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
@@ -1584,7 +1595,9 @@ providers:
     models:
       "gemini-3.1-pro":
         enabled: true
-        aliases: ["gemini-3.1-pro-preview", "gemini-3-1-pro"]
+        # gemini-3.1-pro-preview-customtools is the Custom Tools endpoint id; the
+        # pricing page lists it beside gemini-3.1-pro-preview with identical rates.
+        aliases: ["gemini-3.1-pro-preview", "gemini-3-1-pro", "gemini-3.1-pro-preview-customtools"]
         limits:
           tokens_per_minute: 5_000_000
           requests_per_minute: 1_000
