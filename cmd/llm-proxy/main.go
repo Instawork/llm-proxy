@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1991,7 +1992,12 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
 
-	logger.Info("Health check available", "url", "http://0.0.0.0:"+port+"/health")
+	bindAddr := yamlConfig.BindAddress
+	if bindAddr == "" {
+		bindAddr = "0.0.0.0"
+	}
+	listenAddr := net.JoinHostPort(bindAddr, port)
+	logger.Info("Health check available", "url", "http://"+listenAddr+"/health")
 
 	// Log cost tracking status
 	if globalCostTracker != nil {
@@ -2005,16 +2011,16 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		logger.Info("Registered provider", "provider", name)
 	}
 
-	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
-	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
-	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
+	logger.Info("OpenAI API endpoints available", "url", "http://"+listenAddr+"/openai/")
+	logger.Info("Anthropic API endpoints available", "url", "http://"+listenAddr+"/anthropic/")
+	logger.Info("Gemini API endpoints available", "url", "http://"+listenAddr+"/gemini/")
 	if bedrockProvider != nil {
-		logger.Info("Bedrock API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock/", "region", bedrockProvider.Region())
+		logger.Info("Bedrock API endpoints available", "url", "http://"+listenAddr+"/bedrock/", "region", bedrockProvider.Region())
 	}
 	if bedrockMantleProvider != nil {
-		logger.Info("Bedrock Mantle API endpoints available", "url", "http://0.0.0.0:"+port+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
+		logger.Info("Bedrock Mantle API endpoints available", "url", "http://"+listenAddr+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
 	}
-	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
+	logger.Info("Meta routes with user ID available", "pattern", "http://"+listenAddr+"/meta/{userID}/{provider}/")
 
 	// Server-level timeouts to bound resource usage and avoid Slowloris-style
 	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
@@ -2028,7 +2034,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// zero target 5xx). Per AWS guidance the target's keep-alive idle timeout
 	// must outlive the load balancer's so the ALB always closes first.
 	server := &http.Server{
-		Addr:              "0.0.0.0:" + port,
+		Addr:              listenAddr,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -2039,7 +2045,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// Set up graceful shutdown
 	serverErrChan := make(chan error, 1)
 	go func() {
-		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
+		logger.Info("🚀 Starting server", "address", listenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrChan <- err
 		}
