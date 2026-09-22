@@ -56,7 +56,9 @@ export function n8nSetupGuide(provider: Provider, baseUrl: string): N8nSetupGuid
           `Set Host to ${baseUrl} (no trailing slash).`,
           "Paste your iw: proxy key in API Key.",
           "In your workflow, add a Google Gemini Chat Model node and pick that credential.",
+          "The credential test and model dropdown send the key as ?key=; the proxy allows that only for the Gemini model list. Chat calls use the x-goog-api-key header.",
         ],
+        note: "Only the Google Gemini Chat Model node works with a proxy key. The regular Google Gemini node and HTTP Request nodes using this credential send ?key= on every call and are rejected with 401.",
       };
     case "bedrock":
       return {

@@ -354,6 +354,59 @@ func TestAPIKeyValidationMiddleware_RejectsProxyKeyInQueryString(t *testing.T) {
 	}
 }
 
+type mockGeminiProxyKeyStore struct {
+	mockAPIKeyStore
+}
+
+func (m *mockGeminiProxyKeyStore) ValidateAndGetActualKey(ctx context.Context, key string) (string, string, error) {
+	if key == apikeys.KeyPrefix+"proxy" {
+		return "actual-proxy", "gemini", nil
+	}
+	return m.mockAPIKeyStore.ValidateAndGetActualKey(ctx, key)
+}
+
+func (m *mockGeminiProxyKeyStore) LookupProxyKey(_ context.Context, bearer string) (*apikeys.APIKey, error) {
+	if bearer == apikeys.KeyPrefix+"proxy" {
+		return &apikeys.APIKey{PK: bearer, Provider: "gemini"}, nil
+	}
+	return nil, nil
+}
+
+// n8n's Gemini credential can only send ?key=; the model list GET it uses for
+// the credential test and model dropdown stays open, everything else on Gemini
+// still requires a header.
+func TestAPIKeyValidationMiddleware_AllowsGeminiModelListProxyKeyInQuery(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewGeminiProxy())
+	mw := APIKeyValidationMiddleware(pm, &mockGeminiProxyKeyStore{}, true, nil)
+	var gotQueryKey string
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQueryKey = r.URL.Query().Get("key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	iwKey := apikeys.KeyPrefix + "proxy"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/gemini/v1beta/models?key="+iwKey, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET model list with query proxy key: expected 200, got %d", rec.Code)
+	}
+	if gotQueryKey != "actual-proxy" {
+		t.Fatalf("expected query key translated to upstream key, got %q", gotQueryKey)
+	}
+
+	for _, tc := range []struct{ method, target string }{
+		{"POST", "/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + iwKey},
+		{"GET", "/gemini/v1beta/models/gemini-2.5-flash?key=" + iwKey},
+	} {
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.target, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s: expected 401, got %d", tc.method, tc.target, rec.Code)
+		}
+	}
+}
+
 // Repeated rejected credentials from one client are refused with 429 before
 // reaching the key store; a valid key from another client is unaffected.
 func TestAPIKeyValidationMiddleware_ThrottlesRepeatedFailures(t *testing.T) {

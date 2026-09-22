@@ -261,6 +261,12 @@ or `x-goog-api-key`). A proxy key in the `?key=` query string is rejected with
 401, because the URL is written to every access log between the client and the
 proxy.
 
+The one exception is `GET /gemini/v1beta/models` (the model list), which still
+accepts `?key=`. n8n's Google Gemini credential can only send its key as a
+query parameter, and both its credential test and the model dropdown call this
+endpoint. Actual `generateContent` calls from the n8n chat model node go
+through the Google SDK, which sends `x-goog-api-key`.
+
 ## Security Considerations
 
 1. **Key Storage**: Actual provider keys are stored encrypted in DynamoDB
