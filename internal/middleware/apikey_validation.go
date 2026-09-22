@@ -59,7 +59,7 @@ func APIKeyValidationMiddleware(providerManager *providers.ProviderManager, keyS
 
 				// A proxy key in the URL lands in every access log between the
 				// client and this process (ALB, WAF); only headers are accepted.
-				if apikeys.HasKeyPrefix(inboundKey) && proxyKeyOnlyInQuery(r, inboundKey) {
+				if apikeys.HasKeyPrefix(inboundKey) && proxyKeyOnlyInQuery(r, inboundKey) && !allowsProxyKeyInQuery(provider, r) {
 					proxylog.Proxy("API key validation: proxy key sent in query string for %s", provider.GetName())
 					rejectUnauthorized("Invalid API key: proxy keys must be sent in a header (Authorization: Bearer or x-goog-api-key), not the ?key= query string")
 					return
@@ -151,6 +151,15 @@ func proxyKeyOnlyInQuery(r *http.Request, key string) bool {
 		return false
 	}
 	return r.URL.Query().Get("key") == key
+}
+
+// allowsProxyKeyInQuery exempts the Gemini model list from the header-only
+// rule. n8n's Gemini credential can only send its key as ?key=, and both its
+// credential test and model dropdown GET this one read-only endpoint.
+func allowsProxyKeyInQuery(provider providers.Provider, r *http.Request) bool {
+	return provider.GetName() == "gemini" &&
+		r.Method == http.MethodGet &&
+		strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/models")
 }
 
 func extractBearerToken(r *http.Request) string {
