@@ -153,13 +153,14 @@ func proxyKeyOnlyInQuery(r *http.Request, key string) bool {
 	return r.URL.Query().Get("key") == key
 }
 
-// allowsProxyKeyInQuery exempts the Gemini model list from the header-only
-// rule. n8n's Gemini credential can only send its key as ?key=, and both its
-// credential test and model dropdown GET this one read-only endpoint.
-func allowsProxyKeyInQuery(provider providers.Provider, r *http.Request) bool {
-	return provider.GetName() == "gemini" &&
-		r.Method == http.MethodGet &&
-		strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/models")
+// allowsProxyKeyInQuery exempts all Gemini routes from the header-only rule.
+// n8n's Google Gemini(PaLM) credential is query-string auth only
+// (qs: { key: ... }) and sends the proxy key as ?key= on every call it makes
+// — the model list, uploads, and :generateContent alike — not just the
+// credential test (#94 scoped the exemption to the model list GET, which
+// left every other Gemini call from n8n 401ing).
+func allowsProxyKeyInQuery(provider providers.Provider, _ *http.Request) bool {
+	return provider.GetName() == "gemini"
 }
 
 func extractBearerToken(r *http.Request) string {
