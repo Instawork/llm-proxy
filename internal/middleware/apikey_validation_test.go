@@ -375,7 +375,11 @@ func (m *mockGeminiProxyKeyStore) LookupProxyKey(_ context.Context, bearer strin
 // n8n's Gemini credential can only send ?key=; the model list GET it uses for
 // the credential test and model dropdown stays open, everything else on Gemini
 // still requires a header.
-func TestAPIKeyValidationMiddleware_AllowsGeminiModelListProxyKeyInQuery(t *testing.T) {
+// n8n's Google Gemini(PaLM) credential is query-string auth only and sends
+// the proxy key as ?key= on every call — the model list, generateContent,
+// and uploads alike — so the exemption covers all Gemini routes, not just
+// the model list GET that #94 originally scoped it to.
+func TestAPIKeyValidationMiddleware_AllowsGeminiProxyKeyInQuery(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewGeminiProxy())
 	mw := APIKeyValidationMiddleware(pm, &mockGeminiProxyKeyStore{}, true, nil)
@@ -386,24 +390,36 @@ func TestAPIKeyValidationMiddleware_AllowsGeminiModelListProxyKeyInQuery(t *test
 	}))
 	iwKey := apikeys.KeyPrefix + "proxy"
 
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/gemini/v1beta/models?key="+iwKey, nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET model list with query proxy key: expected 200, got %d", rec.Code)
+	for _, tc := range []struct{ method, target string }{
+		{"GET", "/gemini/v1beta/models?key=" + iwKey},
+		{"POST", "/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + iwKey},
+		{"GET", "/gemini/v1beta/models/gemini-2.5-flash?key=" + iwKey},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: expected 200, got %d", tc.method, tc.target, rec.Code)
+		}
 	}
 	if gotQueryKey != "actual-proxy" {
 		t.Fatalf("expected query key translated to upstream key, got %q", gotQueryKey)
 	}
+}
 
-	for _, tc := range []struct{ method, target string }{
-		{"POST", "/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + iwKey},
-		{"GET", "/gemini/v1beta/models/gemini-2.5-flash?key=" + iwKey},
-	} {
-		rec = httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.target, nil))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s %s: expected 401, got %d", tc.method, tc.target, rec.Code)
-		}
+// The header-only rule still applies to every non-Gemini provider.
+func TestAPIKeyValidationMiddleware_RejectsProxyKeyInQuery_NonGemini(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	mw := APIKeyValidationMiddleware(pm, &mockAPIKeyStore{}, true, nil)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	iwKey := apikeys.KeyPrefix + "known"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/openai/v1/chat/completions?key="+iwKey, nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 }
 

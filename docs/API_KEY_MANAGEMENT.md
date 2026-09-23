@@ -261,11 +261,11 @@ or `x-goog-api-key`). A proxy key in the `?key=` query string is rejected with
 401, because the URL is written to every access log between the client and the
 proxy.
 
-The one exception is `GET /gemini/v1beta/models` (the model list), which still
-accepts `?key=`. n8n's Google Gemini credential can only send its key as a
-query parameter, and both its credential test and the model dropdown call this
-endpoint. Actual `generateContent` calls from the n8n chat model node go
-through the Google SDK, which sends `x-goog-api-key`.
+The one exception is Gemini: every `/gemini/*` route still accepts a proxy key
+in `?key=`. n8n's Google Gemini(PaLM) credential is query-string auth only and
+sends the key as `?key=` on every call it makes through that credential — the
+model list, `generateContent`, and uploads alike — so the exemption covers the
+whole provider rather than one endpoint.
 
 ## Security Considerations
 
