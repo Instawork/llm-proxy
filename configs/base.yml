@@ -785,6 +785,43 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 20.00
             output: 75.00
+      # GPT-6 Sol / Luna (API 2026-09-22, audit-09-23-2026). Same GPT-6 billing
+      # shape as Astra: no dated snapshot, >272K input bills 2x input / 1.5x
+      # output for the full request, cache writes at 1.25x input.
+      "gpt-6-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
+      "gpt-6-luna":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 0.10
+            output: 0.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 0.20
+            output: 0.75
       # GPT-5.6 Cyber (2026-08-20): gated behind Trusted Access for Cyber. 400K
       # context; the model card states "prompts with >272K input tokens are
       # priced at 2x input and 1.5x output for the full request" (the pricing
@@ -969,6 +1006,22 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+      # Claude Opus 5.5 (2026-09-22, audit-09-23-2026): latest Opus, $4/$20,
+      # 1M context / 128K output at standard pricing. Supersedes Opus 5, which
+      # Anthropic now lists as legacy (no retirement date announced).
+      "claude-opus-5-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 4.00
+          output: 20.00
       "claude-opus-5":
         enabled: true
         aliases: []
@@ -1267,6 +1320,39 @@ providers:
             "global.anthropic.claude-sonnet-4-6":
               input: 3.00
               output: 15.00
+      # Claude Opus 5.5 on Bedrock (launch 2026-09-22, audit-09-23-2026). AWS
+      # card: bedrock-runtime takes the us./eu./au./jp. geo or global.* profile
+      # ids; the bare id is Mantle-only (mirrored under bedrock-mantle).
+      "us.anthropic.claude-opus-5-5":
+        enabled: true
+        aliases:
+          [
+            "eu.anthropic.claude-opus-5-5",
+            "au.anthropic.claude-opus-5-5",
+            "jp.anthropic.claude-opus-5-5",
+            "global.anthropic.claude-opus-5-5",
+            "claude-opus-5-5-bedrock",
+            "claude-opus-5.5-bedrock",
+            "claude-opus-5-5-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        # Native $4/$20 plus the 10% regional premium. Flat: 1M context at
+        # standard pricing.
+        pricing:
+          input: 4.40
+          output: 22.00
+          overrides:
+            # global.* routes worldwide and bills the Anthropic list rate; the
+            # 10% premium above applies to regional (us./eu./au./jp.) profiles.
+            "global.anthropic.claude-opus-5-5":
+              input: 4.00
+              output: 20.00
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1577,6 +1663,14 @@ providers:
         pricing:
           input: 5.50
           output: 27.50
+      # Claude Opus 5.5 (launch 2026-09-22, audit-09-23-2026): $4/$20 list plus
+      # the 10% in-region premium.
+      "anthropic.claude-opus-5-5":
+        enabled: true
+        aliases: ["claude-opus-5-5"]
+        pricing:
+          input: 4.40
+          output: 22.00
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
