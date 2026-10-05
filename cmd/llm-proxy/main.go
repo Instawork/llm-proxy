@@ -466,6 +466,10 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 	logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
 
 	globalCostStatsRecorder = coststats.NewRecorder()
+	// Monthly key spend (Redis) rides the cost tracker's worker pool rather
+	// than the request goroutine; falls back to inline when the pool is
+	// not running.
+	globalCostStatsRecorder.SetBackgroundRunner(costTracker.RunInBackground)
 	costTracker.SetStatsRecorder(globalCostStatsRecorder)
 	globalUsageStatsRecorder = usagestats.NewRecorder()
 	costTracker.SetUsageStatsRecorder(globalUsageStatsRecorder)
@@ -1891,9 +1895,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
 					keyID = middleware.MaskKeyID(keyRecord.PK)
 					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
-						if err := store.MarkFirstRequest(r.Context(), keyRecord.PK, time.Now()); err != nil {
-							logProxyWarn("Failed to mark first request", "error", err, "key", keyID)
-						}
+						// DynamoDB UpdateItem; not needed to answer the
+						// request, so it runs on the cost-tracker pool.
+						pk, at := keyRecord.PK, time.Now()
+						globalCostTracker.RunInBackground(func(ctx context.Context) {
+							if err := store.MarkFirstRequest(ctx, pk, at); err != nil {
+								logProxyWarn("Failed to mark first request", "error", err, "key", keyID)
+							}
+						})
 					}
 				}
 				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {

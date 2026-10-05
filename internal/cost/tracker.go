@@ -105,6 +105,7 @@ type CostTracker struct {
 	// Async tracking support
 	async         bool               // Whether to use async tracking
 	queue         chan *CostRecord   // Queue for async tracking
+	jobs          chan backgroundJob // Best-effort backend writes handed off the request path
 	workers       int                // Number of worker goroutines
 	flushInterval time.Duration      // Interval for periodic flushing
 	ctx           context.Context    // Context for cancelling workers
@@ -215,6 +216,7 @@ func (ct *CostTracker) ConfigureAsync(workers, queueSize, flushIntervalSeconds i
 		flushIntervalSeconds = 15 // Default
 	}
 	ct.queue = make(chan *CostRecord, queueSize)
+	ct.jobs = make(chan backgroundJob, queueSize)
 	ct.flushInterval = time.Duration(flushIntervalSeconds) * time.Second
 
 	ct.logger.Info("💰 Cost Tracker: Configured for async tracking",
@@ -331,6 +333,9 @@ func (ct *CostTracker) asyncWorker(workerID int) {
 				ct.logger.Debug("💰 Cost Tracker: Async worker processed record successfully", "worker_id", workerID, "request_id", record.RequestID)
 			}
 
+		case job := <-ct.jobs:
+			ct.runBackgroundJob(job)
+
 		case <-flushTicker.C:
 			// Periodic flush - process any queued records.
 			// No log here: this fires every flushInterval per worker and
@@ -342,6 +347,75 @@ func (ct *CostTracker) asyncWorker(workerID int) {
 			// Context cancelled, process any remaining records and exit
 			ct.logger.Debug("💰 Cost Tracker: Async worker exiting (context cancelled)", "worker_id", workerID)
 			ct.processRemainingRecords(workerID)
+			ct.drainBackgroundJobs()
+			return
+		}
+	}
+}
+
+// backgroundJob is a best-effort backend write (DynamoDB UpdateItem, Redis
+// HINCRBYFLOAT, ...) that the request path hands to the worker pool instead
+// of running inline after the response.
+type backgroundJob func(ctx context.Context)
+
+// backgroundJobTimeout bounds each job so a stalled backend cannot pin a
+// worker (and, at shutdown, the drain) indefinitely.
+const backgroundJobTimeout = 5 * time.Second
+
+// RunInBackground executes job on the cost tracker's worker pool when async
+// mode is running, so backend writes that are not needed to answer the
+// request (first-request stamps, monthly spend counters) come off the
+// request goroutine. When the pool is not running, or its job queue is
+// full, the job runs inline instead so nothing is silently dropped. Safe on
+// a nil tracker (runs inline). Jobs always get a bounded context.
+func (ct *CostTracker) RunInBackground(job func(ctx context.Context)) {
+	if job == nil {
+		return
+	}
+	if ct == nil {
+		runBoundedJob(job)
+		return
+	}
+	ct.mu.RLock()
+	async, started, jobs := ct.async, ct.started, ct.jobs
+	ct.mu.RUnlock()
+	if async && started && jobs != nil && !ct.stopped.Load() {
+		select {
+		case jobs <- job:
+			return
+		default:
+			ct.logger.Warn("💵 Cost Tracking: Background job queue is full, running inline")
+		}
+	}
+	runBoundedJob(job)
+}
+
+func (ct *CostTracker) runBackgroundJob(job backgroundJob) {
+	if job != nil {
+		runBoundedJob(job)
+	}
+}
+
+func runBoundedJob(job func(ctx context.Context)) {
+	ctx, cancel := context.WithTimeout(context.Background(), backgroundJobTimeout)
+	defer cancel()
+	job(ctx)
+}
+
+// drainBackgroundJobs runs every job already queued without blocking for
+// new ones; used by the periodic flush and at shutdown.
+func (ct *CostTracker) drainBackgroundJobs() {
+	ct.mu.RLock()
+	jobs := ct.jobs
+	ct.mu.RUnlock()
+	if jobs == nil {
+		return
+	}
+	for {
+		select {
+		case job := <-jobs:
+			ct.runBackgroundJob(job)
+		default:
 			return
 		}
 	}

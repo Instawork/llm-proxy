@@ -83,6 +83,11 @@ type Recorder struct {
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
 	history.Binding
+
+	// background, when set, runs the per-request monthly key spend write
+	// (a Redis HINCRBYFLOAT per key) off the request goroutine; see
+	// SetBackgroundRunner. Guarded by mu like the rest of the recorder.
+	background func(job func(ctx context.Context))
 }
 
 type costFlushed struct {
@@ -242,10 +247,40 @@ func (r *Recorder) RecordRequest(
 	// doing that under r.mu would stall every concurrent RecordRequest.
 	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
-	r.applyMonthlyKeySpendFromDelta(context.Background(), delta)
+
+	// Monthly key spend is a synchronous Redis write per key touched; hand
+	// it to the background runner when one is wired so the request
+	// goroutine is not held on it. The month is pinned here so a job that
+	// runs across midnight on the 1st still lands in the right bucket.
+	// Cost-limit reservations linger for a grace period after the
+	// response, which already covers the delay before the write lands.
+	if len(delta.Dimensions["by_key"]) > 0 {
+		month := now.Format("2006-01")
+		r.mu.RLock()
+		run := r.background
+		r.mu.RUnlock()
+		if run != nil {
+			run(func(ctx context.Context) { r.applyMonthlyKeySpendFromDelta(ctx, month, delta) })
+		} else {
+			r.applyMonthlyKeySpendFromDelta(context.Background(), month, delta)
+		}
+	}
 }
 
-func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta adminrollup.Delta) {
+// SetBackgroundRunner installs the executor used for backend writes that are
+// not needed to answer the request (currently the monthly key spend
+// counter). Intended to be the cost tracker's worker pool; nil restores the
+// inline behaviour. Call once at startup before traffic.
+func (r *Recorder) SetBackgroundRunner(run func(job func(ctx context.Context))) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.background = run
+	r.mu.Unlock()
+}
+
+func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, month string, delta adminrollup.Delta) {
 	if r == nil {
 		return
 	}
@@ -253,7 +288,6 @@ func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta admi
 	if len(byKey) == 0 {
 		return
 	}
-	month := time.Now().UTC().Format("2006-01")
 	for field, spendUSD := range byKey {
 		member, f, ok := adminrollup.ParseDimMemberField(field)
 		if !ok || f != "spend_usd" || spendUSD == 0 {
