@@ -68,15 +68,9 @@ var openaiTestModels = []openaiTestModel{
 		testPrompt:  "What is 2+2?",
 		temperature: 0.0,
 	},
-	// Legacy completions model
-	{
-		name:        "GPT-3.5-Turbo-Instruct",
-		modelID:     "gpt-3.5-turbo-instruct",
-		endpoint:    "completions",
-		maxTokens:   50,
-		testPrompt:  "Hello, world!",
-		temperature: 0.7,
-	},
+	// No legacy /v1/completions model: OpenAI retired gpt-3.5-turbo-instruct,
+	// the last model served on that endpoint, so it cannot be exercised live.
+	// Routing for /v1/completions remains covered by the middleware unit tests.
 }
 
 // TestOpenAIIntegration_ChatCompletions_Models tests multiple OpenAI models using subtests
@@ -177,14 +171,6 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 			temperature:  0.5,
 			stream:       true,
 			includeUsage: true,
-		},
-		{
-			name:        "LegacyCompletion",
-			model:       openaiTestModels[2], // GPT-3.5-Turbo-Instruct
-			prompt:      "Once upon a time",
-			maxTokens:   50,
-			temperature: 0.8,
-			stream:      false,
 		},
 	}
 
