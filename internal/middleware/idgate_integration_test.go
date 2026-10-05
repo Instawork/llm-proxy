@@ -136,7 +136,6 @@ func TestIntegration_IDGate_TestdataManifest(t *testing.T) {
 	}))
 
 	for _, tc := range manifest.Cases {
-		tc := tc
 		t.Run(tc.File, func(t *testing.T) {
 			png, err := os.ReadFile(filepath.Join(dir, tc.File))
 			if err != nil {
@@ -168,7 +167,6 @@ func TestIntegration_OCRSidecar_TestdataExtractsText(t *testing.T) {
 	client := ocr.New(ocrURL, 60*time.Second)
 
 	for _, tc := range manifest.Cases {
-		tc := tc
 		t.Run(tc.File, func(t *testing.T) {
 			png, err := os.ReadFile(filepath.Join(dir, tc.File))
 			if err != nil {

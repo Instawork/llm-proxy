@@ -438,12 +438,12 @@ func (b *BedrockMantleProxy) WrapTransport(fn func(http.RoundTripper) http.Round
 	b.proxy.Transport = fn(b.proxy.Transport)
 }
 
-func (b *BedrockMantleProxy) GetHealthStatus() map[string]interface{} {
+func (b *BedrockMantleProxy) GetHealthStatus() map[string]any {
 	auth := "proxy_api_key_and_task_sigv4"
 	if b.taskSigV4Auth {
 		auth = "task_sigv4"
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"provider":          bedrockMantleName,
 		"status":            "healthy",
 		"baseURL":           b.baseURL,

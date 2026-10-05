@@ -100,7 +100,7 @@ func TestStopAsyncWorkers_DrainsQueuedBackgroundJobs(t *testing.T) {
 
 	var mu sync.Mutex
 	var ran int
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		ct.RunInBackground(func(ctx context.Context) {
 			mu.Lock()
 			ran++

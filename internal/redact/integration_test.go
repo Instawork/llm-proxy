@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +19,7 @@ import (
 // “needle“.  Tiny helper to keep the recognizer-list assertions in
 // this file readable.
 func contains(haystack []string, needle string) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // httpGetJSON does a GET against “urlStr“ and decodes the response

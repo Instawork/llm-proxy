@@ -4,6 +4,7 @@ package idgatestats
 
 import (
 	"encoding/json"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -126,8 +127,8 @@ func topN(m map[string]int64, n int) []kv {
 	return out
 }
 
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
-	return map[string]interface{}{
+func (r *Recorder) rollupDataLocked() map[string]any {
+	return map[string]any{
 		"requests_with_images": r.requestsWithImages,
 		"requests_blocked":     r.requestsBlocked,
 		"requests_cleared":     r.requestsCleared,
@@ -229,9 +230,7 @@ func (r *Recorder) advanceFlushedLocked() {
 
 func copyIntMap(m map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
@@ -292,9 +291,9 @@ func (r *Recorder) RecordScanFailed(provider, keyID, stage string, failClosed bo
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -327,7 +326,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		localByKey = copyIntMap(r.byKey)
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":            true,
 		"day":                  today,
 		"started_at":           startedAt.Unix(),
@@ -358,7 +357,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalIDGateIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	requestsWithImages, requestsBlocked, requestsCleared int64,
 	failOpen, failClosed, imagesScanned int64,
 	localByProvider, localByEntity, localByKey map[string]int64,
@@ -374,7 +373,7 @@ func mergeLocalIDGateIntoSnap(
 	mergeIDGateNameCounts(snap, "top_keys", localByKey, 10)
 }
 
-func mergeIDGateNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+func mergeIDGateNameCounts(snap map[string]any, field string, local map[string]int64, limit int) {
 	if snap == nil || len(local) == 0 {
 		return
 	}

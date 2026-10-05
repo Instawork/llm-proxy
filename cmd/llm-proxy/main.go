@@ -1033,14 +1033,14 @@ func newPerKeyOverrideProvider(store *apikeys.Store, logger *slog.Logger) rateli
 }
 
 // nil when PII redaction (and thus its recorder) was never installed.
-func piiSummaryFunc() func() map[string]interface{} {
+func piiSummaryFunc() func() map[string]any {
 	if globalPIIRecorder == nil {
 		return nil
 	}
 	return globalPIIRecorder.Snapshot
 }
 
-func idGateSummaryFunc() func() map[string]interface{} {
+func idGateSummaryFunc() func() map[string]any {
 	if globalIDGateRecorder == nil {
 		return nil
 	}
@@ -1048,42 +1048,42 @@ func idGateSummaryFunc() func() map[string]interface{} {
 }
 
 // nil when cost tracking (and thus its stats recorder) was never installed.
-func costSummaryFunc() func() map[string]interface{} {
+func costSummaryFunc() func() map[string]any {
 	if globalCostStatsRecorder == nil {
 		return nil
 	}
 	return globalCostStatsRecorder.Snapshot
 }
 
-func usageSummaryFunc() func() map[string]interface{} {
+func usageSummaryFunc() func() map[string]any {
 	if globalUsageStatsRecorder == nil {
 		return nil
 	}
 	return globalUsageStatsRecorder.Snapshot
 }
 
-func rateLimitSummaryFunc() func() map[string]interface{} {
+func rateLimitSummaryFunc() func() map[string]any {
 	if globalRateLimitStatsRecorder == nil {
 		return nil
 	}
 	return globalRateLimitStatsRecorder.Snapshot
 }
 
-func circuitActivitySummaryFunc() func() map[string]interface{} {
+func circuitActivitySummaryFunc() func() map[string]any {
 	if globalCircuitStatsRecorder == nil {
 		return nil
 	}
 	return globalCircuitStatsRecorder.Snapshot
 }
 
-func modelStatusSummaryFunc() func() map[string]interface{} {
+func modelStatusSummaryFunc() func() map[string]any {
 	if globalModelStatusRecorder == nil {
 		return nil
 	}
 	return globalModelStatusRecorder.Snapshot
 }
 
-func unmeteredSummaryFunc() func() map[string]interface{} {
+func unmeteredSummaryFunc() func() map[string]any {
 	if globalUnmeteredRecorder == nil {
 		return nil
 	}
@@ -1209,11 +1209,11 @@ var healthStoreTimeout = 2 * time.Second
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	providerHealth := globalProviderManager.GetHealthStatus()
 
-	var circuitBlock map[string]interface{}
+	var circuitBlock map[string]any
 	if globalCircuitStore != nil {
 		storeCtx, cancelStore := context.WithTimeout(r.Context(), healthStoreTimeout)
 		defer cancelStore()
-		perProvider := make(map[string]interface{}, len(circuitBreakerProviders))
+		perProvider := make(map[string]any, len(circuitBreakerProviders))
 		totalFailures := 0
 		for _, name := range circuitBreakerProviders {
 			stats, err := circuit.ProviderStatsFor(storeCtx, globalCircuitStore, name)
@@ -1229,12 +1229,12 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 					"provider", name,
 					"error", err,
 				)
-				perProvider[name] = map[string]interface{}{
+				perProvider[name] = map[string]any{
 					"error": "stats_unavailable",
 				}
 				continue
 			}
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"state":    stats.State.String(),
 				"failures": stats.Failures,
 			}
@@ -1254,7 +1254,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 				rollupOpen, count, _ := rec.RollupOpen(storeCtx, name,
 					globalCircuitConfig.PerProviderRollupThreshold,
 					globalCircuitConfig.PerProviderRollupWindowSeconds)
-				rollup := map[string]interface{}{
+				rollup := map[string]any{
 					"enabled":        true,
 					"open":           rollupOpen,
 					"count":          count,
@@ -1271,9 +1271,9 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			// Keep the legacy provider-level fields populated so any
 			// existing consumers that read providers[X].circuit_state
 			// don't break.
-			ph, _ := providerHealth[name].(map[string]interface{})
+			ph, _ := providerHealth[name].(map[string]any)
 			if ph == nil {
-				ph = make(map[string]interface{})
+				ph = make(map[string]any)
 			}
 			ph["circuit_state"] = stats.State.String()
 			ph["circuit_failures"] = stats.Failures
@@ -1282,7 +1282,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			providerHealth[name] = ph
 		}
-		circuitBlock = map[string]interface{}{
+		circuitBlock = map[string]any{
 			"enabled":         true,
 			"mode":            globalCircuitConfig.Mode,
 			"backend":         globalCircuitConfig.Backend,
@@ -1317,7 +1317,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	health := map[string]interface{}{
+	health := map[string]any{
 		"status":    "healthy",
 		"timestamp": time.Now().Unix(),
 		"providers": providerHealth,

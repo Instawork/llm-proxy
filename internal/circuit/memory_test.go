@@ -50,7 +50,7 @@ func TestMemoryStore_CircuitOpensAtThreshold(t *testing.T) {
 	s := NewMemoryStore(cfg)
 	ctx := context.Background()
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		st, openedNow, err := s.RecordTerminalFailure(ctx, "openai")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

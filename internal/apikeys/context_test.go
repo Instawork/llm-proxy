@@ -4,8 +4,8 @@ import "testing"
 
 func TestEffectiveRedactPII(t *testing.T) {
 	keyInherit := &APIKey{}
-	keyOn := &APIKey{RedactPII: boolPtr(true)}
-	keyOff := &APIKey{RedactPII: boolPtr(false)}
+	keyOn := &APIKey{RedactPII: new(true)}
+	keyOff := &APIKey{RedactPII: new(false)}
 
 	if !EffectiveRedactPII(true, keyInherit) {
 		t.Fatal("inherit true")
@@ -23,8 +23,8 @@ func TestEffectiveRedactPII(t *testing.T) {
 
 func TestEffectiveAllowStreaming(t *testing.T) {
 	keyInherit := &APIKey{}
-	keyOff := &APIKey{AllowStreaming: boolPtr(false)}
-	keyOn := &APIKey{AllowStreaming: boolPtr(true)}
+	keyOff := &APIKey{AllowStreaming: new(false)}
+	keyOn := &APIKey{AllowStreaming: new(true)}
 
 	if !EffectiveAllowStreaming(true, keyInherit) {
 		t.Fatal("inherit true")
@@ -40,4 +40,5 @@ func TestEffectiveAllowStreaming(t *testing.T) {
 	}
 }
 
-func boolPtr(v bool) *bool { return &v }
+//go:fix inline
+func boolPtr(v bool) *bool { return new(v) }

@@ -39,7 +39,7 @@ func newStreamingCapture(chunkTrace bool) *responseCapture {
 func TestResponseCapture_ChunkTraceOff_NoPerChunkLogButSummaryHistogramKept(t *testing.T) {
 	rc := newStreamingCapture(false)
 	out := captureStdLog(func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			_, _ = rc.Write([]byte("event: content_block_delta\ndata: {\"type\":\"text_delta\",\"text\":\"x\"}\n\n"))
 		}
 	})
@@ -55,7 +55,7 @@ func TestResponseCapture_ChunkTraceOff_NoPerChunkLogButSummaryHistogramKept(t *t
 func TestResponseCapture_ChunkTraceOn_LogsEveryChunk(t *testing.T) {
 	rc := newStreamingCapture(true)
 	out := captureStdLog(func() {
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			_, _ = rc.Write([]byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"))
 		}
 	})

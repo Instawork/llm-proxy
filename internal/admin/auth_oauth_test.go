@@ -76,7 +76,7 @@ func (td *testOIDCServer) serveDiscovery(w http.ResponseWriter, _ *http.Request)
 func (td *testOIDCServer) serveJWKS(w http.ResponseWriter, _ *http.Request) {
 	n := base64.RawURLEncoding.EncodeToString(td.privateKey.PublicKey.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"keys": []map[string]string{
 			{
 				"kty": "RSA",
@@ -129,7 +129,7 @@ func (td *testOIDCServer) mintIDToken(claims idTokenClaims) string {
 			Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
 			IssuedAt: jwt.NewNumericDate(now),
 		}).
-		Claims(map[string]interface{}{
+		Claims(map[string]any{
 			"email":          claims.email,
 			"email_verified": claims.emailVerified,
 			"name":           claims.name,

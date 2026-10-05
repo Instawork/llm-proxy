@@ -1,6 +1,7 @@
 package modelstatusstats
 
 import (
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -94,9 +95,7 @@ func intMapDelta(cur, prev map[string]int64) map[string]float64 {
 
 func copyIntMap(m map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
@@ -202,9 +201,9 @@ func (r *Recorder) RecordUnmetered(provider, endpoint string) {
 }
 
 // Snapshot returns a JSON-serialisable view for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -231,7 +230,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r.RollupBound() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":        true,
 		"backend":          backend,
 		"day":              today,
@@ -257,7 +256,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalModelStatusIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	retiredTotal, deprecatedTotal, unknownTotal, unmeteredTotal int64,
 	localRetired, localDeprecated, localUnknown, localUnmetered map[string]int64,
 ) {
@@ -271,7 +270,7 @@ func mergeLocalModelStatusIntoSnap(
 	mergeModelStatusNameCounts(snap, "by_unmetered", localUnmetered, 0)
 }
 
-func mergeModelStatusNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+func mergeModelStatusNameCounts(snap map[string]any, field string, local map[string]int64, limit int) {
 	if snap == nil || len(local) == 0 {
 		return
 	}

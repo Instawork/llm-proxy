@@ -750,7 +750,7 @@ func (ct *CostTracker) writeRecordToTransports(record *CostRecord) error {
 }
 
 // TransportFactory defines a function type for creating transports from configuration
-type TransportFactory func(transportConfig interface{}, logger *slog.Logger) (Transport, error)
+type TransportFactory func(transportConfig any, logger *slog.Logger) (Transport, error)
 
 // transportRegistry holds registered transport factories
 var transportRegistry = map[string]TransportFactory{
@@ -765,7 +765,7 @@ func RegisterTransportFactory(transportType string, factory TransportFactory) {
 }
 
 // CreateTransportFromConfig creates a transport based on the provided configuration
-func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func CreateTransportFromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	var transportType string
 
 	// Extract transport type from different config formats
@@ -773,7 +773,7 @@ func CreateTransportFromConfig(transportConfig interface{}, logger *slog.Logger)
 	case *config.TransportConfig:
 		transportType = cfg.Type
 		logger.Debug("💰 Cost Tracker: Processing structured transport config", "type", transportType)
-	case map[string]interface{}:
+	case map[string]any:
 		var ok bool
 		transportType, ok = cfg["type"].(string)
 		if !ok {

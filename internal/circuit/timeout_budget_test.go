@@ -167,7 +167,7 @@ func TestTransport_TimeoutBudget_RaceAtDeadlineNeverReturnsClosedBody(t *testing
 	})
 	tr := newTimeoutBudgetTestTransport(inner, 0) // ceiling unused; called directly below
 
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		req := budgetRequest("")
 		// Exercises roundTripWithBudget directly rather than through the
 		// full RoundTrip/runWithRetries stack, so this test isolates the
@@ -310,7 +310,7 @@ func TestTransport_TimeoutBudget_ShortBudgetNeverOpensBreaker(t *testing.T) {
 	// breaker and fast-fail every other caller of this provider.
 	tr, store := newBudgetCreditTestTransport(hangingRoundTripper(), 300*time.Second, 60)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp, err := tr.RoundTrip(budgetRequest("1000"))
 		require.NoError(t, err)
 		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
@@ -328,7 +328,7 @@ func TestTransport_TimeoutBudget_CeilingBudgetStillOpensBreaker(t *testing.T) {
 	// abort is the provider's own response-header timeout firing.
 	tr, store := newBudgetCreditTestTransport(hangingRoundTripper(), 1*time.Second, 60)
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		resp, err := tr.RoundTrip(budgetRequest("1000"))
 		require.NoError(t, err)
 		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)

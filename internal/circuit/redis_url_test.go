@@ -62,7 +62,7 @@ func readRedisCommand(reader *bufio.Reader) ([]string, error) {
 	}
 
 	parts := make([]string, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		lenLine, err := reader.ReadString('\n')
 		if err != nil {
 			return nil, err

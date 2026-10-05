@@ -187,7 +187,7 @@ func TestAbortTrackingWriter_ForwardsFlush(t *testing.T) {
 	rec := httptest.NewRecorder()
 	w := &abortTrackingWriter{ResponseWriter: rec}
 
-	if _, ok := interface{}(w).(http.Flusher); !ok {
+	if _, ok := any(w).(http.Flusher); !ok {
 		t.Fatal("abortTrackingWriter must implement http.Flusher")
 	}
 	w.Write([]byte("chunk"))

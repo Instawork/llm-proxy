@@ -136,7 +136,7 @@ func RedactKey(k string) string {
 // We log field names rather than the updates map directly because some
 // update payloads include sensitive provider keys (e.g. `actual_key`)
 // that should never be persisted into logs in cleartext.
-func updateFieldNames(updates map[string]interface{}) []string {
+func updateFieldNames(updates map[string]any) []string {
 	names := make([]string, 0, len(updates))
 	for k := range updates {
 		names = append(names, k)
@@ -646,8 +646,7 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil, ErrOwnerKeyExists
 		}
 		return nil, fmt.Errorf("failed to acquire owner/provider lock: %w", err)
@@ -772,8 +771,7 @@ func (s *Store) MarkFirstRequest(ctx context.Context, key string, at time.Time) 
 		},
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil
 		}
 		s.firstMarked.Delete(key)
@@ -824,7 +822,7 @@ func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
 }
 
 // UpdateKey updates an existing API key
-func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]interface{}) error {
+func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]any) error {
 	// Build update expression
 	var updateExpr strings.Builder
 	var removeParts []string
@@ -1147,8 +1145,7 @@ func (s *Store) TryAcquireSweepLease(ctx context.Context, holder string, ttl tim
 		},
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to acquire sweep lease: %w", err)

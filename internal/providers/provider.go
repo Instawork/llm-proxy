@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -91,7 +92,7 @@ type Provider interface {
 	Proxy() http.Handler
 
 	// GetHealthStatus returns the health status of the provider
-	GetHealthStatus() map[string]interface{}
+	GetHealthStatus() map[string]any
 
 	// UserIDFromRequest extracts user ID from request body in a provider-specific way
 	// Returns empty string if no user ID can be extracted
@@ -198,9 +199,7 @@ func (pm *ProviderManager) GetProvider(name string) Provider {
 // state in IsStreamingRequest / ProviderForRequest.
 func (pm *ProviderManager) GetAllProviders() map[string]Provider {
 	out := make(map[string]Provider, len(pm.providers))
-	for k, v := range pm.providers {
-		out[k] = v
-	}
+	maps.Copy(out, pm.providers)
 	return out
 }
 
@@ -251,8 +250,8 @@ func (pm *ProviderManager) ProviderForRequest(req *http.Request) Provider {
 }
 
 // GetHealthStatus returns the health status of all providers
-func (pm *ProviderManager) GetHealthStatus() map[string]interface{} {
-	status := make(map[string]interface{})
+func (pm *ProviderManager) GetHealthStatus() map[string]any {
+	status := make(map[string]any)
 	for name, provider := range pm.providers {
 		status[name] = provider.GetHealthStatus()
 	}

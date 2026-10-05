@@ -73,7 +73,7 @@ func TestAppendRecentEvent_BoundsInFlightWritesAndDropsOverflow(t *testing.T) {
 	droppedBefore := RecentEventsDropped()
 	const burst = maxConcurrentRecentEventWrites * 4
 	start := time.Now()
-	for i := 0; i < burst; i++ {
+	for i := range burst {
 		b.AppendRecentEvent(MetricPII, map[string]int{"i": i}, 50)
 	}
 	// Every call must return immediately even though the backend is parked.

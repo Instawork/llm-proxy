@@ -13,10 +13,10 @@ import (
 func TestScrubJSON_ParallelizesMultipleContentBlocks(t *testing.T) {
 	const delay = 120 * time.Millisecond
 	var peak int32
-	var active int32
+	var active atomic.Int32
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
-		cur := atomic.AddInt32(&active, 1)
+		cur := active.Add(1)
 		for {
 			old := atomic.LoadInt32(&peak)
 			if cur <= old || atomic.CompareAndSwapInt32(&peak, old, cur) {
@@ -24,7 +24,7 @@ func TestScrubJSON_ParallelizesMultipleContentBlocks(t *testing.T) {
 			}
 		}
 		time.Sleep(delay)
-		atomic.AddInt32(&active, -1)
+		active.Add(-1)
 
 		var payload struct {
 			Text string `json:"text"`
@@ -94,10 +94,10 @@ func TestScrubJSON_ParallelSiblingStringsInSameMap(t *testing.T) {
 
 func TestScrubJSON_SequentialWhenConcurrencyOne(t *testing.T) {
 	var peak int32
-	var active int32
+	var active atomic.Int32
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
-		cur := atomic.AddInt32(&active, 1)
+		cur := active.Add(1)
 		for {
 			old := atomic.LoadInt32(&peak)
 			if cur <= old || atomic.CompareAndSwapInt32(&peak, old, cur) {
@@ -105,7 +105,7 @@ func TestScrubJSON_SequentialWhenConcurrencyOne(t *testing.T) {
 			}
 		}
 		time.Sleep(20 * time.Millisecond)
-		atomic.AddInt32(&active, -1)
+		active.Add(-1)
 		_ = json.NewEncoder(w).Encode([]Span{})
 	})
 	r, err := New(Config{AnalyzerURL: srv.URL, AnalyzeConcurrency: 1})

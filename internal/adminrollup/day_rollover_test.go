@@ -3,6 +3,7 @@ package adminrollup
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -67,10 +68,8 @@ func waitForOp(t *testing.T, be *gatedBackend, want string) []string {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ops := be.snapshotOps()
-		for _, op := range ops {
-			if op == want {
-				return ops
-			}
+		if slices.Contains(ops, want) {
+			return ops
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

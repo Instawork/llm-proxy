@@ -128,7 +128,7 @@ func TestSaveTodayAndArchiveDaily(t *testing.T) {
 	// Use a day inside the HistoryDays window (relative to now); a hardcoded
 	// date eventually falls outside the window and LoadHistory drops it.
 	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	data := map[string]interface{}{"spend_today_usd": 1.23, "requests_today": int64(5)}
+	data := map[string]any{"spend_today_usd": 1.23, "requests_today": int64(5)}
 	require.NoError(t, store.SaveToday(ctx, MetricCost, day, data))
 	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, day, data))
 
@@ -145,11 +145,11 @@ func TestLoadHistoryMergesToday(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 
-	require.NoError(t, store.ArchiveDaily(ctx, MetricPII, yesterday, map[string]interface{}{
+	require.NoError(t, store.ArchiveDaily(ctx, MetricPII, yesterday, map[string]any{
 		"requests_with_pii": int64(3),
-		"by_entity":         []map[string]interface{}{{"name": "EMAIL_ADDRESS", "count": int64(2)}},
+		"by_entity":         []map[string]any{{"name": "EMAIL_ADDRESS", "count": int64(2)}},
 	}))
-	require.NoError(t, store.SaveToday(ctx, MetricPII, today, map[string]interface{}{
+	require.NoError(t, store.SaveToday(ctx, MetricPII, today, map[string]any{
 		"requests_with_pii": int64(1),
 	}))
 
@@ -201,10 +201,10 @@ func TestMemoryBackendRoundTrip(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
-	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, "2026-06-10", map[string]interface{}{
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, "2026-06-10", map[string]any{
 		"spend_today_usd": 2.5,
 	}))
-	require.NoError(t, store.SaveToday(ctx, MetricCost, time.Now().UTC().Format("2006-01-02"), map[string]interface{}{
+	require.NoError(t, store.SaveToday(ctx, MetricCost, time.Now().UTC().Format("2006-01-02"), map[string]any{
 		"spend_today_usd": 1.0,
 	}))
 
@@ -236,11 +236,11 @@ func TestMergeHourlyMapsFieldNames(t *testing.T) {
 		"requests": 42,
 	}))
 
-	costSnap := map[string]interface{}{}
+	costSnap := map[string]any{}
 	store.MergeHourly(ctx, MetricCost, costSnap)
 	require.True(t, costSnap["hourly_history_available"].(bool))
-	costRows := costSnap["hourly_history"].([]map[string]interface{})
-	var costRow map[string]interface{}
+	costRows := costSnap["hourly_history"].([]map[string]any)
+	var costRow map[string]any
 	for _, row := range costRows {
 		if row["hour"] == hour {
 			costRow = row
@@ -252,10 +252,10 @@ func TestMergeHourlyMapsFieldNames(t *testing.T) {
 	require.Equal(t, int64(99), costRow["requests_today"].(int64))
 	require.Nil(t, costRow["spend_usd"])
 
-	usageSnap := map[string]interface{}{}
+	usageSnap := map[string]any{}
 	store.MergeHourly(ctx, MetricUsage, usageSnap)
-	usageRows := usageSnap["hourly_history"].([]map[string]interface{})
-	var usageRow map[string]interface{}
+	usageRows := usageSnap["hourly_history"].([]map[string]any)
+	var usageRow map[string]any
 	for _, row := range usageRows {
 		if row["hour"] == hour {
 			usageRow = row

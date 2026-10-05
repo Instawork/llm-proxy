@@ -153,8 +153,8 @@ func (o *OpenAIProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper
 }
 
 // GetHealthStatus returns the health status of the OpenAI proxy
-func (o *OpenAIProxy) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (o *OpenAIProxy) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"provider":          "openai",
 		"status":            "healthy",
 		"baseURL":           openAIBaseURL,
@@ -231,9 +231,9 @@ type OpenAIResponseOutput struct {
 
 // OpenAIResponseContent represents content in a Responses API output
 type OpenAIResponseContent struct {
-	Type        string        `json:"type"`
-	Text        string        `json:"text,omitempty"`
-	Annotations []interface{} `json:"annotations,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	Annotations []any  `json:"annotations,omitempty"`
 }
 
 // OpenAIResponsesUsage represents usage data for Responses API
@@ -472,7 +472,7 @@ func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMe
 
 // detectOpenAIAPIType determines whether the streaming response is from Responses API or Chat Completions API
 func detectOpenAIAPIType(jsonData []byte) string {
-	var checkData map[string]interface{}
+	var checkData map[string]any
 	if err := json.Unmarshal(jsonData, &checkData); err == nil {
 		// Responses API streaming has "type" field (e.g., "response.output_text.delta")
 		// or has "output" field in the event
@@ -494,7 +494,7 @@ func detectOpenAIAPIType(jsonData []byte) string {
 // parseOpenAIResponsesStreamingChunk processes a single streaming chunk from the Responses API
 func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
 	// Try to parse the chunk - could be an event or a delta
-	var chunkData map[string]interface{}
+	var chunkData map[string]any
 	if err := json.Unmarshal(jsonData, &chunkData); err != nil {
 		// Log error but continue processing other chunks
 		proxylog.Proxy("openai failed to parse Responses API streaming chunk: %v", err)
@@ -520,16 +520,16 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 				redact.LogPreview(context.Background(), fmt.Sprintf("%+v", chunkData), 200))
 
 			// Try to extract usage information from either response or event field
-			var dataField map[string]interface{}
+			var dataField map[string]any
 			var fieldName string
 
 			// Check for response field first (actual API format)
-			if responseField, hasResponse := chunkData["response"].(map[string]interface{}); hasResponse {
+			if responseField, hasResponse := chunkData["response"].(map[string]any); hasResponse {
 				dataField = responseField
 				fieldName = "response"
 				log.Printf("🔄 OpenAI Responses API: Response field found: %s",
 					redact.LogPreview(context.Background(), fmt.Sprintf("%+v", responseField), 200))
-			} else if eventField, hasEvent := chunkData["event"].(map[string]interface{}); hasEvent {
+			} else if eventField, hasEvent := chunkData["event"].(map[string]any); hasEvent {
 				// Fallback to event field (test data format)
 				dataField = eventField
 				fieldName = "event"
@@ -553,7 +553,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 				}
 
 				// Extract usage information
-				if usageField, hasUsage := dataField["usage"].(map[string]interface{}); hasUsage {
+				if usageField, hasUsage := dataField["usage"].(map[string]any); hasUsage {
 					inputTokens := 0
 					outputTokens := 0
 					totalTokens := 0
@@ -568,7 +568,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 					if totalVal, ok := usageField["total_tokens"].(float64); ok {
 						totalTokens = int(totalVal)
 					}
-					if outputDetails, ok := usageField["output_tokens_details"].(map[string]interface{}); ok {
+					if outputDetails, ok := usageField["output_tokens_details"].(map[string]any); ok {
 						if reasoningVal, ok := outputDetails["reasoning_tokens"].(float64); ok {
 							reasoningTokens = int(reasoningVal)
 						}
@@ -579,9 +579,9 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 							typeField, fieldName, inputTokens, outputTokens, totalTokens, reasoningTokens)
 
 						// Extract finish reason from output if available
-						if outputField, hasOutput := dataField["output"].([]interface{}); hasOutput {
+						if outputField, hasOutput := dataField["output"].([]any); hasOutput {
 							for _, output := range outputField {
-								if outputMap, ok := output.(map[string]interface{}); ok {
+								if outputMap, ok := output.(map[string]any); ok {
 									if status, ok := outputMap["status"].(string); ok && status != "" && status != "in_progress" {
 										finishReason = status
 										log.Printf("🔄 OpenAI Responses API: Captured finish reason: %s", finishReason)
@@ -899,8 +899,7 @@ func extractOpenAIModelAndMessages(body []byte) (string, []string) {
 	if err := json.Unmarshal(body, &data); err != nil {
 		// Tolerate shape mismatches in optional fields (e.g. "messages" not
 		// an array) the way the map-based version did: keep what decoded.
-		var typeErr *json.UnmarshalTypeError
-		if !errors.As(err, &typeErr) {
+		if _, ok := errors.AsType[*json.UnmarshalTypeError](err); !ok {
 			return "", nil
 		}
 	}

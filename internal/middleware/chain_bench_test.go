@@ -86,7 +86,7 @@ func benchOpenAINonStreamingBody() []byte {
 
 func benchOpenAISSEBody(chunks int) []byte {
 	var b strings.Builder
-	for i := 0; i < chunks; i++ {
+	for i := range chunks {
 		fmt.Fprintf(&b, "data: {\"id\":\"chatcmpl-bench\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o-mini-2024-07-18\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tok%d \"},\"finish_reason\":null}]}\n\n", i)
 	}
 	b.WriteString("data: {\"id\":\"chatcmpl-bench\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o-mini-2024-07-18\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")

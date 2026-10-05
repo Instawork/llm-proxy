@@ -52,7 +52,7 @@ func (b *RecorderBinding) deps() (*Store, *Persister) {
 }
 
 // QueueToday schedules a debounced write of today's snapshot (no-op if unbound).
-func (b *RecorderBinding) QueueToday(day string, data map[string]interface{}) {
+func (b *RecorderBinding) QueueToday(day string, data map[string]any) {
 	if _, p := b.deps(); p != nil {
 		p.QueueToday(day, data)
 	}
@@ -67,7 +67,7 @@ func (b *RecorderBinding) QueueDelta(day string, d Delta) {
 
 // ArchiveDay writes a completed day's data to the daily key immediately
 // (no-op if unbound). Used on UTC day rollover.
-func (b *RecorderBinding) ArchiveDay(day string, data map[string]interface{}) {
+func (b *RecorderBinding) ArchiveDay(day string, data map[string]any) {
 	if _, p := b.deps(); p != nil {
 		p.ArchiveImmediately(day, data)
 	}
@@ -109,7 +109,7 @@ func (b *RecorderBinding) ArchiveDayFromAggregatesElected(metric, day string, ca
 }
 
 // MergeToday overlays fleet-wide today totals from Redis (no-op if unbound).
-func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]interface{}, caps TopNCaps) {
+func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]any, caps TopNCaps) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -121,7 +121,7 @@ func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]interfa
 
 // MergeHistory folds persisted daily history into a live snapshot under a
 // bounded timeout (no-op if unbound).
-func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{}) {
+func (b *RecorderBinding) MergeHistory(metric string, snap map[string]any) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -134,7 +134,7 @@ func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{
 // MergeHourly folds today's per-hour Redis totals into a live snapshot so the
 // "Today" trend chart uses fleet-wide Redis data instead of a browser sparkline.
 // No-op when unbound.
-func (b *RecorderBinding) MergeHourly(metric string, snap map[string]interface{}) {
+func (b *RecorderBinding) MergeHourly(metric string, snap map[string]any) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -348,7 +348,7 @@ func (b *RecorderBinding) AppendRecentEvent(metric string, event any, maxLen int
 // MergeRecentEvents overlays fleet-wide recent events from the rollup store.
 // When events exist, snap[field] is replaced and snap["recent_backend"] is set
 // to the store backend kind. No-op when unbound or the list is empty.
-func (b *RecorderBinding) MergeRecentEvents(metric, field string, maxLen int, snap map[string]interface{}, parse func([]json.RawMessage) any) {
+func (b *RecorderBinding) MergeRecentEvents(metric, field string, maxLen int, snap map[string]any, parse func([]json.RawMessage) any) {
 	s, _ := b.deps()
 	if s == nil || snap == nil || parse == nil {
 		return

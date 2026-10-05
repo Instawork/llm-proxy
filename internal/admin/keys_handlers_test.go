@@ -53,7 +53,8 @@ func withTestProvisioner(t *testing.T, h *handler, providers ...string) {
 	h.deps.KeyProvisioner = provision.NewManager(slog.Default(), byProvider)
 }
 
-func boolPtr(v bool) *bool { return &v }
+//go:fix inline
+func boolPtr(v bool) *bool { return new(v) }
 
 // Editors are held to the Bedrock-only rule for PII-off keys; admins (below)
 // may override it after confirming in the dashboard.
@@ -69,7 +70,7 @@ func TestHandleCreateKey_PIIOffRequiresBedrockForEditor(t *testing.T) {
 		Description:    "editor key",
 		DailyCostLimit: 1000,
 		AutoProvision:  true,
-		RedactPII:      boolPtr(false),
+		RedactPII:      new(false),
 	})
 	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
@@ -84,7 +85,7 @@ func TestHandleCreateKey_PIIOffAdminAllowed(t *testing.T) {
 	body, _ := json.Marshal(CreateKeyRequest{
 		Provider:  "openai",
 		ActualKey: "sk-real",
-		RedactPII: boolPtr(false),
+		RedactPII: new(false),
 	})
 	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
@@ -99,7 +100,7 @@ func TestHandleCreateKey_PIIOffBedrockAllowed(t *testing.T) {
 	body, _ := json.Marshal(CreateKeyRequest{
 		Provider:  "bedrock",
 		ActualKey: "unused",
-		RedactPII: boolPtr(false),
+		RedactPII: new(false),
 	})
 	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
@@ -148,7 +149,7 @@ func TestHandleCreateKey_PIIOffBypassAllowlistedEditor(t *testing.T) {
 		Description:    "editor key",
 		DailyCostLimit: 1000,
 		AutoProvision:  true,
-		RedactPII:      boolPtr(false),
+		RedactPII:      new(false),
 	})
 	req := authenticatedRequestAs(t, h, "editor@example.com", http.MethodPost, "/admin/api/keys", body)
 	rec := httptest.NewRecorder()
@@ -163,7 +164,7 @@ func TestHandleUpdateKey_PIIOffRequiresBedrockForEditor(t *testing.T) {
 	_, err := h.deps.UserStore.CreateUser(ctx, "editor@example.com", adminusers.RoleEditor)
 	require.NoError(t, err)
 
-	key, err := store.CreateKey(ctx, "openai", "sk", "", 0, nil, boolPtr(true))
+	key, err := store.CreateKey(ctx, "openai", "sk", "", 0, nil, new(true))
 	require.NoError(t, err)
 
 	body := []byte(`{"redact_pii": false}`)
@@ -179,7 +180,7 @@ func TestHandleUpdateKey_PIIOffAdminAllowed(t *testing.T) {
 	ctx := context.Background()
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
 
-	key, err := store.CreateKey(ctx, "openai", "sk", "", 0, nil, boolPtr(true))
+	key, err := store.CreateKey(ctx, "openai", "sk", "", 0, nil, new(true))
 	require.NoError(t, err)
 
 	body := []byte(`{"redact_pii": false}`)
@@ -332,7 +333,7 @@ func TestHandleUpdateKey_RejectPartialCostLimitPatch(t *testing.T) {
 
 	key, err := store.CreateKey(ctx, "openai", "sk", "monthly key", 0, nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, store.UpdateKey(ctx, key.PK, map[string]interface{}{
+	require.NoError(t, store.UpdateKey(ctx, key.PK, map[string]any{
 		"monthly_cost_limit": int64(3000),
 	}))
 
@@ -696,7 +697,7 @@ func TestViewerPersonalKeys_IssuanceRateLimited(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, rec.Code)
 	}
 
-	for i := 0; i < personalKeyIssuanceBurst; i++ {
+	for i := range personalKeyIssuanceBurst {
 		rec := create("viewer@example.com")
 		require.Equal(t, http.StatusCreated, rec.Code, "mint %d: %s", i, rec.Body.String())
 		var created KeyResponse

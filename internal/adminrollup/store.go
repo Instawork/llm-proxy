@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -49,8 +50,8 @@ const (
 
 // DayRecord is one UTC calendar day of rolled-up stats (stored in Redis).
 type DayRecord struct {
-	Day  string                 `json:"day"`
-	Data map[string]interface{} `json:"data"`
+	Day  string         `json:"day"`
+	Data map[string]any `json:"data"`
 }
 
 // HourRecord is one UTC hour of summed totals for the current day (stored in
@@ -206,7 +207,7 @@ func (s *Store) LoadTodayHourly(ctx context.Context, metric string) ([]HourRecor
 // snapshot map. Callers use this in Snapshot() alongside MergeHistory so the
 // "Today" trend chart can use Redis-backed per-hour data rather than a
 // browser-side sparkline.
-func (s *Store) MergeHourly(ctx context.Context, metric string, snap map[string]interface{}) {
+func (s *Store) MergeHourly(ctx context.Context, metric string, snap map[string]any) {
 	if s == nil || snap == nil {
 		return
 	}
@@ -216,7 +217,7 @@ func (s *Store) MergeHourly(ctx context.Context, metric string, snap map[string]
 		snap["hourly_history_available"] = false
 		return
 	}
-	rows := make([]map[string]interface{}, 0, len(records))
+	rows := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
 		rows = append(rows, hourlyRowFromTotals(metric, rec.Hour, rec.Data))
 	}
@@ -228,7 +229,7 @@ func (s *Store) MergeHourly(ctx context.Context, metric string, snap map[string]
 // blob (overwriting any previous value for that hour). Use this instead of
 // ApplyHourlyTotals when the metric is a gauge (windowed peak) rather than a
 // cumulative delta — e.g. circuit-breaker failure counts.
-func (s *Store) SaveHourlySnapshot(ctx context.Context, metric, day string, hour int, data map[string]interface{}) error {
+func (s *Store) SaveHourlySnapshot(ctx context.Context, metric, day string, hour int, data map[string]any) error {
 	if s == nil || len(data) == 0 {
 		return nil
 	}
@@ -261,7 +262,7 @@ func (s *Store) LoadTodayHourlySnapshots(ctx context.Context, metric string) ([]
 		if raw == nil {
 			continue
 		}
-		var data map[string]interface{}
+		var data map[string]any
 		if err := json.Unmarshal([]byte(*raw), &data); err != nil {
 			s.logger.Warn("admin rollup: skip corrupt hourly snap", "metric", metric, "hour", i, "error", err)
 			continue
@@ -288,7 +289,7 @@ func (s *Store) LoadTodayHourlySnapshots(ctx context.Context, metric string) ([]
 // SaveHourlySnapshot rather than accumulated hash increments. Callers use this
 // for metrics where the value is a windowed peak (e.g. circuit-breaker failure
 // count) rather than a cumulative total.
-func (s *Store) MergeHourlySnapshots(ctx context.Context, metric string, snap map[string]interface{}) {
+func (s *Store) MergeHourlySnapshots(ctx context.Context, metric string, snap map[string]any) {
 	if s == nil || snap == nil {
 		return
 	}
@@ -298,9 +299,9 @@ func (s *Store) MergeHourlySnapshots(ctx context.Context, metric string, snap ma
 		snap["hourly_history_available"] = false
 		return
 	}
-	rows := make([]map[string]interface{}, 0, len(records))
+	rows := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
-		row := map[string]interface{}{"hour": rec.Hour}
+		row := map[string]any{"hour": rec.Hour}
 		for k, v := range rec.Data {
 			row[k] = v
 		}
@@ -375,7 +376,7 @@ func (s *Store) loadHash(ctx context.Context, key string) (map[string]float64, e
 	return s.be.hgetall(ctx, key)
 }
 
-func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps TopNCaps) (map[string]interface{}, bool) {
+func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps TopNCaps) (map[string]any, bool) {
 	totals, err := s.loadHash(ctx, totalsKey(metric, day))
 	if err != nil || len(totals) == 0 {
 		return nil, false
@@ -425,7 +426,7 @@ func (s *Store) buildTodayData(ctx context.Context, metric, day string, caps Top
 }
 
 // MergeToday overlays fleet-wide today totals from Redis onto a live snapshot.
-func (s *Store) MergeToday(ctx context.Context, metric, day string, snap map[string]interface{}, caps TopNCaps) {
+func (s *Store) MergeToday(ctx context.Context, metric, day string, snap map[string]any, caps TopNCaps) {
 	if s == nil || snap == nil {
 		return
 	}
@@ -433,9 +434,7 @@ func (s *Store) MergeToday(ctx context.Context, metric, day string, snap map[str
 	if !ok {
 		return
 	}
-	for k, v := range data {
-		snap[k] = v
-	}
+	maps.Copy(snap, data)
 }
 
 // ArchiveDailyFromAggregates copies completed hash aggregates to the daily JSON
@@ -462,7 +461,7 @@ func (s *Store) ArchiveDailyFromAggregates(ctx context.Context, metric, day stri
 // SaveToday writes the in-progress UTC day blob with a bounded TTL so an
 // orphaned today key (restart across midnight) self-expires; a live day is
 // rewritten long before todayTTL elapses.
-func (s *Store) SaveToday(ctx context.Context, metric, day string, data map[string]interface{}) error {
+func (s *Store) SaveToday(ctx context.Context, metric, day string, data map[string]any) error {
 	if s == nil {
 		return nil
 	}
@@ -475,7 +474,7 @@ func (s *Store) SaveToday(ctx context.Context, metric, day string, data map[stri
 
 // ArchiveDaily copies a completed day to the daily key with retention TTL and
 // removes the now-superseded today key.
-func (s *Store) ArchiveDaily(ctx context.Context, metric, day string, data map[string]interface{}) error {
+func (s *Store) ArchiveDaily(ctx context.Context, metric, day string, data map[string]any) error {
 	if s == nil {
 		return nil
 	}
@@ -552,7 +551,7 @@ func (s *Store) LoadHistory(ctx context.Context, metric string) ([]DayRecord, er
 }
 
 // MergeHistory attaches daily_history to a stats snapshot map.
-func (s *Store) MergeHistory(ctx context.Context, metric string, snap map[string]interface{}) {
+func (s *Store) MergeHistory(ctx context.Context, metric string, snap map[string]any) {
 	if s == nil || snap == nil {
 		return
 	}
@@ -563,12 +562,10 @@ func (s *Store) MergeHistory(ctx context.Context, metric string, snap map[string
 		snap["daily_history_available"] = false
 		return
 	}
-	rows := make([]map[string]interface{}, 0, len(history))
+	rows := make([]map[string]any, 0, len(history))
 	for _, rec := range history {
-		row := map[string]interface{}{"day": rec.Day}
-		for k, v := range rec.Data {
-			row[k] = v
-		}
+		row := map[string]any{"day": rec.Day}
+		maps.Copy(row, rec.Data)
 		rows = append(rows, row)
 	}
 	snap["daily_history"] = rows
@@ -636,7 +633,7 @@ func ConfigFromYAML(admin config.AdminDashboardConfig) Config {
 }
 
 // ChartDays extracts day labels from daily_history rows.
-func ChartDays(rows []map[string]interface{}) []string {
+func ChartDays(rows []map[string]any) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if d, ok := row["day"].(string); ok {
@@ -648,7 +645,7 @@ func ChartDays(rows []map[string]interface{}) []string {
 }
 
 // FloatField reads a numeric field from a daily_history row.
-func FloatField(row map[string]interface{}, key string) float64 {
+func FloatField(row map[string]any, key string) float64 {
 	v, ok := row[key]
 	if !ok {
 		return 0

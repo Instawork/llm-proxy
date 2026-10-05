@@ -155,7 +155,7 @@ func TestPIIResponseRestoreMiddleware_QuoteBearingPersonStaysValidJSONStreaming(
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, req)
 
-	for _, line := range strings.Split(rec.Body.String(), "\n") {
+	for line := range strings.SplitSeq(rec.Body.String(), "\n") {
 		jsonData, ok := strings.CutPrefix(line, "data: ")
 		if !ok {
 			continue

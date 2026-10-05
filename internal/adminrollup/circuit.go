@@ -32,13 +32,13 @@ func newCircuitDayPeak() *circuitDayPeak {
 }
 
 // merge folds a fresh SnapshotCircuit map into the running daily peak.
-func (p *circuitDayPeak) merge(snap map[string]interface{}) {
-	provs, ok := snap["providers"].(map[string]interface{})
+func (p *circuitDayPeak) merge(snap map[string]any) {
+	provs, ok := snap["providers"].(map[string]any)
 	if !ok {
 		return
 	}
 	for name, raw := range provs {
-		entry, ok := raw.(map[string]interface{})
+		entry, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -58,18 +58,18 @@ func (p *circuitDayPeak) merge(snap map[string]interface{}) {
 
 // payload renders the accumulated peak as a JSON-ready map matching the
 // SnapshotCircuit shape the daily_history consumers expect.
-func (p *circuitDayPeak) payload() map[string]interface{} {
+func (p *circuitDayPeak) payload() map[string]any {
 	total := 0
-	provOut := make(map[string]interface{}, len(p.providers))
+	provOut := make(map[string]any, len(p.providers))
 	for name, d := range p.providers {
 		total += d.Failures
-		provOut[name] = map[string]interface{}{
+		provOut[name] = map[string]any{
 			"failures":    d.Failures,
 			"state":       d.State,
 			"rollup_open": d.RollupOpen,
 		}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"total_failures": total,
 		"providers":      provOut,
 	}
@@ -77,7 +77,7 @@ func (p *circuitDayPeak) payload() map[string]interface{} {
 
 // snapInt coerces a snapshot numeric field to int. Values built in-process are
 // int; values that round-tripped through JSON/Redis are float64.
-func snapInt(v interface{}) int {
+func snapInt(v any) int {
 	switch n := v.(type) {
 	case int:
 		return n
@@ -97,11 +97,11 @@ func SnapshotCircuit(
 	providers []string,
 	rollupThreshold int,
 	rollupWindowSec int,
-) map[string]interface{} {
+) map[string]any {
 	if store == nil {
-		return map[string]interface{}{"total_failures": 0, "providers": map[string]interface{}{}}
+		return map[string]any{"total_failures": 0, "providers": map[string]any{}}
 	}
-	providerOut := make(map[string]interface{}, len(providers))
+	providerOut := make(map[string]any, len(providers))
 	total := 0
 	for _, name := range providers {
 		stats, err := circuit.ProviderStatsFor(ctx, store, name)
@@ -109,7 +109,7 @@ func SnapshotCircuit(
 			continue
 		}
 		total += stats.Failures
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"failures": stats.Failures,
 			"state":    stats.State.String(),
 		}
@@ -120,7 +120,7 @@ func SnapshotCircuit(
 		}
 		providerOut[name] = entry
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"total_failures": total,
 		"providers":      providerOut,
 	}

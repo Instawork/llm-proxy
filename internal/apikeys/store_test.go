@@ -209,7 +209,7 @@ func TestStore_UpdateKey_AllFields(t *testing.T) {
 	require.NoError(t, err)
 
 	expiresAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"actual_key":       "new-real-key",
 		"daily_cost_limit": int64(2000),
 		"description":      "updated",
@@ -254,7 +254,7 @@ func TestStore_UpdateKey_SetsExpiresAt(t *testing.T) {
 	require.NoError(t, err)
 
 	future := time.Now().Add(48 * time.Hour).Truncate(time.Second)
-	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]any{
 		"expires_at": future,
 	}))
 
@@ -274,7 +274,7 @@ func TestStore_UpdateKey_ClearsExpiresAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, created.ExpiresAt)
 
-	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+	require.NoError(t, store.UpdateKey(context.Background(), created.PK, map[string]any{
 		"expires_at": nil,
 	}))
 
@@ -288,7 +288,7 @@ func TestStore_UpdateKey_ExpiresAtWrongTypeErrors(t *testing.T) {
 	created, err := store.CreateKey(context.Background(), "openai", "real-sk", "", 100, nil, nil)
 	require.NoError(t, err)
 
-	err = store.UpdateKey(context.Background(), created.PK, map[string]interface{}{
+	err = store.UpdateKey(context.Background(), created.PK, map[string]any{
 		"expires_at": "not-a-time",
 	})
 	require.Error(t, err)
@@ -515,7 +515,7 @@ func TestStore_CreateKey_PutItemError(t *testing.T) {
 func TestStore_UpdateKey_Error(t *testing.T) {
 	store, fake := newFakeStore(t)
 	fake.FailOnce("UpdateItem", errors.New("ResourceNotFoundException"))
-	err := store.UpdateKey(context.Background(), KeyPrefix+"x", map[string]interface{}{"enabled": false})
+	err := store.UpdateKey(context.Background(), KeyPrefix+"x", map[string]any{"enabled": false})
 	require.Error(t, err)
 }
 

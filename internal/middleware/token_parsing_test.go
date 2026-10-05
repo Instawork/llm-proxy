@@ -34,8 +34,8 @@ func (m *configurableProvider) GetName() string                           { retu
 func (m *configurableProvider) IsStreamingRequest(req *http.Request) bool { return m.streaming }
 func (m *configurableProvider) Proxy() http.Handler                       { return http.NotFoundHandler() }
 
-func (m *configurableProvider) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{}
+func (m *configurableProvider) GetHealthStatus() map[string]any {
+	return map[string]any{}
 }
 func (m *configurableProvider) UserIDFromRequest(req *http.Request) string { return m.userID }
 func (m *configurableProvider) RegisterExtraRoutes(r *mux.Router)          {}
@@ -102,8 +102,8 @@ func TestTokenParsingMiddleware_EndpointCoverage(t *testing.T) {
 			pm := providers.NewProviderManager()
 			for _, name := range []string{"openai", "anthropic", "gemini", "bedrock", "bedrock-mantle"} {
 				pm.RegisterProvider(&namedProvider{
-					name:                 name,
-					configurableProvider: configurableProvider{metadata: &providers.LLMResponseMetadata{Provider: name, InputTokens: 1}},
+					name:     name,
+					metadata: &providers.LLMResponseMetadata{Provider: name, InputTokens: 1},
 				})
 			}
 			fired := false
@@ -697,8 +697,8 @@ func (fmp *FailingMockProvider) Proxy() http.Handler {
 	})
 }
 
-func (fmp *FailingMockProvider) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (fmp *FailingMockProvider) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"status": "healthy",
 	}
 }

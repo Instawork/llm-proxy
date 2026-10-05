@@ -30,7 +30,7 @@ func (f *fakeProvider) ParseResponseMetadata(body io.Reader, isStreaming bool) (
 
 func (f *fakeProvider) Proxy() http.Handler { return http.NotFoundHandler() }
 
-func (f *fakeProvider) GetHealthStatus() map[string]interface{} { return map[string]interface{}{} }
+func (f *fakeProvider) GetHealthStatus() map[string]any { return map[string]any{} }
 
 func (f *fakeProvider) UserIDFromRequest(req *http.Request) string { return "" }
 
@@ -123,7 +123,7 @@ func TestRateLimitingTokensPerMinute(t *testing.T) {
 	}))
 
 	// Body of ~100 bytes -> est ~25 tokens assuming 4 bytes/token
-	payload := map[string]interface{}{"model": "gpt-4o", "messages": []string{"hello", "world"}, "pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+	payload := map[string]any{"model": "gpt-4o", "messages": []string{"hello", "world"}, "pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/openai/chat/completions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

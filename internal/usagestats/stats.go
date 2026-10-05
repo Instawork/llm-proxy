@@ -3,6 +3,7 @@ package usagestats
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -217,8 +218,8 @@ func scopeMap(m map[string]*scopeUsage) map[string]scopeUsage {
 	return out
 }
 
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
-	return map[string]interface{}{
+func (r *Recorder) rollupDataLocked() map[string]any {
+	return map[string]any{
 		"requests_today": r.global.Requests,
 		"tokens_today":   r.global.Tokens,
 		"by_model":       scopeMap(r.byModel),
@@ -277,9 +278,9 @@ func (r *Recorder) allCountersLocked() map[string]scopeUsage {
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -302,7 +303,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		counters = map[string]scopeUsage{"global": {}}
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":      true,
 		"day":            today,
 		"started_at":     startedAt.Unix(),
@@ -323,7 +324,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	return snap
 }
 
-func mergeLocalUsageIntoSnap(snap map[string]interface{}, global scopeUsage, counters map[string]scopeUsage) {
+func mergeLocalUsageIntoSnap(snap map[string]any, global scopeUsage, counters map[string]scopeUsage) {
 	if snap == nil {
 		return
 	}
@@ -339,7 +340,7 @@ func mergeLocalUsageIntoSnap(snap map[string]interface{}, global scopeUsage, cou
 	}
 }
 
-func mergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
+func mergeSnapInt64Max(snap map[string]any, key string, local int64) {
 	if local <= 0 {
 		return
 	}
@@ -349,7 +350,7 @@ func mergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
 	}
 }
 
-func snapInt64(v interface{}) int64 {
+func snapInt64(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
@@ -364,9 +365,7 @@ func snapInt64(v interface{}) int64 {
 
 func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
 	out := make(map[string]scopeUsage, len(a)+len(b))
-	for k, v := range a {
-		out[k] = v
-	}
+	maps.Copy(out, a)
 	for k, v := range b {
 		existing := out[k]
 		if v.Requests > existing.Requests {

@@ -400,7 +400,7 @@ func TestRedisStore_Rollup_DedupesByKey(t *testing.T) {
 	store, _ := newRedisStoreForBehaviorTest(t, cfg)
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := store.RecordKeyOpenedForRollup(ctx, "openai", "openai:m1", 60); err != nil {
 			t.Fatalf("RecordKeyOpenedForRollup #%d: %v", i, err)
 		}

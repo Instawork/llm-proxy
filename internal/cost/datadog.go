@@ -105,7 +105,7 @@ func resolveDogstatsdAddr(host, port string) (string, error) {
 }
 
 // FromConfig creates a DatadogTransport from configuration
-func (dt *DatadogTransport) FromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func (dt *DatadogTransport) FromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	switch cfg := transportConfig.(type) {
 	case *configPkg.TransportConfig:
 		if cfg.Datadog == nil {
@@ -127,8 +127,8 @@ func (dt *DatadogTransport) FromConfig(transportConfig interface{}, logger *slog
 		}
 		return NewDatadogTransport(config)
 
-	case map[string]interface{}:
-		datadogConfig, ok := cfg["datadog"].(map[string]interface{})
+	case map[string]any:
+		datadogConfig, ok := cfg["datadog"].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("datadog transport configuration not found")
 		}
@@ -141,7 +141,7 @@ func (dt *DatadogTransport) FromConfig(transportConfig interface{}, logger *slog
 
 		// Handle tags array
 		var tags []string
-		if tagsInterface, ok := datadogConfig["tags"].([]interface{}); ok {
+		if tagsInterface, ok := datadogConfig["tags"].([]any); ok {
 			for _, tag := range tagsInterface {
 				if tagStr, ok := tag.(string); ok {
 					tags = append(tags, tagStr)
@@ -170,7 +170,7 @@ func (dt *DatadogTransport) FromConfig(transportConfig interface{}, logger *slog
 }
 
 // NewDatadogTransportFromConfig creates a DatadogTransport from configuration (convenience function)
-func NewDatadogTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func NewDatadogTransportFromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	dt := &DatadogTransport{}
 	return dt.FromConfig(transportConfig, logger)
 }

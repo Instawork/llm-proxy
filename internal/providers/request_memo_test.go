@@ -48,7 +48,7 @@ func TestRequestMemo_ParsesOncePerFact(t *testing.T) {
 	p := &countingProvider{OpenAIProxy: NewOpenAIProxy()}
 	req := memoRequest(memoBody, true)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		assert.True(t, RequestIsStreaming(p, req))
 		model, msgs := RequestModelAndMessages(p, req)
 		assert.Equal(t, "gpt-4o-mini", model)
@@ -91,7 +91,7 @@ func TestRequestMemo_AbsentMemoFallsThrough(t *testing.T) {
 	req := memoRequest(memoBody, false)
 	assert.Nil(t, RequestMemoFrom(req.Context()))
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		assert.True(t, RequestIsStreaming(p, req))
 	}
 	assert.Equal(t, 3, p.streamCalls, "without a memo every call hits the provider")

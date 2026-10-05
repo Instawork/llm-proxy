@@ -69,19 +69,19 @@ func TestFileTransport_FromConfig_StructAndMap(t *testing.T) {
 	assert.Error(t, err)
 
 	// map path
-	mp := map[string]interface{}{
-		"file": map[string]interface{}{"path": filepath.Join(t.TempDir(), "m.log")},
+	mp := map[string]any{
+		"file": map[string]any{"path": filepath.Join(t.TempDir(), "m.log")},
 	}
 	tr, err = ft.FromConfig(mp, logger)
 	require.NoError(t, err)
 	require.NotNil(t, tr)
 
 	// map path - no file key
-	_, err = ft.FromConfig(map[string]interface{}{"other": 1}, logger)
+	_, err = ft.FromConfig(map[string]any{"other": 1}, logger)
 	assert.Error(t, err)
 
 	// map path - wrong path type
-	_, err = ft.FromConfig(map[string]interface{}{"file": map[string]interface{}{"path": 123}}, logger)
+	_, err = ft.FromConfig(map[string]any{"file": map[string]any{"path": 123}}, logger)
 	assert.Error(t, err)
 
 	// invalid type
@@ -171,20 +171,20 @@ func TestDatadogTransport_FromConfig_StructAndMap(t *testing.T) {
 	require.NotNil(t, tr)
 
 	// map cfg success
-	tr, err = dt.FromConfig(map[string]interface{}{
-		"datadog": map[string]interface{}{
+	tr, err = dt.FromConfig(map[string]any{
+		"datadog": map[string]any{
 			"host":        host,
 			"port":        port,
 			"namespace":   "ns",
 			"sample_rate": 1.0,
-			"tags":        []interface{}{"x:y", 123, "z:w"}, // mix to exercise tag filter
+			"tags":        []any{"x:y", 123, "z:w"}, // mix to exercise tag filter
 		},
 	}, logger)
 	require.NoError(t, err)
 	require.NotNil(t, tr)
 
 	// map cfg without datadog
-	_, err = dt.FromConfig(map[string]interface{}{"other": 1}, logger)
+	_, err = dt.FromConfig(map[string]any{"other": 1}, logger)
 	assert.Error(t, err)
 
 	// invalid type
@@ -211,15 +211,15 @@ func TestDynamoDBTransport_FromConfig_ValidationErrors(t *testing.T) {
 	assert.Error(t, err)
 
 	// map: missing dynamodb key
-	_, err = dt.FromConfig(map[string]interface{}{"other": 1}, logger)
+	_, err = dt.FromConfig(map[string]any{"other": 1}, logger)
 	assert.Error(t, err)
 
 	// map: missing table_name
-	_, err = dt.FromConfig(map[string]interface{}{"dynamodb": map[string]interface{}{"region": "us-west-2"}}, logger)
+	_, err = dt.FromConfig(map[string]any{"dynamodb": map[string]any{"region": "us-west-2"}}, logger)
 	assert.Error(t, err)
 
 	// map: missing region
-	_, err = dt.FromConfig(map[string]interface{}{"dynamodb": map[string]interface{}{"table_name": "t"}}, logger)
+	_, err = dt.FromConfig(map[string]any{"dynamodb": map[string]any{"table_name": "t"}}, logger)
 	assert.Error(t, err)
 
 	// invalid type
@@ -288,13 +288,13 @@ func TestRegisterTransportFactory_AndCreateTransportFromConfig(t *testing.T) {
 
 	// factory registration & lookup via map cfg
 	called := false
-	RegisterTransportFactory("noop-test", func(_ interface{}, _ *slog.Logger) (Transport, error) {
+	RegisterTransportFactory("noop-test", func(_ any, _ *slog.Logger) (Transport, error) {
 		called = true
 		return &mockTransport{}, nil
 	})
 	defer func() { delete(transportRegistry, "noop-test") }()
 
-	tr, err := CreateTransportFromConfig(map[string]interface{}{"type": "noop-test"}, logger)
+	tr, err := CreateTransportFromConfig(map[string]any{"type": "noop-test"}, logger)
 	require.NoError(t, err)
 	require.NotNil(t, tr)
 	assert.True(t, called)
@@ -306,11 +306,11 @@ func TestRegisterTransportFactory_AndCreateTransportFromConfig(t *testing.T) {
 	require.NotNil(t, tr)
 
 	// map cfg without type
-	_, err = CreateTransportFromConfig(map[string]interface{}{"other": 1}, logger)
+	_, err = CreateTransportFromConfig(map[string]any{"other": 1}, logger)
 	assert.Error(t, err)
 
 	// unsupported type
-	_, err = CreateTransportFromConfig(map[string]interface{}{"type": "does-not-exist"}, logger)
+	_, err = CreateTransportFromConfig(map[string]any{"type": "does-not-exist"}, logger)
 	assert.Error(t, err)
 
 	// invalid cfg type
@@ -391,7 +391,7 @@ func TestCostTracker_AsyncQueueFull_FallsBackToSync(t *testing.T) {
 	// fire many requests so the bounded channel overflows
 	ct.transports = []Transport{slowTransport{d: 50 * time.Millisecond, mock: mock}}
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		// TrackRequest must never return an error in the "queue full"
 		// case — the contract is "fall back to sync so the caller
 		// never observes a missed record". Re-asserting that here
@@ -460,7 +460,7 @@ func TestCostTracker_AsyncFlushTickerProcessesRecords(t *testing.T) {
 	ct.SetPricingForModel("openai", "gpt-4o", &ModelPricing{
 		Tiers: []PricingTier{{Threshold: 0, Input: 0.01, Output: 0.02}},
 	})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
 			Provider: "openai", Model: "gpt-4o", InputTokens: 1, OutputTokens: 1,
 		}, "u", "", "/e", ""))
@@ -572,7 +572,7 @@ func TestFlushQueuedRecords_DirectExercisesBothPaths(t *testing.T) {
 	// Pre-queue records by stopping the worker goroutine using ConfigureAsync's
 	// flush helper. Since we can't pause the running worker, simulate the flush
 	// path by invoking it directly with a deterministic queue state.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
 			Provider: "openai", Model: "gpt-4o", InputTokens: 1, OutputTokens: 1,
 		}, "u", "", "/e", ""))

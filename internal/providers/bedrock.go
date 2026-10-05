@@ -194,8 +194,8 @@ func (b *BedrockProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTrippe
 }
 
 // GetHealthStatus implements Provider.
-func (b *BedrockProxy) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (b *BedrockProxy) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"provider":          "bedrock",
 		"status":            "healthy",
 		"baseURL":           b.baseURL,
@@ -503,15 +503,15 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 // to be safe.
 func sigV4HeaderSigned(authorization, name string) bool {
 	const marker = "SignedHeaders="
-	idx := strings.Index(authorization, marker)
-	if idx < 0 {
+	_, after, ok := strings.Cut(authorization, marker)
+	if !ok {
 		return false
 	}
-	list := authorization[idx+len(marker):]
+	list := after
 	if end := strings.IndexAny(list, ", "); end >= 0 {
 		list = list[:end]
 	}
-	for _, h := range strings.Split(list, ";") {
+	for h := range strings.SplitSeq(list, ";") {
 		if strings.EqualFold(h, name) {
 			return true
 		}
@@ -581,21 +581,21 @@ func (b *BedrockProxy) ExtractRequestModelAndMessages(req *http.Request) (string
 	if err != nil || len(bodyBytes) == 0 {
 		return model, nil
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		return model, nil
 	}
 
 	messages := make([]string, 0, 8)
-	if rawMsgs, ok := data["messages"].([]interface{}); ok {
+	if rawMsgs, ok := data["messages"].([]any); ok {
 		for _, m := range rawMsgs {
-			msg, ok := m.(map[string]interface{})
+			msg, ok := m.(map[string]any)
 			if !ok {
 				continue
 			}
-			if parts, ok := msg["content"].([]interface{}); ok {
+			if parts, ok := msg["content"].([]any); ok {
 				for _, p := range parts {
-					pm, ok := p.(map[string]interface{})
+					pm, ok := p.(map[string]any)
 					if !ok {
 						continue
 					}
@@ -608,9 +608,9 @@ func (b *BedrockProxy) ExtractRequestModelAndMessages(req *http.Request) (string
 	}
 	// System messages live in a top-level `system: [{text: "..."}]` block
 	// in the Converse API. They count toward input tokens too.
-	if sys, ok := data["system"].([]interface{}); ok {
+	if sys, ok := data["system"].([]any); ok {
 		for _, s := range sys {
-			sm, ok := s.(map[string]interface{})
+			sm, ok := s.(map[string]any)
 			if !ok {
 				continue
 			}

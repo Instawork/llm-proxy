@@ -167,7 +167,7 @@ func (r *Recorder) Close() {
 	})
 }
 
-func (r *Recorder) mergeRedisRecentEvents(snap map[string]interface{}) {
+func (r *Recorder) mergeRedisRecentEvents(snap map[string]any) {
 	if !r.redisEnabled() || snap == nil {
 		return
 	}

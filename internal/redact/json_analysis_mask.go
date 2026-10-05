@@ -2,6 +2,7 @@ package redact
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
@@ -146,10 +147,8 @@ func shouldMaskJSONStringValue(path []string, key string, adapter ContentAdapter
 	if hasPathAncestor(path, "enum") {
 		return true
 	}
-	for _, seg := range path {
-		if jsonSchemaContainerKey(seg) {
-			return true
-		}
+	if slices.ContainsFunc(path, jsonSchemaContainerKey) {
+		return true
 	}
 	return jsonSchemaContainerKey(key)
 }

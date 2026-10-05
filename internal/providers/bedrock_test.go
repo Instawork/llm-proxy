@@ -332,7 +332,7 @@ func TestBedrock_ParseNonStreamingResponse_Gzip(t *testing.T) {
 // It uses the SDK's Encoder, which is the same code path AWS uses on the wire,
 // so a test failure here would mean either AWS's encoding changed or our
 // decoder usage is wrong — both worth catching.
-func encodeBedrockEvent(t *testing.T, w io.Writer, eventType string, payload interface{}) {
+func encodeBedrockEvent(t *testing.T, w io.Writer, eventType string, payload any) {
 	t.Helper()
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

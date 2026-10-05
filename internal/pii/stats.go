@@ -4,6 +4,7 @@ package pii
 
 import (
 	"encoding/json"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -142,9 +143,9 @@ func (r *Recorder) detectionRateLocked() (int64, float64) {
 	return cleanScanned, rate
 }
 
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
+func (r *Recorder) rollupDataLocked() map[string]any {
 	_, detectionRate := r.detectionRateLocked()
-	return map[string]interface{}{
+	return map[string]any{
 		"requests_scanned":  r.requestsScanned,
 		"requests_with_pii": r.requestsWithPII,
 		"entities_total":    r.entitiesTotal,
@@ -279,17 +280,15 @@ func (r *Recorder) advancePIIFlushedLocked() {
 
 func copyIntMap(m map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
 // Snapshot returns a JSON-serialisable view of the current aggregates for
 // the admin API. Recent events are returned newest-first.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -324,7 +323,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		_, detectionRate = r.detectionRateLocked()
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":         true,
 		"day":               today,
 		"started_at":        startedAt.Unix(),
@@ -356,7 +355,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalPIIIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	requestsScanned, requestsWithPII, entitiesTotal int64,
 	failOpen, failClosed, oversize int64,
 	localByEntity, localByProvider, localByKey map[string]int64,
@@ -381,7 +380,7 @@ func mergeLocalPIIIntoSnap(
 	)
 }
 
-func mergePIINameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+func mergePIINameCounts(snap map[string]any, field string, local map[string]int64, limit int) {
 	if snap == nil || len(local) == 0 {
 		return
 	}

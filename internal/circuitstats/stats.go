@@ -7,6 +7,7 @@ package circuitstats
 
 import (
 	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -189,12 +190,8 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.probesSucceeded = r.probesSucceeded
 	r.flushed.probesFailed = r.probesFailed
 	r.flushed.circuitsOpened = r.circuitsOpened
-	for k, v := range r.byProvider {
-		r.flushed.byProvider[k] = v
-	}
-	for k, v := range r.byKey {
-		r.flushed.byKey[k] = v
-	}
+	maps.Copy(r.flushed.byProvider, r.byProvider)
+	maps.Copy(r.flushed.byKey, r.byKey)
 }
 
 func (r *Recorder) publishLocked() {
@@ -318,9 +315,9 @@ func (r *Recorder) RecordCheck() {
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -348,19 +345,15 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		probesSucceeded = r.probesSucceeded
 		probesFailed = r.probesFailed
 		circuitsOpened = r.circuitsOpened
-		for k, v := range r.byProvider {
-			byProvider[k] = v
-		}
-		for k, v := range r.byKey {
-			byKey[k] = v
-		}
+		maps.Copy(byProvider, r.byProvider)
+		maps.Copy(byKey, r.byKey)
 	}
 
 	backend := "memory"
 	if r.redisEnabled() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":        true,
 		"backend":          backend,
 		"day":              today,
@@ -388,7 +381,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalCircuitIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	checksTotal, blockedOpen, probesStarted, probesSucceeded, probesFailed, circuitsOpened int64,
 	byProvider, byKey map[string]int64,
 ) {

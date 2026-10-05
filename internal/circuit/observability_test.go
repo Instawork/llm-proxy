@@ -68,7 +68,7 @@ func captureLogs(buf *bytes.Buffer) *slog.Logger {
 // matches substr, or nil if none.
 func findLogLine(t *testing.T, buf *bytes.Buffer, substr string) map[string]any {
 	t.Helper()
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

@@ -74,11 +74,7 @@ func timeoutBudgetFromRequest(req *http.Request, ceiling time.Duration) (budget 
 	}
 	budget = time.Duration(ms) * time.Millisecond
 	if budget < minTimeoutBudget {
-		if minTimeoutBudget > ceiling {
-			budget = ceiling
-		} else {
-			budget = minTimeoutBudget
-		}
+		budget = min(minTimeoutBudget, ceiling)
 	}
 	return budget, true
 }

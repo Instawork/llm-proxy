@@ -5,6 +5,7 @@ package unmeteredstats
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -80,9 +81,7 @@ func intMapDelta(cur, prev map[string]int64) map[string]float64 {
 
 func copyIntMap(m map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
@@ -168,9 +167,9 @@ func (r *Recorder) RecordRequest(keyID, endpoint string) {
 
 // Snapshot returns a JSON-serialisable view for the admin API:
 // requests_today, by_endpoint ([{name,count}]) and by_key (key → endpoint → count).
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 
@@ -190,12 +189,12 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r.RollupBound() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":      true,
 		"backend":        backend,
 		"day":            today,
 		"requests_today": int64(0),
-		"by_endpoint":    []map[string]interface{}{},
+		"by_endpoint":    []map[string]any{},
 		"by_key":         map[string]map[string]int64{},
 	}
 	r.MergeToday(adminrollup.MetricUnmetered, today, snap, adminrollup.TopNCaps{})
@@ -222,7 +221,7 @@ func nestByKey(flat map[string]int64) map[string]map[string]int64 {
 	return out
 }
 
-func byKeyFromSnap(raw interface{}) map[string]map[string]int64 {
+func byKeyFromSnap(raw any) map[string]map[string]int64 {
 	if m, ok := raw.(map[string]map[string]int64); ok {
 		return m
 	}

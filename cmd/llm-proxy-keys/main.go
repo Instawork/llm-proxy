@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -147,13 +148,7 @@ func loadConfig(configDir, environment string) (*config.YAMLConfig, error) {
 func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, logger *slog.Logger) {
 	// Validate provider
 	validProviders := []string{"openai", "anthropic", "gemini"}
-	isValid := false
-	for _, p := range validProviders {
-		if provider == p {
-			isValid = true
-			break
-		}
-	}
+	isValid := slices.Contains(validProviders, provider)
 	if !isValid {
 		logger.Error("Invalid provider", "provider", provider, "valid", validProviders)
 		os.Exit(1)
@@ -162,7 +157,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	// Parse tags
 	tags := make(map[string]string)
 	if tagsStr != "" {
-		for _, tag := range strings.Split(tagsStr, ",") {
+		for tag := range strings.SplitSeq(tagsStr, ",") {
 			parts := strings.SplitN(tag, "=", 2)
 			if len(parts) == 2 {
 				tags[parts[0]] = parts[1]
@@ -280,7 +275,7 @@ func handleDelete(ctx context.Context, store *apikeys.Store, keyID string, logge
 
 // handleDisable disables an API key
 func handleDisable(ctx context.Context, store *apikeys.Store, keyID string, logger *slog.Logger) {
-	err := store.UpdateKey(ctx, keyID, map[string]interface{}{
+	err := store.UpdateKey(ctx, keyID, map[string]any{
 		"enabled": false,
 	})
 	if err != nil {
@@ -293,7 +288,7 @@ func handleDisable(ctx context.Context, store *apikeys.Store, keyID string, logg
 
 // handleEnable enables an API key
 func handleEnable(ctx context.Context, store *apikeys.Store, keyID string, logger *slog.Logger) {
-	err := store.UpdateKey(ctx, keyID, map[string]interface{}{
+	err := store.UpdateKey(ctx, keyID, map[string]any{
 		"enabled": true,
 	})
 	if err != nil {

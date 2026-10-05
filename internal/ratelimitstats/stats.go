@@ -3,6 +3,7 @@
 package ratelimitstats
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -127,12 +128,8 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.requestsTotal = r.requestsTotal
 	r.flushed.requestsAllowed = r.requestsAllowed
 	r.flushed.requestsBlocked = r.requestsBlocked
-	for k, v := range r.byProvider {
-		r.flushed.byProvider[k] = v
-	}
-	for k, v := range r.byReason {
-		r.flushed.byReason[k] = v
-	}
+	maps.Copy(r.flushed.byProvider, r.byProvider)
+	maps.Copy(r.flushed.byReason, r.byReason)
 }
 
 // RecordDecision ingests one rate-limit check. Memory and Redis aggregates
@@ -193,9 +190,9 @@ func (r *Recorder) RecordDecision(
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -220,15 +217,11 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		requestsTotal = r.requestsTotal
 		requestsAllowed = r.requestsAllowed
 		requestsBlocked = r.requestsBlocked
-		for k, v := range r.byProvider {
-			byProvider[k] = v
-		}
-		for k, v := range r.byReason {
-			byReason[k] = v
-		}
+		maps.Copy(byProvider, r.byProvider)
+		maps.Copy(byReason, r.byReason)
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":        true,
 		"day":              today,
 		"started_at":       startedAt.Unix(),
@@ -251,7 +244,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalRateLimitIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	requestsTotal, requestsAllowed, requestsBlocked int64,
 	byProvider, byReason map[string]int64,
 ) {

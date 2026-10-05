@@ -158,7 +158,7 @@ func (w iotestReader) Read(p []byte) (int, error) { return w.r.Read(p) }
 
 func TestParseOpenAIStreaming_BorrowedBodyIsNotMutated(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		b.WriteString(`data: {"id":"chatcmpl-x","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}` + "\n\n")
 	}
 	b.WriteString(`data: {"id":"chatcmpl-x","model":"gpt-4o-mini","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":5,"total_tokens":9}}` + "\n\n")

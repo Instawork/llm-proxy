@@ -46,7 +46,6 @@ func TestCircuitBreaker_EnvConfigsLoad(t *testing.T) {
 	basePath := filepath.Join(configsDir, "base.yml")
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.file, func(t *testing.T) {
 			t.Setenv("ENVIRONMENT", strings.TrimSuffix(tc.file, ".yml"))
 			envPath := filepath.Join(configsDir, tc.file)

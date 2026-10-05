@@ -230,10 +230,8 @@ func TestAnthropicIntegration_AdvancedScenarios(t *testing.T) {
 
 	// Run each scenario as a subtest
 	for _, scenario := range scenarios {
-		scenario := scenario // capture range variable
-
 		t.Run(fmt.Sprintf("%s_%s", scenario.model.name, scenario.name), func(t *testing.T) {
-			requestBody := map[string]interface{}{
+			requestBody := map[string]any{
 				"model":      scenario.model.modelID,
 				"max_tokens": scenario.maxTokens,
 				"messages":   scenario.messages,
@@ -283,7 +281,7 @@ func TestAnthropicIntegration_AdvancedScenarios(t *testing.T) {
 					t.Fatalf("Failed to read response body: %v", err)
 				}
 
-				var response map[string]interface{}
+				var response map[string]any
 				if err := json.Unmarshal(bodyBytes, &response); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -304,7 +302,7 @@ func TestAnthropicIntegration_AdvancedScenarios(t *testing.T) {
 
 // Helper function for non-streaming tests
 func testAnthropicNonStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model anthropicTestModel) {
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model":      model.modelID,
 		"max_tokens": model.maxTokens,
 		"messages": []map[string]string{
@@ -349,7 +347,7 @@ func testAnthropicNonStreaming(t *testing.T, server *httptest.Server, providerMa
 	}
 
 	// Parse JSON for basic validation
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -383,7 +381,7 @@ func testAnthropicNonStreaming(t *testing.T, server *httptest.Server, providerMa
 
 // Helper function for streaming tests
 func testAnthropicStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model anthropicTestModel) {
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model":      model.modelID,
 		"max_tokens": model.maxTokens,
 		"messages": []map[string]string{
@@ -457,7 +455,7 @@ func testAnthropicStreaming(t *testing.T, server *httptest.Server, providerManag
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue

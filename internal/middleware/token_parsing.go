@@ -621,14 +621,6 @@ func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.ErrUnsupported
 }
 
-// Helper function to find minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ExtractUserIDFromRequest extracts user ID from request headers, query parameters, or provider-specific methods
 // Follows the priority order: context (from meta URL) → URL path → headers → query parameters → provider-specific extraction → fallback to IP
 func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) string {

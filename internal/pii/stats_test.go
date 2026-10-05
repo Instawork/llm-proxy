@@ -55,7 +55,7 @@ func TestRecorderAggregates(t *testing.T) {
 
 func TestRecorderRingBufferBounded(t *testing.T) {
 	r := NewRecorder()
-	for i := 0; i < MaxRecentEvents+25; i++ {
+	for range MaxRecentEvents + 25 {
 		r.RecordRedaction("openai", "k", map[string]int{"EMAIL_ADDRESS": 1}, 10, time.Millisecond, OutcomeOK)
 	}
 	recent := r.Snapshot()["recent"].([]recentEntry)

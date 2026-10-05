@@ -67,7 +67,7 @@ func TestRedisConfig_MarshalJSON_Redacts(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			b, err := json.Marshal(c.cfg)
 			require.NoError(t, err)
-			var out map[string]interface{}
+			var out map[string]any
 			require.NoError(t, json.Unmarshal(b, &out))
 			if c.wantURL != "" {
 				assert.Equal(t, c.wantURL, out["url"])
