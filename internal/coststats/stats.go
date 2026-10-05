@@ -234,7 +234,10 @@ func (r *Recorder) RecordRequest(
 	// runs across midnight on the 1st still lands in the right bucket.
 	// Cost-limit reservations linger for a grace period after the
 	// response, which already covers the delay before the write lands.
-	if len(delta.Dimensions["by_key"]) > 0 {
+	// Skipped entirely when no rollup store is bound: the write would be a
+	// no-op, and queueing it would still take a turn on the shared worker
+	// pool ahead of real cost records.
+	if len(delta.Dimensions["by_key"]) > 0 && r.RollupBound() {
 		month := now.Format("2006-01")
 		r.mu.RLock()
 		run := r.background
