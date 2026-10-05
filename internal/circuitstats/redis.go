@@ -85,17 +85,86 @@ func (r *Recorder) recordRedisEvent(counterField, provider string, e activityEve
 	}
 }
 
-func (r *Recorder) incrRedisCheckAsync() {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), redisOpTimeout)
-		defer cancel()
-		pipe := r.rdb.Pipeline()
-		pipe.HIncrBy(ctx, redisCountersKey, "checks_total", 1)
-		pipe.HSetNX(ctx, redisCountersKey, "started_at", strconv.FormatInt(time.Now().UTC().Unix(), 10))
-		if _, err := pipe.Exec(ctx); err != nil && r.log != nil {
-			r.log.Warn("circuitstats: redis check increment failed", "error", err)
+// checkFlushInterval is how often coalesced state-check increments are
+// pushed to the legacy Redis counters hash.
+const checkFlushInterval = time.Second
+
+// noteRedisCheck coalesces one state check into pendingChecks. RecordCheck
+// runs on every routing decision (twice per proxied request), and the
+// previous implementation spawned a goroutine plus a Redis pipeline for
+// each one — an unbounded goroutine backlog whenever Redis slowed down,
+// for a counter that only mirrors the in-process value for operators
+// inspecting Redis directly. A single flusher goroutine now ships the
+// accumulated delta once per checkFlushInterval.
+func (r *Recorder) noteRedisCheck() {
+	r.pendingChecks.Add(1)
+	r.startCheckFlusher()
+}
+
+func (r *Recorder) startCheckFlusher() {
+	r.flusherOnce.Do(func() {
+		r.flusherStop = make(chan struct{})
+		r.flusherDone = make(chan struct{})
+		go r.runCheckFlusher()
+	})
+}
+
+func (r *Recorder) runCheckFlusher() {
+	defer close(r.flusherDone)
+	ticker := time.NewTicker(checkFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.FlushRedisChecks()
+		case <-r.flusherStop:
+			r.FlushRedisChecks()
+			return
 		}
-	}()
+	}
+}
+
+// FlushRedisChecks pushes any coalesced state-check increments to Redis
+// now. Called by the flusher goroutine and on Close; exported so tests and
+// shutdown paths can force the write.
+func (r *Recorder) FlushRedisChecks() {
+	if !r.redisEnabled() {
+		return
+	}
+	n := r.pendingChecks.Swap(0)
+	if n == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), redisOpTimeout)
+	defer cancel()
+	pipe := r.rdb.Pipeline()
+	pipe.HIncrBy(ctx, redisCountersKey, "checks_total", n)
+	pipe.HSetNX(ctx, redisCountersKey, "started_at", strconv.FormatInt(time.Now().UTC().Unix(), 10))
+	if _, err := pipe.Exec(ctx); err != nil {
+		// Put the delta back so the next flush retries it rather than
+		// silently losing checks on a Redis blip.
+		r.pendingChecks.Add(n)
+		if r.log != nil {
+			r.log.Warn("circuitstats: redis check increment failed", "checks", n, "error", err)
+		}
+	}
+}
+
+// Close stops the check flusher (flushing any pending increments first).
+// The Redis client itself is owned by the circuit store and is not closed
+// here. Safe on a nil recorder or one that never used Redis.
+func (r *Recorder) Close() {
+	if r == nil {
+		return
+	}
+	r.flusherOnce.Do(func() {}) // ensure no flusher starts after Close
+	r.closeOnce.Do(func() {
+		if r.flusherStop == nil {
+			return
+		}
+		close(r.flusherStop)
+		<-r.flusherDone
+	})
 }
 
 func (r *Recorder) mergeRedisRecentEvents(snap map[string]interface{}) {

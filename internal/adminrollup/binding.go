@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -292,15 +293,50 @@ func (b *RecorderBinding) FinishDayRollover(metric, oldDay string, caps TopNCaps
 
 const recentEventWriteTimeout = 500 * time.Millisecond
 
+// maxConcurrentRecentEventWrites bounds the number of in-flight
+// AppendRecentEvent goroutines across the whole process. Recent events are a
+// best-effort operator convenience (a rolling list of the last N PII / ID-gate
+// hits), so when Redis is slow it is better to drop events than to let one
+// goroutine per request pile up behind a 500ms timeout.
+const maxConcurrentRecentEventWrites = 32
+
+// recentEventDropLogInterval rate-limits the "dropped" warning so a sustained
+// Redis stall does not itself flood the logs.
+const recentEventDropLogInterval = 30 * time.Second
+
+var (
+	recentEventSem         = make(chan struct{}, maxConcurrentRecentEventWrites)
+	recentEventDropped     atomic.Int64
+	recentEventLastDropLog atomic.Int64 // unix nanos
+)
+
+// RecentEventsDropped reports how many recent-event mirror writes were
+// skipped process-wide because the concurrency cap was reached.
+func RecentEventsDropped() int64 { return recentEventDropped.Load() }
+
 // AppendRecentEvent mirrors one event into the shared rollup store's rolling
 // recent list (fleet-wide when Redis is enabled). Fire-and-forget on the hot
-// path; no-op when unbound.
+// path, bounded by maxConcurrentRecentEventWrites; events beyond the cap are
+// dropped and counted. No-op when unbound.
 func (b *RecorderBinding) AppendRecentEvent(metric string, event any, maxLen int) {
 	s, _ := b.deps()
 	if s == nil {
 		return
 	}
+	select {
+	case recentEventSem <- struct{}{}:
+	default:
+		n := recentEventDropped.Add(1)
+		now := time.Now().UnixNano()
+		last := recentEventLastDropLog.Load()
+		if now-last >= int64(recentEventDropLogInterval) && recentEventLastDropLog.CompareAndSwap(last, now) {
+			s.logger.Warn("admin rollup: recent event writes saturated; dropping",
+				"metric", metric, "in_flight", maxConcurrentRecentEventWrites, "dropped_total", n)
+		}
+		return
+	}
 	go func() {
+		defer func() { <-recentEventSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), recentEventWriteTimeout)
 		defer cancel()
 		if err := s.AppendRecentEvent(ctx, metric, event, maxLen); err != nil {

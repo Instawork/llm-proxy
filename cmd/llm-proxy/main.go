@@ -2171,6 +2171,7 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalCircuitStatsRecorder != nil {
 		globalCircuitStatsRecorder.FlushRollup()
+		globalCircuitStatsRecorder.Close() // flushes coalesced Redis check counters and stops the flusher
 	}
 	if globalModelStatusRecorder != nil {
 		globalModelStatusRecorder.FlushRollup()

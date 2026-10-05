@@ -8,6 +8,7 @@ package circuitstats
 import (
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
@@ -74,6 +75,14 @@ type Recorder struct {
 
 	rdb *redis.Client
 	log *slog.Logger
+
+	// Coalesced checks_total increments for the legacy Redis counters hash;
+	// see noteRedisCheck in redis.go.
+	pendingChecks atomic.Int64
+	flusherOnce   sync.Once
+	closeOnce     sync.Once
+	flusherStop   chan struct{}
+	flusherDone   chan struct{}
 }
 
 // NewRecorder returns a recorder scoped to this process.
@@ -304,7 +313,7 @@ func (r *Recorder) RecordCheck() {
 	r.mu.Unlock()
 
 	if r.redisEnabled() {
-		r.incrRedisCheckAsync()
+		r.noteRedisCheck()
 	}
 }
 
