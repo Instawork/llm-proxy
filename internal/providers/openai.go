@@ -48,14 +48,13 @@ func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the OpenAI proxy instance
 	openAIProxy := &OpenAIProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(openAIProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(openAIProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)

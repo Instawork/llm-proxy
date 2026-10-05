@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -263,18 +264,24 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 	return exists
 }
 
-// CreateGenericDirector creates a generic director function for reverse proxy requests.
+// CreateGenericRewrite creates a generic httputil.ReverseProxy.Rewrite function.
 // This eliminates code duplication across all providers by handling the common logic:
-//   - Setting the target host header
+//   - Pointing the outbound request at targetURL and pinning the Host header
 //   - Stripping the provider prefix from the path
 //   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
 //     upstream returns uncompressed responses. Useful for debugging SSE streams where
 //     plain-text event data is easier to inspect in logs. By default gzip is allowed.
 //   - Logging the request with streaming detection
-func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request), disableGzip bool) func(*http.Request) {
-	return func(req *http.Request) {
-		// Call the original director first
-		originalDirector(req)
+//
+// Rewrite is used instead of the deprecated Director hook: in Rewrite mode
+// ReverseProxy strips inbound X-Forwarded-*/Forwarded headers before calling
+// us and never appends the client IP, so no client-identifying forwarding
+// headers reach the upstream vendor.
+func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip bool) func(*httputil.ProxyRequest) {
+	providerPrefix := "/" + provider.GetName()
+	return func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		req := pr.Out
 
 		// Set the Host header to the target host
 		req.Host = targetURL.Host
@@ -282,7 +289,6 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 		// Strip the provider prefix from the path before forwarding
 		// Note: mux PathPrefix matches but doesn't strip the prefix automatically
 		// Note: URL rewriting for /meta/{userID}/provider/ is handled by URLRewritingMiddleware
-		providerPrefix := "/" + provider.GetName()
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, providerPrefix)
 
 		// When gzip is disabled, force upstream to send uncompressed bytes.
@@ -306,7 +312,7 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 // newProxyTransport creates a new http.Transport with optimized settings for
 // proxying LLM requests.  When disableGzip is true, DisableCompression is set
 // so Go's transport never auto-decompresses upstream gzip responses — useful
-// alongside Accept-Encoding stripping in CreateGenericDirector for debug builds.
+// alongside Accept-Encoding stripping in CreateGenericRewrite for debug builds.
 // Defaults to false (gzip allowed). responseHeaderTimeout of zero uses
 // DefaultResponseHeaderTimeout (5 minutes).
 func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *http.Transport {

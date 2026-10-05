@@ -16,9 +16,9 @@ import (
 
 // These tests pin the contract at the httputil.ReverseProxy seam: the exact
 // outbound request each provider hands to its transport after the proxy's
-// request-rewriting hook has run. They are driven through ServeHTTP so they
-// exercise the real hook (Director today, Rewrite after migration) and the
-// ReverseProxy plumbing around it, not a hand-rolled closure.
+// Rewrite hook has run. They are driven through ServeHTTP so they exercise
+// the real hook and the ReverseProxy plumbing around it (forwarding-header
+// stripping, hop-by-hop handling), not a hand-rolled closure.
 
 // seamRT captures the final outbound request as the upstream vendor would
 // see it and answers with a canned 200 so ServeHTTP completes normally.

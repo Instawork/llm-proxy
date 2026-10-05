@@ -76,19 +76,21 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 		panic(fmt.Sprintf("invalid Bedrock upstream URL %q (region=%q): %v", baseURL, region, err))
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 	bedrockProxy := &BedrockProxy{proxy: proxy, region: region, baseURL: baseURL}
 
-	// Director: strip our `/bedrock` URL prefix and pin the Host header to the
+	// Rewrite: strip our `/bedrock` URL prefix and pin the Host header to the
 	// canonical AWS hostname so the SigV4-signed Authorization remains valid.
-	// We deliberately do NOT call the shared CreateGenericDirector helper here:
+	// We deliberately do NOT call the shared CreateGenericRewrite helper here:
 	// that one logs through provider.IsStreamingRequest(), which works for
 	// path-based detection but isn't useful for Bedrock (path suffix is
 	// already enough). We also need precise control over Host header rewriting.
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		// After originalDirector, req.URL.Path is "/bedrock/model/..." — strip
+	// Rewrite mode also guarantees ReverseProxy never appends X-Forwarded-For,
+	// which would otherwise be forwarded to AWS alongside the signed headers.
+	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		req := pr.Out
+		// After SetURL, req.URL.Path is "/bedrock/model/..." — strip
 		// our prefix to match what the client signed.  We must also strip from
 		// RawPath when it is set, because Bedrock model IDs contain `:` (e.g.
 		// `us.anthropic.claude-sonnet-4-5-...v1:0`) which boto3 URL-encodes to
@@ -105,7 +107,7 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 		// targetURL.Host, but being explicit guards future refactors).
 		req.Host = targetURL.Host
 		// Optional: strip Accept-Encoding so upstream returns plain bytes —
-		// matches the debug-mode contract of CreateGenericDirector.
+		// matches the debug-mode contract of CreateGenericRewrite.
 		// boto3 adds Accept-Encoding after signing so deleting it is safe
 		// there, but some signers (AWS SDK for Java v2, aws-crt-based
 		// custom signers) include every present header in SignedHeaders;

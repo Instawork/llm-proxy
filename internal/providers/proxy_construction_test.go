@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -94,21 +96,24 @@ func TestProvider_WrapTransport_AppliesWrapper(t *testing.T) {
 	}
 }
 
-func TestCreateGenericDirector_StripsPrefixAndGzip(t *testing.T) {
+func TestCreateGenericRewrite_StripsPrefixAndGzip(t *testing.T) {
 	op := NewOpenAIProxy()
-	target, _ := http.NewRequest("GET", "https://api.openai.com", nil)
-	originalDirector := func(req *http.Request) {
-		req.URL.Scheme = target.URL.Scheme
-		req.URL.Host = target.URL.Host
-	}
-	director := CreateGenericDirector(op, target.URL, originalDirector, true)
+	target, _ := url.Parse("https://api.openai.com")
+	rewrite := CreateGenericRewrite(op, target, true)
 
-	req, _ := http.NewRequest("POST", "/openai/v1/chat/completions", nil)
-	req.Header.Set("Accept-Encoding", "gzip")
-	director(req)
-	assert.Equal(t, "/v1/chat/completions", req.URL.Path)
-	assert.Equal(t, "", req.Header.Get("Accept-Encoding"))
-	assert.Equal(t, target.URL.Host, req.Host)
+	in, _ := http.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	in.Header.Set("Accept-Encoding", "gzip")
+	out := in.Clone(in.Context())
+	rewrite(&httputil.ProxyRequest{In: in, Out: out})
+
+	assert.Equal(t, "https", out.URL.Scheme)
+	assert.Equal(t, target.Host, out.URL.Host)
+	assert.Equal(t, "/v1/chat/completions", out.URL.Path)
+	assert.Equal(t, "", out.Header.Get("Accept-Encoding"))
+	assert.Equal(t, target.Host, out.Host)
+	// The inbound request is never mutated in Rewrite mode.
+	assert.Equal(t, "/openai/v1/chat/completions", in.URL.Path)
+	assert.Equal(t, "gzip", in.Header.Get("Accept-Encoding"))
 }
 
 func TestDecompressResponseIfNeeded_PlainPassthrough(t *testing.T) {

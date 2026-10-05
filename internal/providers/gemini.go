@@ -50,14 +50,13 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the Gemini proxy instance
 	geminiProxy := &GeminiProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(geminiProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance. Gemini historically
 	// needed a longer ResponseHeaderTimeout than other providers; the shared default

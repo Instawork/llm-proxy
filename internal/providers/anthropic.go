@@ -46,14 +46,13 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the Anthropic proxy instance
 	anthropicProxy := &AnthropicProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(anthropicProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)

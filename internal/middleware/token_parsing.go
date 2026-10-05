@@ -293,7 +293,7 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 			log.Printf("⏱  TTFB: %dms", rc.ttfbMS)
 		})
 		// Detect upstream gzip on the first chunk. When --disable-gzip is set,
-		// CreateGenericDirector strips Accept-Encoding so this should not fire;
+		// CreateGenericRewrite strips Accept-Encoding so this should not fire;
 		// without it, gzip is expected and this is just an observational note.
 		rc.compressedOnce.Do(func() {
 			if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
