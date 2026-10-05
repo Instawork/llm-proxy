@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1224,12 +1225,10 @@ func TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview(t *testin
 
 // ─── TokenParsingMiddleware: streaming pacing diagnostics ──────────────
 
-// TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary
-// exercises the streaming-only branch of the middleware: per-chunk pacing
-// logs (#N), the SSE event-type histogram (events=...), and the
-// chunks=N bytes=N summary added to the final summary line.  We use an
-// SSE-shaped body so sniffSSEEvents populates the event-type counters.
-func TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary(t *testing.T) {
+// driveStreamingSSE runs a two-chunk SSE response through the token-parsing
+// middleware and returns the captured standard-log output.
+func driveStreamingSSE(t *testing.T) string {
+	t.Helper()
 	p := &configurableProvider{
 		streaming: true,
 		metadata: &providers.LLMResponseMetadata{
@@ -1252,16 +1251,46 @@ func TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary(t *te
 	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Accept", "text/event-stream")
 	rr := httptest.NewRecorder()
-	logOut := captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+	return captureLogOutput(func() { chain.ServeHTTP(rr, req) })
+}
+
+// TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary
+// exercises the streaming-only branch of the middleware at the default
+// (INFO) log level: the SSE event-type histogram (events=...) and the
+// chunks=N bytes=N summary are added to the final summary line, while the
+// per-chunk 📡 pacing lines stay silent.
+func TestTokenParsingMiddleware_StreamingResponse_LogsChunkAndEventSummary(t *testing.T) {
+	logOut := driveStreamingSSE(t)
 
 	if !strings.Contains(logOut, "chunks=2") {
 		t.Errorf("expected chunks=2 in summary; got %s", logOut)
 	}
-	if !strings.Contains(logOut, "events=") {
-		t.Errorf("expected events=… in summary; got %s", logOut)
+	if !strings.Contains(logOut, "events=event:message_start=1") && !strings.Contains(logOut, "event:message_start=1") {
+		t.Errorf("expected cumulative event histogram in summary; got %s", logOut)
+	}
+	if strings.Contains(logOut, "📡") {
+		t.Errorf("per-chunk pacing logs must be debug-only; got %s", logOut)
+	}
+}
+
+// TestTokenParsingMiddleware_StreamingResponse_DebugLevelLogsEveryChunk
+// verifies the per-chunk 📡 lines come back when the default slog level is
+// DEBUG, which is how operators opt in to chunk-level pacing diagnostics.
+func TestTokenParsingMiddleware_StreamingResponse_DebugLevelLogsEveryChunk(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	logOut := driveStreamingSSE(t)
+
+	if strings.Count(logOut, "📡") != 2 {
+		t.Errorf("expected one 📡 line per chunk at DEBUG; got %s", logOut)
 	}
 	if !strings.Contains(logOut, "#1") || !strings.Contains(logOut, "#2") {
 		t.Errorf("expected per-chunk pacing logs; got %s", logOut)
+	}
+	if !strings.Contains(logOut, "types=event:ping,type:ping") {
+		t.Errorf("expected per-chunk event types; got %s", logOut)
 	}
 }
 

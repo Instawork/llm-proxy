@@ -22,6 +22,12 @@ import (
 // cannedUpstream is a RoundTripper that drains the request and returns a
 // fixed body, so benchmarks measure proxy + middleware overhead rather than
 // network or vendor latency.
+//
+// For SSE bodies the response is delivered one event per Read. A plain
+// bytes.Reader would hand ReverseProxy the whole stream in a single 32KB
+// read, collapsing a 40-event stream into one Write and hiding every
+// per-chunk cost in the middleware; a real flushed upstream yields roughly
+// one event per read.
 type cannedUpstream struct {
 	body        []byte
 	contentType string
@@ -34,6 +40,10 @@ func (c *cannedUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	h := http.Header{}
 	h.Set("Content-Type", c.contentType)
+	var body io.Reader = bytes.NewReader(c.body)
+	if strings.HasPrefix(c.contentType, "text/event-stream") {
+		body = &sseEventReader{rest: c.body}
+	}
 	return &http.Response{
 		StatusCode:    http.StatusOK,
 		Status:        "200 OK",
@@ -41,10 +51,31 @@ func (c *cannedUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        h,
-		Body:          io.NopCloser(bytes.NewReader(c.body)),
+		Body:          io.NopCloser(body),
 		ContentLength: int64(len(c.body)),
 		Request:       req,
 	}, nil
+}
+
+// sseEventReader returns at most one SSE event (up to and including the
+// blank-line terminator) per Read call.
+type sseEventReader struct {
+	rest []byte
+}
+
+func (r *sseEventReader) Read(p []byte) (int, error) {
+	if len(r.rest) == 0 {
+		return 0, io.EOF
+	}
+	end := bytes.Index(r.rest, []byte("\n\n"))
+	if end < 0 {
+		end = len(r.rest)
+	} else {
+		end += 2
+	}
+	n := copy(p, r.rest[:end])
+	r.rest = r.rest[n:]
+	return n, nil
 }
 
 func benchOpenAINonStreamingBody() []byte {
