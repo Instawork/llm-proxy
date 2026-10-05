@@ -75,6 +75,9 @@ jobs:
               exit 1
             fi
       - run:
+          name: Run staticcheck
+          command: make lint
+      - run:
           name: Guard against raw body/chunk dumps in logs
           command: make lint-pii-logs
 

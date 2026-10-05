@@ -60,7 +60,7 @@ Break the alignment by inserting blank lines between unrelated method definition
 # Vet — same as CI
 go vet ./...
 
-# Stricter golint style gate (deprecated upstream but pinned in Makefile)
+# staticcheck (pinned in Makefile; part of make ci)
 make lint
 
 # Config validator — required after any configs/*.yml edit
@@ -132,7 +132,7 @@ Or, to fix formatting then verify:
 make ci-fix
 ```
 
-`make ci` runs, in order: `fmt-check`, `vet`, `lint-pii-logs`, `validate-config`, `test`.
+`make ci` runs, in order: `fmt-check`, `vet`, `lint` (staticcheck), `lint-pii-logs`, `validate-config`, `test`.
 
 For extra local coverage (fuzz unit tests + web typecheck/tests):
 
@@ -147,6 +147,7 @@ Task Progress:
 - [ ] gofmt -s -l . is empty          (or: make fmt-check)
 - [ ] gofumpt -l . is empty           (or: make fmt-check)
 - [ ] go vet ./...                    (or: make vet)
+- [ ] make lint                       (staticcheck ./...)
 - [ ] make lint-pii-logs
 - [ ] go run ./cmd/config-validator/  (or: make validate-config)
 - [ ] make test                       (race-enabled unit tests)

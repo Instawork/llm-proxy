@@ -117,7 +117,7 @@ help:
 	@echo "  fmt-strict     - Apply gofmt -s and gofumpt (what CI enforces)"
 	@echo "  fmt-check      - Verify gofmt -s and gofumpt (no writes)"
 	@echo "  install-hooks  - Enable the pre-commit format check (.githooks/)"
-	@echo "  lint           - Run golint"
+	@echo "  lint           - Run staticcheck"
 	@echo "  validate-config - Validate configs/*.yml"
 	@echo ""
 	@echo "$(GREEN)Docker:$(NC)"
@@ -484,21 +484,23 @@ dev:
 	@echo "$(YELLOW)Press Ctrl+C to stop$(NC)"
 	@ENVIRONMENT=$${ENVIRONMENT:-dev} LOG_LEVEL=debug go run $(MAIN_PATH)
 
-# golint is deprecated upstream but still serves as a useful style gate
-# in CI. We pin to a known-good commit so adding new lints does not silently
-# start failing builds on master. Override with GOLINT_VERSION at the
-# command line if a future revision is needed.
-GOLINT_VERSION?=v0.0.0-20210508222113-6edffad5e616
+# staticcheck replaces the archived golint as the style/correctness gate.
+# Pinned so a new upstream release cannot start failing builds on main
+# without a deliberate bump; override with STATICCHECK_VERSION if needed.
+STATICCHECK_VERSION?=2026.2.1
+STATICCHECK=$(shell command -v staticcheck 2>/dev/null || echo "$(GOPATH_BIN)/staticcheck")
+
+.PHONY: install-staticcheck
+install-staticcheck:
+	@if ! "$(STATICCHECK)" -version 2>/dev/null | grep -q "$(STATICCHECK_VERSION)"; then \
+		echo "$(YELLOW)Installing staticcheck $(STATICCHECK_VERSION)...$(NC)"; \
+		go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
+	fi
 
 .PHONY: lint
-lint:
-	@echo "$(BLUE)Running golint ($(GOLINT_VERSION))...$(NC)"
-	@if ! command -v golint >/dev/null 2>&1; then \
-		echo "$(YELLOW)golint not installed; installing $(GOLINT_VERSION)...$(NC)"; \
-		go install golang.org/x/lint/golint@$(GOLINT_VERSION) || \
-			(echo "$(YELLOW)golint install failed; skipping...$(NC)"; exit 0); \
-	fi; \
-	golint ./cmd/... ./internal/...
+lint: install-staticcheck
+	@echo "$(BLUE)Running staticcheck ($(STATICCHECK_VERSION))...$(NC)"
+	@"$(STATICCHECK)" ./...
 	@echo "$(GREEN)✓ Lint completed$(NC)"
 
 # Format Go code
@@ -594,7 +596,7 @@ check: fmt-check vet lint lint-pii-logs
 
 # Mirror CircleCI lint + unit-tests jobs (the default pre-push gate).
 .PHONY: ci
-ci: fmt-check vet lint-pii-logs validate-config test
+ci: fmt-check vet lint lint-pii-logs validate-config test
 	@echo "$(GREEN)✓ CI checks passed$(NC)"
 
 # Apply formatters then run ci.
@@ -713,9 +715,8 @@ quick-start: install build
 
 # Development setup
 .PHONY: setup
-setup: install install-hooks
+setup: install install-hooks install-staticcheck
 	@echo "$(BLUE)Setting up development environment...$(NC)"
-	@go install golang.org/x/lint/golint@latest || echo "$(YELLOW)Could not install golint$(NC)"
 	@echo "$(GREEN)✓ Development environment setup completed$(NC)"
 
 # Show project status
