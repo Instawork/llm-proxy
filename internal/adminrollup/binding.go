@@ -267,6 +267,29 @@ func (b *RecorderBinding) FlushRollup() {
 	}
 }
 
+// FinishDayRollover performs the I/O half of a UTC day rollover for a
+// recorder: it flushes this instance's pending debounced deltas so the last
+// old-day numbers land in the store, then runs the elected archive of the
+// completed day. Both steps are Redis round-trips with multi-second
+// timeouts, so they run on a background goroutine; the recorder must call
+// this from inside maybeRollDay without holding its own mutex across any
+// I/O (the in-memory reset happens under the lock, this does not).
+//
+// Flush-before-archive ordering is preserved within the goroutine. No-op
+// when unbound.
+func (b *RecorderBinding) FinishDayRollover(metric, oldDay string, caps TopNCaps) {
+	s, p := b.deps()
+	if s == nil && p == nil {
+		return
+	}
+	go func() {
+		if p != nil {
+			p.FlushNow()
+		}
+		b.ArchiveDayFromAggregatesElected(metric, oldDay, caps)
+	}()
+}
+
 const recentEventWriteTimeout = 500 * time.Millisecond
 
 // AppendRecentEvent mirrors one event into the shared rollup store's rolling

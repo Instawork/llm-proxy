@@ -86,10 +86,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	}
 	oldDay := r.dayKey
 	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricIDGate, oldDay, idGateRollupCaps)
-	}()
+	// Flush + archive are Redis round-trips with multi-second timeouts;
+	// they run off-lock on a background goroutine (flush first) so a UTC
+	// rollover never pins r.mu — and every concurrent Record* caller —
+	// for the duration of a slow or unreachable store.
+	r.FinishDayRollover(adminrollup.MetricIDGate, oldDay, idGateRollupCaps)
 	r.flushed = idGateFlushed{}
 	r.requestsWithImages = 0
 	r.requestsBlocked = 0
@@ -171,13 +172,14 @@ func (r *Recorder) ingest(entry recentEntry) {
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
-	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.deltaLocked()
 	r.advanceFlushedLocked()
 	r.mu.Unlock()
 
+	// Emit outside the lock: a threshold-tripping Emit uploads inline.
+	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
 	if r.RollupBound() {
 		r.AppendRecentEvent(adminrollup.MetricIDGate, entry, MaxRecentEvents)

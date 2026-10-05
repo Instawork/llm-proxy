@@ -107,10 +107,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	}
 	oldDay := r.dayKey
 	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricModelStatus, oldDay, modelStatusRollupCaps)
-	}()
+	// Flush + archive are Redis round-trips with multi-second timeouts;
+	// they run off-lock on a background goroutine (flush first) so a UTC
+	// rollover never pins r.mu — and every concurrent Record* caller —
+	// for the duration of a slow or unreachable store.
+	r.FinishDayRollover(adminrollup.MetricModelStatus, oldDay, modelStatusRollupCaps)
 	r.flushed = statusFlushed{}
 	r.retiredTotal = 0
 	r.deprecatedTotal = 0

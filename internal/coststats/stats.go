@@ -118,14 +118,11 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	}
 	oldDay := r.dayKey
 	r.dayKey = day
-	// Flush pending debounced deltas synchronously (persister mutex only — does
-	// not take r.mu) so this instance's last old-day deltas land in Redis
-	// before the archive goroutine snapshots. Only the archive runs async so a
-	// UTC rollover never blocks concurrent RecordRequest on r.mu for seconds.
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCost, oldDay, costRollupCaps)
-	}()
+	// Flush + archive are Redis round-trips with multi-second timeouts;
+	// they run off-lock on a background goroutine (flush first) so a UTC
+	// rollover never pins r.mu — and every concurrent Record* caller —
+	// for the duration of a slow or unreachable store.
+	r.FinishDayRollover(adminrollup.MetricCost, oldDay, costRollupCaps)
 	r.flushed = costFlushed{}
 	r.spendTodayUSD = 0
 	r.inputSpendTodayUSD = 0
@@ -234,13 +231,16 @@ func (r *Recorder) RecordRequest(
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
-	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.costDeltaLocked()
 	r.advanceCostFlushedLocked()
 	r.mu.Unlock()
 
+	// Emit outside the lock: when the history buffer trips its size
+	// threshold, Emit uploads inline (S3 PUT, bounded by its own timeout);
+	// doing that under r.mu would stall every concurrent RecordRequest.
+	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
 	r.applyMonthlyKeySpendFromDelta(context.Background(), delta)
 }
