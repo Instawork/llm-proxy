@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -108,4 +109,33 @@ func TestAdminDistFS_FromDisk(t *testing.T) {
 
 	fs := adminDistFS()
 	require.NotNil(t, fs)
+}
+
+func TestSPAIndex_ReadsOnceAtMountAndServesCachedBytes(t *testing.T) {
+	dist := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>v1</title>")},
+	}
+	index := newSPAIndex(dist)
+	require.NoError(t, index.err)
+
+	// Mutating the backing FS after mount must not change what is served:
+	// the shell is immutable for the life of the process.
+	dist["index.html"] = &fstest.MapFile{Data: []byte("<!doctype html><title>v2</title>")}
+
+	for range 3 {
+		rec := httptest.NewRecorder()
+		index.serve(rec, httptest.NewRequest(http.MethodGet, "/admin/anything", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "<!doctype html><title>v1</title>", rec.Body.String())
+		assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
+		assert.Equal(t, "no-cache, no-store, must-revalidate", rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestSPAIndex_MissingIndexIs404(t *testing.T) {
+	index := newSPAIndex(fstest.MapFS{"assets/app.js": &fstest.MapFile{Data: []byte("x")}})
+	require.Error(t, index.err)
+	rec := httptest.NewRecorder()
+	index.serve(rec, httptest.NewRequest(http.MethodGet, "/admin/", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
