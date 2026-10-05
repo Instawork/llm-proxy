@@ -159,7 +159,7 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 			// metrics correctly model-tagged without changing the Provider
 			// interface signature.
 			if metadata.Model == "" {
-				if reqModel, _ := provider.ExtractRequestModelAndMessages(r); reqModel != "" {
+				if reqModel, _ := providers.RequestModelAndMessages(provider, r); reqModel != "" {
 					metadata.Model = reqModel
 				}
 			}
@@ -656,7 +656,7 @@ func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) st
 
 	// Priority 3: Provider-specific extraction from request body
 	if provider != nil {
-		if userID := provider.UserIDFromRequest(req); userID != "" {
+		if userID := providers.RequestUserID(provider, req); userID != "" {
 			log.Printf("🔍 User ID from provider-specific extraction: %s", userID)
 			return userID
 		}

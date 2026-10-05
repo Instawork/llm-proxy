@@ -216,7 +216,7 @@ func (pm *ProviderManager) IsStreamingRequest(req *http.Request) bool {
 	if p == nil {
 		return false
 	}
-	return p.IsStreamingRequest(req)
+	return RequestIsStreaming(p, req)
 }
 
 // ProviderForRequest returns the Provider responsible for handling req based
@@ -506,7 +506,7 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig, provider Pro
 		if strings.Contains(ct, "application/json") {
 			if req.ContentLength >= 0 && req.ContentLength <= int64(maxSample) {
 				if provider != nil {
-					provModel, messages := provider.ExtractRequestModelAndMessages(req)
+					provModel, messages := RequestModelAndMessages(provider, req)
 					if provModel != "" {
 						model = provModel
 					}

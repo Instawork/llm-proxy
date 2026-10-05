@@ -737,28 +737,28 @@ func circuitModelExtractor(
 			strings.HasPrefix(path, "/v1/chat/"),
 			strings.HasPrefix(path, "/v1/responses"),
 			strings.HasPrefix(path, "/v1/completions"):
-			model, _ := openAIProvider.ExtractRequestModelAndMessages(req)
+			model, _ := providers.RequestModelAndMessages(openAIProvider, req)
 			return model
 		case strings.HasPrefix(path, "/anthropic/"),
 			strings.HasPrefix(path, "/v1/messages"):
-			model, _ := anthropicProvider.ExtractRequestModelAndMessages(req)
+			model, _ := providers.RequestModelAndMessages(anthropicProvider, req)
 			return model
 		case strings.HasPrefix(path, "/gemini/"),
 			strings.HasPrefix(path, "/v1beta/models/"),
 			strings.HasPrefix(path, "/v1/models/"):
-			model, _ := geminiProvider.ExtractRequestModelAndMessages(req)
+			model, _ := providers.RequestModelAndMessages(geminiProvider, req)
 			return model
 		case strings.HasPrefix(path, "/bedrock/"), strings.HasPrefix(path, "/model/"):
 			if bedrockProvider == nil {
 				return ""
 			}
-			model, _ := bedrockProvider.ExtractRequestModelAndMessages(req)
+			model, _ := providers.RequestModelAndMessages(bedrockProvider, req)
 			return model
 		case strings.HasPrefix(path, "/bedrock-mantle/"):
 			if bedrockMantleProvider == nil {
 				return ""
 			}
-			model, _ := bedrockMantleProvider.ExtractRequestModelAndMessages(req)
+			model, _ := providers.RequestModelAndMessages(bedrockMantleProvider, req)
 			return model
 		}
 		return ""
@@ -1653,6 +1653,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// panics raised anywhere below (ReverseProxy body-copy failures that
 	// otherwise reset the connection with zero log output).
 	r.Use(middleware.AbortLoggingMiddleware())
+	r.Use(middleware.RequestMemoMiddleware())                           // one body parse per request, shared by everything below
 	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
 
 	if yamlConfig.Features.ClientGzip.Enabled {

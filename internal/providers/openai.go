@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -797,15 +798,16 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 		return ""
 	}
 
-	// Parse JSON to extract user field
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+	// Decode only the "user" field; a non-string value reads as absent.
+	var probe struct {
+		User json.RawMessage `json:"user"`
+	}
+	if err := json.Unmarshal(bodyBytes, &probe); err != nil {
 		proxylog.Proxy("openai user ID extraction: error parsing request JSON: %v", err)
 		return ""
 	}
-
-	// Extract user ID from the "user" field
-	if userValue, ok := data["user"].(string); ok && userValue != "" {
+	var userValue string
+	if len(probe.User) > 0 && json.Unmarshal(probe.User, &userValue) == nil && userValue != "" {
 		log.Printf("🔍 OpenAI: Extracted user ID: %s", userValue)
 		return userValue
 	}
@@ -867,66 +869,105 @@ func (o *OpenAIProxy) ExtractRequestModelAndMessages(req *http.Request) (string,
 		return "", nil
 	}
 
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		return "", nil
-	}
+	return extractOpenAIModelAndMessages(bodyBytes)
+}
 
-	// Model
-	model := ""
-	if mv, ok := data["model"].(string); ok {
-		model = mv
+// openAIRequestProbe is the minimal typed view of an OpenAI-shaped request
+// used for model and message-text extraction. Polymorphic fields (content,
+// input) are kept as json.RawMessage and decoded per shape below, so the
+// whole body is scanned once without materialising it as a generic map.
+type openAIRequestProbe struct {
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Input    json.RawMessage `json:"input"`
+	Prompt   json.RawMessage `json:"prompt"`
+}
+
+type openAIMessage struct {
+	Content json.RawMessage `json:"content"`
+}
+
+type openAIContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// extractOpenAIModelAndMessages pulls the model and the user-visible text
+// (chat messages, Responses API input, legacy prompt) from a request body.
+// Malformed or non-object JSON yields ("", nil); individual fields of an
+// unexpected shape are skipped rather than failing the whole extraction.
+func extractOpenAIModelAndMessages(body []byte) (string, []string) {
+	var data openAIRequestProbe
+	if err := json.Unmarshal(body, &data); err != nil {
+		// Tolerate shape mismatches in optional fields (e.g. "messages" not
+		// an array) the way the map-based version did: keep what decoded.
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return "", nil
+		}
 	}
 
 	messages := make([]string, 0, 8)
 
 	// Chat Completions style: messages: [{ role, content }]
-	if rawMsgs, ok := data["messages"].([]interface{}); ok {
-		for _, m := range rawMsgs {
-			if msg, ok := m.(map[string]interface{}); ok {
-				if contentStr, ok := msg["content"].(string); ok && contentStr != "" {
-					messages = append(messages, contentStr)
-					continue
-				}
-				// content can be array for multimodal; collect text parts
-				if parts, ok := msg["content"].([]interface{}); ok {
-					for _, p := range parts {
-						if pm, ok := p.(map[string]interface{}); ok {
-							if t, ok := pm["type"].(string); ok && t == "text" {
-								if txt, ok := pm["text"].(string); ok && txt != "" {
-									messages = append(messages, txt)
-								}
-							}
-						}
-					}
+	for _, msg := range data.Messages {
+		if len(msg.Content) == 0 {
+			continue
+		}
+		var contentStr string
+		if json.Unmarshal(msg.Content, &contentStr) == nil {
+			if contentStr != "" {
+				messages = append(messages, contentStr)
+			}
+			continue
+		}
+		// content can be array for multimodal; collect text parts
+		var parts []openAIContentPart
+		if json.Unmarshal(msg.Content, &parts) == nil {
+			for _, p := range parts {
+				if p.Type == "text" && p.Text != "" {
+					messages = append(messages, p.Text)
 				}
 			}
 		}
 	}
 
-	// Responses API: input can be string or array of blocks {type, text}
-	if inputStr, ok := data["input"].(string); ok && inputStr != "" {
-		messages = append(messages, inputStr)
-	} else if inputArr, ok := data["input"].([]interface{}); ok {
-		for _, it := range inputArr {
-			if m, ok := it.(map[string]interface{}); ok {
-				if t, ok := m["type"].(string); ok && (t == "input_text" || t == "text") {
-					if txt, ok := m["text"].(string); ok && txt != "" {
-						messages = append(messages, txt)
+	// Responses API: input can be string or array of blocks {type, text} or strings
+	if len(data.Input) > 0 {
+		var inputStr string
+		if json.Unmarshal(data.Input, &inputStr) == nil {
+			if inputStr != "" {
+				messages = append(messages, inputStr)
+			}
+		} else {
+			var items []json.RawMessage
+			if json.Unmarshal(data.Input, &items) == nil {
+				for _, it := range items {
+					var s string
+					if json.Unmarshal(it, &s) == nil {
+						if s != "" {
+							messages = append(messages, s)
+						}
+						continue
+					}
+					var block openAIContentPart
+					if json.Unmarshal(it, &block) == nil && (block.Type == "input_text" || block.Type == "text") && block.Text != "" {
+						messages = append(messages, block.Text)
 					}
 				}
-			} else if s, ok := it.(string); ok && s != "" {
-				messages = append(messages, s)
 			}
 		}
 	}
 
 	// Legacy completions: prompt
-	if prompt, ok := data["prompt"].(string); ok && prompt != "" {
-		messages = append(messages, prompt)
+	if len(data.Prompt) > 0 {
+		var prompt string
+		if json.Unmarshal(data.Prompt, &prompt) == nil && prompt != "" {
+			messages = append(messages, prompt)
+		}
 	}
 
-	return model, messages
+	return data.Model, messages
 }
 
 // ValidateAPIKey validates and potentially replaces the API key in the request

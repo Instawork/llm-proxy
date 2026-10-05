@@ -17,6 +17,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
@@ -403,6 +404,9 @@ func setRequestBody(r *http.Request, body []byte) {
 	r.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(body)), nil
 	}
+	// Facts memoized from the pre-rewrite body (message text for token
+	// estimation in particular) must be recomputed from the new bytes.
+	providers.InvalidateRequestMemo(r)
 	r.Header.Del("Transfer-Encoding")
 	if len(body) == 0 {
 		r.Header.Del("Content-Length")

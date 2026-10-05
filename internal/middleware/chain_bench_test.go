@@ -117,6 +117,7 @@ func newBenchChain(tb testing.TB, upstream http.RoundTripper) http.Handler {
 
 	r := mux.NewRouter()
 	r.Use(AbortLoggingMiddleware())
+	r.Use(RequestMemoMiddleware())
 	r.Use(MetaURLRewritingMiddleware(pm))
 	r.Use(VendorPathPolicyMiddleware(pm))
 	r.Use(ModelStatusMiddleware(pm, cfg, modelstatusstats.NewRecorder(), nil))
