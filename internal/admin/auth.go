@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -59,12 +58,14 @@ type authenticator struct {
 }
 
 func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig, userStore *adminusers.Store) (*authenticator, error) {
+	env := config.LoadAdminAuthEnv()
+
 	// Resolve the allowed sign-in domain with the env var taking precedence over
 	// the YAML value, then fall back to example.com. Doing it here (not just in
 	// loadAuthConfig) ensures auth.allowedDomain — the value isAllowedUser checks —
 	// honors the override in every path, including dev-bypass which returns before
 	// loadAuthConfig runs.
-	allowedDomain := os.Getenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN")
+	allowedDomain := env.AllowedDomain
 	if allowedDomain == "" {
 		allowedDomain = adminCfg.AllowedDomain
 	}
@@ -72,7 +73,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		allowedDomain = "example.com"
 	}
 
-	sessionSecret := os.Getenv("LLM_PROXY_ADMIN_SESSION_SECRET")
+	sessionSecret := env.SessionSecret
 	if sessionSecret == "" {
 		if adminCfg.DevBypassLogin {
 			sessionSecret = "dev-local-session-secret-not-for-prod"
@@ -85,7 +86,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 	// Secure by default; only plain-http local dev (dev bypass) or an explicit
 	// LLM_PROXY_ADMIN_SESSION_SECURE=0 turns it off.
 	secureCookie := !adminCfg.DevBypassLogin
-	switch os.Getenv("LLM_PROXY_ADMIN_SESSION_SECURE") {
+	switch env.SessionSecure {
 	case "1":
 		secureCookie = true
 	case "0":
@@ -111,8 +112,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		logger:            logger,
 	}
 
-	clientID := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID")
-	clientSecret := os.Getenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET")
+	clientID, clientSecret := env.GoogleClientID, env.GoogleClientSecret
 	if clientID == "" || clientSecret == "" {
 		if adminCfg.DevBypassLogin {
 			logger.Warn("admin auth: Google OAuth not configured; dev bypass login only")
@@ -121,10 +121,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		return nil, fmt.Errorf("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID and LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET are required")
 	}
 
-	cfg, err := loadAuthConfig(allowedDomain, clientID, clientSecret, sessionSecret)
-	if err != nil {
-		return nil, err
-	}
+	cfg := loadAuthConfig(env, allowedDomain, clientID, clientSecret, sessionSecret)
 
 	// OIDC discovery is a network round-trip at boot. Bound it so a hung
 	// upstream fails startup with a clear error instead of wedging the
@@ -148,8 +145,8 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 	return auth, nil
 }
 
-func loadAuthConfig(allowedDomain, clientID, clientSecret, sessionSecret string) (authConfig, error) {
-	domain := os.Getenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN")
+func loadAuthConfig(env config.AdminAuthEnv, allowedDomain, clientID, clientSecret, sessionSecret string) authConfig {
+	domain := env.AllowedDomain
 	if domain == "" {
 		if allowedDomain != "" {
 			domain = allowedDomain
@@ -163,8 +160,8 @@ func loadAuthConfig(allowedDomain, clientID, clientSecret, sessionSecret string)
 		clientSecret:  clientSecret,
 		sessionSecret: sessionSecret,
 		allowedDomain: domain,
-		redirectURL:   os.Getenv("LLM_PROXY_ADMIN_OAUTH_REDIRECT_URL"),
-	}, nil
+		redirectURL:   env.OAuthRedirectURL,
+	}
 }
 
 func (a *authenticator) redirectURL(r *http.Request) string {
@@ -221,7 +218,7 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := os.Getenv("LLM_PROXY_ADMIN_DEV_USER_EMAIL")
+	email := config.AdminDevUserEmail()
 	if email == "" {
 		email = "dev@example.com"
 	}
