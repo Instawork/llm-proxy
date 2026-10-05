@@ -101,8 +101,6 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				next.ServeHTTP(w, r)
 				return
 			}
-			setRequestBody(r, body)
-
 			if oversize || len(body) == 0 {
 				next.ServeHTTP(w, r)
 				return
