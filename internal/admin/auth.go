@@ -31,6 +31,9 @@ const (
 	sessionOAuthState    = "oauth_state"
 	sessionOAuthRedirect = "oauth_redirect"
 	sessionIssuedAt      = "issued_at"
+
+	// oidcDiscoveryTimeout bounds the Google OIDC discovery fetch at boot.
+	oidcDiscoveryTimeout = 15 * time.Second
 )
 
 type authConfig struct {
@@ -123,7 +126,11 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		return nil, err
 	}
 
-	ctx := context.Background()
+	// OIDC discovery is a network round-trip at boot. Bound it so a hung
+	// upstream fails startup with a clear error instead of wedging the
+	// process before the HTTP listener (and /health) ever come up.
+	ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+	defer cancel()
 	provider, err := oidc.NewProvider(ctx, "https://accounts.google.com")
 	if err != nil {
 		return nil, fmt.Errorf("oidc provider: %w", err)

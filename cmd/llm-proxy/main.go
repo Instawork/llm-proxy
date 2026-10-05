@@ -160,6 +160,17 @@ var (
 // Background sweeper that revokes and deletes keys past their expiry grace period.
 var globalKeyExpiryStop chan struct{}
 
+// globalBackgroundWG tracks long-running background goroutines (circuit
+// archiver, key-expiry sweeper) so gracefulShutdown can wait for their
+// in-flight Redis/DynamoDB work to finish before closing the shared clients
+// out from under them.
+var globalBackgroundWG sync.WaitGroup
+
+// backgroundDrainTimeout caps how long gracefulShutdown waits for background
+// goroutines after signalling them to stop. The archiver's per-tick context
+// is 10s, so this is generous enough for a tick in flight to complete.
+const backgroundDrainTimeout = 15 * time.Second
+
 // Global circuit breaker store instance
 var globalCircuitStore circuit.Store
 
@@ -849,7 +860,7 @@ func startKeyExpirySweeper(yamlConfig *config.YAMLConfig) {
 		GracePeriod:   time.Duration(expiryCfg.GracePeriodDays) * 24 * time.Hour,
 	}, logger)
 	globalKeyExpiryStop = make(chan struct{})
-	go sweeper.Run(globalKeyExpiryStop)
+	globalBackgroundWG.Go(func() { sweeper.Run(globalKeyExpiryStop) })
 	logger.Info("Key expiry sweeper: ENABLED",
 		"sweep_interval_seconds", expiryCfg.SweepIntervalSeconds,
 		"grace_period_days", expiryCfg.GracePeriodDays)
@@ -1143,15 +1154,18 @@ func initAdminRollups(yamlConfig *config.YAMLConfig) {
 	}
 	if globalCircuitStore != nil {
 		globalAdminRollupStop = make(chan struct{})
-		go adminrollup.RunCircuitArchiver(
-			store,
-			adminrollup.NewPersister(store, adminrollup.MetricCircuit),
-			globalCircuitStore,
-			circuitBreakerProviders,
-			globalCircuitConfig.PerProviderRollupThreshold,
-			globalCircuitConfig.PerProviderRollupWindowSeconds,
-			globalAdminRollupStop,
-		)
+		stop := globalAdminRollupStop
+		globalBackgroundWG.Go(func() {
+			adminrollup.RunCircuitArchiver(
+				store,
+				adminrollup.NewPersister(store, adminrollup.MetricCircuit),
+				globalCircuitStore,
+				circuitBreakerProviders,
+				globalCircuitConfig.PerProviderRollupThreshold,
+				globalCircuitConfig.PerProviderRollupWindowSeconds,
+				stop,
+			)
+		})
 	}
 }
 
@@ -1169,15 +1183,25 @@ func rollupDBLabel(r *config.RedisConfig) int {
 // we fell back from Redis to in-memory, and per-provider state/failure
 // counts.  This is the canonical signal operators should key dashboards
 // and alerts off of.
+// healthStoreTimeout bounds every circuit-store read performed by /health.
+// With the Redis backend each ProviderStatsFor / RolledUpKeys / RollupOpen
+// call is a network round-trip; /health is the liveness probe, so a slow or
+// partitioned Redis must degrade the circuit block to "stats_unavailable"
+// (fail open) rather than stall the probe into a restart loop. A var so tests
+// can shorten it.
+var healthStoreTimeout = 2 * time.Second
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	providerHealth := globalProviderManager.GetHealthStatus()
 
 	var circuitBlock map[string]interface{}
 	if globalCircuitStore != nil {
+		storeCtx, cancelStore := context.WithTimeout(r.Context(), healthStoreTimeout)
+		defer cancelStore()
 		perProvider := make(map[string]interface{}, len(circuitBreakerProviders))
 		totalFailures := 0
 		for _, name := range circuitBreakerProviders {
-			stats, err := circuit.ProviderStatsFor(r.Context(), globalCircuitStore, name)
+			stats, err := circuit.ProviderStatsFor(storeCtx, globalCircuitStore, name)
 			if err != nil {
 				// /health is unauthenticated, so we MUST NOT leak the
 				// raw error string (it can contain Redis URLs, host
@@ -1211,8 +1235,8 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 			// currently degraded and which ones.  Surfacing both lets
 			// dashboards alert on the right signal.
 			if rec, ok := globalCircuitStore.(circuit.RollupRecorder); ok && globalCircuitConfig.PerProviderRollupThreshold > 0 {
-				keys, _ := rec.RolledUpKeys(r.Context(), name, globalCircuitConfig.PerProviderRollupWindowSeconds)
-				rollupOpen, count, _ := rec.RollupOpen(r.Context(), name,
+				keys, _ := rec.RolledUpKeys(storeCtx, name, globalCircuitConfig.PerProviderRollupWindowSeconds)
+				rollupOpen, count, _ := rec.RollupOpen(storeCtx, name,
 					globalCircuitConfig.PerProviderRollupThreshold,
 					globalCircuitConfig.PerProviderRollupWindowSeconds)
 				rollup := map[string]interface{}{
@@ -1261,7 +1285,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		// ?history=1); bare infra probes stay Redis-free.
 		if globalAdminRollupStore != nil && r.URL.Query().Get("history") == "1" {
 			cbSnap := adminrollup.SnapshotCircuit(
-				r.Context(),
+				storeCtx,
 				globalCircuitStore,
 				circuitBreakerProviders,
 				globalCircuitConfig.PerProviderRollupThreshold,
@@ -2073,6 +2097,24 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 }
 
+// waitGroupWithTimeout waits for wg or the timeout, whichever comes first,
+// reporting whether the group finished in time. The waiter goroutine exits as
+// soon as wg completes, so a timed-out call does not leak a goroutine past
+// the point the tracked workers finish.
+func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // closeGlobalHistorySink flushes buffered row history on shutdown.
 func closeGlobalHistorySink() error {
 	if globalHistorySink == nil {
@@ -2139,6 +2181,13 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalKeyExpiryStop != nil {
 		close(globalKeyExpiryStop)
+	}
+	// Wait for the archiver/sweeper to observe the stop signal and finish any
+	// tick in flight before the Redis/DynamoDB clients below are closed;
+	// otherwise a final archive write races the close and is lost.
+	if !waitGroupWithTimeout(&globalBackgroundWG, backgroundDrainTimeout) {
+		logProxyWarn("Background workers did not stop within drain timeout; closing stores anyway",
+			"timeout", backgroundDrainTimeout.String())
 	}
 	if globalAdminRollupStore != nil {
 		if err := globalAdminRollupStore.Close(); err != nil {
