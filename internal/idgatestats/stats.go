@@ -127,20 +127,6 @@ func topN(m map[string]int64, n int) []kv {
 	return out
 }
 
-func (r *Recorder) rollupDataLocked() map[string]any {
-	return map[string]any{
-		"requests_with_images": r.requestsWithImages,
-		"requests_blocked":     r.requestsBlocked,
-		"requests_cleared":     r.requestsCleared,
-		"fail_open":            r.failOpen,
-		"fail_closed":          r.failClosed,
-		"images_scanned":       r.imagesScanned,
-		"by_provider":          topN(r.byProvider, 0),
-		"by_entity":            topN(r.byEntity, 0),
-		"top_keys":             topN(r.byKey, 10),
-	}
-}
-
 func (r *Recorder) ingest(entry recentEntry) {
 	now := time.Now().UTC()
 	r.mu.Lock()

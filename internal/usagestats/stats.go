@@ -210,25 +210,6 @@ func (r *Recorder) advanceUsageFlushedLocked() {
 	}
 }
 
-func scopeMap(m map[string]*scopeUsage) map[string]scopeUsage {
-	out := make(map[string]scopeUsage, len(m))
-	for k, v := range m {
-		out[k] = *v
-	}
-	return out
-}
-
-func (r *Recorder) rollupDataLocked() map[string]any {
-	return map[string]any{
-		"requests_today": r.global.Requests,
-		"tokens_today":   r.global.Tokens,
-		"by_model":       scopeMap(r.byModel),
-		"by_provider":    scopeMap(r.byProv),
-		"by_key":         scopeMap(r.byKey),
-		"by_user":        scopeMap(r.byUser),
-	}
-}
-
 type nameCount struct {
 	Name  string `json:"name"`
 	Count int64  `json:"count"`

@@ -143,22 +143,6 @@ func (r *Recorder) detectionRateLocked() (int64, float64) {
 	return cleanScanned, rate
 }
 
-func (r *Recorder) rollupDataLocked() map[string]any {
-	_, detectionRate := r.detectionRateLocked()
-	return map[string]any{
-		"requests_scanned":  r.requestsScanned,
-		"requests_with_pii": r.requestsWithPII,
-		"entities_total":    r.entitiesTotal,
-		"detection_rate":    detectionRate,
-		"fail_open":         r.failOpen,
-		"fail_closed":       r.failClosed,
-		"oversize":          r.oversize,
-		"by_entity":         topN(r.byEntity, 0),
-		"by_provider":       topN(r.byProvider, 0),
-		"top_keys":          topN(r.byKey, 10),
-	}
-}
-
 // RecordRedaction ingests a single redaction outcome.
 func (r *Recorder) RecordRedaction(
 	provider, keyID string,

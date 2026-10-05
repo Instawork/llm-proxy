@@ -36,7 +36,7 @@ func httpGetJSON(t *testing.T, urlStr string) (any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &http.ProtocolError{ErrorString: "GET " + urlStr + ": status " + resp.Status}
+		return nil, fmt.Errorf("GET %s: status %s", urlStr, resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

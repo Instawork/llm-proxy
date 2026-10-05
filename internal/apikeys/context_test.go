@@ -39,6 +39,3 @@ func TestEffectiveAllowStreaming(t *testing.T) {
 		t.Fatal("key on")
 	}
 }
-
-//go:fix inline
-func boolPtr(v bool) *bool { return new(v) }

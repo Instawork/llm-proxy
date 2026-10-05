@@ -349,13 +349,6 @@ func max0(v int) int {
 	return v
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func exceededMetric(c *counters, lim limits, addTokens int) string {
 	// Prefer requests over tokens when both are exceeded, matching exceeds()
 	// check order and redis.luaCheckAndReserve so X-RateLimit-* headers

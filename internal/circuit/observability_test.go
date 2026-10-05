@@ -578,7 +578,7 @@ func TestEnforce_FastFailMetric_OnOpenCircuit(t *testing.T) {
 		MaxTransientRetries: 1,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
-	state, _, err := store.RecordTerminalFailure(context.Background(), "openai:gpt-4o") //nolint:errcheck
+	state, _, _ := store.RecordTerminalFailure(context.Background(), "openai:gpt-4o")
 	if state != StateOpen {
 		t.Fatalf("expected state to be Open after RecordTerminalFailure, got %v", state)
 	}

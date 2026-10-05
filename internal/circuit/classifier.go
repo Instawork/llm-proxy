@@ -803,7 +803,7 @@ func parseRetryAfterSeconds(s string) int {
 	if err != nil {
 		return 0
 	}
-	seconds := t.Sub(time.Now()).Seconds()
+	seconds := time.Until(t).Seconds()
 	if seconds <= 0 {
 		return 0
 	}

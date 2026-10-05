@@ -122,14 +122,18 @@ func TestProxySeam_ExactlyOneRewriteHookConfigured(t *testing.T) {
 			rp := tc.reverse(tc.build(ProxyOptions{}))
 			// ReverseProxy.ServeHTTP responds 502 through the ErrorHandler when
 			// both or neither hook is set; catch that misconfiguration directly.
-			assert.NotEqual(t, rp.Director != nil, rp.Rewrite != nil,
+			//lint:ignore SA1019 the deprecated Director field is exactly what this seam test guards against
+			hasDirector := rp.Director != nil
+			hasRewrite := rp.Rewrite != nil
+			assert.NotEqual(t, hasDirector, hasRewrite,
 				"exactly one of Director/Rewrite must be set (Director=%v Rewrite=%v)",
-				rp.Director != nil, rp.Rewrite != nil)
+				hasDirector, hasRewrite)
 		})
 	}
 	t.Run("bedrock-mantle", func(t *testing.T) {
 		m := newBedrockMantleProxy("us-west-2",
 			credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", "session"), ProxyOptions{})
+		//lint:ignore SA1019 the deprecated Director field is exactly what this seam test guards against
 		assert.NotEqual(t, m.proxy.Director != nil, m.proxy.Rewrite != nil)
 	})
 }

@@ -53,9 +53,6 @@ func withTestProvisioner(t *testing.T, h *handler, providers ...string) {
 	h.deps.KeyProvisioner = provision.NewManager(slog.Default(), byProvider)
 }
 
-//go:fix inline
-func boolPtr(v bool) *bool { return new(v) }
-
 // Editors are held to the Bedrock-only rule for PII-off keys; admins (below)
 // may override it after confirming in the dashboard.
 func TestHandleCreateKey_PIIOffRequiresBedrockForEditor(t *testing.T) {

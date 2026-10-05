@@ -141,20 +141,6 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.recent = nil
 }
 
-func (r *Recorder) rollupDataLocked() map[string]any {
-	return map[string]any{
-		"spend_today_usd":        r.spendTodayUSD,
-		"input_spend_today_usd":  r.inputSpendTodayUSD,
-		"output_spend_today_usd": r.outputSpendTodayUSD,
-		"requests_today":         r.requestsToday,
-		"input_tokens_today":     r.inputTokensToday,
-		"output_tokens_today":    r.outputTokensToday,
-		"by_key":                 spendList(r.byKey),
-		"by_user":                userSpendMap(r.byUser),
-		"by_provider":            providerList(r.byProvider),
-	}
-}
-
 // RecordRequest ingests one tracked LLM request. keyID should be a masked iw:
 // key when available (see middleware.MaskKeyID).
 func (r *Recorder) RecordRequest(

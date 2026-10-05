@@ -249,7 +249,6 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				cfg.Recorder.RecordClear(provider, keyID, len(images), gateDuration)
 			}
 			next.ServeHTTP(w, r)
-			return
 		})
 	}
 }
