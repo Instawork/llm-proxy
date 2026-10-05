@@ -65,3 +65,22 @@ func TestRecordRequest_MonthlyKeySpendGoesThroughBackgroundRunner(t *testing.T) 
 		t.Fatalf("monthly spend = %v with inline runner, want 0.5", got)
 	}
 }
+
+// When no rollup store is bound there is nothing to write, so RecordRequest
+// must not spend a worker-pool turn on a no-op job. (Under the cost tracker's
+// 3-worker pool, a phantom job per request delays the real cost records
+// behind it, which widens the read-only cost-limit overshoot window.)
+func TestRecordRequest_UnboundRecorderQueuesNoBackgroundJob(t *testing.T) {
+	r := NewRecorder()
+	var queued int
+	r.SetBackgroundRunner(func(job func(ctx context.Context)) { queued++ })
+
+	r.RecordRequest("openai", "iw:abcdefgh999", "", "gpt-4o-mini", 0.25, 0.15, 0.10, 100, 50)
+
+	if queued != 0 {
+		t.Fatalf("unbound recorder queued %d background jobs, want 0", queued)
+	}
+	if got := r.Snapshot()["spend_today_usd"].(float64); got != 0.25 {
+		t.Fatalf("in-process spend_today_usd = %v, want 0.25", got)
+	}
+}
