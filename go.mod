@@ -1,6 +1,6 @@
 module github.com/Instawork/llm-proxy
 
-go 1.24.5
+go 1.27.1
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.6.0

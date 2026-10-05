@@ -10,7 +10,7 @@ flow, package map, middleware order, key decisions).
 A Go reverse proxy that forwards requests to LLM providers (OpenAI, Anthropic,
 Gemini, AWS Bedrock) with streaming support, cost tracking, rate limiting, PII
 redaction, a circuit breaker, and an embedded React admin dashboard. Built on
-Gorilla Mux; module path is `github.com/Instawork/llm-proxy` (Go 1.24).
+Gorilla Mux; module path is `github.com/Instawork/llm-proxy` (Go 1.27).
 
 ## Repository layout
 

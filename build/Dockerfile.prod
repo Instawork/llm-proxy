@@ -1,8 +1,8 @@
 # Production Dockerfile for LLM Proxy
 # Multi-stage build with security hardening and optimization
 
-ARG GO_VERSION=1.24.5
-ARG ALPINE_VERSION=3.22
+ARG GO_VERSION=1.27.1
+ARG ALPINE_VERSION=3.23
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
