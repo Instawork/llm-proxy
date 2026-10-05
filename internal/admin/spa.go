@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -28,22 +29,36 @@ func adminDistFS() fs.FS {
 // dist FS once at mount: every client-side route and every unknown path
 // falls through to this handler, and re-opening the embedded file on each
 // hit was pure overhead for content that cannot change while the process
-// runs. When the read fails at mount (e.g. a dist directory with no
-// index.html) the handler reports 404 for the shell, matching the previous
-// per-request behaviour.
+// runs. Failures are recorded at mount and reported per request with the
+// same status codes the previous per-request implementation used: a dist
+// without index.html is 404, an index.html that exists but cannot be read is
+// 500.
 type spaIndex struct {
-	data []byte
-	err  error
+	data   []byte
+	status int // 0 when the shell loaded; otherwise the HTTP status to report
 }
 
 func newSPAIndex(dist fs.FS) *spaIndex {
-	data, err := fs.ReadFile(dist, "index.html")
-	return &spaIndex{data: data, err: err}
+	f, err := dist.Open("index.html")
+	if err != nil {
+		return &spaIndex{status: http.StatusNotFound}
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return &spaIndex{status: http.StatusInternalServerError}
+	}
+	return &spaIndex{data: data}
 }
 
 func (s *spaIndex) serve(w http.ResponseWriter, r *http.Request) {
-	if s.err != nil {
+	switch s.status {
+	case 0:
+	case http.StatusNotFound:
 		http.NotFound(w, r)
+		return
+	default:
+		http.Error(w, "failed to load admin UI", s.status)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
