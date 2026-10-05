@@ -236,14 +236,35 @@ func TestProxySeam_Bedrock_PathRawPathHostAndSignedHeaders(t *testing.T) {
 	const signedAuth = "AWS4-HMAC-SHA256 Credential=AKID/20250101/us-west-2/bedrock/aws4_request, " +
 		"SignedHeaders=accept-encoding;content-type;host;x-amz-date, Signature=deadbeef"
 
-	t.Run("strips prefix from Path and RawPath, pins Host", func(t *testing.T) {
+	t.Run("strips prefix from Path and RawPath, pins Host, passes body and every signed header through byte-for-byte", func(t *testing.T) {
+		// Every header the client signed. If the proxy drops, renames, or
+		// re-canonicalises any of these — or touches a single body byte — AWS
+		// rejects the request with a signature mismatch, so the seam must
+		// carry them verbatim.
+		signedHeaders := map[string]string{
+			"Content-Type":         "application/json; charset=utf-8",
+			"X-Amz-Date":           "20250101T000000Z",
+			"X-Amz-Content-Sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			"X-Amz-Security-Token": "FwoGZXIvYXdzEBYaDExampleSessionToken==",
+			"X-Amz-Target":         "AmazonBedrockRuntime.Converse",
+			"X-Amzn-Bedrock-Trace": "ENABLED",
+		}
+		fullAuth := "AWS4-HMAC-SHA256 Credential=AKID/20250101/us-west-2/bedrock/aws4_request, " +
+			"SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token;x-amz-target;x-amzn-bedrock-trace, " +
+			"Signature=deadbeef"
+		// Body with non-ASCII, escaped slashes, and whitespace the proxy must
+		// not normalise (SigV4 hashes the exact bytes).
+		body := []byte("{\"messages\":[{\"role\":\"user\",\"content\":[{\"text\":\"héllo \\/ wörld\\n\"}]}],  \"inferenceConfig\": {\"maxTokens\":  8}}")
+
 		p := tc.build(ProxyOptions{})
 		rt := captureAtSeam(p)
 		req := httptest.NewRequest(http.MethodPost,
-			"http://localhost:9002/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse", bytes.NewReader([]byte(`{}`)))
+			"http://localhost:9002/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse", bytes.NewReader(body))
 		req.Host = tc.vendorHost
-		req.Header.Set("Authorization", signedAuth)
-		req.Header.Set("X-Amz-Date", "20250101T000000Z")
+		req.Header.Set("Authorization", fullAuth)
+		for k, v := range signedHeaders {
+			req.Header.Set(k, v)
+		}
 		p.Proxy().ServeHTTP(httptest.NewRecorder(), req)
 
 		require.NotNil(t, rt.got)
@@ -252,7 +273,26 @@ func TestProxySeam_Bedrock_PathRawPathHostAndSignedHeaders(t *testing.T) {
 			"RawPath must be stripped too so the on-wire path matches the signed canonical path")
 		assert.Equal(t, tc.vendorHost, rt.got.Host)
 		assert.Equal(t, tc.vendorHost, rt.got.URL.Host)
-		assert.Equal(t, signedAuth, rt.got.Header.Get("Authorization"), "SigV4 Authorization passes through verbatim")
+		assert.Equal(t, fullAuth, rt.got.Header.Get("Authorization"), "SigV4 Authorization passes through verbatim")
+		for k, v := range signedHeaders {
+			assert.Equalf(t, []string{v}, rt.got.Header.Values(k), "signed header %s must pass through verbatim and exactly once", k)
+		}
+		assert.Equal(t, body, rt.body, "SigV4 body must reach the vendor byte-for-byte")
+		assert.Equal(t, int64(len(body)), rt.got.ContentLength, "Content-Length must match the signed payload")
+		assert.Empty(t, rt.got.Header.Values("Content-Encoding"), "proxy must not compress a signed body")
+		assert.Empty(t, rt.got.Header.Values("Accept-Encoding"), "an unsigned Accept-Encoding must not be synthesised")
+	})
+
+	t.Run("plain path without escaped characters", func(t *testing.T) {
+		p := tc.build(ProxyOptions{})
+		rt := captureAtSeam(p)
+		req := httptest.NewRequest(http.MethodPost, "http://localhost:9002/bedrock/model/x/converse", bytes.NewReader([]byte(`{}`)))
+		req.Header.Set("Authorization", signedAuth)
+		req.Header.Set("X-Amz-Date", "20250101T000000Z")
+		p.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+		require.NotNil(t, rt.got)
+		assert.Equal(t, "/model/x/converse", rt.got.URL.Path)
+		assert.Equal(t, signedAuth, rt.got.Header.Get("Authorization"))
 		assert.Equal(t, "20250101T000000Z", rt.got.Header.Get("X-Amz-Date"))
 	})
 
