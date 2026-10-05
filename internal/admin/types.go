@@ -215,7 +215,7 @@ func (o *OptionalTime) UnmarshalJSON(data []byte) error {
 // ConfigResponse summarizes feature flags for the dashboard.
 type ConfigResponse struct {
 	Enabled        bool                        `json:"enabled"`
-	Features       map[string]interface{}      `json:"features"`
+	Features       map[string]any              `json:"features"`
 	Providers      map[string]ProviderSummary  `json:"providers"`
 	AdminDashboard config.AdminDashboardConfig `json:"admin_dashboard"`
 }
@@ -233,7 +233,7 @@ type RateLimitsResponse struct {
 	Limits    config.LimitsConfig       `json:"limits,omitempty"`
 	Overrides config.RateLimitOverrides `json:"overrides,omitempty"`
 	Snapshot  *ratelimit.LimitsSnapshot `json:"snapshot,omitempty"`
-	Stats     map[string]interface{}    `json:"stats,omitempty"`
+	Stats     map[string]any            `json:"stats,omitempty"`
 }
 
 // ProvisioningResponse summarizes auto-provision availability for the admin UI.

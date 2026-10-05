@@ -1,11 +1,15 @@
 package providers
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -94,21 +98,59 @@ func TestProvider_WrapTransport_AppliesWrapper(t *testing.T) {
 	}
 }
 
-func TestCreateGenericDirector_StripsPrefixAndGzip(t *testing.T) {
+func TestCreateGenericRewrite_StripsPrefixAndGzip(t *testing.T) {
 	op := NewOpenAIProxy()
-	target, _ := http.NewRequest("GET", "https://api.openai.com", nil)
-	originalDirector := func(req *http.Request) {
-		req.URL.Scheme = target.URL.Scheme
-		req.URL.Host = target.URL.Host
-	}
-	director := CreateGenericDirector(op, target.URL, originalDirector, true)
+	target, _ := url.Parse("https://api.openai.com")
+	rewrite := CreateGenericRewrite(op, target, true)
 
-	req, _ := http.NewRequest("POST", "/openai/v1/chat/completions", nil)
-	req.Header.Set("Accept-Encoding", "gzip")
-	director(req)
-	assert.Equal(t, "/v1/chat/completions", req.URL.Path)
-	assert.Equal(t, "", req.Header.Get("Accept-Encoding"))
-	assert.Equal(t, target.URL.Host, req.Host)
+	in, _ := http.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	in.Header.Set("Accept-Encoding", "gzip")
+	out := in.Clone(in.Context())
+	rewrite(&httputil.ProxyRequest{In: in, Out: out})
+
+	assert.Equal(t, "https", out.URL.Scheme)
+	assert.Equal(t, target.Host, out.URL.Host)
+	assert.Equal(t, "/v1/chat/completions", out.URL.Path)
+	assert.Equal(t, "", out.Header.Get("Accept-Encoding"))
+	assert.Equal(t, target.Host, out.Host)
+	// The inbound request is never mutated in Rewrite mode.
+	assert.Equal(t, "/openai/v1/chat/completions", in.URL.Path)
+	assert.Equal(t, "gzip", in.Header.Get("Accept-Encoding"))
+}
+
+func TestGunzipIfNeeded(t *testing.T) {
+	plain := []byte(`{"output":[]}`)
+	out, err := gunzipIfNeeded(plain)
+	require.NoError(t, err)
+	assert.Equal(t, plain, out)
+	assert.Same(t, &plain[0], &out[0], "plain bodies are returned without copying")
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write(plain)
+	require.NoError(t, gz.Close())
+	out, err = gunzipIfNeeded(buf.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, plain, out)
+
+	_, err = gunzipIfNeeded([]byte{0x1f, 0x8b, 0xff, 0xff})
+	assert.Error(t, err, "truncated gzip must surface an error, not silently parse")
+	assert.Empty(t, mustGunzip(t, nil))
+}
+
+func mustGunzip(t *testing.T, b []byte) []byte {
+	t.Helper()
+	out, err := gunzipIfNeeded(b)
+	require.NoError(t, err)
+	return out
+}
+
+func TestOpenAIBodyHasOutput(t *testing.T) {
+	assert.True(t, openAIBodyHasOutput([]byte(`{"id":"r","output":[{"type":"message"}]}`)))
+	assert.True(t, openAIBodyHasOutput([]byte(`{"output":null}`)), "key present with null still routes to Responses parser")
+	assert.False(t, openAIBodyHasOutput([]byte(`{"id":"c","choices":[]}`)))
+	assert.False(t, openAIBodyHasOutput([]byte(`not json`)))
+	assert.False(t, openAIBodyHasOutput(nil))
 }
 
 func TestDecompressResponseIfNeeded_PlainPassthrough(t *testing.T) {

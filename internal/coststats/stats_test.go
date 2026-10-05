@@ -109,7 +109,7 @@ func TestRecorderAggregatesByKeyAndProvider(t *testing.T) {
 	switch rows := byKeyRaw.(type) {
 	case []keySpend:
 		byKey = rows
-	case []map[string]interface{}:
+	case []map[string]any:
 		byKey = make([]keySpend, len(rows))
 		for i, row := range rows {
 			byKey[i] = keySpend{

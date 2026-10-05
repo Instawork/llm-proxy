@@ -24,14 +24,14 @@ type Deps struct {
 	AdminRollupStore   *adminrollup.Store
 	RateLimiter        ratelimit.RateLimiter
 	HealthFunc         http.HandlerFunc
-	CostSummary        func() map[string]interface{}
-	PIISummary         func() map[string]interface{}
-	IDGateSummary      func() map[string]interface{}
-	UsageSummary       func() map[string]interface{}
-	RateLimitSummary   func() map[string]interface{}
-	CircuitActivity    func() map[string]interface{}
-	ModelStatusSummary func() map[string]interface{}
-	UnmeteredSummary   func() map[string]interface{}
+	CostSummary        func() map[string]any
+	PIISummary         func() map[string]any
+	IDGateSummary      func() map[string]any
+	UsageSummary       func() map[string]any
+	RateLimitSummary   func() map[string]any
+	CircuitActivity    func() map[string]any
+	ModelStatusSummary func() map[string]any
+	UnmeteredSummary   func() map[string]any
 	KeyProvisioner     *provision.Manager
 	Notifier           *notify.Notifier
 }

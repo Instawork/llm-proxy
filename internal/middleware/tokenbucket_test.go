@@ -13,7 +13,7 @@ func TestTokenBucketLimiter_BurstThenBlock(t *testing.T) {
 	l := NewTokenBucketLimiter(1, 5)
 	now := time.Now()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		assert.True(t, l.Allow("1.2.3.4", now), "request %d within burst should pass", i)
 	}
 	assert.False(t, l.Allow("1.2.3.4", now), "request beyond burst should be blocked")
@@ -80,7 +80,7 @@ func TestTokenBucketLimiter_SpendAndExhausted(t *testing.T) {
 	l.Spend("ip", now)
 	assert.True(t, l.Exhausted("ip", now))
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		l.Spend("ip", now)
 	}
 	// Two seconds refill from the -1 floor to 1 token: unblocked again.

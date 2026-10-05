@@ -33,11 +33,11 @@ func modelFromBody(req *http.Request) string {
 		return ""
 	}
 	rest := string(b)[idx+len(needle):]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
+	before, _, ok := strings.Cut(rest, "\"")
+	if !ok {
 		return ""
 	}
-	return rest[:end]
+	return before
 }
 
 // requestForModel builds a dummyRequest variant with a body that targets
@@ -136,7 +136,7 @@ func TestBypass_DegradedResponse_StillFeedsBreaker(t *testing.T) {
 		WithModelExtractor(modelFromBody),
 	)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		req := requestForModel("gpt-4o")
 		req.Header.Set(BypassHeader, "true")
 		resp, err := tr.RoundTrip(req)
@@ -507,7 +507,7 @@ func TestRollup_RecordKeyOpenedForRollup_DedupesByKey(t *testing.T) {
 	cfg.PerProviderRollupWindowSeconds = 60
 	store := NewMemoryStore(cfg)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = store.RecordKeyOpenedForRollup(context.Background(), "openai", "openai:m1", cfg.PerProviderRollupWindowSeconds)
 	}
 	open, count, _ := store.RollupOpen(context.Background(), "openai", cfg.PerProviderRollupThreshold, cfg.PerProviderRollupWindowSeconds)

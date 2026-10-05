@@ -12,29 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func snap(provs map[string]interface{}) map[string]interface{} {
-	return map[string]interface{}{"providers": provs}
+func snap(provs map[string]any) map[string]any {
+	return map[string]any{"providers": provs}
 }
 
 func TestCircuitDayPeakTakesElementwiseMax(t *testing.T) {
 	p := newCircuitDayPeak()
 
 	// Window gauge bounces 3 -> 7 -> 2 for openai; peak must stick at 7.
-	p.merge(snap(map[string]interface{}{
-		"openai": map[string]interface{}{"failures": 3, "state": "closed"},
+	p.merge(snap(map[string]any{
+		"openai": map[string]any{"failures": 3, "state": "closed"},
 	}))
-	p.merge(snap(map[string]interface{}{
-		"openai": map[string]interface{}{"failures": 7, "state": "open", "rollup_open": true},
+	p.merge(snap(map[string]any{
+		"openai": map[string]any{"failures": 7, "state": "open", "rollup_open": true},
 	}))
-	p.merge(snap(map[string]interface{}{
-		"openai": map[string]interface{}{"failures": 2, "state": "closed"},
+	p.merge(snap(map[string]any{
+		"openai": map[string]any{"failures": 2, "state": "closed"},
 	}))
 
 	out := p.payload()
 	if got := out["total_failures"].(int); got != 7 {
 		t.Fatalf("total_failures = %d, want 7 (peak, not sum)", got)
 	}
-	prov := out["providers"].(map[string]interface{})["openai"].(map[string]interface{})
+	prov := out["providers"].(map[string]any)["openai"].(map[string]any)
 	if got := prov["failures"].(int); got != 7 {
 		t.Fatalf("openai peak failures = %d, want 7", got)
 	}
@@ -50,12 +50,12 @@ func TestCircuitDayPeakTakesElementwiseMax(t *testing.T) {
 
 func TestCircuitDayPeakMultipleProviders(t *testing.T) {
 	p := newCircuitDayPeak()
-	p.merge(snap(map[string]interface{}{
-		"openai":    map[string]interface{}{"failures": 4},
-		"anthropic": map[string]interface{}{"failures": 1},
+	p.merge(snap(map[string]any{
+		"openai":    map[string]any{"failures": 4},
+		"anthropic": map[string]any{"failures": 1},
 	}))
-	p.merge(snap(map[string]interface{}{
-		"anthropic": map[string]interface{}{"failures": 6},
+	p.merge(snap(map[string]any{
+		"anthropic": map[string]any{"failures": 6},
 	}))
 
 	out := p.payload()
@@ -67,10 +67,10 @@ func TestCircuitDayPeakMultipleProviders(t *testing.T) {
 func TestCircuitDayPeakHandlesFloatFromRedis(t *testing.T) {
 	p := newCircuitDayPeak()
 	// Values round-tripped through JSON/Redis arrive as float64.
-	p.merge(snap(map[string]interface{}{
-		"gemini": map[string]interface{}{"failures": float64(5)},
+	p.merge(snap(map[string]any{
+		"gemini": map[string]any{"failures": float64(5)},
 	}))
-	prov := p.payload()["providers"].(map[string]interface{})["gemini"].(map[string]interface{})
+	prov := p.payload()["providers"].(map[string]any)["gemini"].(map[string]any)
 	if got := prov["failures"].(int); got != 5 {
 		t.Fatalf("failures from float64 = %d, want 5", got)
 	}
@@ -78,9 +78,9 @@ func TestCircuitDayPeakHandlesFloatFromRedis(t *testing.T) {
 
 func TestCircuitDayPeakIgnoresMalformedSnapshots(t *testing.T) {
 	p := newCircuitDayPeak()
-	p.merge(map[string]interface{}{"providers": "not-a-map"})
-	p.merge(map[string]interface{}{}) // no providers key
-	p.merge(snap(map[string]interface{}{"openai": "not-a-map"}))
+	p.merge(map[string]any{"providers": "not-a-map"})
+	p.merge(map[string]any{}) // no providers key
+	p.merge(snap(map[string]any{"openai": "not-a-map"}))
 
 	out := p.payload()
 	if got := out["total_failures"].(int); got != 0 {
@@ -90,7 +90,7 @@ func TestCircuitDayPeakIgnoresMalformedSnapshots(t *testing.T) {
 
 func TestSnapIntCoercions(t *testing.T) {
 	cases := []struct {
-		in   interface{}
+		in   any
 		want int
 	}{
 		{int(3), 3},
@@ -111,7 +111,7 @@ func TestSnapshotCircuitNilStore(t *testing.T) {
 	if got := out["total_failures"].(int); got != 0 {
 		t.Fatalf("nil store total_failures = %d, want 0", got)
 	}
-	if provs := out["providers"].(map[string]interface{}); len(provs) != 0 {
+	if provs := out["providers"].(map[string]any); len(provs) != 0 {
 		t.Fatalf("nil store providers = %+v, want empty", provs)
 	}
 }
@@ -133,8 +133,8 @@ func TestSnapshotCircuitMemoryStore(t *testing.T) {
 
 	out := SnapshotCircuit(ctx, store, []string{"openai", "anthropic"}, 2, 300)
 	require.Equal(t, 2, out["total_failures"])
-	provs := out["providers"].(map[string]interface{})
-	openai := provs["openai"].(map[string]interface{})
+	provs := out["providers"].(map[string]any)
+	openai := provs["openai"].(map[string]any)
 	require.Equal(t, 2, openai["failures"])
 	require.Equal(t, "open", openai["state"])
 	require.Contains(t, openai, "rollup_open")
@@ -144,7 +144,7 @@ func TestSnapshotCircuitSkipsGetStatsErrors(t *testing.T) {
 	store := &fakeCircuitStore{statsErr: errors.New("redis down")}
 	out := SnapshotCircuit(context.Background(), store, []string{"openai"}, 0, 0)
 	require.Equal(t, 0, out["total_failures"])
-	require.Empty(t, out["providers"].(map[string]interface{}))
+	require.Empty(t, out["providers"].(map[string]any))
 }
 
 func TestArchiverHolderIDNonEmpty(t *testing.T) {
@@ -228,7 +228,7 @@ func TestCircuitArchiverElectsSingleWriter(t *testing.T) {
 
 	var wg sync.WaitGroup
 	winners := make(chan bool, 4)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()

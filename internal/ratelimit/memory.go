@@ -254,8 +254,8 @@ func (m *memoryLimiter) limitFor(key string, minute bool) limits {
 	}
 	// Apply overrides by key namespace
 	overrides := m.cfg.Features.RateLimiting.Overrides
-	if strings.HasPrefix(key, "model:") {
-		name := strings.TrimPrefix(key, "model:")
+	if after, ok := strings.CutPrefix(key, "model:"); ok {
+		name := after
 		if o, ok := overrides.PerModel[name]; ok {
 			if minute {
 				if o.RequestsPerMinute > 0 {
@@ -273,8 +273,8 @@ func (m *memoryLimiter) limitFor(key string, minute bool) limits {
 				}
 			}
 		}
-	} else if strings.HasPrefix(key, "key:") {
-		id := strings.TrimPrefix(key, "key:")
+	} else if after, ok := strings.CutPrefix(key, "key:"); ok {
+		id := after
 		o, ok := overrides.PerKey[id]
 		// Dynamic per-key overrides (API-key record) take precedence over
 		// static YAML overrides when present.
@@ -300,8 +300,8 @@ func (m *memoryLimiter) limitFor(key string, minute bool) limits {
 				}
 			}
 		}
-	} else if strings.HasPrefix(key, "user:") {
-		id := strings.TrimPrefix(key, "user:")
+	} else if after, ok := strings.CutPrefix(key, "user:"); ok {
+		id := after
 		if o, ok := overrides.PerUser[id]; ok {
 			if minute {
 				if o.RequestsPerMinute > 0 {
@@ -347,13 +347,6 @@ func max0(v int) int {
 		return 0
 	}
 	return v
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func exceededMetric(c *counters, lim limits, addTokens int) string {

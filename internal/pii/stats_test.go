@@ -3,6 +3,8 @@ package pii
 import (
 	"testing"
 	"time"
+
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 )
 
 func TestRecorderAggregates(t *testing.T) {
@@ -38,7 +40,7 @@ func TestRecorderAggregates(t *testing.T) {
 		t.Fatalf("detection_rate = %f, want ~0.667", got)
 	}
 
-	byEntity := snap["by_entity"].([]kv)
+	byEntity := snap["by_entity"].([]adminrollup.NameCount)
 	if len(byEntity) != 2 || byEntity[0].Name != "EMAIL_ADDRESS" || byEntity[0].Count != 3 {
 		t.Fatalf("by_entity top = %+v, want EMAIL_ADDRESS:3 first", byEntity)
 	}
@@ -55,7 +57,7 @@ func TestRecorderAggregates(t *testing.T) {
 
 func TestRecorderRingBufferBounded(t *testing.T) {
 	r := NewRecorder()
-	for i := 0; i < MaxRecentEvents+25; i++ {
+	for range MaxRecentEvents + 25 {
 		r.RecordRedaction("openai", "k", map[string]int{"EMAIL_ADDRESS": 1}, 10, time.Millisecond, OutcomeOK)
 	}
 	recent := r.Snapshot()["recent"].([]recentEntry)

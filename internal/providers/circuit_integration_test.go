@@ -28,9 +28,9 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // circuit.NewTransport directly, which meant a regression that broke the
 // provider-level wrapping would not be caught.
 func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
-	var upstreamCalls int32
+	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&upstreamCalls, 1)
+		upstreamCalls.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer upstream.Close()
@@ -99,7 +99,7 @@ func TestProviderCircuitBreaker_OpenAI_DegradedSignal(t *testing.T) {
 	// Retry budget is one, so we expect initial attempt + one retry before
 	// giving up — the upstream must have been hit exactly twice.  If the
 	// wrapping were not applied (regression) this would be 1.
-	if got := atomic.LoadInt32(&upstreamCalls); got != 2 {
+	if got := upstreamCalls.Load(); got != 2 {
 		t.Fatalf("expected upstream to be called twice (attempt + 1 retry), got %d", got)
 	}
 }

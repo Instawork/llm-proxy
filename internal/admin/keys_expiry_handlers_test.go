@@ -74,7 +74,7 @@ func TestHandleUpdateKey_ExpiresAt_SetAndClear(t *testing.T) {
 	require.NoError(t, err)
 
 	future := time.Now().Add(24 * time.Hour).Truncate(time.Second).UTC()
-	setBody, _ := json.Marshal(map[string]interface{}{"expires_at": future})
+	setBody, _ := json.Marshal(map[string]any{"expires_at": future})
 	setReq := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, setBody)
 	setReq = mux.SetURLVars(setReq, map[string]string{"key": key.PK})
 	setRec := httptest.NewRecorder()
@@ -128,7 +128,7 @@ func TestHandleUpdateKey_ExpiresAt_ForbiddenForViewer(t *testing.T) {
 	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&created))
 
 	future := time.Now().Add(24 * time.Hour)
-	body, _ := json.Marshal(map[string]interface{}{"expires_at": future})
+	body, _ := json.Marshal(map[string]any{"expires_at": future})
 	req := authenticatedRequestAs(t, h, "viewer@example.com", http.MethodPatch, "/admin/api/keys/"+created.Key, body)
 	req = mux.SetURLVars(req, map[string]string{"key": created.Key})
 	rec := httptest.NewRecorder()

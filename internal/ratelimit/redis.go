@@ -115,8 +115,8 @@ func (r *redisLimiter) limitFor(key string, minute bool) rlLimits {
 	}
 
 	overrides := r.cfg.Features.RateLimiting.Overrides
-	if strings.HasPrefix(key, "model:") {
-		name := strings.TrimPrefix(key, "model:")
+	if after, ok := strings.CutPrefix(key, "model:"); ok {
+		name := after
 		if o, ok := overrides.PerModel[name]; ok {
 			if minute {
 				if o.RequestsPerMinute > 0 {
@@ -134,8 +134,8 @@ func (r *redisLimiter) limitFor(key string, minute bool) rlLimits {
 				}
 			}
 		}
-	} else if strings.HasPrefix(key, "key:") {
-		id := strings.TrimPrefix(key, "key:")
+	} else if after, ok := strings.CutPrefix(key, "key:"); ok {
+		id := after
 		o, ok := overrides.PerKey[id]
 		// Dynamic per-key overrides (API-key record) take precedence over
 		// static YAML overrides when present.
@@ -161,8 +161,8 @@ func (r *redisLimiter) limitFor(key string, minute bool) rlLimits {
 				}
 			}
 		}
-	} else if strings.HasPrefix(key, "user:") {
-		id := strings.TrimPrefix(key, "user:")
+	} else if after, ok := strings.CutPrefix(key, "user:"); ok {
+		id := after
 		if o, ok := overrides.PerUser[id]; ok {
 			if minute {
 				if o.RequestsPerMinute > 0 {
@@ -399,7 +399,7 @@ func (r *redisLimiter) scanCounters(ctx context.Context, prefix string, out map[
 func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope ScopeKeys, estTokens int, now time.Time) (ReservationResult, error) {
 	scopeKeys := r.scopeKeys(scope)
 	keys := make([]string, 0, len(scopeKeys)*2)
-	argLimits := make([]interface{}, 0, len(scopeKeys)*4)
+	argLimits := make([]any, 0, len(scopeKeys)*4)
 	for _, sk := range scopeKeys {
 		keys = append(keys, minuteKey(sk, now))
 		keys = append(keys, dayKey(sk, now))
@@ -407,7 +407,7 @@ func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope Sco
 		dayLim := r.limitFor(sk, false)
 		argLimits = append(argLimits, minLim.reqPerWindow, minLim.tokPerWindow, dayLim.reqPerWindow, dayLim.tokPerWindow)
 	}
-	argv := make([]interface{}, 0, 4+len(argLimits))
+	argv := make([]any, 0, 4+len(argLimits))
 	argv = append(argv, estTokens)
 	argv = append(argv, secToMinuteEnd(now))
 	argv = append(argv, secToDayEnd(now))
@@ -417,7 +417,7 @@ func (r *redisLimiter) CheckAndReserve(ctx context.Context, id string, scope Sco
 	if err != nil {
 		return ReservationResult{}, err
 	}
-	arr, ok := res.([]interface{})
+	arr, ok := res.([]any)
 	if !ok || len(arr) == 0 {
 		return ReservationResult{}, fmt.Errorf("invalid redis script result")
 	}
@@ -469,7 +469,7 @@ func (r *redisLimiter) Adjust(ctx context.Context, id string, scope ScopeKeys, t
 		keys = append(keys, minuteKey(sk, reservedAt))
 		keys = append(keys, dayKey(sk, reservedAt))
 	}
-	argv := []interface{}{tokenDelta, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
+	argv := []any{tokenDelta, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaAdjust.Run(ctx, r.rdb, keys, argv...).Result()
 	return err
 }
@@ -489,7 +489,7 @@ func (r *redisLimiter) Cancel(ctx context.Context, id string, scope ScopeKeys, e
 		keys = append(keys, minuteKey(sk, reservedAt))
 		keys = append(keys, dayKey(sk, reservedAt))
 	}
-	argv := []interface{}{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
+	argv := []any{estTokens, secToMinuteEnd(now), secToDayEnd(now), len(scopeKeys), applyMin, applyDay}
 	_, err := luaCancel.Run(ctx, r.rdb, keys, argv...).Result()
 	return err
 }
@@ -502,7 +502,7 @@ func (r *redisLimiter) Close() error {
 	return r.rdb.Close()
 }
 
-func toInt(v interface{}) int {
+func toInt(v any) int {
 	switch t := v.(type) {
 	case int64:
 		return int(t)

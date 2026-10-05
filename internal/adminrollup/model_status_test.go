@@ -29,7 +29,7 @@ func TestModelStatusMergeToday(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	store.MergeToday(ctx, MetricModelStatus, day, snap, TopNCaps{})
 
 	assert.Equal(t, int64(2), snap["retired_total"])

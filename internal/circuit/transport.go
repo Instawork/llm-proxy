@@ -1761,8 +1761,8 @@ func (t *Transport) degradedResponse(req *http.Request, upstream bool) *http.Res
 // rateLimitResponse returns a synthetic 429 without the DegradedSignal — the
 // request is throttled but the provider is not considered degraded.
 func (t *Transport) rateLimitResponse(fc FailureClass) *http.Response {
-	body, _ := json.Marshal(map[string]interface{}{
-		"error": map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
 			"message": proxylog.UpstreamMsg("Rate limit exceeded; please retry later."),
 			"type":    "rate_limit_error",
 			"code":    "rate_limit_exceeded",
@@ -1798,8 +1798,8 @@ func buildDegradedBody(provider, signal string, upstream bool) []byte {
 	} else {
 		msg = proxylog.ProxyMsg(msg)
 	}
-	body := map[string]interface{}{
-		"error": map[string]interface{}{
+	body := map[string]any{
+		"error": map[string]any{
 			"message": msg,
 			"type":    "provider_degraded",
 			"code":    "provider_degraded",

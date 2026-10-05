@@ -7,7 +7,9 @@ package circuitstats
 
 import (
 	"log/slog"
+	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
@@ -74,6 +76,14 @@ type Recorder struct {
 
 	rdb *redis.Client
 	log *slog.Logger
+
+	// Coalesced checks_total increments for the legacy Redis counters hash;
+	// see noteRedisCheck in redis.go.
+	pendingChecks atomic.Int64
+	flusherOnce   sync.Once
+	closeOnce     sync.Once
+	flusherStop   chan struct{}
+	flusherDone   chan struct{}
 }
 
 // NewRecorder returns a recorder scoped to this process.
@@ -88,16 +98,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricCircuitActivity, adminrollup.TopNCaps{}) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCircuitActivity, oldDay, adminrollup.TopNCaps{})
-	}()
 	r.flushed = activityFlushed{}
 	r.checksTotal = 0
 	r.blockedOpen = 0
@@ -140,30 +145,19 @@ func (r *Recorder) activityDeltaLocked() adminrollup.Delta {
 			"circuits_opened":  float64(r.circuitsOpened - r.flushed.circuitsOpened),
 		},
 	}
-	if provDelta := int64MapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
+	if provDelta := adminrollup.IntMapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}
 		d.Dimensions["by_provider"] = provDelta
 	}
-	if keyDelta := int64MapDelta(r.byKey, r.flushed.byKey); len(keyDelta) > 0 {
+	if keyDelta := adminrollup.IntMapDelta(r.byKey, r.flushed.byKey); len(keyDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}
 		d.Dimensions["by_key"] = keyDelta
 	}
 	return d
-}
-
-func int64MapDelta(cur map[string]int64, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		p := prev[k]
-		if dr := float64(v - p); dr != 0 {
-			out[k] = dr
-		}
-	}
-	return out
 }
 
 func (r *Recorder) advanceFlushedLocked() {
@@ -179,12 +173,8 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.probesSucceeded = r.probesSucceeded
 	r.flushed.probesFailed = r.probesFailed
 	r.flushed.circuitsOpened = r.circuitsOpened
-	for k, v := range r.byProvider {
-		r.flushed.byProvider[k] = v
-	}
-	for k, v := range r.byKey {
-		r.flushed.byKey[k] = v
-	}
+	maps.Copy(r.flushed.byProvider, r.byProvider)
+	maps.Copy(r.flushed.byKey, r.byKey)
 }
 
 func (r *Recorder) publishLocked() {
@@ -303,14 +293,14 @@ func (r *Recorder) RecordCheck() {
 	r.mu.Unlock()
 
 	if r.redisEnabled() {
-		r.incrRedisCheckAsync()
+		r.noteRedisCheck()
 	}
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -338,19 +328,15 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		probesSucceeded = r.probesSucceeded
 		probesFailed = r.probesFailed
 		circuitsOpened = r.circuitsOpened
-		for k, v := range r.byProvider {
-			byProvider[k] = v
-		}
-		for k, v := range r.byKey {
-			byKey[k] = v
-		}
+		maps.Copy(byProvider, r.byProvider)
+		maps.Copy(byKey, r.byKey)
 	}
 
 	backend := "memory"
 	if r.redisEnabled() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":        true,
 		"backend":          backend,
 		"day":              today,
@@ -378,7 +364,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalCircuitIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	checksTotal, blockedOpen, probesStarted, probesSucceeded, probesFailed, circuitsOpened int64,
 	byProvider, byKey map[string]int64,
 ) {

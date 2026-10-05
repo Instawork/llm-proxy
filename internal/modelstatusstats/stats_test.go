@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,12 +24,12 @@ func TestRecorder_SnapshotCounts(t *testing.T) {
 	assert.Equal(t, int64(1), snap["unknown_total"])
 	assert.Equal(t, int64(1), snap["unmetered_total"])
 
-	byUnmetered, ok := snap["by_unmetered"].([]kv)
+	byUnmetered, ok := snap["by_unmetered"].([]adminrollup.NameCount)
 	require.True(t, ok)
 	require.Len(t, byUnmetered, 1)
 	assert.Equal(t, "openai:/openai/v1/audio/transcriptions", byUnmetered[0].Name)
 
-	byRetired, ok := snap["by_retired"].([]kv)
+	byRetired, ok := snap["by_retired"].([]adminrollup.NameCount)
 	require.True(t, ok)
 	require.Len(t, byRetired, 1)
 	assert.Equal(t, "openai:o1-mini", byRetired[0].Name)

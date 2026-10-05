@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,7 +52,7 @@ func (b *RecorderBinding) deps() (*Store, *Persister) {
 }
 
 // QueueToday schedules a debounced write of today's snapshot (no-op if unbound).
-func (b *RecorderBinding) QueueToday(day string, data map[string]interface{}) {
+func (b *RecorderBinding) QueueToday(day string, data map[string]any) {
 	if _, p := b.deps(); p != nil {
 		p.QueueToday(day, data)
 	}
@@ -66,7 +67,7 @@ func (b *RecorderBinding) QueueDelta(day string, d Delta) {
 
 // ArchiveDay writes a completed day's data to the daily key immediately
 // (no-op if unbound). Used on UTC day rollover.
-func (b *RecorderBinding) ArchiveDay(day string, data map[string]interface{}) {
+func (b *RecorderBinding) ArchiveDay(day string, data map[string]any) {
 	if _, p := b.deps(); p != nil {
 		p.ArchiveImmediately(day, data)
 	}
@@ -108,7 +109,7 @@ func (b *RecorderBinding) ArchiveDayFromAggregatesElected(metric, day string, ca
 }
 
 // MergeToday overlays fleet-wide today totals from Redis (no-op if unbound).
-func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]interface{}, caps TopNCaps) {
+func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]any, caps TopNCaps) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -120,7 +121,7 @@ func (b *RecorderBinding) MergeToday(metric, day string, snap map[string]interfa
 
 // MergeHistory folds persisted daily history into a live snapshot under a
 // bounded timeout (no-op if unbound).
-func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{}) {
+func (b *RecorderBinding) MergeHistory(metric string, snap map[string]any) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -133,7 +134,7 @@ func (b *RecorderBinding) MergeHistory(metric string, snap map[string]interface{
 // MergeHourly folds today's per-hour Redis totals into a live snapshot so the
 // "Today" trend chart uses fleet-wide Redis data instead of a browser sparkline.
 // No-op when unbound.
-func (b *RecorderBinding) MergeHourly(metric string, snap map[string]interface{}) {
+func (b *RecorderBinding) MergeHourly(metric string, snap map[string]any) {
 	s, _ := b.deps()
 	if s == nil {
 		return
@@ -267,17 +268,80 @@ func (b *RecorderBinding) FlushRollup() {
 	}
 }
 
+// FinishDayRollover performs the I/O half of a UTC day rollover for a
+// recorder: it flushes this instance's pending debounced deltas so the last
+// old-day numbers land in the store, then runs the elected archive of the
+// completed day. Both steps are Redis round-trips with multi-second
+// timeouts, so they run on a background goroutine; the recorder must call
+// this from inside maybeRollDay without holding its own mutex across any
+// I/O (the in-memory reset happens under the lock, this does not).
+//
+// Flush-before-archive ordering is preserved within the goroutine. The
+// pending deltas themselves live in the Persister (keyed by day, with a
+// debounce timer and flushed again by FlushRollup at shutdown), so handing
+// the flush to a goroutine does not widen the window in which they can be
+// lost; the goroutine only decides *when* the write is attempted. It is
+// tracked by the Store so Store.Close drains it before the backend closes.
+// No-op when unbound.
+func (b *RecorderBinding) FinishDayRollover(metric, oldDay string, caps TopNCaps) {
+	s, p := b.deps()
+	if s == nil && p == nil {
+		return
+	}
+	s.goRollover(func() {
+		if p != nil {
+			p.FlushNow()
+		}
+		b.ArchiveDayFromAggregatesElected(metric, oldDay, caps)
+	})
+}
+
 const recentEventWriteTimeout = 500 * time.Millisecond
+
+// maxConcurrentRecentEventWrites bounds the number of in-flight
+// AppendRecentEvent goroutines across the whole process. Recent events are a
+// best-effort operator convenience (a rolling list of the last N PII / ID-gate
+// hits), so when Redis is slow it is better to drop events than to let one
+// goroutine per request pile up behind a 500ms timeout.
+const maxConcurrentRecentEventWrites = 32
+
+// recentEventDropLogInterval rate-limits the "dropped" warning so a sustained
+// Redis stall does not itself flood the logs.
+const recentEventDropLogInterval = 30 * time.Second
+
+var (
+	recentEventSem         = make(chan struct{}, maxConcurrentRecentEventWrites)
+	recentEventDropped     atomic.Int64
+	recentEventLastDropLog atomic.Int64 // unix nanos
+)
+
+// RecentEventsDropped reports how many recent-event mirror writes were
+// skipped process-wide because the concurrency cap was reached.
+func RecentEventsDropped() int64 { return recentEventDropped.Load() }
 
 // AppendRecentEvent mirrors one event into the shared rollup store's rolling
 // recent list (fleet-wide when Redis is enabled). Fire-and-forget on the hot
-// path; no-op when unbound.
+// path, bounded by maxConcurrentRecentEventWrites; events beyond the cap are
+// dropped and counted. No-op when unbound.
 func (b *RecorderBinding) AppendRecentEvent(metric string, event any, maxLen int) {
 	s, _ := b.deps()
 	if s == nil {
 		return
 	}
+	select {
+	case recentEventSem <- struct{}{}:
+	default:
+		n := recentEventDropped.Add(1)
+		now := time.Now().UnixNano()
+		last := recentEventLastDropLog.Load()
+		if now-last >= int64(recentEventDropLogInterval) && recentEventLastDropLog.CompareAndSwap(last, now) {
+			s.logger.Warn("admin rollup: recent event writes saturated; dropping",
+				"metric", metric, "in_flight", maxConcurrentRecentEventWrites, "dropped_total", n)
+		}
+		return
+	}
 	go func() {
+		defer func() { <-recentEventSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), recentEventWriteTimeout)
 		defer cancel()
 		if err := s.AppendRecentEvent(ctx, metric, event, maxLen); err != nil {
@@ -289,7 +353,7 @@ func (b *RecorderBinding) AppendRecentEvent(metric string, event any, maxLen int
 // MergeRecentEvents overlays fleet-wide recent events from the rollup store.
 // When events exist, snap[field] is replaced and snap["recent_backend"] is set
 // to the store backend kind. No-op when unbound or the list is empty.
-func (b *RecorderBinding) MergeRecentEvents(metric, field string, maxLen int, snap map[string]interface{}, parse func([]json.RawMessage) any) {
+func (b *RecorderBinding) MergeRecentEvents(metric, field string, maxLen int, snap map[string]any, parse func([]json.RawMessage) any) {
 	s, _ := b.deps()
 	if s == nil || snap == nil || parse == nil {
 		return

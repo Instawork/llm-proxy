@@ -113,7 +113,7 @@ func TestFormatPerChunkEvents(t *testing.T) {
 		// Same input twice must produce identical output despite map ordering.
 		m := map[string]int64{"a": 2, "b": 3, "c": 1}
 		first := formatPerChunkEvents(m)
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			if got := formatPerChunkEvents(m); got != first {
 				t.Fatalf("formatPerChunkEvents must be deterministic; got %q vs %q", got, first)
 			}

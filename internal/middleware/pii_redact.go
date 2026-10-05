@@ -17,6 +17,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
@@ -218,18 +219,18 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Always restore the body for the upstream proxy regardless
-			// of redaction outcome — we never want to truncate or drop
-			// the upstream payload.
-			setRequestBody(r, body)
+			// readBoundedBody has already restored the body for the
+			// upstream proxy regardless of redaction outcome — we never
+			// truncate or drop the upstream payload.
 
 			if oversize {
+				bodyBytes := observedBodyBytes(r, body)
 				logger.Warn(proxylog.ProxyMsg("pii_redact: body exceeds max_body_bytes"),
 					slog.String("path", r.URL.Path),
 					slog.String("provider", getProviderFromPath(r.URL.Path)),
-					slog.Int("body_bytes", len(body)),
+					slog.Int("body_bytes", bodyBytes),
 					slog.Int("max_body_bytes", maxBytes))
-				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, len(body), 0, piiOutcomeOversize)
+				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, bodyBytes, 0, piiOutcomeOversize)
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeOversize, nil))
 				if cfg.FailClosed {
 					writePIIResponseHeadersPartial(w, ctx)
@@ -395,6 +396,17 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 func setRequestBody(r *http.Request, body []byte) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
+	// Earlier middleware (model status, cost limit) caches the ORIGINAL body
+	// in GetBody. Anything downstream that prefers GetBody — stream
+	// detection, user-ID extraction, and above all the circuit transport's
+	// retry replay — must see the rewritten bytes, never the pre-redaction
+	// ones, so GetBody has to be swapped together with Body.
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	// Facts memoized from the pre-rewrite body (message text for token
+	// estimation in particular) must be recomputed from the new bytes.
+	providers.InvalidateRequestMemo(r)
 	r.Header.Del("Transfer-Encoding")
 	if len(body) == 0 {
 		r.Header.Del("Content-Length")
@@ -603,19 +615,42 @@ func dataURLBase64(raw string) string {
 	return raw[comma+1:]
 }
 
-// readBoundedBody reads up to maxBytes+1 bytes; if the body has more,
-// returns oversize=true so the caller can short-circuit redaction
-// without exhausting memory on a runaway upload. The full body is
-// always restored to the request — we never truncate what reaches
-// upstream.
+// readBoundedBody reads at most maxBytes+1 bytes of the request body and
+// reports oversize=true when the body is larger than maxBytes, so callers
+// can short-circuit analysis without materializing a runaway upload.
+//
+// The request body is always left ready for upstream, never truncated:
+// within the cap, Body/GetBody are reset to the fully buffered bytes; over
+// the cap, Body becomes the already-read prefix followed by the untouched
+// remainder of the original stream. In the oversize case the returned
+// slice is only the prefix and must not be treated as the whole payload.
 func readBoundedBody(r *http.Request, maxBytes int) (body []byte, oversize bool, err error) {
 	if r.Body == nil {
 		return nil, false, nil
 	}
-	body, err = io.ReadAll(r.Body)
+	orig := r.Body
+	body, err = io.ReadAll(io.LimitReader(orig, int64(maxBytes)+1))
 	if err != nil {
 		return nil, false, err
 	}
-	oversize = len(body) > maxBytes
-	return body, oversize, nil
+	if len(body) > maxBytes {
+		r.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), orig), orig}
+		return body, true, nil
+	}
+	setRequestBody(r, body)
+	return body, false, nil
+}
+
+// observedBodyBytes reports the request body size for logs and stats after
+// readBoundedBody: the declared Content-Length when the client sent one,
+// otherwise the number of bytes actually buffered (a lower bound when
+// oversize).
+func observedBodyBytes(r *http.Request, body []byte) int {
+	if r.ContentLength > int64(len(body)) {
+		return int(r.ContentLength)
+	}
+	return len(body)
 }

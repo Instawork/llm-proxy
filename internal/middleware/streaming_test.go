@@ -261,7 +261,7 @@ func TestResponseCapture_ImplementsFlusher(t *testing.T) {
 		body:           &bytes.Buffer{},
 	}
 
-	if _, ok := interface{}(rc).(http.Flusher); !ok {
+	if _, ok := any(rc).(http.Flusher); !ok {
 		t.Fatal("responseCapture must implement http.Flusher so StreamingMiddleware can detect Flusher capability")
 	}
 }

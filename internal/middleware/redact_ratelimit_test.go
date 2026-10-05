@@ -44,7 +44,7 @@ func TestRedactRateLimitMiddleware_SkipsOtherRoutes(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

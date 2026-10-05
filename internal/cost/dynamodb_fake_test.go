@@ -71,8 +71,8 @@ func TestNewDynamoDBTransportFromConfig_MapConfig_FakeServer(t *testing.T) {
 	fake := dynamodbfake.New(t)
 	dynamodbfake.UseFakeDynamo(t, fake.URL())
 
-	cfg := map[string]interface{}{
-		"dynamodb": map[string]interface{}{
+	cfg := map[string]any{
+		"dynamodb": map[string]any{
 			"table_name": "tbl",
 			"region":     "us-west-2",
 		},

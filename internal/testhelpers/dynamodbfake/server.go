@@ -335,9 +335,9 @@ func extractAttrValueString(attrs map[string]any, key string) string {
 
 func resolveAttrName(exprNames map[string]any, field string) string {
 	field = strings.TrimSpace(field)
-	if strings.HasPrefix(field, "#") {
+	if after, ok := strings.CutPrefix(field, "#"); ok {
 		if exprNames == nil {
-			return strings.TrimPrefix(field, "#")
+			return after
 		}
 		if mapped, ok := exprNames[field].(string); ok {
 			return mapped
@@ -353,6 +353,17 @@ func evaluateUpdateCondition(conditionExpr string, item map[string]any, input ma
 	}
 	exprNames, _ := input["ExpressionAttributeNames"].(map[string]any)
 	exprValues, _ := input["ExpressionAttributeValues"].(map[string]any)
+
+	// A bare attribute_not_exists(field) fails when the stored item already
+	// carries that attribute (write-once fields such as first_request_at).
+	// Compound expressions (e.g. "... OR lease_expires_at < :now") are not
+	// modelled and keep passing, as before.
+	if rest, ok := strings.CutPrefix(conditionExpr, "attribute_not_exists("); ok && strings.HasSuffix(rest, ")") && !strings.Contains(rest, " ") {
+		field := resolveAttrName(exprNames, strings.TrimSuffix(rest, ")"))
+		if _, present := item[field]; present {
+			return false
+		}
+	}
 
 	if strings.Contains(conditionExpr, "#status = :") {
 		statusField := resolveAttrName(exprNames, "#status")
@@ -381,14 +392,14 @@ func applyUpdateExpression(item map[string]any, input map[string]any) {
 	if idx := strings.Index(strings.ToUpper(updateExpr), " REMOVE "); idx >= 0 {
 		removePart := strings.TrimSpace(updateExpr[idx+len(" REMOVE "):])
 		setPart = strings.TrimSpace(updateExpr[:idx])
-		for _, field := range strings.Split(removePart, ",") {
+		for field := range strings.SplitSeq(removePart, ",") {
 			field = resolveAttrName(exprNames, strings.TrimSpace(field))
 			delete(item, field)
 		}
 	}
 
 	setPart = strings.TrimSpace(strings.TrimPrefix(setPart, "SET "))
-	for _, assignment := range strings.Split(setPart, ",") {
+	for assignment := range strings.SplitSeq(setPart, ",") {
 		assignment = strings.TrimSpace(assignment)
 		parts := strings.SplitN(assignment, "=", 2)
 		if len(parts) != 2 {

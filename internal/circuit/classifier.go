@@ -450,8 +450,7 @@ func classifyNetworkError(err error) FailureClass {
 	}
 
 	// net.Error covers dial timeout, connection refused, etc.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return FailureClassDegraded
 	}
 
@@ -780,8 +779,7 @@ func classifyTransportErrorKind(err error) FailureKind {
 		return KindClientDeadline
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if netErr, ok := errors.AsType[net.Error](err); ok {
 		if netErr.Timeout() {
 			return KindIOTimeout
 		}
@@ -805,7 +803,7 @@ func parseRetryAfterSeconds(s string) int {
 	if err != nil {
 		return 0
 	}
-	seconds := t.Sub(time.Now()).Seconds()
+	seconds := time.Until(t).Seconds()
 	if seconds <= 0 {
 		return 0
 	}
