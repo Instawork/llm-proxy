@@ -31,6 +31,14 @@ func testStore(t *testing.T) *Store {
 	return store
 }
 
+func TestNewStore_RedisClientHonoursContextDeadlines(t *testing.T) {
+	store := testStore(t)
+	be, ok := store.be.(*redisBackend)
+	require.True(t, ok, "testStore should build a redis backend, got %T", store.be)
+	require.True(t, be.rdb.Options().ContextTimeoutEnabled,
+		"mergeHistoryTimeout and friends are only enforced on reads when ContextTimeoutEnabled is set")
+}
+
 func TestStoreKeySpendUSD(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

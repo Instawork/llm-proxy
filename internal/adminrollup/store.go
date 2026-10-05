@@ -602,6 +602,11 @@ func newRedisClient(r *config.RedisConfig) (*redis.Client, error) {
 		}
 		opts = &redis.Options{Addr: addr, Password: password, DB: r.DB}
 	}
+	// Without this go-redis v9 ignores context deadlines on the socket
+	// read, so mergeHistoryTimeout / recentEventWriteTimeout / the
+	// /health fail-open bound would all silently become the 3 s default
+	// ReadTimeout.
+	opts.ContextTimeoutEnabled = true
 
 	client := redis.NewClient(opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

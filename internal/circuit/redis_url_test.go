@@ -106,6 +106,9 @@ func TestNewRedisStore_URLOnly(t *testing.T) {
 	if opts.DB != 3 {
 		t.Fatalf("want DB=3, got %d", opts.DB)
 	}
+	if !opts.ContextTimeoutEnabled {
+		t.Fatal("ContextTimeoutEnabled must be on or per-call deadlines never reach the socket read")
+	}
 }
 
 // TestNewRedisStore_URLPlusDBOverlay confirms that an explicit RedisDB
