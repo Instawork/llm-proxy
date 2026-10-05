@@ -118,6 +118,65 @@ func TestFinishDayRollover_ReturnsImmediatelyAndFlushesBeforeArchive(t *testing.
 	require.Greater(t, elected, flushDone, "flush must complete before the archiver election; ops=%v", ops)
 }
 
+// Store.Close must not pull the backend out from under an in-flight rollover:
+// it blocks until the parked flush+archive goroutine finishes (or the drain
+// timeout fires), and the archive still runs after the flush.
+func TestStoreClose_DrainsInFlightRollover(t *testing.T) {
+	be := newGatedBackend()
+	store := &Store{be: be, logger: slog.Default(), retentionDays: 7, historyDays: 3}
+	persister := NewPersister(store, MetricCost)
+
+	var b RecorderBinding
+	b.BindRollup(store, persister)
+
+	const oldDay = "2026-06-10"
+	b.QueueDelta(oldDay, Delta{Totals: map[string]float64{"requests_today": 1}})
+	b.FinishDayRollover(MetricCost, oldDay, TopNCaps{})
+	waitForOp(t, be, "applyDelta:start")
+
+	closed := make(chan error, 1)
+	go func() { closed <- store.Close() }()
+
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while the rollover flush was still parked", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(be.release)
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after the rollover was released")
+	}
+
+	ops := be.snapshotOps()
+	require.Contains(t, ops, "applyDelta:done", "pending old-day delta must have landed before close; ops=%v", ops)
+	require.Contains(t, ops, "trySetNX", "archive election must have run before close; ops=%v", ops)
+}
+
+// A rollover that is stuck past rolloverDrainTimeout must not wedge shutdown.
+func TestStoreClose_DrainTimeoutDoesNotWedge(t *testing.T) {
+	prev := rolloverDrainTimeout
+	rolloverDrainTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { rolloverDrainTimeout = prev })
+
+	be := newGatedBackend()
+	store := &Store{be: be, logger: slog.Default(), retentionDays: 7, historyDays: 3}
+	t.Cleanup(func() { close(be.release) })
+
+	blocker := make(chan struct{})
+	t.Cleanup(func() { close(blocker) })
+	store.goRollover(func() { <-blocker })
+
+	start := time.Now()
+	require.NoError(t, store.Close())
+	elapsed := time.Since(start)
+	require.GreaterOrEqual(t, elapsed, 100*time.Millisecond, "Close must wait for the drain timeout")
+	require.Less(t, elapsed, 3*time.Second, "Close must not wedge on a stuck rollover")
+}
+
 func TestFinishDayRollover_UnboundIsNoOp(t *testing.T) {
 	var b RecorderBinding
 	b.FinishDayRollover(MetricCost, "2026-06-10", TopNCaps{})

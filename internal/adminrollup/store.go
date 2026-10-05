@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -68,7 +69,18 @@ type Store struct {
 	logger        *slog.Logger
 	retentionDays int
 	historyDays   int
+
+	// rollovers tracks the background flush+archive goroutines spawned by
+	// RecorderBinding.FinishDayRollover so Close can drain them before the
+	// backend connection goes away.
+	rollovers sync.WaitGroup
 }
+
+// rolloverDrainTimeout bounds how long Close waits for in-flight day
+// rollovers. Every rollover step already runs under its own context deadline
+// (archiveTimeout / mergeHistoryTimeout), so this is a backstop, not the
+// primary bound. A var so tests can shorten it.
+var rolloverDrainTimeout = 6 * time.Second
 
 // Config mirrors admin_dashboard.rollups YAML.
 type Config struct {
@@ -123,10 +135,33 @@ func (s *Store) Backend() string {
 	return s.be.kind()
 }
 
-// Close releases backend resources.
+// goRollover runs fn on a goroutine tracked by the store so Close can wait
+// for it. Day-rollover I/O (flush of the completed day's pending deltas, then
+// the elected archive) uses this rather than a bare `go` so a shutdown that
+// races a UTC midnight rollover does not close the backend underneath it.
+func (s *Store) goRollover(fn func()) {
+	if s == nil {
+		go fn()
+		return
+	}
+	s.rollovers.Go(fn)
+}
+
+// Close drains in-flight day rollovers (bounded by rolloverDrainTimeout) and
+// then releases backend resources.
 func (s *Store) Close() error {
 	if s == nil || s.be == nil {
 		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		s.rollovers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(rolloverDrainTimeout):
+		s.logger.Warn("admin rollup: day rollover still in flight at close; proceeding", "timeout", rolloverDrainTimeout)
 	}
 	return s.be.close()
 }

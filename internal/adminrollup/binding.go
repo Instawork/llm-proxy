@@ -276,19 +276,24 @@ func (b *RecorderBinding) FlushRollup() {
 // this from inside maybeRollDay without holding its own mutex across any
 // I/O (the in-memory reset happens under the lock, this does not).
 //
-// Flush-before-archive ordering is preserved within the goroutine. No-op
-// when unbound.
+// Flush-before-archive ordering is preserved within the goroutine. The
+// pending deltas themselves live in the Persister (keyed by day, with a
+// debounce timer and flushed again by FlushRollup at shutdown), so handing
+// the flush to a goroutine does not widen the window in which they can be
+// lost; the goroutine only decides *when* the write is attempted. It is
+// tracked by the Store so Store.Close drains it before the backend closes.
+// No-op when unbound.
 func (b *RecorderBinding) FinishDayRollover(metric, oldDay string, caps TopNCaps) {
 	s, p := b.deps()
 	if s == nil && p == nil {
 		return
 	}
-	go func() {
+	s.goRollover(func() {
 		if p != nil {
 			p.FlushNow()
 		}
 		b.ArchiveDayFromAggregatesElected(metric, oldDay, caps)
-	}()
+	})
 }
 
 const recentEventWriteTimeout = 500 * time.Millisecond
