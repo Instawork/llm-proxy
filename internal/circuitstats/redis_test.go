@@ -110,6 +110,26 @@ func TestRedisRecorder_CloseFlushesPendingAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), r.pendingChecks.Load())
 }
 
+// Close during a Redis outage must still return promptly and must not
+// zero the pending delta: the final flush and its retry both put the count
+// back, so the loss is bounded to what is logged, never silently discarded.
+func TestRedisRecorder_CloseDuringOutageRetainsPendingDelta(t *testing.T) {
+	r, mr := newRedisRecorderForTest(t)
+	r.RecordCheck()
+	r.RecordCheck()
+	mr.SetError("ERR simulated outage")
+
+	done := make(chan struct{})
+	go func() { r.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return during a Redis outage")
+	}
+	assert.Equal(t, int64(2), r.pendingChecks.Load(), "failed final flush must not discard the delta")
+	assert.Equal(t, "", mr.HGet(redisCountersKey, "checks_total"))
+}
+
 func TestRedisRecorder_FlusherTickShipsChecks(t *testing.T) {
 	r, mr := newRedisRecorderForTest(t)
 	r.RecordCheck()

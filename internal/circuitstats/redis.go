@@ -164,6 +164,14 @@ func (r *Recorder) Close() {
 		}
 		close(r.flusherStop)
 		<-r.flusherDone
+		// The flusher's final write may have hit a Redis blip; give it one
+		// more try, then make any remaining loss visible rather than silent.
+		if r.pendingChecks.Load() > 0 {
+			r.FlushRedisChecks()
+		}
+		if lost := r.pendingChecks.Load(); lost > 0 && r.log != nil {
+			r.log.Warn("circuitstats: dropping unflushed redis check increments at close", "checks", lost)
+		}
 	})
 }
 
