@@ -4,8 +4,6 @@ package idgatestats
 
 import (
 	"encoding/json"
-	"maps"
-	"sort"
 	"sync"
 	"time"
 
@@ -81,17 +79,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricIDGate, idGateRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricIDGate, oldDay, idGateRollupCaps)
 	r.flushed = idGateFlushed{}
 	r.requestsWithImages = 0
 	r.requestsBlocked = 0
@@ -103,28 +95,6 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.byEntity = make(map[string]int64)
 	r.byKey = make(map[string]int64)
 	r.recent = nil
-}
-
-type kv struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
-}
-
-func topN(m map[string]int64, n int) []kv {
-	out := make([]kv, 0, len(m))
-	for name, count := range m {
-		out = append(out, kv{Name: name, Count: count})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Name < out[j].Name
-	})
-	if n > 0 && len(out) > n {
-		out = out[:n]
-	}
-	return out
 }
 
 func (r *Recorder) ingest(entry recentEntry) {
@@ -184,22 +154,12 @@ func (r *Recorder) deltaLocked() adminrollup.Delta {
 			"images_scanned":       float64(r.imagesScanned - r.flushed.imagesScanned),
 		},
 		Dimensions: map[string]map[string]float64{
-			"by_provider": intMapDelta(r.byProvider, r.flushed.byProvider),
-			"by_entity":   intMapDelta(r.byEntity, r.flushed.byEntity),
-			"by_key":      intMapDelta(r.byKey, r.flushed.byKey),
+			"by_provider": adminrollup.IntMapDelta(r.byProvider, r.flushed.byProvider),
+			"by_entity":   adminrollup.IntMapDelta(r.byEntity, r.flushed.byEntity),
+			"by_key":      adminrollup.IntMapDelta(r.byKey, r.flushed.byKey),
 		},
 	}
 	return d
-}
-
-func intMapDelta(cur, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		if dv := float64(v - prev[k]); dv != 0 {
-			out[k] = dv
-		}
-	}
-	return out
 }
 
 func (r *Recorder) advanceFlushedLocked() {
@@ -209,15 +169,9 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.failOpen = r.failOpen
 	r.flushed.failClosed = r.failClosed
 	r.flushed.imagesScanned = r.imagesScanned
-	r.flushed.byProvider = copyIntMap(r.byProvider)
-	r.flushed.byEntity = copyIntMap(r.byEntity)
-	r.flushed.byKey = copyIntMap(r.byKey)
-}
-
-func copyIntMap(m map[string]int64) map[string]int64 {
-	out := make(map[string]int64, len(m))
-	maps.Copy(out, m)
-	return out
+	r.flushed.byProvider = adminrollup.CopyIntMap(r.byProvider)
+	r.flushed.byEntity = adminrollup.CopyIntMap(r.byEntity)
+	r.flushed.byKey = adminrollup.CopyIntMap(r.byKey)
 }
 
 // RecordClear logs a request whose embedded images were scanned and cleared.
@@ -307,9 +261,9 @@ func (r *Recorder) Snapshot() map[string]any {
 		failOpen = r.failOpen
 		failClosed = r.failClosed
 		imagesScanned = r.imagesScanned
-		localByProvider = copyIntMap(r.byProvider)
-		localByEntity = copyIntMap(r.byEntity)
-		localByKey = copyIntMap(r.byKey)
+		localByProvider = adminrollup.CopyIntMap(r.byProvider)
+		localByEntity = adminrollup.CopyIntMap(r.byEntity)
+		localByKey = adminrollup.CopyIntMap(r.byKey)
 	}
 
 	snap := map[string]any{
@@ -322,9 +276,9 @@ func (r *Recorder) Snapshot() map[string]any {
 		"fail_open":            failOpen,
 		"fail_closed":          failClosed,
 		"images_scanned":       imagesScanned,
-		"by_provider":          topN(localByProvider, 0),
-		"by_entity":            topN(localByEntity, 0),
-		"top_keys":             topN(localByKey, 10),
+		"by_provider":          adminrollup.TopN(localByProvider, 0),
+		"by_entity":            adminrollup.TopN(localByEntity, 0),
+		"top_keys":             adminrollup.TopN(localByKey, 10),
 		"recent":               recent,
 	}
 	r.mu.RUnlock()
@@ -367,7 +321,7 @@ func mergeIDGateNameCounts(snap map[string]any, field string, local map[string]i
 	if len(merged) == 0 {
 		return
 	}
-	snap[field] = topN(merged, limit)
+	snap[field] = adminrollup.TopN(merged, limit)
 }
 
 func parseRecentEventPayloads(raw []json.RawMessage) any {

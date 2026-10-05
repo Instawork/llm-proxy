@@ -65,17 +65,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricRateLimit, adminrollup.TopNCaps{}) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricRateLimit, oldDay, adminrollup.TopNCaps{})
 	r.flushed = rateLimitFlushed{}
 	r.requestsTotal = 0
 	r.requestsAllowed = 0
@@ -83,16 +77,6 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.byProvider = make(map[string]int64)
 	r.byReason = make(map[string]int64)
 	r.recentBlocks = nil
-}
-
-func int64MapDelta(cur, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		if dr := float64(v - prev[k]); dr != 0 {
-			out[k] = dr
-		}
-	}
-	return out
 }
 
 func (r *Recorder) deltaLocked() adminrollup.Delta {
@@ -103,13 +87,13 @@ func (r *Recorder) deltaLocked() adminrollup.Delta {
 			"requests_blocked": float64(r.requestsBlocked - r.flushed.requestsBlocked),
 		},
 	}
-	if provDelta := int64MapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
+	if provDelta := adminrollup.IntMapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}
 		d.Dimensions["by_provider"] = provDelta
 	}
-	if reasonDelta := int64MapDelta(r.byReason, r.flushed.byReason); len(reasonDelta) > 0 {
+	if reasonDelta := adminrollup.IntMapDelta(r.byReason, r.flushed.byReason); len(reasonDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}

@@ -71,17 +71,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricUsage, usageRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricUsage, oldDay, usageRollupCaps)
 	r.flushed = usageFlushed{}
 	r.global = scopeUsage{}
 	r.byModel = make(map[string]*scopeUsage)
@@ -210,12 +204,7 @@ func (r *Recorder) advanceUsageFlushedLocked() {
 	}
 }
 
-type nameCount struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
-}
-
-func topScopes(m map[string]*scopeUsage, n int) []nameCount {
+func topScopes(m map[string]*scopeUsage, n int) []adminrollup.NameCount {
 	type pair struct {
 		name string
 		v    int64
@@ -233,9 +222,9 @@ func topScopes(m map[string]*scopeUsage, n int) []nameCount {
 	if n > 0 && len(pairs) > n {
 		pairs = pairs[:n]
 	}
-	out := make([]nameCount, len(pairs))
+	out := make([]adminrollup.NameCount, len(pairs))
 	for i, p := range pairs {
-		out[i] = nameCount{Name: p.name, Count: p.v}
+		out[i] = adminrollup.NameCount{Name: p.name, Count: p.v}
 	}
 	return out
 }
@@ -360,7 +349,7 @@ func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
 	return out
 }
 
-func topScopesFromCounters(counters map[string]scopeUsage, prefix string, n int) []nameCount {
+func topScopesFromCounters(counters map[string]scopeUsage, prefix string, n int) []adminrollup.NameCount {
 	ptrMap := make(map[string]*scopeUsage)
 	for k, v := range counters {
 		if len(prefix) > 0 && len(k) >= len(prefix) && k[:len(prefix)] == prefix {

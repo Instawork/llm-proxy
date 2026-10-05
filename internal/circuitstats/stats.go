@@ -98,17 +98,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricCircuitActivity, adminrollup.TopNCaps{}) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricCircuitActivity, oldDay, adminrollup.TopNCaps{})
 	r.flushed = activityFlushed{}
 	r.checksTotal = 0
 	r.blockedOpen = 0
@@ -151,30 +145,19 @@ func (r *Recorder) activityDeltaLocked() adminrollup.Delta {
 			"circuits_opened":  float64(r.circuitsOpened - r.flushed.circuitsOpened),
 		},
 	}
-	if provDelta := int64MapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
+	if provDelta := adminrollup.IntMapDelta(r.byProvider, r.flushed.byProvider); len(provDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}
 		d.Dimensions["by_provider"] = provDelta
 	}
-	if keyDelta := int64MapDelta(r.byKey, r.flushed.byKey); len(keyDelta) > 0 {
+	if keyDelta := adminrollup.IntMapDelta(r.byKey, r.flushed.byKey); len(keyDelta) > 0 {
 		if d.Dimensions == nil {
 			d.Dimensions = make(map[string]map[string]float64)
 		}
 		d.Dimensions["by_key"] = keyDelta
 	}
 	return d
-}
-
-func int64MapDelta(cur map[string]int64, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		p := prev[k]
-		if dr := float64(v - p); dr != 0 {
-			out[k] = dr
-		}
-	}
-	return out
 }
 
 func (r *Recorder) advanceFlushedLocked() {

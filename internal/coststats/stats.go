@@ -117,17 +117,11 @@ func costScopeKey(kind, name string) string {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricCost, costRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricCost, oldDay, costRollupCaps)
 	r.flushed = costFlushed{}
 	r.spendTodayUSD = 0
 	r.inputSpendTodayUSD = 0

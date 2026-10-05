@@ -4,8 +4,6 @@ package pii
 
 import (
 	"encoding/json"
-	"maps"
-	"sort"
 	"sync"
 	"time"
 
@@ -83,17 +81,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricPII, piiRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush + archive are Redis round-trips with multi-second timeouts;
-	// they run off-lock on a background goroutine (flush first) so a UTC
-	// rollover never pins r.mu — and every concurrent Record* caller —
-	// for the duration of a slow or unreachable store.
-	r.FinishDayRollover(adminrollup.MetricPII, oldDay, piiRollupCaps)
 	r.flushed = piiFlushed{}
 	r.requestsScanned = 0
 	r.requestsWithPII = 0
@@ -105,28 +97,6 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.byProvider = make(map[string]int64)
 	r.byKey = make(map[string]int64)
 	r.recent = nil
-}
-
-type kv struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
-}
-
-func topN(m map[string]int64, n int) []kv {
-	out := make([]kv, 0, len(m))
-	for name, count := range m {
-		out = append(out, kv{Name: name, Count: count})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Name < out[j].Name
-	})
-	if n > 0 && len(out) > n {
-		out = out[:n]
-	}
-	return out
 }
 
 // detectionRateLocked returns the count of cleanly-scanned requests (total
@@ -232,22 +202,12 @@ func (r *Recorder) piiDeltaLocked() adminrollup.Delta {
 			"oversize":          float64(r.oversize - r.flushed.oversize),
 		},
 		Dimensions: map[string]map[string]float64{
-			"by_entity":   intMapDelta(r.byEntity, r.flushed.byEntity),
-			"by_provider": intMapDelta(r.byProvider, r.flushed.byProvider),
-			"by_key":      intMapDelta(r.byKey, r.flushed.byKey),
+			"by_entity":   adminrollup.IntMapDelta(r.byEntity, r.flushed.byEntity),
+			"by_provider": adminrollup.IntMapDelta(r.byProvider, r.flushed.byProvider),
+			"by_key":      adminrollup.IntMapDelta(r.byKey, r.flushed.byKey),
 		},
 	}
 	return d
-}
-
-func intMapDelta(cur, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		if dv := float64(v - prev[k]); dv != 0 {
-			out[k] = dv
-		}
-	}
-	return out
 }
 
 func (r *Recorder) advancePIIFlushedLocked() {
@@ -257,15 +217,9 @@ func (r *Recorder) advancePIIFlushedLocked() {
 	r.flushed.failOpen = r.failOpen
 	r.flushed.failClosed = r.failClosed
 	r.flushed.oversize = r.oversize
-	r.flushed.byEntity = copyIntMap(r.byEntity)
-	r.flushed.byProvider = copyIntMap(r.byProvider)
-	r.flushed.byKey = copyIntMap(r.byKey)
-}
-
-func copyIntMap(m map[string]int64) map[string]int64 {
-	out := make(map[string]int64, len(m))
-	maps.Copy(out, m)
-	return out
+	r.flushed.byEntity = adminrollup.CopyIntMap(r.byEntity)
+	r.flushed.byProvider = adminrollup.CopyIntMap(r.byProvider)
+	r.flushed.byKey = adminrollup.CopyIntMap(r.byKey)
 }
 
 // Snapshot returns a JSON-serialisable view of the current aggregates for
@@ -301,9 +255,9 @@ func (r *Recorder) Snapshot() map[string]any {
 		failOpen = r.failOpen
 		failClosed = r.failClosed
 		oversize = r.oversize
-		localByEntity = copyIntMap(r.byEntity)
-		localByProvider = copyIntMap(r.byProvider)
-		localByKey = copyIntMap(r.byKey)
+		localByEntity = adminrollup.CopyIntMap(r.byEntity)
+		localByProvider = adminrollup.CopyIntMap(r.byProvider)
+		localByKey = adminrollup.CopyIntMap(r.byKey)
 		_, detectionRate = r.detectionRateLocked()
 	}
 
@@ -318,9 +272,9 @@ func (r *Recorder) Snapshot() map[string]any {
 		"fail_open":         failOpen,
 		"fail_closed":       failClosed,
 		"oversize":          oversize,
-		"by_entity":         topN(localByEntity, 0),
-		"by_provider":       topN(localByProvider, 0),
-		"top_keys":          topN(localByKey, 10),
+		"by_entity":         adminrollup.TopN(localByEntity, 0),
+		"by_provider":       adminrollup.TopN(localByProvider, 0),
+		"top_keys":          adminrollup.TopN(localByKey, 10),
 		"recent":            recent,
 	}
 	r.mu.RUnlock()
@@ -372,7 +326,7 @@ func mergePIINameCounts(snap map[string]any, field string, local map[string]int6
 	if len(merged) == 0 {
 		return
 	}
-	snap[field] = topN(merged, limit)
+	snap[field] = adminrollup.TopN(merged, limit)
 }
 
 func parseRecentEventPayloads(raw []json.RawMessage) any {
