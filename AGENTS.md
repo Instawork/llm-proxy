@@ -51,8 +51,9 @@ CI enforces, exactly:
 1. `go vet ./...`
 2. `gofmt -s -l .` — must output nothing (note the `-s`; plain `go fmt` is not enough)
 3. `gofumpt -l .` — must output nothing (stricter than gofmt)
-4. `go run ./cmd/config-validator/` — required after any `configs/*.yml` edit
-5. `make test` — `go test -race ./internal/... -short -skip Integration`
+4. `make lint` — `staticcheck ./...` (pinned version in the Makefile)
+5. `go run ./cmd/config-validator/` — required after any `configs/*.yml` edit
+6. `make test` — `go test -race ./internal/... -short -skip Integration`
 
 Never drop `-race` when re-running a test subset: concurrency bugs in
 `internal/circuit/`, `internal/ratelimit/`, and `internal/cost/` only surface

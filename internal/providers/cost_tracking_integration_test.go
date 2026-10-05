@@ -179,7 +179,7 @@ func (env *costTrackingEnv) createKey(t *testing.T, provider, upstreamKey string
 
 // doJSON posts body to path with the given headers and requires HTTP 200,
 // returning the response body for debugging context on failures.
-func (env *costTrackingEnv) doJSON(t *testing.T, path string, headers map[string]string, body map[string]interface{}) []byte {
+func (env *costTrackingEnv) doJSON(t *testing.T, path string, headers map[string]string, body map[string]any) []byte {
 	t.Helper()
 	payload, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestOpenAIIntegration_CostTracking_CreatedKey(t *testing.T) {
 	baseline := env.recordCount()
 	env.doJSON(t, "/openai/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + created.PK},
-		map[string]interface{}{
+		map[string]any{
 			"model":      "gpt-4o-mini",
 			"max_tokens": 32,
 			"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
@@ -294,7 +294,7 @@ func TestAnthropicIntegration_CostTracking_CreatedKey(t *testing.T) {
 	baseline := env.recordCount()
 	env.doJSON(t, "/anthropic/v1/messages",
 		map[string]string{"x-api-key": created.PK, "anthropic-version": "2023-06-01"},
-		map[string]interface{}{
+		map[string]any{
 			"model":      "claude-haiku-4-5",
 			"max_tokens": 32,
 			"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
@@ -318,7 +318,7 @@ func TestAnthropicIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T)
 	t.Run("NonStreaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/anthropic/v1/chat/completions", headers,
-			map[string]interface{}{
+			map[string]any{
 				"model":      "claude-haiku-4-5",
 				"max_tokens": 32,
 				"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
@@ -331,7 +331,7 @@ func TestAnthropicIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T)
 	t.Run("Streaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/anthropic/v1/chat/completions", headers,
-			map[string]interface{}{
+			map[string]any{
 				"model":          "claude-haiku-4-5",
 				"max_tokens":     32,
 				"stream":         true,
@@ -362,11 +362,11 @@ func TestGeminiIntegration_CostTracking_CreatedKey(t *testing.T) {
 	baseline := env.recordCount()
 	env.doJSON(t, "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
 		map[string]string{"x-goog-api-key": created.PK},
-		map[string]interface{}{
-			"contents": []map[string]interface{}{
+		map[string]any{
+			"contents": []map[string]any{
 				{"parts": []map[string]string{{"text": "Say hi in one word."}}},
 			},
-			"generationConfig": map[string]interface{}{"maxOutputTokens": 32},
+			"generationConfig": map[string]any{"maxOutputTokens": 32},
 		})
 
 	record := env.requireCostTracked(t, baseline, "gemini", masked)
@@ -393,7 +393,7 @@ func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
 	t.Run("NonStreaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
-			map[string]interface{}{
+			map[string]any{
 				"model":      "gemini-2.5-flash",
 				"max_tokens": geminiCompatMaxTokens,
 				"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
@@ -406,7 +406,7 @@ func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
 	t.Run("Streaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
-			map[string]interface{}{
+			map[string]any{
 				"model":          "gemini-2.5-flash",
 				"max_tokens":     geminiCompatMaxTokens,
 				"stream":         true,

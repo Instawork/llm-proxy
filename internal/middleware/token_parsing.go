@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"sort"
@@ -96,6 +97,9 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 				isStreaming:    isStreaming,
 				provider:       provider,
 				requestStart:   requestStart,
+				// Per-chunk 📡 tracing is debug-only; evaluated once per
+				// request rather than once per chunk.
+				chunkTrace: isStreaming && slog.Default().Enabled(r.Context(), slog.LevelDebug),
 			}
 
 			next.ServeHTTP(captureWriter, r)
@@ -116,7 +120,10 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 
 			totalElapsed := time.Since(requestStart)
 
-			bodyReader := bytes.NewReader(captureWriter.body.Bytes())
+			// BodyReader lends the capture buffer to the parser; providers
+			// that need the whole body borrow it instead of re-copying it
+			// with io.ReadAll, so the stream is held in memory exactly once.
+			bodyReader := providers.NewBodyReader(captureWriter.body.Bytes())
 			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
 			if err != nil {
 				if !isStreaming {
@@ -155,7 +162,7 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 			// metrics correctly model-tagged without changing the Provider
 			// interface signature.
 			if metadata.Model == "" {
-				if reqModel, _ := provider.ExtractRequestModelAndMessages(r); reqModel != "" {
+				if reqModel, _ := providers.RequestModelAndMessages(provider, r); reqModel != "" {
 					metadata.Model = reqModel
 				}
 			}
@@ -231,6 +238,10 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 // bounds worst-case per-request memory at ~4 MiB × inflight requests.
 const maxCapturedBodyBytes = 4 * 1024 * 1024
 
+// streamStallThreshold is the inter-chunk gap above which a streaming
+// response is flagged as stalled in the logs.
+const streamStallThreshold = 5 * time.Second
+
 // responseCapture captures the response body for parsing and measures TTFB.
 type responseCapture struct {
 	http.ResponseWriter
@@ -255,6 +266,12 @@ type responseCapture struct {
 	// Compressed-content detection (best-effort, observational only).
 	compressed     bool
 	compressedOnce sync.Once
+	// chunkTrace enables the per-chunk 📡 log line (one per Write) and the
+	// per-chunk event histogram it renders. Off at INFO: a 400-event SSE
+	// stream otherwise paid 400 log lines plus 400 map allocations and
+	// sort+join calls on the hot path. The cumulative histogram for the
+	// end-of-stream summary and the stall warning are kept at every level.
+	chunkTrace bool
 
 	// SSE event-type histogram. Counts both `event:` lines and `"type":"..."`
 	// occurrences in `data:` payloads. Useful for telling apart "Anthropic is
@@ -265,6 +282,7 @@ type responseCapture struct {
 	sseLeftover    []byte
 	sseEventCounts map[string]int64
 	sseDataTypes   map[string]int64
+	sseNames       map[string]string // intern table, see internSSEName
 }
 
 // WriteHeader keeps the first committed status, as net/http does.
@@ -293,7 +311,7 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 			log.Printf("⏱  TTFB: %dms", rc.ttfbMS)
 		})
 		// Detect upstream gzip on the first chunk. When --disable-gzip is set,
-		// CreateGenericDirector strips Accept-Encoding so this should not fire;
+		// CreateGenericRewrite strips Accept-Encoding so this should not fire;
 		// without it, gzip is expected and this is just an observational note.
 		rc.compressedOnce.Do(func() {
 			if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
@@ -313,35 +331,37 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 		rc.chunkCount++
 		rc.totalBytes += int64(len(b))
 
-		// SSE event-type sniffing on uncompressed bodies. Returns the per-chunk
-		// event types so we can log them on every chunk without re-scanning.
-		// This walks line-by-line through the new bytes (plus any partial line
-		// leftover from the previous chunk). O(new bytes), never O(N²).
+		// SSE event-type sniffing on uncompressed bodies. Walks line-by-line
+		// through the new bytes (plus any partial line leftover from the
+		// previous chunk). O(new bytes), never O(N²). The cumulative
+		// histogram always updates (it feeds the end-of-stream summary); the
+		// per-chunk map is only built when we are going to log it.
 		var perChunk map[string]int64
 		if !rc.compressed {
-			perChunk = rc.sniffSSEEvents(b)
+			perChunk = rc.sniffSSE(b, rc.chunkTrace)
 		}
 
-		// One concise line per chunk: chunk #, gap from prev, size, event types
-		// in THIS chunk. With Accept-Encoding stripping you'll see things like:
-		//   📡 #1   +0ms     402B types=event:message_start=1,type:message_start=1
-		//   📡 #18  +7828ms  18B  types=event:ping=1,type:ping=1   ← stall here
-		//   📡 #100 +43508ms 21951B types=event:content_block_stop=1,...
-		gapNote := ""
-		if rc.chunkCount > 1 {
-			gapNote = fmt.Sprintf("+%dms ", gap.Milliseconds())
-		} else {
-			gapNote = "+0ms "
+		stalled := gap > streamStallThreshold
+		if rc.chunkTrace {
+			// One concise line per chunk: chunk #, gap from prev, size, event
+			// types in THIS chunk. With Accept-Encoding stripping you'll see:
+			//   📡 #1   +0ms     402B types=event:message_start=1,type:message_start=1
+			//   📡 #18  +7828ms  18B  types=event:ping=1,type:ping=1   ← stall here
+			//   📡 #100 +43508ms 21951B types=event:content_block_stop=1,...
+			stallTag := ""
+			if stalled {
+				stallTag = "⚠ "
+			}
+			log.Printf("📡 %s#%-3d +%dms %-7dB t+%dms types=%s",
+				stallTag, rc.chunkCount, gap.Milliseconds(), len(b),
+				now.Sub(rc.requestStart).Milliseconds(),
+				formatPerChunkEvents(perChunk))
+		} else if stalled {
+			// Keep the operator-facing stall signal at every log level.
+			log.Printf("⚠ streaming stall: +%dms gap before chunk #%d (%dB) t+%dms",
+				gap.Milliseconds(), rc.chunkCount, len(b),
+				now.Sub(rc.requestStart).Milliseconds())
 		}
-		stallTag := ""
-		if gap > 5*time.Second {
-			stallTag = "⚠ "
-		}
-		eventsNote := formatPerChunkEvents(perChunk)
-		log.Printf("📡 %s#%-3d %s%-7dB t+%dms types=%s",
-			stallTag, rc.chunkCount, gapNote, len(b),
-			now.Sub(rc.requestStart).Milliseconds(),
-			eventsNote)
 	}
 
 	// Buffer for post-stream metadata parsing, then forward immediately so the
@@ -380,13 +400,23 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 // Per-chunk keys are prefixed (event:NAME or type:NAME) so we can render them
 // in a single line without ambiguity.
 func (rc *responseCapture) sniffSSEEvents(b []byte) map[string]int64 {
+	return rc.sniffSSE(b, true)
+}
+
+// sniffSSE is sniffSSEEvents with the per-chunk map made optional. When
+// perChunkWanted is false it returns nil and only the cumulative histograms
+// are updated, with no per-call allocation beyond leftover handling.
+func (rc *responseCapture) sniffSSE(b []byte, perChunkWanted bool) map[string]int64 {
 	if rc.sseEventCounts == nil {
 		rc.sseEventCounts = make(map[string]int64, 8)
 	}
 	if rc.sseDataTypes == nil {
 		rc.sseDataTypes = make(map[string]int64, 16)
 	}
-	perChunk := make(map[string]int64, 4)
+	var perChunk map[string]int64
+	if perChunkWanted {
+		perChunk = make(map[string]int64, 4)
+	}
 
 	// Combine any partial line we held back with the new bytes.
 	var work []byte
@@ -415,14 +445,19 @@ func (rc *responseCapture) sniffSSEEvents(b []byte) map[string]int64 {
 		}
 		switch {
 		case bytes.HasPrefix(line, []byte("event: ")):
-			ev := string(line[len("event: "):])
+			ev := rc.internSSEName(line[len("event: "):])
 			rc.sseEventCounts[ev]++
-			perChunk["event:"+ev]++
+			if perChunk != nil {
+				perChunk["event:"+ev]++
+			}
 		case bytes.HasPrefix(line, []byte("data: ")):
 			payload := line[len("data: "):]
-			if t := extractJSONType(payload); t != "" {
-				rc.sseDataTypes[t]++
-				perChunk["type:"+t]++
+			if t := extractJSONTypeBytes(payload); len(t) > 0 {
+				name := rc.internSSEName(t)
+				rc.sseDataTypes[name]++
+				if perChunk != nil {
+					perChunk["type:"+name]++
+				}
 			}
 		}
 	}
@@ -430,6 +465,29 @@ func (rc *responseCapture) sniffSSEEvents(b []byte) map[string]int64 {
 		rc.sseLeftover = append(rc.sseLeftover[:0], work[start:]...)
 	}
 	return perChunk
+}
+
+// maxInternedSSENames caps the per-response intern table so an upstream
+// emitting unbounded distinct event names cannot grow it without limit.
+const maxInternedSSENames = 64
+
+// internSSEName returns a string for an SSE event/type name, reusing the
+// allocation from the first time that name was seen on this response. Go
+// elides the []byte→string conversion for map reads but not for the
+// read-modify-write in m[string(b)]++, so without interning every counted
+// line allocated a fresh copy of a name the histogram already held.
+func (rc *responseCapture) internSSEName(b []byte) string {
+	if s, ok := rc.sseNames[string(b)]; ok {
+		return s
+	}
+	s := string(b)
+	if len(rc.sseNames) < maxInternedSSENames {
+		if rc.sseNames == nil {
+			rc.sseNames = make(map[string]string, 16)
+		}
+		rc.sseNames[s] = s
+	}
+	return s
 }
 
 // formatPerChunkEvents renders the per-chunk event histogram compactly:
@@ -474,6 +532,12 @@ func (rc *responseCapture) formatEventCounts() string {
 // "" on anything that doesn't look like a clean `"type":"..."` substring near
 // the start of the object. Good enough for telemetry.
 func extractJSONType(b []byte) string {
+	return string(extractJSONTypeBytes(b))
+}
+
+// extractJSONTypeBytes is extractJSONType without the string conversion; the
+// returned slice aliases b. Returns nil when no type marker is found.
+func extractJSONTypeBytes(b []byte) []byte {
 	// Look for `"type":"`. Bound the search to a small prefix to avoid pathological scans.
 	limit := len(b)
 	if limit > 256 {
@@ -484,7 +548,7 @@ func extractJSONType(b []byte) string {
 		// Tolerate `"type": "...".
 		idx = bytes.Index(b[:limit], []byte(`"type": "`))
 		if idx < 0 {
-			return ""
+			return nil
 		}
 		idx += len(`"type": "`)
 	} else {
@@ -492,12 +556,12 @@ func extractJSONType(b []byte) string {
 	}
 	end := bytes.IndexByte(b[idx:], '"')
 	if end < 0 {
-		return ""
+		return nil
 	}
 	if end > 64 { // sanity cap on type-name length
-		return ""
+		return nil
 	}
-	return string(b[idx : idx+end])
+	return b[idx : idx+end]
 }
 
 // chunkPreview returns a printable, length-limited preview of a byte chunk for
@@ -557,14 +621,6 @@ func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.ErrUnsupported
 }
 
-// Helper function to find minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ExtractUserIDFromRequest extracts user ID from request headers, query parameters, or provider-specific methods
 // Follows the priority order: context (from meta URL) → URL path → headers → query parameters → provider-specific extraction → fallback to IP
 func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) string {
@@ -595,7 +651,7 @@ func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) st
 
 	// Priority 3: Provider-specific extraction from request body
 	if provider != nil {
-		if userID := provider.UserIDFromRequest(req); userID != "" {
+		if userID := providers.RequestUserID(provider, req); userID != "" {
 			log.Printf("🔍 User ID from provider-specific extraction: %s", userID)
 			return userID
 		}

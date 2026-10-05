@@ -1,7 +1,6 @@
 package modelstatusstats
 
 import (
-	"sort"
 	"sync"
 	"time"
 
@@ -9,11 +8,6 @@ import (
 )
 
 var modelStatusRollupCaps = adminrollup.TopNCaps{}
-
-type kv struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
-}
 
 type statusFlushed struct {
 	retiredTotal    int64
@@ -65,52 +59,12 @@ func composeKey(provider, model string) string {
 	return provider + ":" + model
 }
 
-func topN(m map[string]int64, n int) []kv {
-	out := make([]kv, 0, len(m))
-	for name, count := range m {
-		out = append(out, kv{Name: name, Count: count})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Name < out[j].Name
-	})
-	if n > 0 && len(out) > n {
-		out = out[:n]
-	}
-	return out
-}
-
-func intMapDelta(cur, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		if dv := float64(v - prev[k]); dv != 0 {
-			out[k] = dv
-		}
-	}
-	return out
-}
-
-func copyIntMap(m map[string]int64) map[string]int64 {
-	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
-}
-
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricModelStatus, modelStatusRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricModelStatus, oldDay, modelStatusRollupCaps)
-	}()
 	r.flushed = statusFlushed{}
 	r.retiredTotal = 0
 	r.deprecatedTotal = 0
@@ -138,10 +92,10 @@ func (r *Recorder) statusDeltaLocked() adminrollup.Delta {
 			"unmetered_total":  float64(r.unmeteredTotal - r.flushed.unmeteredTotal),
 		},
 		Dimensions: map[string]map[string]float64{
-			"by_retired":    intMapDelta(r.retired, r.flushed.retired),
-			"by_deprecated": intMapDelta(r.deprecated, r.flushed.deprecated),
-			"by_unknown":    intMapDelta(r.unknown, r.flushed.unknown),
-			"by_unmetered":  intMapDelta(r.unmetered, r.flushed.unmetered),
+			"by_retired":    adminrollup.IntMapDelta(r.retired, r.flushed.retired),
+			"by_deprecated": adminrollup.IntMapDelta(r.deprecated, r.flushed.deprecated),
+			"by_unknown":    adminrollup.IntMapDelta(r.unknown, r.flushed.unknown),
+			"by_unmetered":  adminrollup.IntMapDelta(r.unmetered, r.flushed.unmetered),
 		},
 	}
 }
@@ -151,10 +105,10 @@ func (r *Recorder) advanceFlushedLocked() {
 	r.flushed.deprecatedTotal = r.deprecatedTotal
 	r.flushed.unknownTotal = r.unknownTotal
 	r.flushed.unmeteredTotal = r.unmeteredTotal
-	r.flushed.retired = copyIntMap(r.retired)
-	r.flushed.deprecated = copyIntMap(r.deprecated)
-	r.flushed.unknown = copyIntMap(r.unknown)
-	r.flushed.unmetered = copyIntMap(r.unmetered)
+	r.flushed.retired = adminrollup.CopyIntMap(r.retired)
+	r.flushed.deprecated = adminrollup.CopyIntMap(r.deprecated)
+	r.flushed.unknown = adminrollup.CopyIntMap(r.unknown)
+	r.flushed.unmetered = adminrollup.CopyIntMap(r.unmetered)
 }
 
 func (r *Recorder) publishLocked() {
@@ -201,9 +155,9 @@ func (r *Recorder) RecordUnmetered(provider, endpoint string) {
 }
 
 // Snapshot returns a JSON-serialisable view for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -220,17 +174,17 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		deprecatedTotal = r.deprecatedTotal
 		unknownTotal = r.unknownTotal
 		unmeteredTotal = r.unmeteredTotal
-		localRetired = copyIntMap(r.retired)
-		localDeprecated = copyIntMap(r.deprecated)
-		localUnknown = copyIntMap(r.unknown)
-		localUnmetered = copyIntMap(r.unmetered)
+		localRetired = adminrollup.CopyIntMap(r.retired)
+		localDeprecated = adminrollup.CopyIntMap(r.deprecated)
+		localUnknown = adminrollup.CopyIntMap(r.unknown)
+		localUnmetered = adminrollup.CopyIntMap(r.unmetered)
 	}
 
 	backend := "memory"
 	if r.RollupBound() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":        true,
 		"backend":          backend,
 		"day":              today,
@@ -239,10 +193,10 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		"deprecated_total": deprecatedTotal,
 		"unknown_total":    unknownTotal,
 		"unmetered_total":  unmeteredTotal,
-		"by_retired":       topN(localRetired, 0),
-		"by_deprecated":    topN(localDeprecated, 0),
-		"by_unknown":       topN(localUnknown, 0),
-		"by_unmetered":     topN(localUnmetered, 0),
+		"by_retired":       adminrollup.TopN(localRetired, 0),
+		"by_deprecated":    adminrollup.TopN(localDeprecated, 0),
+		"by_unknown":       adminrollup.TopN(localUnknown, 0),
+		"by_unmetered":     adminrollup.TopN(localUnmetered, 0),
 	}
 	r.mu.RUnlock()
 
@@ -256,7 +210,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalModelStatusIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	retiredTotal, deprecatedTotal, unknownTotal, unmeteredTotal int64,
 	localRetired, localDeprecated, localUnknown, localUnmetered map[string]int64,
 ) {
@@ -270,7 +224,7 @@ func mergeLocalModelStatusIntoSnap(
 	mergeModelStatusNameCounts(snap, "by_unmetered", localUnmetered, 0)
 }
 
-func mergeModelStatusNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+func mergeModelStatusNameCounts(snap map[string]any, field string, local map[string]int64, limit int) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
@@ -278,5 +232,5 @@ func mergeModelStatusNameCounts(snap map[string]interface{}, field string, local
 	if len(merged) == 0 {
 		return
 	}
-	snap[field] = topN(merged, limit)
+	snap[field] = adminrollup.TopN(merged, limit)
 }

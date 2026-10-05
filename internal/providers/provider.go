@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
+	"maps"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -89,7 +92,7 @@ type Provider interface {
 	Proxy() http.Handler
 
 	// GetHealthStatus returns the health status of the provider
-	GetHealthStatus() map[string]interface{}
+	GetHealthStatus() map[string]any
 
 	// UserIDFromRequest extracts user ID from request body in a provider-specific way
 	// Returns empty string if no user ID can be extracted
@@ -196,9 +199,7 @@ func (pm *ProviderManager) GetProvider(name string) Provider {
 // state in IsStreamingRequest / ProviderForRequest.
 func (pm *ProviderManager) GetAllProviders() map[string]Provider {
 	out := make(map[string]Provider, len(pm.providers))
-	for k, v := range pm.providers {
-		out[k] = v
-	}
+	maps.Copy(out, pm.providers)
 	return out
 }
 
@@ -214,7 +215,7 @@ func (pm *ProviderManager) IsStreamingRequest(req *http.Request) bool {
 	if p == nil {
 		return false
 	}
-	return p.IsStreamingRequest(req)
+	return RequestIsStreaming(p, req)
 }
 
 // ProviderForRequest returns the Provider responsible for handling req based
@@ -249,8 +250,8 @@ func (pm *ProviderManager) ProviderForRequest(req *http.Request) Provider {
 }
 
 // GetHealthStatus returns the health status of all providers
-func (pm *ProviderManager) GetHealthStatus() map[string]interface{} {
-	status := make(map[string]interface{})
+func (pm *ProviderManager) GetHealthStatus() map[string]any {
+	status := make(map[string]any)
 	for name, provider := range pm.providers {
 		status[name] = provider.GetHealthStatus()
 	}
@@ -263,18 +264,24 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 	return exists
 }
 
-// CreateGenericDirector creates a generic director function for reverse proxy requests.
+// CreateGenericRewrite creates a generic httputil.ReverseProxy.Rewrite function.
 // This eliminates code duplication across all providers by handling the common logic:
-//   - Setting the target host header
+//   - Pointing the outbound request at targetURL and pinning the Host header
 //   - Stripping the provider prefix from the path
 //   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
 //     upstream returns uncompressed responses. Useful for debugging SSE streams where
 //     plain-text event data is easier to inspect in logs. By default gzip is allowed.
 //   - Logging the request with streaming detection
-func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirector func(*http.Request), disableGzip bool) func(*http.Request) {
-	return func(req *http.Request) {
-		// Call the original director first
-		originalDirector(req)
+//
+// Rewrite is used instead of the deprecated Director hook: in Rewrite mode
+// ReverseProxy strips inbound X-Forwarded-*/Forwarded headers before calling
+// us and never appends the client IP, so no client-identifying forwarding
+// headers reach the upstream vendor.
+func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip bool) func(*httputil.ProxyRequest) {
+	providerPrefix := "/" + provider.GetName()
+	return func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		req := pr.Out
 
 		// Set the Host header to the target host
 		req.Host = targetURL.Host
@@ -282,7 +289,6 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 		// Strip the provider prefix from the path before forwarding
 		// Note: mux PathPrefix matches but doesn't strip the prefix automatically
 		// Note: URL rewriting for /meta/{userID}/provider/ is handled by URLRewritingMiddleware
-		providerPrefix := "/" + provider.GetName()
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, providerPrefix)
 
 		// When gzip is disabled, force upstream to send uncompressed bytes.
@@ -303,10 +309,13 @@ func CreateGenericDirector(provider Provider, targetURL *url.URL, originalDirect
 	}
 }
 
+// proxyMaxIdleConns is the idle keep-alive pool size per provider transport.
+const proxyMaxIdleConns = 100
+
 // newProxyTransport creates a new http.Transport with optimized settings for
 // proxying LLM requests.  When disableGzip is true, DisableCompression is set
 // so Go's transport never auto-decompresses upstream gzip responses — useful
-// alongside Accept-Encoding stripping in CreateGenericDirector for debug builds.
+// alongside Accept-Encoding stripping in CreateGenericRewrite for debug builds.
 // Defaults to false (gzip allowed). responseHeaderTimeout of zero uses
 // DefaultResponseHeaderTimeout (5 minutes).
 func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *http.Transport {
@@ -317,8 +326,15 @@ func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *h
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100, // Each provider gets its own transport, so this is 100 idle connections per provider.
+		ForceAttemptHTTP2: true,
+		// Each provider gets its own transport talking to (effectively) a
+		// single upstream host, so the pool-wide and per-host caps must match.
+		// Without MaxIdleConnsPerHost the per-host default of 2 applies: under
+		// any real concurrency every connection beyond the second is closed
+		// after use and the next request pays a fresh TCP+TLS handshake to the
+		// vendor, even though MaxIdleConns nominally allows 100.
+		MaxIdleConns:          proxyMaxIdleConns,
+		MaxIdleConnsPerHost:   proxyMaxIdleConns,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
@@ -335,6 +351,22 @@ func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *h
 // This is a shared utility function that all providers can use to handle gzip-compressed responses
 // when DisableCompression is set to true in the transport.
 func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
+	// Captured bodies (BodyReader, bytes.Buffer) can be sniffed in place:
+	// no bufio.Reader, no MultiReader, and the reader is handed back
+	// untouched so a downstream readResponseBody still borrows rather
+	// than copies.
+	if b, ok := reader.(bytesBorrower); ok {
+		if !isGzipMagic(b.Bytes()) {
+			return reader, nil
+		}
+		slog.Debug("Detected gzip compressed response, decompressing")
+		gzipReader, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		return gzipReader, nil
+	}
+
 	// Read the first few bytes to check for gzip magic number
 	buffer := make([]byte, 2)
 	peekReader := bufio.NewReader(reader)
@@ -344,8 +376,10 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 	}
 
 	// Check if this looks like gzip (magic number 0x1f, 0x8b)
-	if n >= 2 && buffer[0] == 0x1f && buffer[1] == 0x8b {
-		log.Printf("🔍 Debug: Detected gzip compressed response, decompressing...")
+	if n >= 2 && isGzipMagic(buffer[:n]) {
+		// Debug-level: this fires for every gzip response on the metadata
+		// path, which at INFO is one log line per request for SDK clients.
+		slog.Debug("Detected gzip compressed response, decompressing")
 
 		// Create a new reader that includes the peeked bytes
 		combinedReader := io.MultiReader(bytes.NewReader(buffer[:n]), peekReader)
@@ -361,6 +395,31 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 
 	// Not gzipped, return the original reader with peeked bytes restored
 	return io.MultiReader(bytes.NewReader(buffer[:n]), peekReader), nil
+}
+
+// isGzipMagic reports whether b starts with the gzip member header.
+func isGzipMagic(b []byte) bool {
+	return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b
+}
+
+// gunzipIfNeeded returns body inflated when it is gzip-compressed, or body
+// itself (no copy) when it is not. It is the in-memory counterpart of
+// DecompressResponseIfNeeded for callers that already hold the full body.
+func gunzipIfNeeded(body []byte) ([]byte, error) {
+	if !isGzipMagic(body) {
+		return body, nil
+	}
+	slog.Debug("Detected gzip compressed response, decompressing")
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+	out, err := io.ReadAll(gz)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+	return out, nil
 }
 
 // Estimation primarily uses Content-Length divided by BytesPerToken.
@@ -462,7 +521,7 @@ func EstimateRequestTokens(req *http.Request, cfg estimationConfig, provider Pro
 		if strings.Contains(ct, "application/json") {
 			if req.ContentLength >= 0 && req.ContentLength <= int64(maxSample) {
 				if provider != nil {
-					provModel, messages := provider.ExtractRequestModelAndMessages(req)
+					provModel, messages := RequestModelAndMessages(provider, req)
 					if provModel != "" {
 						model = provModel
 					}

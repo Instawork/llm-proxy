@@ -208,8 +208,7 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 	key, err := h.createOrgKey(r, adminusers.RoleAdmin, createReq)
 	if err != nil {
 		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id)
-		var httpErr *orgKeyError
-		if errors.As(err, &httpErr) {
+		if httpErr, ok := errors.AsType[*orgKeyError](err); ok {
 			writeJSON(w, httpErr.status, map[string]string{"error": httpErr.message})
 			return
 		}

@@ -14,11 +14,11 @@ import (
 func TestRecorderBindingUnboundIsNoOp(t *testing.T) {
 	var b RecorderBinding
 	// None of these should panic or do anything when unbound.
-	b.QueueToday("2026-06-11", map[string]interface{}{"x": 1})
-	b.ArchiveDay("2026-06-11", map[string]interface{}{"x": 1})
+	b.QueueToday("2026-06-11", map[string]any{"x": 1})
+	b.ArchiveDay("2026-06-11", map[string]any{"x": 1})
 	b.FlushRollup()
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	b.MergeHistory(MetricCost, snap)
 	if _, ok := snap["daily_history"]; ok {
 		t.Fatal("unbound MergeHistory must not mutate the snapshot")
@@ -41,17 +41,17 @@ func TestRecorderBindingArchiveAndMergeHistory(t *testing.T) {
 	// the HistoryDays window (relative to now); a hardcoded date eventually
 	// falls outside the window and MergeHistory drops it.
 	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	b.ArchiveDay(day, map[string]interface{}{
+	b.ArchiveDay(day, map[string]any{
 		"spend_today_usd": 2.50,
 		"requests_today":  int64(7),
 	})
 
 	// MergeHistory should now fold the archived day into a live snapshot.
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	b.MergeHistory(MetricCost, snap)
 
 	require.Equal(t, true, snap["daily_history_available"])
-	rows, ok := snap["daily_history"].([]map[string]interface{})
+	rows, ok := snap["daily_history"].([]map[string]any)
 	require.True(t, ok, "daily_history should be rows")
 	require.Len(t, rows, 1)
 	require.Equal(t, day, rows[0]["day"])
@@ -95,7 +95,7 @@ func TestRecorderBindingMergeTodayAndArchiveFromAggregates(t *testing.T) {
 	b.QueueDelta(day, Delta{Totals: map[string]float64{"requests": 4, "tokens": 40}})
 	b.FlushRollup()
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	b.MergeToday(MetricUsage, day, snap, TopNCaps{ByKey: 100})
 	require.Equal(t, int64(4), snap["requests_today"])
 	require.Equal(t, int64(40), snap["tokens_today"])
@@ -125,7 +125,7 @@ func TestRecorderBindingMergeRecentEvents(t *testing.T) {
 		"outcome":  "ok",
 	}, 50))
 
-	snap := map[string]interface{}{}
+	snap := map[string]any{}
 	b.MergeRecentEvents(MetricPII, "recent", 50, snap, func(raw []json.RawMessage) any {
 		out := make([]map[string]any, 0, len(raw))
 		for _, payload := range raw {

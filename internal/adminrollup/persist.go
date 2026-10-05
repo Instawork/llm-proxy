@@ -15,7 +15,7 @@ type Persister struct {
 
 	mu           sync.Mutex
 	timers       map[string]*time.Timer
-	pending      map[string]map[string]interface{}
+	pending      map[string]map[string]any
 	deltaTimers  map[string]*time.Timer
 	deltaPending map[string]Delta
 }
@@ -29,14 +29,14 @@ func NewPersister(store *Store, metric string) *Persister {
 		store:        store,
 		metric:       metric,
 		timers:       make(map[string]*time.Timer),
-		pending:      make(map[string]map[string]interface{}),
+		pending:      make(map[string]map[string]any),
 		deltaTimers:  make(map[string]*time.Timer),
 		deltaPending: make(map[string]Delta),
 	}
 }
 
 // QueueToday schedules a debounced write of today's snapshot (legacy JSON path).
-func (p *Persister) QueueToday(day string, data map[string]interface{}) {
+func (p *Persister) QueueToday(day string, data map[string]any) {
 	if p == nil || p.store == nil || data == nil {
 		return
 	}
@@ -94,7 +94,7 @@ func mergeDelta(acc, d Delta) Delta {
 }
 
 // ArchiveImmediately writes the completed day to the daily key (day rollover).
-func (p *Persister) ArchiveImmediately(day string, data map[string]interface{}) {
+func (p *Persister) ArchiveImmediately(day string, data map[string]any) {
 	if p == nil || p.store == nil || data == nil {
 		return
 	}

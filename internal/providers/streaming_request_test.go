@@ -51,7 +51,6 @@ func TestProviderManager_IsStreamingRequest_RequiresPathOwnership(t *testing.T) 
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			req, _ := http.NewRequest("POST", tc.path, nil)
 			req.Header.Set("Accept", "text/event-stream")

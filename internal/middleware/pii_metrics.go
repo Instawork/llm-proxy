@@ -35,7 +35,7 @@ func emitPIIRedactionMetrics(
 			"provider:" + normalizeDogstatsdTag(provider),
 			"entity_type:" + normalizeDogstatsdTag(entityType),
 		}
-		for i := 0; i < count; i++ {
+		for range count {
 			_ = metrics.Incr("pii.entity_detected", entityTags, 1.0)
 		}
 	}

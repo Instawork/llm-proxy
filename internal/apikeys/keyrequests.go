@@ -103,8 +103,7 @@ func (s *Store) acquireKeyRequestPendingLock(ctx context.Context, requesterEmail
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return ErrPendingKeyRequestExists
 		}
 		return fmt.Errorf("failed to acquire key request lock: %w", err)
@@ -296,8 +295,7 @@ func (s *Store) BeginKeyRequestApproval(ctx context.Context, id, reviewedBy stri
 		ReturnValues: types.ReturnValueAllNew,
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			if _, getErr := s.GetKeyRequest(ctx, id); errors.Is(getErr, ErrKeyRequestNotFound) {
 				return nil, ErrKeyRequestNotFound
 			}
@@ -418,8 +416,7 @@ func (s *Store) RejectKeyRequest(ctx context.Context, id, reviewedBy, reason str
 		ReturnValues: types.ReturnValueAllNew,
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			if _, getErr := s.GetKeyRequest(ctx, id); errors.Is(getErr, ErrKeyRequestNotFound) {
 				return nil, ErrKeyRequestNotFound
 			}

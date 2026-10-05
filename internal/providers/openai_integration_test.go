@@ -88,8 +88,6 @@ func TestOpenAIIntegration_ChatCompletions_Models(t *testing.T) {
 
 	// Run model tests in parallel
 	for _, model := range openaiTestModels {
-		model := model // capture range variable
-
 		t.Run(model.name, func(t *testing.T) {
 			// Test non-streaming
 			t.Run("NonStreaming", func(t *testing.T) {
@@ -176,14 +174,12 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 
 	// Run each scenario as a subtest
 	for _, scenario := range scenarios {
-		scenario := scenario // capture range variable
-
 		t.Run(fmt.Sprintf("%s_%s", scenario.model.name, scenario.name), func(t *testing.T) {
-			var requestBody map[string]interface{}
+			var requestBody map[string]any
 			var url string
 
 			if scenario.model.endpoint == "chat" {
-				requestBody = map[string]interface{}{
+				requestBody = map[string]any{
 					"model":       scenario.model.modelID,
 					"max_tokens":  scenario.maxTokens,
 					"messages":    scenario.messages,
@@ -202,7 +198,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 				url = server.URL + "/openai/v1/chat/completions"
 			} else {
 				// completions endpoint
-				requestBody = map[string]interface{}{
+				requestBody = map[string]any{
 					"model":       scenario.model.modelID,
 					"prompt":      scenario.prompt,
 					"max_tokens":  scenario.maxTokens,
@@ -255,7 +251,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 					t.Fatalf("Failed to read response body: %v", err)
 				}
 
-				var response map[string]interface{}
+				var response map[string]any
 				if err := json.Unmarshal(bodyBytes, &response); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -306,8 +302,6 @@ func TestOpenAIIntegration_Responses_Models(t *testing.T) {
 
 	// Run model tests in parallel
 	for _, model := range responsesTestModels {
-		model := model // capture range variable
-
 		t.Run(model.name, func(t *testing.T) {
 			// Test non-streaming
 			t.Run("NonStreaming", func(t *testing.T) {
@@ -382,10 +376,8 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 
 	// Run each scenario as a subtest
 	for _, scenario := range scenarios {
-		scenario := scenario // capture range variable
-
 		t.Run(scenario.name, func(t *testing.T) {
-			requestBody := map[string]interface{}{
+			requestBody := map[string]any{
 				"model":             scenario.model,
 				"input":             scenario.prompt,
 				"max_output_tokens": scenario.maxTokens,
@@ -437,7 +429,7 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 					t.Fatalf("Failed to read response body: %v", err)
 				}
 
-				var response map[string]interface{}
+				var response map[string]any
 				if err := json.Unmarshal(bodyBytes, &response); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -461,11 +453,11 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 
 // Helper function for non-streaming tests
 func testOpenAIChatCompletionsNonStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model openaiTestModel) {
-	var requestBody map[string]interface{}
+	var requestBody map[string]any
 	var url string
 
 	if model.endpoint == "chat" {
-		requestBody = map[string]interface{}{
+		requestBody = map[string]any{
 			"model": model.modelID,
 			"messages": []map[string]string{
 				{
@@ -479,7 +471,7 @@ func testOpenAIChatCompletionsNonStreaming(t *testing.T, server *httptest.Server
 		url = server.URL + "/openai/v1/chat/completions"
 	} else {
 		// completions endpoint
-		requestBody = map[string]interface{}{
+		requestBody = map[string]any{
 			"model":       model.modelID,
 			"prompt":      model.testPrompt,
 			"max_tokens":  model.maxTokens,
@@ -521,7 +513,7 @@ func testOpenAIChatCompletionsNonStreaming(t *testing.T, server *httptest.Server
 	}
 
 	// Parse JSON for basic validation
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -559,7 +551,7 @@ func testOpenAIChatCompletionsStreaming(t *testing.T, server *httptest.Server, p
 		t.Skip("Streaming only supported for chat endpoint")
 	}
 
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model": model.modelID,
 		"messages": []map[string]string{
 			{
@@ -634,7 +626,7 @@ func testOpenAIChatCompletionsStreaming(t *testing.T, server *httptest.Server, p
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue
@@ -673,7 +665,7 @@ func testOpenAIChatCompletionsStreaming(t *testing.T, server *httptest.Server, p
 
 // Helper function for Responses API non-streaming tests
 func testOpenAIResponsesNonStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model openaiTestModel) {
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model":             model.modelID,
 		"input":             model.testPrompt,
 		"max_output_tokens": model.maxTokens,
@@ -714,7 +706,7 @@ func testOpenAIResponsesNonStreaming(t *testing.T, server *httptest.Server, prov
 	}
 
 	// Parse JSON for basic validation
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -751,7 +743,7 @@ func testOpenAIResponsesNonStreaming(t *testing.T, server *httptest.Server, prov
 
 // Helper function for Responses API streaming tests
 func testOpenAIResponsesStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model openaiTestModel) {
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model":             model.modelID,
 		"input":             model.testPrompt,
 		"max_output_tokens": model.maxTokens,
@@ -821,14 +813,14 @@ func testOpenAIResponsesStreaming(t *testing.T, server *httptest.Server, provide
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue
 		}
 
 		// Check for usage information in Responses API streaming
-		if event, ok := chunk["event"].(map[string]interface{}); ok {
+		if event, ok := chunk["event"].(map[string]any); ok {
 			if usage, ok := event["usage"]; ok && usage != nil {
 				hasUsage = true
 			}

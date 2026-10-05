@@ -83,6 +83,11 @@ type Recorder struct {
 	// public BindRollup/FlushRollup API.
 	adminrollup.RecorderBinding
 	history.Binding
+
+	// background, when set, runs the per-request monthly key spend write
+	// (a Redis HINCRBYFLOAT per key) off the request goroutine; see
+	// SetBackgroundRunner. Guarded by mu like the rest of the recorder.
+	background func(job func(ctx context.Context))
 }
 
 type costFlushed struct {
@@ -112,20 +117,11 @@ func costScopeKey(kind, name string) string {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricCost, costRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	// Flush pending debounced deltas synchronously (persister mutex only — does
-	// not take r.mu) so this instance's last old-day deltas land in Redis
-	// before the archive goroutine snapshots. Only the archive runs async so a
-	// UTC rollover never blocks concurrent RecordRequest on r.mu for seconds.
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricCost, oldDay, costRollupCaps)
-	}()
 	r.flushed = costFlushed{}
 	r.spendTodayUSD = 0
 	r.inputSpendTodayUSD = 0
@@ -137,20 +133,6 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.byUser = make(map[string]*userSpend)
 	r.byProvider = make(map[string]*providerSpend)
 	r.recent = nil
-}
-
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
-	return map[string]interface{}{
-		"spend_today_usd":        r.spendTodayUSD,
-		"input_spend_today_usd":  r.inputSpendTodayUSD,
-		"output_spend_today_usd": r.outputSpendTodayUSD,
-		"requests_today":         r.requestsToday,
-		"input_tokens_today":     r.inputTokensToday,
-		"output_tokens_today":    r.outputTokensToday,
-		"by_key":                 spendList(r.byKey),
-		"by_user":                userSpendMap(r.byUser),
-		"by_provider":            providerList(r.byProvider),
-	}
 }
 
 // RecordRequest ingests one tracked LLM request. keyID should be a masked iw:
@@ -234,18 +216,51 @@ func (r *Recorder) RecordRequest(
 	if len(r.recent) > MaxRecentEvents {
 		r.recent = r.recent[len(r.recent)-MaxRecentEvents:]
 	}
-	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.costDeltaLocked()
 	r.advanceCostFlushedLocked()
 	r.mu.Unlock()
 
+	// Emit outside the lock: when the history buffer trips its size
+	// threshold, Emit uploads inline (S3 PUT, bounded by its own timeout);
+	// doing that under r.mu would stall every concurrent RecordRequest.
+	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
-	r.applyMonthlyKeySpendFromDelta(context.Background(), delta)
+
+	// Monthly key spend is a synchronous Redis write per key touched; hand
+	// it to the background runner when one is wired so the request
+	// goroutine is not held on it. The month is pinned here so a job that
+	// runs across midnight on the 1st still lands in the right bucket.
+	// Cost-limit reservations linger for a grace period after the
+	// response, which already covers the delay before the write lands.
+	if len(delta.Dimensions["by_key"]) > 0 {
+		month := now.Format("2006-01")
+		r.mu.RLock()
+		run := r.background
+		r.mu.RUnlock()
+		if run != nil {
+			run(func(ctx context.Context) { r.applyMonthlyKeySpendFromDelta(ctx, month, delta) })
+		} else {
+			r.applyMonthlyKeySpendFromDelta(context.Background(), month, delta)
+		}
+	}
 }
 
-func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta adminrollup.Delta) {
+// SetBackgroundRunner installs the executor used for backend writes that are
+// not needed to answer the request (currently the monthly key spend
+// counter). Intended to be the cost tracker's worker pool; nil restores the
+// inline behaviour. Call once at startup before traffic.
+func (r *Recorder) SetBackgroundRunner(run func(job func(ctx context.Context))) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.background = run
+	r.mu.Unlock()
+}
+
+func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, month string, delta adminrollup.Delta) {
 	if r == nil {
 		return
 	}
@@ -253,7 +268,6 @@ func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, delta admi
 	if len(byKey) == 0 {
 		return
 	}
-	month := time.Now().UTC().Format("2006-01")
 	for field, spendUSD := range byKey {
 		member, f, ok := adminrollup.ParseDimMemberField(field)
 		if !ok || f != "spend_usd" || spendUSD == 0 {
@@ -382,9 +396,9 @@ func providerList(m map[string]*providerSpend) []providerSpend {
 }
 
 // Snapshot returns a JSON-serialisable view for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -419,7 +433,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		localByProvider = providerList(r.byProvider)
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":              true,
 		"day":                    today,
 		"started_at":             startedAt.Unix(),
@@ -449,7 +463,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 }
 
 func mergeLocalCostTotalsIntoSnap(
-	snap map[string]interface{},
+	snap map[string]any,
 	spend, inputSpend, outputSpend float64,
 	requests, inputTokens, outputTokens int64,
 ) {
@@ -464,7 +478,7 @@ func mergeLocalCostTotalsIntoSnap(
 	mergeSnapInt64MaxCost(snap, "output_tokens_today", outputTokens)
 }
 
-func mergeSnapFloatMax(snap map[string]interface{}, key string, local float64) {
+func mergeSnapFloatMax(snap map[string]any, key string, local float64) {
 	if local <= 0 {
 		return
 	}
@@ -473,7 +487,7 @@ func mergeSnapFloatMax(snap map[string]interface{}, key string, local float64) {
 	}
 }
 
-func mergeSnapInt64MaxCost(snap map[string]interface{}, key string, local int64) {
+func mergeSnapInt64MaxCost(snap map[string]any, key string, local int64) {
 	if local <= 0 {
 		return
 	}
@@ -482,7 +496,7 @@ func mergeSnapInt64MaxCost(snap map[string]interface{}, key string, local int64)
 	}
 }
 
-func snapInt64Cost(v interface{}) int64 {
+func snapInt64Cost(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
@@ -498,12 +512,12 @@ func snapInt64Cost(v interface{}) int64 {
 // mergeLocalByKeyIntoSnap re-applies in-process per-key totals after MergeToday.
 // MergeToday overlays Redis fleet rollups and can replace by_key with an empty
 // or top-N-capped view before this instance's debounced delta lands in Redis.
-func mergeLocalByKeyIntoSnap(snap map[string]interface{}, local []keySpend) {
+func mergeLocalByKeyIntoSnap(snap map[string]any, local []keySpend) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
 	rows := byKeyRowsFromSnap(snap["by_key"])
-	byID := make(map[string]map[string]interface{}, len(rows)+len(local))
+	byID := make(map[string]map[string]any, len(rows)+len(local))
 	for _, row := range rows {
 		id, _ := row["key_id"].(string)
 		if id != "" {
@@ -522,7 +536,7 @@ func mergeLocalByKeyIntoSnap(snap map[string]interface{}, local []keySpend) {
 		}
 		byID[id] = mergeKeySpendRowMax(existing, loc)
 	}
-	out := make([]map[string]interface{}, 0, len(byID))
+	out := make([]map[string]any, 0, len(byID))
 	for _, row := range byID {
 		out = append(out, row)
 	}
@@ -551,7 +565,7 @@ func mergeLocalByKeyIntoSnap(snap map[string]interface{}, local []keySpend) {
 	snap["by_key"] = typed
 }
 
-func mergeLocalByUserIntoSnap(snap map[string]interface{}, local map[string]userSpend) {
+func mergeLocalByUserIntoSnap(snap map[string]any, local map[string]userSpend) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
@@ -593,14 +607,14 @@ func userSpendFromScopeMap(m map[string]map[string]float64) map[string]userSpend
 	return out
 }
 
-func mergeKeySpendRowMax(existing map[string]interface{}, loc keySpend) map[string]interface{} {
+func mergeKeySpendRowMax(existing map[string]any, loc keySpend) map[string]any {
 	id := loc.KeyID
 	if id == "" {
 		if s, ok := existing["key_id"].(string); ok {
 			id = s
 		}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"key_id":           id,
 		"spend_usd":        maxFloat(snapFloat(existing["spend_usd"]), loc.SpendUSD),
 		"input_spend_usd":  maxFloat(snapFloat(existing["input_spend_usd"]), loc.InputSpendUSD),
@@ -626,12 +640,12 @@ func maxInt64(a, b int64) int64 {
 }
 
 // mergeLocalByProviderIntoSnap re-applies in-process per-provider totals after MergeToday.
-func mergeLocalByProviderIntoSnap(snap map[string]interface{}, local []providerSpend) {
+func mergeLocalByProviderIntoSnap(snap map[string]any, local []providerSpend) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
 	rows := byProviderRowsFromSnap(snap["by_provider"])
-	byName := make(map[string]map[string]interface{}, len(rows)+len(local))
+	byName := make(map[string]map[string]any, len(rows)+len(local))
 	for _, row := range rows {
 		name, _ := row["name"].(string)
 		if name != "" {
@@ -649,7 +663,7 @@ func mergeLocalByProviderIntoSnap(snap map[string]interface{}, local []providerS
 		}
 		byName[loc.Name] = mergeProviderSpendRowMax(existing, loc)
 	}
-	out := make([]map[string]interface{}, 0, len(byName))
+	out := make([]map[string]any, 0, len(byName))
 	for _, row := range byName {
 		out = append(out, row)
 	}
@@ -678,19 +692,19 @@ func mergeLocalByProviderIntoSnap(snap map[string]interface{}, local []providerS
 	snap["by_provider"] = typed
 }
 
-func asString(v interface{}) string {
+func asString(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
 	return ""
 }
 
-func byProviderRowsFromSnap(raw interface{}) []map[string]interface{} {
+func byProviderRowsFromSnap(raw any) []map[string]any {
 	switch rows := raw.(type) {
-	case []map[string]interface{}:
+	case []map[string]any:
 		return rows
 	case []providerSpend:
-		out := make([]map[string]interface{}, len(rows))
+		out := make([]map[string]any, len(rows))
 		for i, row := range rows {
 			out[i] = providerSpendToRow(row)
 		}
@@ -700,14 +714,14 @@ func byProviderRowsFromSnap(raw interface{}) []map[string]interface{} {
 	}
 }
 
-func mergeProviderSpendRowMax(existing map[string]interface{}, loc providerSpend) map[string]interface{} {
+func mergeProviderSpendRowMax(existing map[string]any, loc providerSpend) map[string]any {
 	name := loc.Name
 	if name == "" {
 		if s, ok := existing["name"].(string); ok {
 			name = s
 		}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"name":             name,
 		"spend_usd":        maxFloat(snapFloat(existing["spend_usd"]), loc.SpendUSD),
 		"input_spend_usd":  maxFloat(snapFloat(existing["input_spend_usd"]), loc.InputSpendUSD),
@@ -718,8 +732,8 @@ func mergeProviderSpendRowMax(existing map[string]interface{}, loc providerSpend
 	}
 }
 
-func providerSpendToRow(ps providerSpend) map[string]interface{} {
-	return map[string]interface{}{
+func providerSpendToRow(ps providerSpend) map[string]any {
+	return map[string]any{
 		"name":             ps.Name,
 		"spend_usd":        ps.SpendUSD,
 		"input_spend_usd":  ps.InputSpendUSD,
@@ -730,12 +744,12 @@ func providerSpendToRow(ps providerSpend) map[string]interface{} {
 	}
 }
 
-func byKeyRowsFromSnap(raw interface{}) []map[string]interface{} {
+func byKeyRowsFromSnap(raw any) []map[string]any {
 	switch rows := raw.(type) {
-	case []map[string]interface{}:
+	case []map[string]any:
 		return rows
 	case []keySpend:
-		out := make([]map[string]interface{}, len(rows))
+		out := make([]map[string]any, len(rows))
 		for i, row := range rows {
 			out[i] = keySpendToRow(row)
 		}
@@ -745,8 +759,8 @@ func byKeyRowsFromSnap(raw interface{}) []map[string]interface{} {
 	}
 }
 
-func keySpendToRow(ks keySpend) map[string]interface{} {
-	return map[string]interface{}{
+func keySpendToRow(ks keySpend) map[string]any {
+	return map[string]any{
 		"key_id":           ks.KeyID,
 		"spend_usd":        ks.SpendUSD,
 		"input_spend_usd":  ks.InputSpendUSD,
@@ -757,7 +771,7 @@ func keySpendToRow(ks keySpend) map[string]interface{} {
 	}
 }
 
-func snapFloat(v interface{}) float64 {
+func snapFloat(v any) float64 {
 	switch n := v.(type) {
 	case float64:
 		return n

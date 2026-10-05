@@ -26,7 +26,7 @@ func TestMergeTodayCircuitActivity(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"checks_total": int64(1),
 		"blocked_open": int64(0),
 	}

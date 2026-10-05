@@ -76,7 +76,7 @@ func (td *testOIDCServer) serveDiscovery(w http.ResponseWriter, _ *http.Request)
 func (td *testOIDCServer) serveJWKS(w http.ResponseWriter, _ *http.Request) {
 	n := base64.RawURLEncoding.EncodeToString(td.privateKey.PublicKey.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"keys": []map[string]string{
 			{
 				"kty": "RSA",
@@ -129,7 +129,7 @@ func (td *testOIDCServer) mintIDToken(claims idTokenClaims) string {
 			Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
 			IssuedAt: jwt.NewNumericDate(now),
 		}).
-		Claims(map[string]interface{}{
+		Claims(map[string]any{
 			"email":          claims.email,
 			"email_verified": claims.emailVerified,
 			"name":           claims.name,
@@ -189,8 +189,7 @@ func TestLoadAuthConfig_EnvOverrides(t *testing.T) {
 	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "override.com")
 	t.Setenv("LLM_PROXY_ADMIN_OAUTH_REDIRECT_URL", "https://llm.example.com/admin/auth/callback")
 
-	cfg, err := loadAuthConfig("example.com", "cid", "csecret", "ssecret")
-	require.NoError(t, err)
+	cfg := loadAuthConfig(config.LoadAdminAuthEnv(), "example.com", "cid", "csecret", "ssecret")
 	assert.Equal(t, "override.com", cfg.allowedDomain)
 	assert.Equal(t, "https://llm.example.com/admin/auth/callback", cfg.redirectURL)
 	assert.Equal(t, "cid", cfg.clientID)

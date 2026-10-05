@@ -151,8 +151,9 @@ func (s *MemoryStore) entry(key string) *memoryEntry {
 // keys are interned forever, so a workload with high model cardinality
 // (e.g. one-off fine-tunes) leaks memory indefinitely.
 //
-// Callers may run this on a timer; the store does not start its own
-// goroutine in order to keep ownership/cancellation explicit.
+// Callers may run this on a timer (see RunIdlePruner); the constructor does
+// not start its own goroutine in order to keep ownership/cancellation
+// explicit.
 func (s *MemoryStore) PruneIdle() int {
 	cutoff := s.now().Add(-memoryEntryIdleTTL)
 	s.mu.Lock()
@@ -169,6 +170,31 @@ func (s *MemoryStore) PruneIdle() int {
 		}
 	}
 	return deleted
+}
+
+// DefaultIdlePruneInterval is how often RunIdlePruner sweeps idle entries.
+// A fraction of memoryEntryIdleTTL so an idle key is reclaimed within a
+// few minutes of becoming eligible without holding s.mu often.
+const DefaultIdlePruneInterval = 5 * time.Minute
+
+// RunIdlePruner calls PruneIdle every interval until stop is closed. It
+// blocks, so callers run it on its own goroutine (and typically track it in
+// a WaitGroup so shutdown can wait for a sweep in flight). A non-positive
+// interval falls back to DefaultIdlePruneInterval.
+func (s *MemoryStore) RunIdlePruner(interval time.Duration, stop <-chan struct{}) {
+	if interval <= 0 {
+		interval = DefaultIdlePruneInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.PruneIdle()
+		}
+	}
 }
 
 func (s *MemoryStore) rollupEntryFor(provider string) *rollupEntry {

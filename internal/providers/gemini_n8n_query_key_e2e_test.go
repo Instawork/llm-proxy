@@ -63,11 +63,11 @@ func TestGeminiIntegration_N8NQueryKeyOnGenerateContent(t *testing.T) {
 	// so the chat model node sends the proxy key ONLY as ?key= here — no
 	// Authorization or x-goog-api-key header, exactly like the model list GET
 	// that #94 already allows, but on a metered POST endpoint instead.
-	body, err := json.Marshal(map[string]interface{}{
-		"contents": []map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
 			{"parts": []map[string]string{{"text": "Reply with the single word OK."}}},
 		},
-		"generationConfig": map[string]interface{}{"maxOutputTokens": 16},
+		"generationConfig": map[string]any{"maxOutputTokens": 16},
 	})
 	require.NoError(t, err)
 

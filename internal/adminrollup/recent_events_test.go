@@ -37,7 +37,7 @@ func TestStoreRecentEventsTrim(t *testing.T) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	ctx := context.Background()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := store.AppendRecentEvent(ctx, MetricPII, map[string]int{"n": i}, 3); err != nil {
 			t.Fatalf("AppendRecentEvent: %v", err)
 		}

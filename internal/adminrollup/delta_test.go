@@ -36,12 +36,12 @@ func TestApplyDeltaMultiWriterSums(t *testing.T) {
 	p1.FlushNow()
 	p2.FlushNow()
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	store.MergeToday(ctx, MetricCost, day, snap, TopNCaps{ByKey: 100})
 
 	require.InDelta(t, 3.5, snap["spend_today_usd"].(float64), 0.001)
 	require.Equal(t, int64(7), snap["requests_today"])
-	byProv, ok := snap["by_provider"].([]map[string]interface{})
+	byProv, ok := snap["by_provider"].([]map[string]any)
 	require.True(t, ok)
 	require.Len(t, byProv, 1)
 	require.InDelta(t, 3.5, byProv[0]["spend_usd"].(float64), 0.001)

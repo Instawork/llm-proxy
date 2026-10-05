@@ -41,9 +41,9 @@ func NewGemini(projectID string, credsJSON []byte, baseURL string) (*Gemini, err
 }
 
 func (g *Gemini) Provision(ctx context.Context, req ProvisionRequest) (Result, error) {
-	createBody := map[string]interface{}{
+	createBody := map[string]any{
 		"displayName": SanitizeName(req.Name),
-		"restrictions": map[string]interface{}{
+		"restrictions": map[string]any{
 			"apiTargets": []map[string]string{
 				{"service": "generativelanguage.googleapis.com"},
 			},
@@ -200,7 +200,7 @@ func (g *Gemini) pollOperation(ctx context.Context, opName string) (keyName, key
 			Name      string `json:"name"`
 			KeyString string `json:"keyString"`
 		} `json:"response"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &op); err != nil {
 		return "", "", false, err

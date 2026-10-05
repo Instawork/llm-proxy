@@ -174,9 +174,7 @@ func (s *Sink) objectName(now time.Time) string {
 func (s *Sink) startFlushLoop() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		t := time.NewTicker(s.maxAge)
 		defer t.Stop()
 		for {
@@ -187,7 +185,7 @@ func (s *Sink) startFlushLoop() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // NewWithWriter constructs a sink with an injected chunk writer (tests).

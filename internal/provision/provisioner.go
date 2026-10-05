@@ -132,16 +132,16 @@ func (m *Manager) Revoke(ctx context.Context, provider, upstreamID, upstreamKind
 }
 
 // Status returns provisioning availability per provider for the admin API.
-func (m *Manager) Status(ctx context.Context) map[string]interface{} {
-	out := map[string]interface{}{
+func (m *Manager) Status(ctx context.Context) map[string]any {
+	out := map[string]any{
 		"enabled": m != nil && m.Enabled(),
 	}
 	if m == nil {
 		return out
 	}
-	providers := make(map[string]interface{}, len(m.byProvider))
+	providers := make(map[string]any, len(m.byProvider))
 	for name, p := range m.byProvider {
-		entry := map[string]interface{}{"auto_provision": true}
+		entry := map[string]any{"auto_provision": true}
 		if n, ok := p.PoolStatus(ctx); ok {
 			entry["pool_available"] = n
 		}

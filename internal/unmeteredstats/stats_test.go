@@ -47,7 +47,7 @@ func TestRecorderSnapshotByKey(t *testing.T) {
 
 func TestRecorderCapsEndpointsPerKey(t *testing.T) {
 	r := NewRecorder()
-	for i := 0; i < maxEndpointsPerKey+5; i++ {
+	for i := range maxEndpointsPerKey + 5 {
 		r.RecordRequest("iw:a", fmt.Sprintf("/v1/junk-%d (HTTP 404)", i))
 	}
 	byKey := r.Snapshot()["by_key"].(map[string]map[string]int64)["iw:a"]
@@ -57,7 +57,7 @@ func TestRecorderCapsEndpointsPerKey(t *testing.T) {
 
 func TestRecorderCapsGlobalEndpoints(t *testing.T) {
 	r := NewRecorder()
-	for i := 0; i < maxEndpoints+5; i++ {
+	for i := range maxEndpoints + 5 {
 		r.RecordRequest("", fmt.Sprintf("/v1/junk-%d (HTTP 404)", i))
 	}
 	byEndpoint := adminrollup.NameCountMapFromSnap(r.Snapshot()["by_endpoint"])

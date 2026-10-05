@@ -42,7 +42,7 @@ func TestRecorder_SnapshotMergeHistory(t *testing.T) {
 
 	snap := r.Snapshot()
 	require.Equal(t, true, snap["daily_history_available"])
-	rows, ok := snap["daily_history"].([]map[string]interface{})
+	rows, ok := snap["daily_history"].([]map[string]any)
 	require.True(t, ok)
 	require.NotEmpty(t, rows)
 }

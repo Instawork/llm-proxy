@@ -18,7 +18,7 @@ func TestOpenAI_ProvisionAndRevoke(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/organization/projects/proj_test/service_accounts":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "sa_123",
 				"api_key": map[string]string{
 					"id":    "key_abc",

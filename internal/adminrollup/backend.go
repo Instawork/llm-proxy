@@ -3,6 +3,7 @@ package adminrollup
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -224,9 +225,7 @@ func (b *memoryBackend) hgetall(_ context.Context, key string) (map[string]float
 		return nil, nil
 	}
 	out := make(map[string]float64, len(h))
-	for k, v := range h {
-		out[k] = v
-	}
+	maps.Copy(out, h)
 	return out, nil
 }
 

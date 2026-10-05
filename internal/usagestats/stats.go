@@ -3,6 +3,7 @@ package usagestats
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -70,16 +71,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricUsage, usageRollupCaps) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricUsage, oldDay, usageRollupCaps)
-	}()
 	r.flushed = usageFlushed{}
 	r.global = scopeUsage{}
 	r.byModel = make(map[string]*scopeUsage)
@@ -139,13 +135,14 @@ func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTok
 		OutputTokens: outputTokens,
 		TotalTokens:  inputTokens + outputTokens,
 	}
-	r.EmitHistory(entry)
 
 	dayKey := r.dayKey
 	delta := r.usageDeltaLocked()
 	r.advanceUsageFlushedLocked()
 	r.mu.Unlock()
 
+	// Emit outside the lock: a threshold-tripping Emit uploads inline.
+	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
 }
 
@@ -207,31 +204,7 @@ func (r *Recorder) advanceUsageFlushedLocked() {
 	}
 }
 
-func scopeMap(m map[string]*scopeUsage) map[string]scopeUsage {
-	out := make(map[string]scopeUsage, len(m))
-	for k, v := range m {
-		out[k] = *v
-	}
-	return out
-}
-
-func (r *Recorder) rollupDataLocked() map[string]interface{} {
-	return map[string]interface{}{
-		"requests_today": r.global.Requests,
-		"tokens_today":   r.global.Tokens,
-		"by_model":       scopeMap(r.byModel),
-		"by_provider":    scopeMap(r.byProv),
-		"by_key":         scopeMap(r.byKey),
-		"by_user":        scopeMap(r.byUser),
-	}
-}
-
-type nameCount struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
-}
-
-func topScopes(m map[string]*scopeUsage, n int) []nameCount {
+func topScopes(m map[string]*scopeUsage, n int) []adminrollup.NameCount {
 	type pair struct {
 		name string
 		v    int64
@@ -249,9 +222,9 @@ func topScopes(m map[string]*scopeUsage, n int) []nameCount {
 	if n > 0 && len(pairs) > n {
 		pairs = pairs[:n]
 	}
-	out := make([]nameCount, len(pairs))
+	out := make([]adminrollup.NameCount, len(pairs))
 	for i, p := range pairs {
-		out[i] = nameCount{Name: p.name, Count: p.v}
+		out[i] = adminrollup.NameCount{Name: p.name, Count: p.v}
 	}
 	return out
 }
@@ -275,9 +248,9 @@ func (r *Recorder) allCountersLocked() map[string]scopeUsage {
 }
 
 // Snapshot returns JSON for the admin API.
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -300,7 +273,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 		counters = map[string]scopeUsage{"global": {}}
 	}
 
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":      true,
 		"day":            today,
 		"started_at":     startedAt.Unix(),
@@ -321,7 +294,7 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	return snap
 }
 
-func mergeLocalUsageIntoSnap(snap map[string]interface{}, global scopeUsage, counters map[string]scopeUsage) {
+func mergeLocalUsageIntoSnap(snap map[string]any, global scopeUsage, counters map[string]scopeUsage) {
 	if snap == nil {
 		return
 	}
@@ -337,7 +310,7 @@ func mergeLocalUsageIntoSnap(snap map[string]interface{}, global scopeUsage, cou
 	}
 }
 
-func mergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
+func mergeSnapInt64Max(snap map[string]any, key string, local int64) {
 	if local <= 0 {
 		return
 	}
@@ -347,7 +320,7 @@ func mergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
 	}
 }
 
-func snapInt64(v interface{}) int64 {
+func snapInt64(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
@@ -362,9 +335,7 @@ func snapInt64(v interface{}) int64 {
 
 func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
 	out := make(map[string]scopeUsage, len(a)+len(b))
-	for k, v := range a {
-		out[k] = v
-	}
+	maps.Copy(out, a)
 	for k, v := range b {
 		existing := out[k]
 		if v.Requests > existing.Requests {
@@ -378,7 +349,7 @@ func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
 	return out
 }
 
-func topScopesFromCounters(counters map[string]scopeUsage, prefix string, n int) []nameCount {
+func topScopesFromCounters(counters map[string]scopeUsage, prefix string, n int) []adminrollup.NameCount {
 	ptrMap := make(map[string]*scopeUsage)
 	for k, v := range counters {
 		if len(prefix) > 0 && len(k) >= len(prefix) && k[:len(prefix)] == prefix {

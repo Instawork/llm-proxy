@@ -19,7 +19,7 @@ import (
 
 // fakeBedrock spins up a httptest.Server pretending to be the upstream
 // `bedrock-runtime.us-west-2.amazonaws.com` endpoint and lets the test
-// inspect the inbound request after our proxy has run its director.
+// inspect the inbound request after our proxy has run its rewrite hook.
 type fakeBedrockUpstream struct {
 	srv          *httptest.Server
 	gotMethod    string
@@ -63,7 +63,7 @@ func newFakeBedrockUpstream(t *testing.T) *fakeBedrockUpstream {
 
 // wireProxyToFake replaces the proxy's transport so requests to the
 // canonical AWS host are redirected to the fake upstream.  This lets us
-// drive the real Director / ModifyResponse without actually hitting AWS.
+// drive the real Rewrite / ModifyResponse without actually hitting AWS.
 func wireProxyToFake(b *BedrockProxy, fb *fakeBedrockUpstream) {
 	target, _ := url.Parse(fb.srv.URL)
 	b.proxy.Transport = &http.Transport{
@@ -332,7 +332,7 @@ func TestBedrock_ParseNonStreamingResponse_Gzip(t *testing.T) {
 // It uses the SDK's Encoder, which is the same code path AWS uses on the wire,
 // so a test failure here would mean either AWS's encoding changed or our
 // decoder usage is wrong — both worth catching.
-func encodeBedrockEvent(t *testing.T, w io.Writer, eventType string, payload interface{}) {
+func encodeBedrockEvent(t *testing.T, w io.Writer, eventType string, payload any) {
 	t.Helper()
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

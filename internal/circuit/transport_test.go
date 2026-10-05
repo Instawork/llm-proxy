@@ -367,11 +367,11 @@ func TestTransport_DegradedResponseBodyIsValidJSON(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal(b, &payload); err != nil {
 		t.Fatalf("degraded response body is not valid JSON: %v\nbody: %s", err, b)
 	}
-	errObj, _ := payload["error"].(map[string]interface{})
+	errObj, _ := payload["error"].(map[string]any)
 	if errObj == nil {
 		t.Fatal("expected 'error' key in JSON body")
 	}

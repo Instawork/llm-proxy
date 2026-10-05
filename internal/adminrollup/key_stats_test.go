@@ -84,9 +84,9 @@ func TestKeyCostDailySeriesArchivedDay(t *testing.T) {
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	const key = "iw:abc…deadbeef"
 
-	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, yesterday, map[string]interface{}{
-		"by_key": []interface{}{
-			map[string]interface{}{"key_id": key, "spend_usd": 2.5},
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, yesterday, map[string]any{
+		"by_key": []any{
+			map[string]any{"key_id": key, "spend_usd": 2.5},
 		},
 	}))
 
@@ -111,9 +111,9 @@ func TestKeyPIIDailySeries(t *testing.T) {
 			"by_key": {key: 1},
 		},
 	}))
-	require.NoError(t, store.ArchiveDaily(ctx, MetricPII, yesterday, map[string]interface{}{
-		"top_keys": []interface{}{
-			map[string]interface{}{"name": key, "count": int64(3)},
+	require.NoError(t, store.ArchiveDaily(ctx, MetricPII, yesterday, map[string]any{
+		"top_keys": []any{
+			map[string]any{"name": key, "count": int64(3)},
 		},
 	}))
 
@@ -208,7 +208,7 @@ func TestCostDailyHistoryParsesArchives(t *testing.T) {
 		TopNCaps{ByKey: 2, ByUser: 100},
 	)
 	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, yesterday, archived))
-	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, today, map[string]interface{}{"spend_today_usd": 9.0}))
+	require.NoError(t, store.ArchiveDaily(ctx, MetricCost, today, map[string]any{"spend_today_usd": 9.0}))
 
 	history, err := store.CostDailyHistory(ctx)
 	require.NoError(t, err)

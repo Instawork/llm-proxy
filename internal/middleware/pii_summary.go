@@ -65,9 +65,12 @@ func finalizePIIRestored(ctx context.Context, reg *redact.Registry) {
 	}
 }
 
-func finalizePIILeaked(ctx context.Context, reg *redact.Registry, responseText string) {
-	if h := piiSummaryHolderFromContext(ctx); h != nil && reg != nil {
-		h.Leaked = reg.MaskPlaceholdersRemaining(responseText)
+// finalizePIILeaked records the number of MASK placeholders that survived
+// restore, as counted incrementally by piiLeakCounter while the response
+// was written.
+func finalizePIILeaked(ctx context.Context, leaked int) {
+	if h := piiSummaryHolderFromContext(ctx); h != nil {
+		h.Leaked = leaked
 	}
 }
 

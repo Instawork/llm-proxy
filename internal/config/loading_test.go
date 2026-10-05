@@ -314,7 +314,6 @@ func TestRealEnvConfigs_FeatureKeysNotMisnestedUnderProviders(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.file, func(t *testing.T) {
 			t.Setenv("ENVIRONMENT", strings.TrimSuffix(tc.file, ".yml"))
 			envPath := filepath.Join(configsDir, tc.file)

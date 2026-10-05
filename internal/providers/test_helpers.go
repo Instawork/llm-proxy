@@ -107,7 +107,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 
 	// Health check endpoint
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]interface{}{
+		response := map[string]any{
 			"status":    "healthy",
 			"service":   "llm-proxy",
 			"providers": manager.GetHealthStatus(),

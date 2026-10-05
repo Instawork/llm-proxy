@@ -159,7 +159,7 @@ func (s *Store) CostDailyHistory(ctx context.Context) ([]CostDay, error) {
 	return out, nil
 }
 
-func costDayFromData(day string, data map[string]interface{}) CostDay {
+func costDayFromData(day string, data map[string]any) CostDay {
 	cd := CostDay{
 		Day:         day,
 		ByKeySpend:  map[string]float64{},
@@ -174,9 +174,9 @@ func costDayFromData(day string, data map[string]interface{}) CostDay {
 		InputTokens:    int64(FloatField(data, "input_tokens_today")),
 		OutputTokens:   int64(FloatField(data, "output_tokens_today")),
 	}
-	if rows, ok := data["by_key"].([]interface{}); ok {
+	if rows, ok := data["by_key"].([]any); ok {
 		for _, raw := range rows {
-			row, ok := raw.(map[string]interface{})
+			row, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -187,9 +187,9 @@ func costDayFromData(day string, data map[string]interface{}) CostDay {
 			cd.ByKeySpend[id] = FloatField(row, "spend_usd")
 		}
 	}
-	if rows, ok := data["by_provider"].([]interface{}); ok {
+	if rows, ok := data["by_provider"].([]any); ok {
 		for _, raw := range rows {
-			row, ok := raw.(map[string]interface{})
+			row, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -204,9 +204,9 @@ func costDayFromData(day string, data map[string]interface{}) CostDay {
 			cd.ByProvider[name] = stats
 		}
 	}
-	if users, ok := data["by_user"].(map[string]interface{}); ok {
+	if users, ok := data["by_user"].(map[string]any); ok {
 		for scope, raw := range users {
-			row, ok := raw.(map[string]interface{})
+			row, ok := raw.(map[string]any)
 			if !ok || scope == "other_user" {
 				continue
 			}
@@ -243,7 +243,7 @@ func (s *Store) KeyPIIDailySeries(ctx context.Context, keyID string, days int) (
 	return s.keyDailySeries(ctx, MetricPII, keyID, days, piiCountFromDayData)
 }
 
-type dayScalarFn func(map[string]interface{}, string) float64
+type dayScalarFn func(map[string]any, string) float64
 
 func (s *Store) keyDailySeries(
 	ctx context.Context,
@@ -299,7 +299,7 @@ func (s *Store) keyDailySeries(
 	return out, any, nil
 }
 
-func (s *Store) loadDailyData(ctx context.Context, metric, day string) (map[string]interface{}, bool, error) {
+func (s *Store) loadDailyData(ctx context.Context, metric, day string) (map[string]any, bool, error) {
 	raw, err := s.be.mget(ctx, []string{dailyKey(metric, day)})
 	if err != nil {
 		return nil, false, err
@@ -317,13 +317,13 @@ func (s *Store) loadDailyData(ctx context.Context, metric, day string) (map[stri
 	return rec.Data, true, nil
 }
 
-func costSpendFromDayData(data map[string]interface{}, keyID string) float64 {
-	rows, ok := data["by_key"].([]interface{})
+func costSpendFromDayData(data map[string]any, keyID string) float64 {
+	rows, ok := data["by_key"].([]any)
 	if !ok {
 		return 0
 	}
 	for _, raw := range rows {
-		row, ok := raw.(map[string]interface{})
+		row, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -343,13 +343,13 @@ func costSpendFromDayData(data map[string]interface{}, keyID string) float64 {
 	return 0
 }
 
-func piiCountFromDayData(data map[string]interface{}, keyID string) float64 {
-	rows, ok := data["top_keys"].([]interface{})
+func piiCountFromDayData(data map[string]any, keyID string) float64 {
+	rows, ok := data["top_keys"].([]any)
 	if !ok {
 		return 0
 	}
 	for _, raw := range rows {
-		row, ok := raw.(map[string]interface{})
+		row, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}

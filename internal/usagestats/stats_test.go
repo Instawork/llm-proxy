@@ -29,7 +29,7 @@ func TestRecorderAggregatesByScope(t *testing.T) {
 		t.Fatalf("tokens_today = %d, want 570", got)
 	}
 
-	topModels := snap["top_models"].([]nameCount)
+	topModels := snap["top_models"].([]adminrollup.NameCount)
 	if len(topModels) != 2 {
 		t.Fatalf("top_models len = %d, want 2", len(topModels))
 	}

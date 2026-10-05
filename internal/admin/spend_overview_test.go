@@ -100,7 +100,7 @@ func TestBuildSpendOverview_MineHistorySumsOwnedKeysOnly(t *testing.T) {
 	resp := buildSpendOverview(spendInputs{
 		scope: spendScopeMine, role: adminusers.RoleViewer, email: "viewer@example.com",
 		day: "2026-09-11", month: "2026-09",
-		keys: []*apikeys.APIKey{key}, snap: map[string]interface{}{}, rollupOK: true,
+		keys: []*apikeys.APIKey{key}, snap: map[string]any{}, rollupOK: true,
 		history: []adminrollup.CostDay{
 			{Day: "2026-09-09", Totals: adminrollup.KeyCostDayStats{SpendUSD: 100}, ByKeySpend: map[string]float64{masked: 4, "iw:someone-else": 96}},
 			{Day: "2026-09-10", Totals: adminrollup.KeyCostDayStats{SpendUSD: 50}, ByKeySpend: map[string]float64{"iw:someone-else": 50}},
@@ -216,7 +216,7 @@ func TestBuildSpendOverview_FleetUnattributedNeverNegative(t *testing.T) {
 func TestBuildSpendOverview_ProviderMonthPartialCaveat(t *testing.T) {
 	resp := buildSpendOverview(spendInputs{
 		scope: spendScopeFleet, role: adminusers.RoleEditor, email: "e@example.com",
-		day: "2026-09-25", month: "2026-09", snap: map[string]interface{}{},
+		day: "2026-09-25", month: "2026-09", snap: map[string]any{},
 		rollupOK: true, historyDays: 7,
 	})
 	assert.Equal(t, []string{spendCaveatProviderMonthPartial}, resp.Caveats)

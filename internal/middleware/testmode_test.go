@@ -43,11 +43,11 @@ func TestTestModeMiddleware_ForceDegraded(t *testing.T) {
 		t.Fatalf("DefaultDegradedSignal not found in response body: %s", body)
 	}
 	// Verify valid JSON.
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("body is not valid JSON: %v\nbody: %s", err, body)
 	}
-	errObj, _ := payload["error"].(map[string]interface{})
+	errObj, _ := payload["error"].(map[string]any)
 	if errObj == nil {
 		t.Fatal("expected 'error' key in JSON")
 	}

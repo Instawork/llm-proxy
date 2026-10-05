@@ -1,12 +1,10 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -103,9 +101,6 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				next.ServeHTTP(w, r)
 				return
 			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-
 			if oversize || len(body) == 0 {
 				next.ServeHTTP(w, r)
 				return
@@ -254,7 +249,6 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				cfg.Recorder.RecordClear(provider, keyID, len(images), gateDuration)
 			}
 			next.ServeHTTP(w, r)
-			return
 		})
 	}
 }
