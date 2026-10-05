@@ -213,9 +213,9 @@ var circuitBreakerProviders = []string{"openai", "anthropic", "gemini"}
 const redisPingTimeout = 2 * time.Second
 
 func init() {
-	logLevel := os.Getenv("LOG_LEVEL")
+	env := config.LoadRuntimeEnv()
 	var level slog.Level
-	switch strings.ToLower(logLevel) {
+	switch strings.ToLower(env.LogLevel) {
 	case "debug":
 		level = slog.LevelDebug
 	case "warn":
@@ -227,10 +227,9 @@ func init() {
 	}
 
 	// Use pretty text format for local development, JSON for production
-	logFormat := os.Getenv("LOG_FORMAT")
 	var handler slog.Handler
 
-	if logFormat == "json" {
+	if env.LogFormat == "json" {
 		// JSON format for production/machine parsing with AWS CloudWatch compatible timestamp
 		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 			Level: level,
@@ -256,7 +255,7 @@ func init() {
 }
 
 // initializeCostTracker creates and configures the cost tracker with pricing data from config
-func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
+func initializeCostTracker(yamlConfig *config.YAMLConfig, env config.RuntimeEnv) *cost.CostTracker {
 	// Check if cost tracking is enabled
 	if !yamlConfig.Features.CostTracking.Enabled {
 		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
@@ -351,7 +350,7 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 		logProxyError("💰 Cost Tracker: No transports could be created, falling back to file transport")
 
 		// Fallback to file transport with env var or default
-		outputFile := os.Getenv("COST_TRACKING_FILE")
+		outputFile := env.CostTrackingFile
 		if outputFile == "" {
 			outputFile = "logs/cost-tracking.jsonl"
 		}
@@ -499,14 +498,14 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
 func isTestModeAllowed(yc *config.YAMLConfig) bool {
 	return yc.Features.CircuitBreaker.Enabled &&
 		yc.Features.CircuitBreaker.TestModeEnabled &&
-		os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1"
+		config.LoadRuntimeEnv().AllowTestMode
 }
 
 // isFakeModeAllowed gates global fake-upstream responses. Both YAML opt-in
 // and LLM_PROXY_ALLOW_FAKE_MODE=1 are required.
 func isFakeModeAllowed(yc *config.YAMLConfig) bool {
 	return yc.Features.FakeUpstream.Enabled &&
-		os.Getenv("LLM_PROXY_ALLOW_FAKE_MODE") == "1"
+		config.LoadRuntimeEnv().AllowFakeMode
 }
 
 // isExplicitLocalDev reports whether the process is opted in to degraded
@@ -514,8 +513,7 @@ func isFakeModeAllowed(yc *config.YAMLConfig) bool {
 // ENVIRONMENT). Startup failures that would be fatal elsewhere are downgraded
 // to warnings here.
 func isExplicitLocalDev() bool {
-	env := os.Getenv("ENVIRONMENT")
-	return os.Getenv("LLM_PROXY_ALLOW_DEFAULT_CONFIG") == "1" || env == "" || env == "dev" || env == "local"
+	return config.LoadRuntimeEnv().IsExplicitLocalDev()
 }
 
 // apiKeyStoreFailureIsFatal reports whether a nil key store must abort
@@ -799,7 +797,7 @@ func circuitCallerExtractor() circuit.CallerFromRequestFunc {
 }
 
 // initializeAPIKeyStore creates and configures the API key store from config
-func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
+func initializeAPIKeyStore(yamlConfig *config.YAMLConfig, env config.RuntimeEnv) providers.APIKeyStore {
 	// Check if API key management is enabled
 	if !yamlConfig.Features.APIKeyManagement.Enabled {
 		logger.Info("🔑 API Key Store: API key management is disabled in config")
@@ -817,7 +815,7 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 	// A blank value leaves the apikeys default in place. New keys are minted
 	// as "sk-<base>-<random>"; legacy "<base>-" / "<base>_" / "<base>:" keys
 	// still validate.
-	keyPrefixBase := os.Getenv("LLM_PROXY_API_KEY_PREFIX")
+	keyPrefixBase := env.APIKeyPrefix
 	if keyPrefixBase == "" {
 		keyPrefixBase = apiKeyConfig.KeyPrefix
 	}
@@ -833,7 +831,7 @@ func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore 
 
 	endpointURL := apiKeyConfig.EndpointURL
 	if endpointURL == "" {
-		endpointURL = os.Getenv("AWS_ENDPOINT_URL")
+		endpointURL = env.AWSEndpointURL
 	}
 
 	// Create the API key store. AutoCreateTable is intentionally driven by
@@ -881,7 +879,7 @@ func startKeyExpirySweeper(yamlConfig *config.YAMLConfig) {
 		"grace_period_days", expiryCfg.GracePeriodDays)
 }
 
-func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
+func initializeAdminUserStore(yamlConfig *config.YAMLConfig, env config.RuntimeEnv) *adminusers.Store {
 	if yamlConfig == nil || !yamlConfig.Features.AdminDashboard.Enabled {
 		logger.Info("👤 Admin User Store: admin dashboard disabled")
 		return nil
@@ -896,7 +894,7 @@ func initializeAdminUserStore(yamlConfig *config.YAMLConfig) *adminusers.Store {
 
 	endpointURL := userCfg.EndpointURL
 	if endpointURL == "" {
-		endpointURL = os.Getenv("AWS_ENDPOINT_URL")
+		endpointURL = env.AWSEndpointURL
 	}
 
 	store, err := adminusers.NewStore(adminusers.StoreConfig{
@@ -929,7 +927,7 @@ func (rollupOnceMarker) TryMarkOnce(ctx context.Context, name string, ttl time.D
 
 // initNotifier builds the transactional Notifier from features.notifications.
 // Returns nil when notifications are disabled or misconfigured.
-func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
+func initNotifier(yamlConfig *config.YAMLConfig, env config.RuntimeEnv) *notify.Notifier {
 	notifyCfg := yamlConfig.Features.Notifications
 	if !notifyCfg.Enabled {
 		logger.Info("🔔 Notifications: disabled")
@@ -943,7 +941,7 @@ func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
 		sender = notify.NewLogSender(logger)
 		logger.Info("🔔 Notifications: ENABLED (log)")
 	case "sendgrid":
-		apiKey := os.Getenv("SENDGRID_API_KEY")
+		apiKey := env.SendGridAPIKey
 		if apiKey == "" {
 			logProxyError("🔔 Notifications: disabled (SENDGRID_API_KEY unset)")
 			return nil
@@ -965,7 +963,7 @@ func initNotifier(yamlConfig *config.YAMLConfig) *notify.Notifier {
 
 	dashboardURL := yamlConfig.Features.AdminDashboard.PublicBaseURL
 	if dashboardURL == "" {
-		dashboardURL = os.Getenv("ADMIN_PUBLIC_BASE_URL")
+		dashboardURL = env.AdminPublicBaseURL
 	}
 
 	// Pass a nil AdminLister interface (not a typed nil *adminusers.Store)
@@ -1493,38 +1491,97 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	return openAI, anthropic, gemini, bedrock, bedrockMantle
 }
 
-func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
-	// Get port from environment variable or use default
-	port := os.Getenv("PORT")
+// transportWrapper is the slice of a provider proxy that the startup wiring
+// needs: the ability to layer fake, circuit-breaking and body-read-logging
+// transports around the upstream RoundTripper.
+type transportWrapper interface {
+	WrapTransport(func(http.RoundTripper) http.RoundTripper)
+}
+
+// namedProvider pairs a provider's route name with its transport hook.
+type namedProvider struct {
+	name string
+	p    transportWrapper
+}
+
+// serverDeps carries the per-process wiring that runServer's three stages
+// hand to each other: initDeps builds stores, providers and recorders,
+// buildRouter turns them into a middleware chain and routes, and
+// serveAndWait binds the listener and blocks until shutdown. Process-wide
+// singletons that health checks, admin summaries and gracefulShutdown read
+// still live in the global* vars (populated by initDeps); this struct holds
+// the values that previously only existed as locals inside runServer.
+type serverDeps struct {
+	yamlConfig *config.YAMLConfig
+	env        config.RuntimeEnv
+	listenAddr string
+
+	openAI         *providers.OpenAIProxy
+	anthropic      *providers.AnthropicProxy
+	gemini         *providers.GeminiProxy
+	bedrock        *providers.BedrockProxy
+	bedrockMantle  *providers.BedrockMantleProxy
+	namedProviders []namedProvider
+
+	// redactor is nil when no PII/redact/ID-gate feature needs Presidio or
+	// when constructing it failed (features depending on it are disabled).
+	redactor     *redact.Redactor
+	authFailures *middleware.AuthFailureGuard
+}
+
+func (d *serverDeps) piiActive() bool {
+	piiCfg := d.yamlConfig.Features.PIIRedact
+	return d.redactor != nil && (piiCfg.Enabled || piiCfg.AllowPerKeyOverride)
+}
+
+func (d *serverDeps) idGateActive() bool {
+	return d.redactor != nil && d.yamlConfig.Features.IDGate.Enabled
+}
+
+func runServer(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) {
+	deps := initDeps(yamlConfig, env, disableGzip)
+	router := buildRouter(deps)
+	serveAndWait(deps, router)
+}
+
+// initDeps wires every store, provider, transport layer and stats recorder
+// the proxy needs, in dependency order. It populates the global* singletons
+// and returns the locals the later stages need. Fatal misconfiguration exits
+// the process here, before a listener is ever bound.
+func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) *serverDeps {
+	port := env.Port
 	if port == "" {
 		port = defaultPort
 	}
+	bindAddr := yamlConfig.BindAddress
+	if bindAddr == "" {
+		bindAddr = "0.0.0.0"
+	}
+	deps := &serverDeps{
+		yamlConfig:   yamlConfig,
+		env:          env,
+		listenAddr:   net.JoinHostPort(bindAddr, port),
+		authFailures: middleware.NewAuthFailureGuard(),
+	}
 
-	// Log configuration
 	yamlConfig.LogConfiguration(logger)
 
-	// Create router
-	r := mux.NewRouter()
-
-	// Initialize global provider manager
 	globalProviderManager = providers.NewProviderManager()
 
-	// Initialize cost tracker
-	globalCostTracker = initializeCostTracker(yamlConfig)
+	globalCostTracker = initializeCostTracker(yamlConfig, env)
 	if globalCostTracker != nil {
 		globalCostTracker.SetLogger(logger)
 	}
 
-	// Initialize API key store if enabled
-	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
-	if apiKeyStoreFailureIsFatal(yamlConfig, globalAPIKeyStore, isExplicitLocalDev()) {
+	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig, env)
+	if apiKeyStoreFailureIsFatal(yamlConfig, globalAPIKeyStore, env.IsExplicitLocalDev()) {
 		logProxyError("🔑 API Key Store: key management is enabled but the store is unavailable; refusing to serve provider routes unauthenticated",
-			"error", globalAPIKeyStoreInitError, "environment", os.Getenv("ENVIRONMENT"),
+			"error", globalAPIKeyStoreInitError, "environment", env.Environment,
 			"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to run without key validation (dev only)")
 		os.Exit(1)
 	}
-	globalAdminUserStore = initializeAdminUserStore(yamlConfig)
-	globalNotifier = initNotifier(yamlConfig)
+	globalAdminUserStore = initializeAdminUserStore(yamlConfig, env)
+	globalNotifier = initNotifier(yamlConfig, env)
 
 	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
 	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
@@ -1538,84 +1595,107 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	}
 
 	startKeyExpirySweeper(yamlConfig)
+	initRateLimiter(yamlConfig)
+	initCircuitBreaker(yamlConfig)
 
-	// Initialize rate limiter if enabled
-	if yamlConfig.Features.RateLimiting.Enabled {
-		lim, err := ratelimit.Factory(yamlConfig)
-		if err != nil {
-			logProxyError("Failed to initialize rate limiter", "error", err)
-		} else {
-			globalRateLimiter = lim
-			globalRateLimitStatsRecorder = ratelimitstats.NewRecorder()
-			// Layer dynamic per-key rate-limit overrides (from the API-key
-			// record) on top of static YAML overrides, if the backend and
-			// store both support it.
-			if ov, ok := lim.(ratelimit.PerKeyOverridable); ok {
-				if store, ok := globalAPIKeyStore.(*apikeys.Store); ok {
-					ov.SetPerKeyOverride(newPerKeyOverrideProvider(store, logger))
-					logger.Info("Rate limiting: per-key overrides wired to API-key store")
-				}
-			}
-			logger.Info("Rate limiting: ENABLED",
-				"backend", yamlConfig.Features.RateLimiting.Backend,
-				"rpm", yamlConfig.Features.RateLimiting.Limits.RequestsPerMinute,
-				"tpm", yamlConfig.Features.RateLimiting.Limits.TokensPerMinute,
-				"rpd", yamlConfig.Features.RateLimiting.Limits.RequestsPerDay,
-				"tpd", yamlConfig.Features.RateLimiting.Limits.TokensPerDay)
-		}
+	deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle = registerProviders(yamlConfig, disableGzip)
+	deps.namedProviders = []namedProvider{
+		{"openai", deps.openAI},
+		{"anthropic", deps.anthropic},
+		{"gemini", deps.gemini},
+	}
+	if deps.bedrock != nil {
+		deps.namedProviders = append(deps.namedProviders, namedProvider{"bedrock", deps.bedrock})
+	}
+	if deps.bedrockMantle != nil {
+		deps.namedProviders = append(deps.namedProviders, namedProvider{"bedrock-mantle", deps.bedrockMantle})
+	}
+	wrapProviderTransports(deps)
+
+	globalModelStatusRecorder = modelstatusstats.NewRecorder()
+	globalUnmeteredRecorder = unmeteredstats.NewRecorder()
+
+	deps.redactor = initRedactor(yamlConfig, env)
+	if yamlConfig.Features.IDGate.Enabled && deps.redactor == nil {
+		logProxyError("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
+	}
+	if deps.idGateActive() {
+		globalIDGateRecorder = idgatestats.NewRecorder()
+	}
+	if deps.piiActive() {
+		globalPIIRecorder = pii.NewRecorder()
 	}
 
-	// Initialize circuit breaker
+	// Rollups bind every recorder created above, so they come last.
+	initAdminRollups(yamlConfig)
+	initHistory(yamlConfig)
+	return deps
+}
+
+func initRateLimiter(yamlConfig *config.YAMLConfig) {
+	if !yamlConfig.Features.RateLimiting.Enabled {
+		return
+	}
+	lim, err := ratelimit.Factory(yamlConfig)
+	if err != nil {
+		logProxyError("Failed to initialize rate limiter", "error", err)
+		return
+	}
+	globalRateLimiter = lim
+	globalRateLimitStatsRecorder = ratelimitstats.NewRecorder()
+	// Layer dynamic per-key rate-limit overrides (from the API-key
+	// record) on top of static YAML overrides, if the backend and
+	// store both support it.
+	if ov, ok := lim.(ratelimit.PerKeyOverridable); ok {
+		if store, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+			ov.SetPerKeyOverride(newPerKeyOverrideProvider(store, logger))
+			logger.Info("Rate limiting: per-key overrides wired to API-key store")
+		}
+	}
+	logger.Info("Rate limiting: ENABLED",
+		"backend", yamlConfig.Features.RateLimiting.Backend,
+		"rpm", yamlConfig.Features.RateLimiting.Limits.RequestsPerMinute,
+		"tpm", yamlConfig.Features.RateLimiting.Limits.TokensPerMinute,
+		"rpd", yamlConfig.Features.RateLimiting.Limits.RequestsPerDay,
+		"tpd", yamlConfig.Features.RateLimiting.Limits.TokensPerDay)
+}
+
+func initCircuitBreaker(yamlConfig *config.YAMLConfig) {
 	globalCircuitStore = initializeCircuitStore(yamlConfig)
-	if globalCircuitStore != nil {
-		if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok && rs.RedisClient() != nil {
-			globalCircuitStatsRecorder = circuitstats.NewRedisRecorder(rs.RedisClient(), logger)
-			logger.Info("⚡ Circuit activity: Redis-backed (shared across tasks)")
-		} else {
-			globalCircuitStatsRecorder = circuitstats.NewRecorder()
-		}
+	if globalCircuitStore == nil {
+		return
 	}
+	if rs, ok := globalCircuitStore.(*circuit.RedisStore); ok && rs.RedisClient() != nil {
+		globalCircuitStatsRecorder = circuitstats.NewRedisRecorder(rs.RedisClient(), logger)
+		logger.Info("⚡ Circuit activity: Redis-backed (shared across tasks)")
+	} else {
+		globalCircuitStatsRecorder = circuitstats.NewRecorder()
+	}
+}
 
-	openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider := registerProviders(yamlConfig, disableGzip)
+// wrapProviderTransports layers the optional fake upstream, the circuit
+// breaker and finally body-read logging around every provider's transport.
+// Order matters: body-read logging must be the outermost wrap so its reader
+// is the one ReverseProxy copies from.
+func wrapProviderTransports(deps *serverDeps) {
+	yamlConfig := deps.yamlConfig
 
 	fakeAllowed := isFakeModeAllowed(yamlConfig)
-	fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
 	if fakeAllowed {
 		logProxyWarn(
 			"🎭 Fake upstream: ENABLED — synthetic LLM responses, no real provider calls",
 			"chaos_failure_rate", yamlConfig.Features.FakeUpstream.ChaosFailureRate,
 		)
+		fakeCfg := fakeConfigFromYAML(yamlConfig, fakeAllowed)
+		for _, np := range deps.namedProviders {
+			wrapProviderWithFake(np.p, np.name, fakeCfg)
+		}
 	} else if yamlConfig.Features.FakeUpstream.Enabled {
 		logProxyWarn(
 			"🎭 Fake upstream: requested in YAML but LLM_PROXY_ALLOW_FAKE_MODE is not set; fake transport NOT installed",
 		)
 	}
 
-	type namedProvider struct {
-		name string
-		p    interface {
-			WrapTransport(func(http.RoundTripper) http.RoundTripper)
-		}
-	}
-	namedProviders := []namedProvider{
-		{"openai", openAIProvider},
-		{"anthropic", anthropicProvider},
-		{"gemini", geminiProvider},
-	}
-	if bedrockProvider != nil {
-		namedProviders = append(namedProviders, namedProvider{"bedrock", bedrockProvider})
-	}
-	if bedrockMantleProvider != nil {
-		namedProviders = append(namedProviders, namedProvider{"bedrock-mantle", bedrockMantleProvider})
-	}
-
-	if fakeAllowed {
-		for _, np := range namedProviders {
-			wrapProviderWithFake(np.p, np.name, fakeCfg)
-		}
-	}
-
-	// Inject circuit-breaking transports when the feature is enabled.
 	if globalCircuitStore != nil {
 		cbCfg := circuitConfigFromYAML(yamlConfig.Features.CircuitBreaker, isTestModeAllowed(yamlConfig))
 
@@ -1625,7 +1705,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		// is missing, which keeps test fixtures and Datadog-less
 		// deployments working unchanged.
 		circuitMetrics := initializeCircuitMetrics(yamlConfig)
-		modelFn := circuitModelExtractor(openAIProvider, anthropicProvider, geminiProvider, bedrockProvider, bedrockMantleProvider)
+		modelFn := circuitModelExtractor(deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
@@ -1635,7 +1715,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			opts = append(opts, circuit.WithActivityRecorder(globalCircuitStatsRecorder))
 		}
 
-		for _, np := range namedProviders {
+		for _, np := range deps.namedProviders {
 			// The timeout-budget ceiling is per-provider (each provider's own
 			// response_header_timeout_seconds), so it can't live in the
 			// shared opts slice above — a caller's X-LLM-Proxy-Timeout-Ms can
@@ -1656,14 +1736,75 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// error ReverseProxy sees before panicking with http.ErrAbortHandler
 	// (which is otherwise silent for context.Canceled). Pure pass-through:
 	// no buffering, streaming unaffected.
-	for _, np := range namedProviders {
+	for _, np := range deps.namedProviders {
 		name := np.name
 		np.p.WrapTransport(func(inner http.RoundTripper) http.RoundTripper {
 			return providers.NewBodyReadLoggingTransport(inner, name)
 		})
 	}
+}
 
-	// Add middleware (order matters for streaming)
+// initRedactor constructs the Presidio-backed redactor (and its analyze
+// cache) when any feature needs it. Returns nil when no feature is enabled
+// or construction failed; callers treat nil as "PII features disabled".
+func initRedactor(yamlConfig *config.YAMLConfig, env config.RuntimeEnv) *redact.Redactor {
+	piiCfg := yamlConfig.Features.PIIRedact
+	needsRedactor := piiCfg.Enabled || piiCfg.AllowPerKeyOverride ||
+		yamlConfig.Features.RedactAPI.Enabled || yamlConfig.Features.IDGate.Enabled
+	if !needsRedactor {
+		return nil
+	}
+
+	analyzerURL := piiCfg.AnalyzerURL
+	if env.PresidioAnalyzerURL != "" {
+		analyzerURL = env.PresidioAnalyzerURL
+	}
+
+	redactCfg := redact.Config{
+		AnalyzerURL:        analyzerURL,
+		Timeout:            time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+		ScoreThreshold:     piiCfg.ScoreThreshold,
+		EntityTypes:        piiCfg.EntityTypes,
+		Language:           piiCfg.Language,
+		AllowTestEmails:    piiCfg.AllowTestEmails,
+		AnalyzeConcurrency: piiCfg.AnalyzeConcurrency,
+		ChunkChars:         piiCfg.AnalyzeChunkChars,
+	}
+	cacheCfg := redact.AnalyzeCacheConfigFromYAML(piiCfg.AnalyzeCache)
+	fingerprint := redact.AnalyzeCacheFingerprint(redactCfg)
+	analyzeCache, closeCache, cacheErr := redact.NewAnalyzeCache(cacheCfg, fingerprint)
+	if cacheErr != nil {
+		logProxyError("Failed to construct PII analyze cache; continuing without cache",
+			"error", cacheErr)
+	} else if analyzeCache != nil {
+		redactCfg.AnalyzeCache = analyzeCache
+		globalAnalyzeCacheClose = closeCache
+	}
+	redactor, err := redact.New(redactCfg)
+	if err != nil {
+		logProxyError("Failed to construct PII redactor; redaction features disabled",
+			"error", err)
+		return nil
+	}
+	redact.SetGlobal(redactor)
+	if analyzeCache != nil {
+		logger.Info(
+			"PII analyze cache enabled",
+			"ttl_seconds", int(cacheCfg.TTL.Seconds()),
+			"memory", cacheCfg.MemoryEnabled,
+			"redis", cacheCfg.RedisEnabled,
+		)
+	}
+	return redactor
+}
+
+// buildRouter assembles the middleware chain (order matters for streaming)
+// and registers every route: health, redact API, robots, admin dashboard
+// and the provider proxies.
+func buildRouter(deps *serverDeps) *mux.Router {
+	yamlConfig := deps.yamlConfig
+	r := mux.NewRouter()
+
 	// Abort logging must be outermost so it observes http.ErrAbortHandler
 	// panics raised anywhere below (ReverseProxy body-copy failures that
 	// otherwise reset the connection with zero log output).
@@ -1679,183 +1820,23 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	// API key validation runs before PII redaction so per-key redact_pii
 	// overrides can be resolved from the DynamoDB record stashed in context.
 	r.Use(middleware.VendorPathPolicyMiddleware(globalProviderManager))
-	authFailures := middleware.NewAuthFailureGuard()
 	if globalAPIKeyStore != nil {
 		r.Use(middleware.APIKeyValidationMiddleware(
 			globalProviderManager,
 			globalAPIKeyStore,
 			yamlConfig.Features.BYOKeys.Enabled,
-			authFailures,
+			deps.authFailures,
 		))
 	}
 
-	globalModelStatusRecorder = modelstatusstats.NewRecorder()
-	globalUnmeteredRecorder = unmeteredstats.NewRecorder()
-	modelStatusMetrics := initializeCircuitMetrics(yamlConfig)
-	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, globalModelStatusRecorder, modelStatusMetrics))
+	r.Use(middleware.ModelStatusMiddleware(globalProviderManager, yamlConfig, globalModelStatusRecorder, initializeCircuitMetrics(yamlConfig)))
 
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
-		costLimitOpts := middleware.CostLimitOptions{
-			FailClosedOnReadError: yamlConfig.Features.CostTracking.FailClosedOnReadError,
-		}
-		if globalNotifier != nil {
-			costLimitOpts.OnLimitReached = func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
-				globalNotifier.SpendLimitReached(context.Background(), rec, window, limitCents, spendCents)
-			}
-		}
-		// When the cost tracker is available, enable synchronous cluster-wide
-		// reservations: estimate a call's cost up front, reserve it atomically
-		// against the cap, and reconcile to the actual cost after the response.
-		// This stops concurrent / multi-instance requests from overshooting a
-		// daily cap in the check-before / charge-after window.
-		if globalCostTracker != nil {
-			costLimitOpts.Estimate = func(provider, model string, inputTokens, outputTokens int) float64 {
-				_, _, total, err := globalCostTracker.CalculateCost(provider, model, inputTokens, outputTokens)
-				if err != nil {
-					return 0
-				}
-				return total
-			}
-			costLimitOpts.Estimation = providers.NewYAMLConfigEstimationAdapter(yamlConfig.Features.RateLimiting.Estimation)
-		}
-		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder, costLimitOpts))
+		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder, costLimitOptions(yamlConfig)))
 	}
 
-	piiCfg := yamlConfig.Features.PIIRedact
-	redactAPICfg := yamlConfig.Features.RedactAPI
-	idGateCfg := yamlConfig.Features.IDGate
-	needsRedactor := piiCfg.Enabled || piiCfg.AllowPerKeyOverride || redactAPICfg.Enabled || idGateCfg.Enabled
-	var redactor *redact.Redactor
-	if needsRedactor {
-		analyzerURL := piiCfg.AnalyzerURL
-		if envURL := os.Getenv("PRESIDIO_ANALYZER_URL"); envURL != "" {
-			analyzerURL = envURL
-		}
-
-		redactCfg := redact.Config{
-			AnalyzerURL:        analyzerURL,
-			Timeout:            time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
-			ScoreThreshold:     piiCfg.ScoreThreshold,
-			EntityTypes:        piiCfg.EntityTypes,
-			Language:           piiCfg.Language,
-			AllowTestEmails:    piiCfg.AllowTestEmails,
-			AnalyzeConcurrency: piiCfg.AnalyzeConcurrency,
-			ChunkChars:         piiCfg.AnalyzeChunkChars,
-		}
-		cacheCfg := redact.AnalyzeCacheConfigFromYAML(piiCfg.AnalyzeCache)
-		fingerprint := redact.AnalyzeCacheFingerprint(redactCfg)
-		analyzeCache, closeCache, cacheErr := redact.NewAnalyzeCache(cacheCfg, fingerprint)
-		if cacheErr != nil {
-			logProxyError("Failed to construct PII analyze cache; continuing without cache",
-				"error", cacheErr)
-		} else if analyzeCache != nil {
-			redactCfg.AnalyzeCache = analyzeCache
-			globalAnalyzeCacheClose = closeCache
-		}
-		var err error
-		redactor, err = redact.New(redactCfg)
-		if err != nil {
-			logProxyError("Failed to construct PII redactor; redaction features disabled",
-				"error", err)
-			redactor = nil
-		} else {
-			redact.SetGlobal(redactor)
-			if analyzeCache != nil {
-				logger.Info(
-					"PII analyze cache enabled",
-					"ttl_seconds", int(cacheCfg.TTL.Seconds()),
-					"memory", cacheCfg.MemoryEnabled,
-					"redis", cacheCfg.RedisEnabled,
-				)
-			}
-		}
-	}
-
-	if idGateCfg.Enabled {
-		if redactor == nil {
-			logProxyError("id_gate enabled but Presidio redactor unavailable; ID gate disabled")
-		} else {
-			globalIDGateRecorder = idgatestats.NewRecorder()
-			ocrURL := idGateCfg.OCRSidecarURL
-			if envURL := os.Getenv("OCR_SIDECAR_URL"); envURL != "" {
-				ocrURL = envURL
-			}
-			ocrTimeout := time.Duration(idGateCfg.TimeoutMs) * time.Millisecond
-			if ocrTimeout <= 0 {
-				ocrTimeout = 30 * time.Second
-			}
-			ocrClient := ocr.New(ocrURL, ocrTimeout)
-			idGateFailClosed := idGateCfg.FailMode == "closed"
-			scoreThreshold := idGateCfg.ScoreThreshold
-			if scoreThreshold <= 0 {
-				scoreThreshold = 0.4
-			}
-			r.Use(middleware.IDGateMiddleware(ocrClient, redactor, middleware.IDGateConfig{
-				FailClosed:       idGateFailClosed,
-				MaxBodyBytes:     idGateCfg.MaxBodyBytes,
-				MaxImageBytes:    idGateCfg.MaxImageBytes,
-				ScoreThreshold:   scoreThreshold,
-				EntityTypes:      idGateCfg.EntityTypes,
-				ImageConcurrency: idGateCfg.ImageConcurrency,
-				Logger:           logger,
-				Metrics:          initializeIDGateMetrics(yamlConfig),
-				Recorder:         globalIDGateRecorder,
-			}))
-			logger.Info(
-				"🪪  Government ID gate middleware installed",
-				"ocr_sidecar_url", ocrURL,
-				"fail_mode", idGateCfg.FailMode,
-				"score_threshold", scoreThreshold,
-			)
-		}
-	}
-
-	if redactor != nil && (piiCfg.Enabled || piiCfg.AllowPerKeyOverride) {
-		failClosed := piiCfg.FailMode == "closed"
-		globalPIIRecorder = pii.NewRecorder()
-		wirePlaceholders := true
-		if piiCfg.WirePlaceholders != nil {
-			wirePlaceholders = *piiCfg.WirePlaceholders
-		}
-		defaultAllowStreaming := true
-		if piiCfg.DefaultAllowStreaming != nil {
-			defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
-		}
-		env := strings.ToLower(os.Getenv("ENVIRONMENT"))
-		devLogRawEntities := env == "dev" || env == "local"
-		r.Use(middleware.PIIRedactMiddleware(redactor, middleware.PIIRedactConfig{
-			GlobalEnabled:           piiCfg.Enabled,
-			FailClosed:              failClosed,
-			MaxBodyBytes:            piiCfg.MaxBodyBytes,
-			Logger:                  logger,
-			Recorder:                globalPIIRecorder,
-			Metrics:                 initializePIIMetrics(yamlConfig),
-			WirePlaceholders:        wirePlaceholders,
-			DefaultAllowStreaming:   defaultAllowStreaming,
-			DevLogRawEntities:       devLogRawEntities,
-			AnalyzeTimeout:          time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
-			AnalyzeTimeoutPer100KiB: time.Duration(piiCfg.TimeoutMsPer100KB) * time.Millisecond,
-			AnalyzeTimeoutMax:       time.Duration(piiCfg.TimeoutMsMax) * time.Millisecond,
-		}))
-		logger.Info(
-			"🛡️  PII redaction middleware installed",
-			"global_enabled", piiCfg.Enabled,
-			"allow_per_key_override", piiCfg.AllowPerKeyOverride,
-			"wire_placeholders", wirePlaceholders,
-			"default_allow_streaming", defaultAllowStreaming,
-			"dev_log_raw_entities", devLogRawEntities,
-			"analyzer_url", piiCfg.AnalyzerURL,
-			"fail_mode", piiCfg.FailMode,
-			"timeout_ms", piiCfg.TimeoutMs,
-			"timeout_ms_per_100kb", piiCfg.TimeoutMsPer100KB,
-			"timeout_ms_max", piiCfg.TimeoutMsMax,
-			"analyze_concurrency", piiCfg.AnalyzeConcurrency,
-			"analyze_chunk_chars", piiCfg.AnalyzeChunkChars,
-		)
-	}
-
-	initAdminRollups(yamlConfig)
-	initHistory(yamlConfig)
+	installIDGateMiddleware(r, deps)
+	installPIIRedactMiddleware(r, deps)
 
 	// Add test-mode middleware when enabled (integration tests only).
 	//
@@ -1879,7 +1860,7 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		logProxyWarn(
 			"⚡ Circuit Breaker: test-mode requested in YAML but one or more guards not satisfied; middleware NOT installed",
 			"circuit_breaker_enabled", yamlConfig.Features.CircuitBreaker.Enabled,
-			"allow_env_set", os.Getenv("LLM_PROXY_ALLOW_TEST_MODE") == "1",
+			"allow_env_set", deps.env.AllowTestMode,
 		)
 	}
 
@@ -1887,85 +1868,22 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	if globalRateLimiter != nil {
 		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter, globalRateLimitStatsRecorder))
 	}
+	redactAPICfg := yamlConfig.Features.RedactAPI
 	if redactAPICfg.Enabled {
 		r.Use(middleware.RedactRateLimitMiddleware(redactAPICfg.RequestsPerMinute))
 	}
 	r.Use(middleware.CORSMiddleware(globalProviderManager))
 
-	// Create callbacks for cost tracking
 	var callbacks []middleware.MetadataCallback
-
-	// Add cost tracking callback if enabled
 	if globalCostTracker != nil {
-		costTrackingCallback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
-			if metadata.TotalTokens > 0 {
-				provider := middleware.GetProviderFromRequest(globalProviderManager, r)
-				userID := middleware.ExtractUserIDFromRequest(r, provider)
-				ipAddress := middleware.ExtractIPAddressFromRequest(r)
-				keyID := ""
-				if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
-					keyID = middleware.MaskKeyID(keyRecord.PK)
-					// The record is read fresh per request, so once
-					// first_request_at is persisted there is nothing to mark.
-					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil && keyRecord.FirstRequestAt == nil {
-						// DynamoDB UpdateItem; not needed to answer the
-						// request, so it runs on the cost-tracker pool.
-						pk, at := keyRecord.PK, time.Now()
-						globalCostTracker.RunInBackground(func(ctx context.Context) {
-							if err := store.MarkFirstRequest(ctx, pk, at); err != nil {
-								logProxyWarn("Failed to mark first request", "error", err, "key", keyID)
-							}
-						})
-					}
-				}
-				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {
-					logProxyWarn("Failed to track request cost", "error", err)
-				}
-			}
-		}
 		callbacks = append(callbacks, costTrackingCallback)
-	}
-
-	unmeteredCallback := func(r *http.Request, status int) {
-		keyID := ""
-		if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
-			keyID = middleware.MaskKeyID(keyRecord.PK)
-		}
-		globalUnmeteredRecorder.RecordRequest(keyID, unmeteredstats.EndpointLabel(r.URL.Path, status))
 	}
 	r.Use(middleware.TokenParsingMiddlewareWithUnmetered(globalProviderManager, unmeteredCallback, callbacks...))
 	r.Use(middleware.PIIResponseRestoreMiddleware(globalProviderManager))
 	r.Use(middleware.StreamingMiddleware(globalProviderManager))
 
-	// Health check endpoint
 	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
-
-	if redactAPICfg.Enabled && redactor != nil {
-		var keyLookup redactapi.ProxyKeyLookup
-		allowUnauth := redactAPICfg.DevAllowUnauthenticated
-		if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
-			keyLookup = store
-		} else if !allowUnauth {
-			logProxyError("redact_api enabled but API key store unavailable — POST /redact not registered")
-		}
-		if keyLookup != nil || allowUnauth {
-			maxBody := redactAPICfg.MaxBodyBytes
-			if maxBody <= 0 && piiCfg.MaxBodyBytes > 0 {
-				maxBody = piiCfg.MaxBodyBytes
-			}
-			r.Handle("/redact", redactapi.NewHandler(redactor, keyLookup, redactapi.Config{
-				MaxBodyBytes:         maxBody,
-				AllowUnauthenticated: allowUnauth,
-				AuthFailures:         authFailures,
-			}, logger)).Methods(http.MethodPost, http.MethodOptions)
-			logger.Info("🔒 POST /redact API enabled",
-				"fail_mode", redactAPICfg.FailMode,
-				"requests_per_minute", redactAPICfg.RequestsPerMinute,
-				"dev_allow_unauthenticated", allowUnauth)
-		}
-	} else if redactAPICfg.Enabled {
-		logProxyError("redact_api enabled but redactor unavailable — POST /redact not registered")
-	}
+	registerRedactAPI(r, deps)
 
 	// robots.txt: keep the admin dashboard and (capability-URL) share pages
 	// out of search indexes. This is defense-in-depth for accidental URL
@@ -1975,39 +1893,231 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		io.WriteString(w, "User-agent: *\nDisallow: /admin/\n") //nolint:errcheck
 	}).Methods("GET")
 
-	if yamlConfig.Features.AdminDashboard.Enabled {
-		// Override the PII-off bypass allowlist from config (falls back to the
-		// built-in default when unset) so roster changes don't need a deploy.
-		apikeys.SetPIIOffNonBedrockBypassAdmins(yamlConfig.Features.AdminDashboard.PIIOffBypassAdmins)
-		var keyStore *apikeys.Store
-		if s, ok := globalAPIKeyStore.(*apikeys.Store); ok {
-			keyStore = s
-		}
-		admin.RegisterRoutes(r, admin.Deps{
-			Logger:             logger,
-			YAMLConfig:         yamlConfig,
-			APIKeyStore:        keyStore,
-			APIKeyStoreError:   globalAPIKeyStoreInitError,
-			UserStore:          globalAdminUserStore,
-			UserStoreError:     globalAdminUserStoreError,
-			RateLimiter:        globalRateLimiter,
-			HealthFunc:         healthHandler,
-			PIISummary:         piiSummaryFunc(),
-			IDGateSummary:      idGateSummaryFunc(),
-			CostSummary:        costSummaryFunc(),
-			UsageSummary:       usageSummaryFunc(),
-			RateLimitSummary:   rateLimitSummaryFunc(),
-			CircuitActivity:    circuitActivitySummaryFunc(),
-			ModelStatusSummary: modelStatusSummaryFunc(),
-			UnmeteredSummary:   unmeteredSummaryFunc(),
-			KeyProvisioner:     globalKeyProvisioner,
-			AdminRollupStore:   globalAdminRollupStore,
-			Notifier:           globalNotifier,
-		})
-		logger.Info("Admin dashboard: ENABLED")
-	}
+	registerAdminRoutes(r, deps)
+	registerProviderRoutes(r)
+	return r
+}
 
-	// Register routes for all providers centrally
+// costLimitOptions wires the cost-limit middleware's notifier and, when the
+// cost tracker is available, synchronous cluster-wide reservations: estimate
+// a call's cost up front, reserve it atomically against the cap, and
+// reconcile to the actual cost after the response. This stops concurrent /
+// multi-instance requests from overshooting a daily cap in the
+// check-before / charge-after window.
+func costLimitOptions(yamlConfig *config.YAMLConfig) middleware.CostLimitOptions {
+	opts := middleware.CostLimitOptions{
+		FailClosedOnReadError: yamlConfig.Features.CostTracking.FailClosedOnReadError,
+	}
+	if globalNotifier != nil {
+		opts.OnLimitReached = func(rec *apikeys.APIKey, window string, limitCents, spendCents int64) {
+			globalNotifier.SpendLimitReached(context.Background(), rec, window, limitCents, spendCents)
+		}
+	}
+	if globalCostTracker != nil {
+		opts.Estimate = func(provider, model string, inputTokens, outputTokens int) float64 {
+			_, _, total, err := globalCostTracker.CalculateCost(provider, model, inputTokens, outputTokens)
+			if err != nil {
+				return 0
+			}
+			return total
+		}
+		opts.Estimation = providers.NewYAMLConfigEstimationAdapter(yamlConfig.Features.RateLimiting.Estimation)
+	}
+	return opts
+}
+
+func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
+	if !deps.idGateActive() {
+		return
+	}
+	idGateCfg := deps.yamlConfig.Features.IDGate
+	ocrURL := idGateCfg.OCRSidecarURL
+	if deps.env.OCRSidecarURL != "" {
+		ocrURL = deps.env.OCRSidecarURL
+	}
+	ocrTimeout := time.Duration(idGateCfg.TimeoutMs) * time.Millisecond
+	if ocrTimeout <= 0 {
+		ocrTimeout = 30 * time.Second
+	}
+	scoreThreshold := idGateCfg.ScoreThreshold
+	if scoreThreshold <= 0 {
+		scoreThreshold = 0.4
+	}
+	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, ocrTimeout), deps.redactor, middleware.IDGateConfig{
+		FailClosed:       idGateCfg.FailMode == "closed",
+		MaxBodyBytes:     idGateCfg.MaxBodyBytes,
+		MaxImageBytes:    idGateCfg.MaxImageBytes,
+		ScoreThreshold:   scoreThreshold,
+		EntityTypes:      idGateCfg.EntityTypes,
+		ImageConcurrency: idGateCfg.ImageConcurrency,
+		Logger:           logger,
+		Metrics:          initializeIDGateMetrics(deps.yamlConfig),
+		Recorder:         globalIDGateRecorder,
+	}))
+	logger.Info(
+		"🪪  Government ID gate middleware installed",
+		"ocr_sidecar_url", ocrURL,
+		"fail_mode", idGateCfg.FailMode,
+		"score_threshold", scoreThreshold,
+	)
+}
+
+func installPIIRedactMiddleware(r *mux.Router, deps *serverDeps) {
+	if !deps.piiActive() {
+		return
+	}
+	piiCfg := deps.yamlConfig.Features.PIIRedact
+	wirePlaceholders := true
+	if piiCfg.WirePlaceholders != nil {
+		wirePlaceholders = *piiCfg.WirePlaceholders
+	}
+	defaultAllowStreaming := true
+	if piiCfg.DefaultAllowStreaming != nil {
+		defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
+	}
+	devLogRawEntities := deps.env.IsDevLike()
+	r.Use(middleware.PIIRedactMiddleware(deps.redactor, middleware.PIIRedactConfig{
+		GlobalEnabled:           piiCfg.Enabled,
+		FailClosed:              piiCfg.FailMode == "closed",
+		MaxBodyBytes:            piiCfg.MaxBodyBytes,
+		Logger:                  logger,
+		Recorder:                globalPIIRecorder,
+		Metrics:                 initializePIIMetrics(deps.yamlConfig),
+		WirePlaceholders:        wirePlaceholders,
+		DefaultAllowStreaming:   defaultAllowStreaming,
+		DevLogRawEntities:       devLogRawEntities,
+		AnalyzeTimeout:          time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+		AnalyzeTimeoutPer100KiB: time.Duration(piiCfg.TimeoutMsPer100KB) * time.Millisecond,
+		AnalyzeTimeoutMax:       time.Duration(piiCfg.TimeoutMsMax) * time.Millisecond,
+	}))
+	logger.Info(
+		"🛡️  PII redaction middleware installed",
+		"global_enabled", piiCfg.Enabled,
+		"allow_per_key_override", piiCfg.AllowPerKeyOverride,
+		"wire_placeholders", wirePlaceholders,
+		"default_allow_streaming", defaultAllowStreaming,
+		"dev_log_raw_entities", devLogRawEntities,
+		"analyzer_url", piiCfg.AnalyzerURL,
+		"fail_mode", piiCfg.FailMode,
+		"timeout_ms", piiCfg.TimeoutMs,
+		"timeout_ms_per_100kb", piiCfg.TimeoutMsPer100KB,
+		"timeout_ms_max", piiCfg.TimeoutMsMax,
+		"analyze_concurrency", piiCfg.AnalyzeConcurrency,
+		"analyze_chunk_chars", piiCfg.AnalyzeChunkChars,
+	)
+}
+
+// costTrackingCallback records cost for every metered response and marks a
+// proxy key's first request on the cost-tracker background lane.
+func costTrackingCallback(r *http.Request, metadata *providers.LLMResponseMetadata) {
+	if metadata.TotalTokens <= 0 {
+		return
+	}
+	provider := middleware.GetProviderFromRequest(globalProviderManager, r)
+	userID := middleware.ExtractUserIDFromRequest(r, provider)
+	ipAddress := middleware.ExtractIPAddressFromRequest(r)
+	keyID := ""
+	if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
+		keyID = middleware.MaskKeyID(keyRecord.PK)
+		// The record is read fresh per request, so once
+		// first_request_at is persisted there is nothing to mark.
+		if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil && keyRecord.FirstRequestAt == nil {
+			// DynamoDB UpdateItem; not needed to answer the
+			// request, so it runs on the cost-tracker pool.
+			pk, at := keyRecord.PK, time.Now()
+			globalCostTracker.RunInBackground(func(ctx context.Context) {
+				if err := store.MarkFirstRequest(ctx, pk, at); err != nil {
+					logProxyWarn("Failed to mark first request", "error", err, "key", keyID)
+				}
+			})
+		}
+	}
+	if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path, keyID); err != nil {
+		logProxyWarn("Failed to track request cost", "error", err)
+	}
+}
+
+func unmeteredCallback(r *http.Request, status int) {
+	keyID := ""
+	if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
+		keyID = middleware.MaskKeyID(keyRecord.PK)
+	}
+	globalUnmeteredRecorder.RecordRequest(keyID, unmeteredstats.EndpointLabel(r.URL.Path, status))
+}
+
+func registerRedactAPI(r *mux.Router, deps *serverDeps) {
+	redactAPICfg := deps.yamlConfig.Features.RedactAPI
+	if !redactAPICfg.Enabled {
+		return
+	}
+	if deps.redactor == nil {
+		logProxyError("redact_api enabled but redactor unavailable — POST /redact not registered")
+		return
+	}
+	var keyLookup redactapi.ProxyKeyLookup
+	allowUnauth := redactAPICfg.DevAllowUnauthenticated
+	if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
+		keyLookup = store
+	} else if !allowUnauth {
+		logProxyError("redact_api enabled but API key store unavailable — POST /redact not registered")
+	}
+	if keyLookup == nil && !allowUnauth {
+		return
+	}
+	maxBody := redactAPICfg.MaxBodyBytes
+	if piiMax := deps.yamlConfig.Features.PIIRedact.MaxBodyBytes; maxBody <= 0 && piiMax > 0 {
+		maxBody = piiMax
+	}
+	r.Handle("/redact", redactapi.NewHandler(deps.redactor, keyLookup, redactapi.Config{
+		MaxBodyBytes:         maxBody,
+		AllowUnauthenticated: allowUnauth,
+		AuthFailures:         deps.authFailures,
+	}, logger)).Methods(http.MethodPost, http.MethodOptions)
+	logger.Info("🔒 POST /redact API enabled",
+		"fail_mode", redactAPICfg.FailMode,
+		"requests_per_minute", redactAPICfg.RequestsPerMinute,
+		"dev_allow_unauthenticated", allowUnauth)
+}
+
+func registerAdminRoutes(r *mux.Router, deps *serverDeps) {
+	yamlConfig := deps.yamlConfig
+	if !yamlConfig.Features.AdminDashboard.Enabled {
+		return
+	}
+	// Override the PII-off bypass allowlist from config (falls back to the
+	// built-in default when unset) so roster changes don't need a deploy.
+	apikeys.SetPIIOffNonBedrockBypassAdmins(yamlConfig.Features.AdminDashboard.PIIOffBypassAdmins)
+	var keyStore *apikeys.Store
+	if s, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+		keyStore = s
+	}
+	admin.RegisterRoutes(r, admin.Deps{
+		Logger:             logger,
+		YAMLConfig:         yamlConfig,
+		APIKeyStore:        keyStore,
+		APIKeyStoreError:   globalAPIKeyStoreInitError,
+		UserStore:          globalAdminUserStore,
+		UserStoreError:     globalAdminUserStoreError,
+		RateLimiter:        globalRateLimiter,
+		HealthFunc:         healthHandler,
+		PIISummary:         piiSummaryFunc(),
+		IDGateSummary:      idGateSummaryFunc(),
+		CostSummary:        costSummaryFunc(),
+		UsageSummary:       usageSummaryFunc(),
+		RateLimitSummary:   rateLimitSummaryFunc(),
+		CircuitActivity:    circuitActivitySummaryFunc(),
+		ModelStatusSummary: modelStatusSummaryFunc(),
+		UnmeteredSummary:   unmeteredSummaryFunc(),
+		KeyProvisioner:     globalKeyProvisioner,
+		AdminRollupStore:   globalAdminRollupStore,
+		Notifier:           globalNotifier,
+	})
+	logger.Info("Admin dashboard: ENABLED")
+}
+
+// registerProviderRoutes mounts every provider's direct and /meta/{userID}/
+// prefixes plus its extra (compatibility) routes.
+func registerProviderRoutes(r *mux.Router) {
 	for name, provider := range globalProviderManager.GetAllProviders() {
 		// Direct provider routes
 		r.PathPrefix(fmt.Sprintf("/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
@@ -2021,16 +2131,16 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 			"meta_path", fmt.Sprintf("/meta/{userID}/%s/", name))
 	}
 
-	// Register extra routes for all providers (e.g., compatibility routes)
 	for name, provider := range globalProviderManager.GetAllProviders() {
 		provider.RegisterExtraRoutes(r)
 		logger.Info("Registered extra routes for provider", "provider", name)
 	}
+}
 
-	// Start server
-	logger.Info("Starting LLM Proxy server", "port", port)
-
-	// Log features
+// logStartupSummary emits the human-readable "what is enabled and where"
+// block operators look for in boot logs.
+func logStartupSummary(deps *serverDeps) {
+	listenAddr := deps.listenAddr
 	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
 	if globalCostTracker != nil {
 		features = append(features, "Cost tracking")
@@ -2042,22 +2152,14 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 		features = append(features, "Circuit breaker")
 	}
 	logger.Info("Features enabled", "features", strings.Join(features, ", "))
-
-	bindAddr := yamlConfig.BindAddress
-	if bindAddr == "" {
-		bindAddr = "0.0.0.0"
-	}
-	listenAddr := net.JoinHostPort(bindAddr, port)
 	logger.Info("Health check available", "url", "http://"+listenAddr+"/health")
 
-	// Log cost tracking status
 	if globalCostTracker != nil {
 		logger.Info("Cost tracking: ENABLED")
 	} else {
 		logger.Info("Cost tracking: DISABLED")
 	}
 
-	// Log registered providers
 	for name := range globalProviderManager.GetAllProviders() {
 		logger.Info("Registered provider", "provider", name)
 	}
@@ -2065,44 +2167,51 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 	logger.Info("OpenAI API endpoints available", "url", "http://"+listenAddr+"/openai/")
 	logger.Info("Anthropic API endpoints available", "url", "http://"+listenAddr+"/anthropic/")
 	logger.Info("Gemini API endpoints available", "url", "http://"+listenAddr+"/gemini/")
-	if bedrockProvider != nil {
-		logger.Info("Bedrock API endpoints available", "url", "http://"+listenAddr+"/bedrock/", "region", bedrockProvider.Region())
+	if deps.bedrock != nil {
+		logger.Info("Bedrock API endpoints available", "url", "http://"+listenAddr+"/bedrock/", "region", deps.bedrock.Region())
 	}
-	if bedrockMantleProvider != nil {
-		logger.Info("Bedrock Mantle API endpoints available", "url", "http://"+listenAddr+"/bedrock-mantle/", "region", bedrockMantleProvider.GetHealthStatus()["region"])
+	if deps.bedrockMantle != nil {
+		logger.Info("Bedrock Mantle API endpoints available", "url", "http://"+listenAddr+"/bedrock-mantle/", "region", deps.bedrockMantle.GetHealthStatus()["region"])
 	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://"+listenAddr+"/meta/{userID}/{provider}/")
+}
 
-	// Server-level timeouts to bound resource usage and avoid Slowloris-style
-	// stalls. WriteTimeout is intentionally generous to accommodate long SSE
-	// streams; per-request deadlines are still enforced by upstream provider
-	// transports and per-handler context.WithTimeout helpers.
-	//
-	// IdleTimeout must be strictly GREATER than the ALB idle timeout (300s).
-	// When they are equal, the server closes idle keep-alive connections at
-	// the same moment the ALB reuses them, and the resulting RST surfaces to
-	// clients as intermittent ALB-generated 502s (HTTPCode_ELB_502_Count with
-	// zero target 5xx). Per AWS guidance the target's keep-alive idle timeout
-	// must outlive the load balancer's so the ALB always closes first.
-	server := &http.Server{
+// newHTTPServer applies the server-level timeouts that bound resource usage
+// and avoid Slowloris-style stalls. WriteTimeout is intentionally zero to
+// accommodate long SSE streams; per-request deadlines are still enforced by
+// upstream provider transports and per-handler context.WithTimeout helpers.
+//
+// IdleTimeout must be strictly GREATER than the ALB idle timeout (300s).
+// When they are equal, the server closes idle keep-alive connections at
+// the same moment the ALB reuses them, and the resulting RST surfaces to
+// clients as intermittent ALB-generated 502s (HTTPCode_ELB_502_Count with
+// zero target 5xx). Per AWS guidance the target's keep-alive idle timeout
+// must outlive the load balancer's so the ALB always closes first.
+func newHTTPServer(listenAddr string, handler http.Handler) *http.Server {
+	return &http.Server{
 		Addr:              listenAddr,
-		Handler:           r,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      0, // streaming: rely on per-handler ctx deadlines
 		IdleTimeout:       400 * time.Second,
 	}
+}
 
-	// Set up graceful shutdown
+// serveAndWait binds the listener and blocks until the server fails to
+// start or a termination signal arrives, then runs gracefulShutdown.
+func serveAndWait(deps *serverDeps, handler http.Handler) {
+	logStartupSummary(deps)
+	server := newHTTPServer(deps.listenAddr, handler)
+
 	serverErrChan := make(chan error, 1)
 	go func() {
-		logger.Info("🚀 Starting server", "address", listenAddr)
+		logger.Info("🚀 Starting server", "address", deps.listenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrChan <- err
 		}
 	}()
 
-	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -2271,11 +2380,12 @@ func main() {
 	// ENVIRONMENT=dev) we fail-fast on load errors rather than silently
 	// running with the in-binary defaults — a misconfigured staging/prod
 	// deploy must be visible at startup, not 15 minutes into traffic.
+	env := config.LoadRuntimeEnv()
 	yamlConfig, err := config.LoadEnvironmentConfig()
 	if err != nil {
-		if !isExplicitLocalDev() {
+		if !env.IsExplicitLocalDev() {
 			logProxyError("Failed to load environment config; refusing to start with in-binary defaults",
-				"error", err, "environment", os.Getenv("ENVIRONMENT"),
+				"error", err, "environment", env.Environment,
 				"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to opt in to default config")
 			os.Exit(1)
 		}
@@ -2289,5 +2399,5 @@ func main() {
 	}
 
 	// Start the server
-	runServer(yamlConfig, disableGzip)
+	runServer(yamlConfig, env, disableGzip)
 }
