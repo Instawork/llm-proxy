@@ -395,6 +395,14 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 func setRequestBody(r *http.Request, body []byte) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
+	// Earlier middleware (model status, cost limit) caches the ORIGINAL body
+	// in GetBody. Anything downstream that prefers GetBody — stream
+	// detection, user-ID extraction, and above all the circuit transport's
+	// retry replay — must see the rewritten bytes, never the pre-redaction
+	// ones, so GetBody has to be swapped together with Body.
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
 	r.Header.Del("Transfer-Encoding")
 	if len(body) == 0 {
 		r.Header.Del("Content-Length")
