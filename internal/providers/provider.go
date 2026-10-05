@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -360,8 +361,10 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 	}
 
 	// Check if this looks like gzip (magic number 0x1f, 0x8b)
-	if n >= 2 && buffer[0] == 0x1f && buffer[1] == 0x8b {
-		log.Printf("🔍 Debug: Detected gzip compressed response, decompressing...")
+	if n >= 2 && isGzipMagic(buffer[:n]) {
+		// Debug-level: this fires for every gzip response on the metadata
+		// path, which at INFO is one log line per request for SDK clients.
+		slog.Debug("Detected gzip compressed response, decompressing")
 
 		// Create a new reader that includes the peeked bytes
 		combinedReader := io.MultiReader(bytes.NewReader(buffer[:n]), peekReader)
@@ -377,6 +380,31 @@ func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
 
 	// Not gzipped, return the original reader with peeked bytes restored
 	return io.MultiReader(bytes.NewReader(buffer[:n]), peekReader), nil
+}
+
+// isGzipMagic reports whether b starts with the gzip member header.
+func isGzipMagic(b []byte) bool {
+	return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b
+}
+
+// gunzipIfNeeded returns body inflated when it is gzip-compressed, or body
+// itself (no copy) when it is not. It is the in-memory counterpart of
+// DecompressResponseIfNeeded for callers that already hold the full body.
+func gunzipIfNeeded(body []byte) ([]byte, error) {
+	if !isGzipMagic(body) {
+		return body, nil
+	}
+	slog.Debug("Detected gzip compressed response, decompressing")
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+	out, err := io.ReadAll(gz)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+	return out, nil
 }
 
 // Estimation primarily uses Content-Length divided by BytesPerToken.

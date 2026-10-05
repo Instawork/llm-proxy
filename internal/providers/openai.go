@@ -289,43 +289,45 @@ func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provide
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+	// Decompress exactly once here. Clients that send Accept-Encoding: gzip
+	// themselves (the stock OpenAI SDKs do) leave raw gzip in the capture
+	// buffer. Previously the shape probe below inflated the body, then the
+	// chosen parser inflated it again from scratch — two full gunzips of
+	// every gzip response on the hot path. The downstream parsers still
+	// tolerate gzip input for direct callers, but on plain bytes their check
+	// is a two-byte peek.
+	bodyBytes, err = gunzipIfNeeded(bodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
 
 	var metadata *LLMResponseMetadata
 	if isStreaming {
 		metadata, err = parseOpenAIUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
-	} else {
+	} else if openAIBodyHasOutput(bodyBytes) {
 		// Responses API has "output"; Chat Completions has "choices".
-		// The shape check must run on DECOMPRESSED bytes: clients that send
-		// Accept-Encoding: gzip themselves (the stock OpenAI SDKs do) leave
-		// raw gzip in the capture buffer, and probing that with
-		// json.Unmarshal fails — which used to mis-route Responses API
-		// bodies to the Chat Completions parser and silently record zero
-		// tokens. The downstream parsers decompress independently, so we
-		// only use the decompressed copy for the probe.
-		checkBytes := bodyBytes
-		if dr, derr := DecompressResponseIfNeeded(bytes.NewReader(bodyBytes)); derr == nil {
-			if decompressed, rerr := io.ReadAll(dr); rerr == nil {
-				checkBytes = decompressed
-			}
-			if gz, ok := dr.(*gzip.Reader); ok {
-				_ = gz.Close()
-			}
-		}
-		var checkResponse map[string]interface{}
-		if json.Unmarshal(checkBytes, &checkResponse) == nil {
-			if _, hasOutput := checkResponse["output"]; hasOutput {
-				metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
-			} else {
-				metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
-			}
-		} else {
-			metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
-		}
+		metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
+	} else {
+		metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
 	}
 	if metadata != nil {
 		metadata.Provider = provider
 	}
 	return metadata, err
+}
+
+// openAIBodyHasOutput reports whether a (decompressed) non-streaming OpenAI
+// body carries a top-level "output" key, i.e. is a Responses API payload.
+// It decodes only that one field instead of materialising the whole document
+// as map[string]interface{}: Responses bodies routinely run to tens of KB of
+// nested output items, and the probe previously allocated all of it just to
+// test for one key. Malformed JSON probes false and falls through to the Chat
+// Completions parser, which reports the real parse error.
+func openAIBodyHasOutput(body []byte) bool {
+	var probe struct {
+		Output json.RawMessage `json:"output"`
+	}
+	return json.Unmarshal(body, &probe) == nil && probe.Output != nil
 }
 
 // parseOpenAINonStreamingResponse handles standard OpenAI JSON responses
