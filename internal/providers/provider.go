@@ -333,9 +333,9 @@ func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *h
 		// any real concurrency every connection beyond the second is closed
 		// after use and the next request pays a fresh TCP+TLS handshake to the
 		// vendor, even though MaxIdleConns nominally allows 100.
-		MaxIdleConns:        proxyMaxIdleConns,
-		MaxIdleConnsPerHost: proxyMaxIdleConns,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:          proxyMaxIdleConns,
+		MaxIdleConnsPerHost:   proxyMaxIdleConns,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		// A generous timeout for the response header, as some LLM providers
