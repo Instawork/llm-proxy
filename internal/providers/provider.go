@@ -309,6 +309,9 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 	}
 }
 
+// proxyMaxIdleConns is the idle keep-alive pool size per provider transport.
+const proxyMaxIdleConns = 100
+
 // newProxyTransport creates a new http.Transport with optimized settings for
 // proxying LLM requests.  When disableGzip is true, DisableCompression is set
 // so Go's transport never auto-decompresses upstream gzip responses — useful
@@ -323,9 +326,16 @@ func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *h
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100, // Each provider gets its own transport, so this is 100 idle connections per provider.
-		IdleConnTimeout:       90 * time.Second,
+		ForceAttemptHTTP2: true,
+		// Each provider gets its own transport talking to (effectively) a
+		// single upstream host, so the pool-wide and per-host caps must match.
+		// Without MaxIdleConnsPerHost the per-host default of 2 applies: under
+		// any real concurrency every connection beyond the second is closed
+		// after use and the next request pays a fresh TCP+TLS handshake to the
+		// vendor, even though MaxIdleConns nominally allows 100.
+		MaxIdleConns:        proxyMaxIdleConns,
+		MaxIdleConnsPerHost: proxyMaxIdleConns,
+		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		// A generous timeout for the response header, as some LLM providers

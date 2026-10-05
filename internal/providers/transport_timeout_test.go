@@ -29,6 +29,17 @@ func TestNewProxyTransportResponseHeaderTimeout(t *testing.T) {
 	require.True(t, tr.DisableCompression)
 }
 
+func TestNewProxyTransportIdlePoolSizedPerHost(t *testing.T) {
+	t.Parallel()
+
+	tr := newProxyTransport(false, 0)
+	require.Equal(t, proxyMaxIdleConns, tr.MaxIdleConns)
+	// A single-upstream transport must not fall back to Go's per-host default
+	// of 2, which would close every extra connection after use.
+	require.Equal(t, tr.MaxIdleConns, tr.MaxIdleConnsPerHost)
+	require.Greater(t, tr.MaxIdleConnsPerHost, http.DefaultMaxIdleConnsPerHost)
+}
+
 func TestProviderConstructorsHonorResponseHeaderTimeout(t *testing.T) {
 	t.Parallel()
 
