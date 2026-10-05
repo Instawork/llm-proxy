@@ -639,7 +639,7 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 	if isStreaming {
 		return parseMantleStream(decompressedReader)
 	}
-	body, err := io.ReadAll(decompressedReader)
+	body, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, err
 	}
@@ -647,20 +647,20 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 		Choices json.RawMessage `json:"choices"`
 	}
 	if json.Unmarshal(body, &responseType) == nil && responseType.Choices != nil {
-		return parseOpenAIFormatMetadata(bytes.NewReader(body), false, bedrockMantleName)
+		return parseOpenAIFormatMetadata(NewBodyReader(body), false, bedrockMantleName)
 	}
 	return parseMantleMetadata(body, false)
 }
 
 func parseMantleStream(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	data, err := io.ReadAll(responseBody)
+	data, err := readResponseBody(responseBody)
 	if err != nil {
 		return nil, err
 	}
 	if mantleStreamLooksAnthropic(data) {
-		return parseAnthropicFormatMetadata(bytes.NewReader(data), true, bedrockMantleName)
+		return parseAnthropicFormatMetadata(NewBodyReader(data), true, bedrockMantleName)
 	}
-	return parseMantleOpenAIStream(bytes.NewReader(data))
+	return parseMantleOpenAIStream(NewBodyReader(data))
 }
 
 func mantleStreamLooksAnthropic(data []byte) bool {

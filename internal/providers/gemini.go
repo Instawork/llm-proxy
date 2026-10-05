@@ -256,7 +256,7 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 		defer gzipReader.Close()
 	}
 
-	bodyBytes, err := io.ReadAll(decompressedReader)
+	bodyBytes, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

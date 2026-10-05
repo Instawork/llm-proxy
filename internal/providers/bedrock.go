@@ -244,7 +244,7 @@ func (b *BedrockProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRe
 	if gz, ok := decompressed.(*gzip.Reader); ok {
 		defer gz.Close()
 	}
-	body, err := io.ReadAll(decompressed)
+	body, err := readResponseBody(decompressed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read bedrock response: %w", err)
 	}

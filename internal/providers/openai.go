@@ -286,7 +286,7 @@ func (o *OpenAIProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming 
 // compatibility endpoints call it when they detect a choices-based body so
 // they do not depend on constructing a concrete OpenAIProxy.
 func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provider string) (*LLMResponseMetadata, error) {
-	bodyBytes, err := io.ReadAll(responseBody)
+	bodyBytes, err := readResponseBody(responseBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -409,18 +409,16 @@ func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMe
 	log.Printf("🔄 OpenAI: Starting to parse unified streaming response")
 
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Skip empty lines and non-data lines
-		if !strings.HasPrefix(line, "data: ") {
+		// scanner.Bytes aliases the scanner's buffer and is only valid
+		// until the next Scan; every consumer below is done with it by
+		// then, so no per-line string copy is needed.
+		jsonData, isData := bytes.CutPrefix(scanner.Bytes(), sseDataPrefix)
+		if !isData {
 			continue
 		}
 
-		// Extract JSON data
-		jsonData := strings.TrimPrefix(line, "data: ")
-
 		// Skip [DONE] marker
-		if strings.TrimSpace(jsonData) == "[DONE]" {
+		if bytes.Equal(bytes.TrimSpace(jsonData), sseDoneMarker) {
 			log.Printf("🔄 OpenAI: Found [DONE] marker, ending stream parse")
 			break
 		}
@@ -473,9 +471,9 @@ func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMe
 }
 
 // detectOpenAIAPIType determines whether the streaming response is from Responses API or Chat Completions API
-func detectOpenAIAPIType(jsonData string) string {
+func detectOpenAIAPIType(jsonData []byte) string {
 	var checkData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonData), &checkData); err == nil {
+	if err := json.Unmarshal(jsonData, &checkData); err == nil {
 		// Responses API streaming has "type" field (e.g., "response.output_text.delta")
 		// or has "output" field in the event
 		if typeField, hasType := checkData["type"].(string); hasType &&
@@ -494,10 +492,10 @@ func detectOpenAIAPIType(jsonData string) string {
 }
 
 // parseOpenAIResponsesStreamingChunk processes a single streaming chunk from the Responses API
-func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
+func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
 	// Try to parse the chunk - could be an event or a delta
 	var chunkData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
+	if err := json.Unmarshal(jsonData, &chunkData); err != nil {
 		// Log error but continue processing other chunks
 		proxylog.Proxy("openai failed to parse Responses API streaming chunk: %v", err)
 		return nil, model, requestID, finishReason, thoughtTokens
@@ -620,7 +618,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 
 	// Try to parse as a full event with usage data (fallback for other event types)
 	var event OpenAIResponsesEvent
-	if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+	if err := json.Unmarshal(jsonData, &event); err != nil {
 		// Not a full event, continue
 		return nil, model, requestID, finishReason, thoughtTokens
 	}
@@ -673,9 +671,9 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 }
 
 // parseOpenAICompletionsStreamingChunk processes a single streaming chunk from the Chat Completions API
-func parseOpenAICompletionsStreamingChunk(jsonData string, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
+func parseOpenAICompletionsStreamingChunk(jsonData []byte, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
 	var streamResponse OpenAIStreamResponse
-	if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
+	if err := json.Unmarshal(jsonData, &streamResponse); err != nil {
 		// Log error but continue processing other chunks
 		proxylog.Proxy("openai failed to parse streaming chunk: %v", err)
 		return nil, model, requestID, finishReason

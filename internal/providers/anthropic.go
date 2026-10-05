@@ -256,7 +256,7 @@ func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMet
 		defer gzipReader.Close()
 	}
 
-	bodyBytes, err := io.ReadAll(decompressedReader)
+	bodyBytes, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

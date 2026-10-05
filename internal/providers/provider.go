@@ -352,6 +352,22 @@ func newProxyTransport(disableGzip bool, responseHeaderTimeout time.Duration) *h
 // This is a shared utility function that all providers can use to handle gzip-compressed responses
 // when DisableCompression is set to true in the transport.
 func DecompressResponseIfNeeded(reader io.Reader) (io.Reader, error) {
+	// Captured bodies (BodyReader, bytes.Buffer) can be sniffed in place:
+	// no bufio.Reader, no MultiReader, and the reader is handed back
+	// untouched so a downstream readResponseBody still borrows rather
+	// than copies.
+	if b, ok := reader.(bytesBorrower); ok {
+		if !isGzipMagic(b.Bytes()) {
+			return reader, nil
+		}
+		slog.Debug("Detected gzip compressed response, decompressing")
+		gzipReader, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		return gzipReader, nil
+	}
+
 	// Read the first few bytes to check for gzip magic number
 	buffer := make([]byte, 2)
 	peekReader := bufio.NewReader(reader)

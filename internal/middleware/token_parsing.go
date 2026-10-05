@@ -120,7 +120,10 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 
 			totalElapsed := time.Since(requestStart)
 
-			bodyReader := bytes.NewReader(captureWriter.body.Bytes())
+			// BodyReader lends the capture buffer to the parser; providers
+			// that need the whole body borrow it instead of re-copying it
+			// with io.ReadAll, so the stream is held in memory exactly once.
+			bodyReader := providers.NewBodyReader(captureWriter.body.Bytes())
 			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
 			if err != nil {
 				if !isStreaming {
