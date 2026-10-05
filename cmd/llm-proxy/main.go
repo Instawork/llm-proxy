@@ -160,6 +160,9 @@ var (
 // Background sweeper that revokes and deletes keys past their expiry grace period.
 var globalKeyExpiryStop chan struct{}
 
+// Stops the in-memory circuit store's idle-entry pruner (memory backend only).
+var globalCircuitPruneStop chan struct{}
+
 // globalBackgroundWG tracks long-running background goroutines (circuit
 // archiver, key-expiry sweeper) so gracefulShutdown can wait for their
 // in-flight Redis/DynamoDB work to finish before closing the shared clients
@@ -649,6 +652,14 @@ func initializeCircuitStore(yamlConfig *config.YAMLConfig) circuit.Store {
 	// Capture the resolved config so /health can report it without
 	// re-applying Defaults() on every request.
 	globalCircuitConfig = cfg.Defaults()
+
+	// The memory store interns one entry per (provider, model) key forever
+	// unless something prunes it; run the sweep on a stoppable ticker.
+	if ms, ok := store.(*circuit.MemoryStore); ok {
+		globalCircuitPruneStop = make(chan struct{})
+		stop := globalCircuitPruneStop
+		globalBackgroundWG.Go(func() { ms.RunIdlePruner(circuit.DefaultIdlePruneInterval, stop) })
+	}
 
 	logger.Info(
 		"⚡ Circuit Breaker: initialized",
@@ -1894,7 +1905,9 @@ func runServer(yamlConfig *config.YAMLConfig, disableGzip bool) {
 				keyID := ""
 				if keyRecord, ok := apikeys.FromContext(r.Context()); ok && keyRecord != nil {
 					keyID = middleware.MaskKeyID(keyRecord.PK)
-					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil {
+					// The record is read fresh per request, so once
+					// first_request_at is persisted there is nothing to mark.
+					if store, ok := globalAPIKeyStore.(*apikeys.Store); ok && store != nil && keyRecord.FirstRequestAt == nil {
 						// DynamoDB UpdateItem; not needed to answer the
 						// request, so it runs on the cost-tracker pool.
 						pk, at := keyRecord.PK, time.Now()
@@ -2192,6 +2205,9 @@ func gracefulShutdown(server *http.Server) {
 	}
 	if globalKeyExpiryStop != nil {
 		close(globalKeyExpiryStop)
+	}
+	if globalCircuitPruneStop != nil {
+		close(globalCircuitPruneStop)
 	}
 	// Wait for the archiver/sweeper to observe the stop signal and finish any
 	// tick in flight before the Redis/DynamoDB clients below are closed;

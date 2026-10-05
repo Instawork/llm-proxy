@@ -354,6 +354,17 @@ func evaluateUpdateCondition(conditionExpr string, item map[string]any, input ma
 	exprNames, _ := input["ExpressionAttributeNames"].(map[string]any)
 	exprValues, _ := input["ExpressionAttributeValues"].(map[string]any)
 
+	// A bare attribute_not_exists(field) fails when the stored item already
+	// carries that attribute (write-once fields such as first_request_at).
+	// Compound expressions (e.g. "... OR lease_expires_at < :now") are not
+	// modelled and keep passing, as before.
+	if rest, ok := strings.CutPrefix(conditionExpr, "attribute_not_exists("); ok && strings.HasSuffix(rest, ")") && !strings.Contains(rest, " ") {
+		field := resolveAttrName(exprNames, strings.TrimSuffix(rest, ")"))
+		if _, present := item[field]; present {
+			return false
+		}
+	}
+
 	if strings.Contains(conditionExpr, "#status = :") {
 		statusField := resolveAttrName(exprNames, "#status")
 		actual := ExtractDDBString(item, statusField)

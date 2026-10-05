@@ -100,6 +100,44 @@ func TestStore_MarkFirstRequest(t *testing.T) {
 	assert.True(t, at.Equal(record.FirstRequestAt.UTC()), "second call must not overwrite first_request_at")
 }
 
+func TestStore_MarkFirstRequest_DedupeMapEvictsSettledKeys(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+
+	first, err := store.CreateKey(ctx, "openai", "real-sk", "first", 0, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.MarkFirstRequest(ctx, first.PK, at))
+	assert.Equal(t, 1, store.firstMarkedLen())
+
+	// Repeat calls within the grace window are deduped in-process.
+	require.NoError(t, store.MarkFirstRequest(ctx, first.PK, at.Add(time.Second)))
+	assert.Equal(t, 1, store.firstMarkedLen())
+
+	// Age the entry past the grace window; the next new-key write sweeps it.
+	store.firstMarked.Store(first.PK, time.Now().Add(-firstMarkedGrace-time.Second))
+	second, err := store.CreateKey(ctx, "openai", "real-sk-2", "second", 0, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.MarkFirstRequest(ctx, second.PK, at))
+	assert.Equal(t, 1, store.firstMarkedLen(), "settled key should be swept, new key retained")
+	_, stillTracked := store.firstMarked.Load(first.PK)
+	assert.False(t, stillTracked)
+	_, tracked := store.firstMarked.Load(second.PK)
+	assert.True(t, tracked)
+
+	// A swept key that is marked again is still a no-op on the record.
+	require.NoError(t, store.MarkFirstRequest(ctx, first.PK, at.Add(time.Hour)))
+	record, err := store.GetKeyRecord(ctx, first.PK)
+	require.NoError(t, err)
+	require.NotNil(t, record.FirstRequestAt)
+	assert.True(t, at.Equal(record.FirstRequestAt.UTC()))
+
+	// Non-prefixed keys never enter the map.
+	require.NoError(t, store.MarkFirstRequest(ctx, "sk-direct", at))
+	_, direct := store.firstMarked.Load("sk-direct")
+	assert.False(t, direct)
+}
+
 func TestStore_CreateAndGetKey(t *testing.T) {
 	store, _ := newFakeStore(t)
 
