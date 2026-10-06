@@ -154,7 +154,7 @@ func runPersonalBumpLimit(configDir, environment string, fromCents, toCents int6
 
 	var updated, failed int
 	for _, key := range candidates {
-		if err := store.UpdateKey(ctx, key.PK, map[string]interface{}{
+		if err := store.UpdateKey(ctx, key.PK, map[string]any{
 			"monthly_cost_limit": toCents,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "update %s: %v\n", apikeys.RedactKey(key.PK), err)

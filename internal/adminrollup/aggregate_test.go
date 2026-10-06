@@ -86,7 +86,7 @@ func TestMergeTodayUsageAggregates(t *testing.T) {
 	})
 	p.FlushNow()
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	store.MergeToday(ctx, MetricUsage, day, snap, caps)
 
 	require.Equal(t, int64(10), snap["requests_today"])
@@ -145,7 +145,7 @@ func TestMergeTodayPIIAggregates(t *testing.T) {
 	})
 	p.FlushNow()
 
-	snap := map[string]interface{}{"available": true}
+	snap := map[string]any{"available": true}
 	store.MergeToday(ctx, MetricPII, day, snap, caps)
 
 	require.Equal(t, int64(100), snap["requests_scanned"])
@@ -154,13 +154,13 @@ func TestMergeTodayPIIAggregates(t *testing.T) {
 	// clean = 100 - 5 - 3 - 2 = 90; rate = 25/90
 	require.InDelta(t, 25.0/90.0, snap["detection_rate"].(float64), 0.001)
 
-	byEntity, ok := snap["by_entity"].([]map[string]interface{})
+	byEntity, ok := snap["by_entity"].([]map[string]any)
 	require.True(t, ok)
 	require.Len(t, byEntity, 2)
 	require.Equal(t, "EMAIL_ADDRESS", byEntity[0]["name"])
 	require.Equal(t, int64(20), byEntity[0]["count"])
 
-	topKeys, ok := snap["top_keys"].([]map[string]interface{})
+	topKeys, ok := snap["top_keys"].([]map[string]any)
 	require.True(t, ok)
 	require.Len(t, topKeys, 3) // top 2 + other_key bucket
 	names := []string{
@@ -189,7 +189,7 @@ func TestMemoryBackendApplyDeltaMergeToday(t *testing.T) {
 		Totals: map[string]float64{"spend_usd": 4.2, "requests": 9},
 	}))
 
-	snap := map[string]interface{}{}
+	snap := map[string]any{}
 	store.MergeToday(ctx, MetricCost, day, snap, TopNCaps{ByKey: 100})
 	require.InDelta(t, 4.2, snap["spend_today_usd"].(float64), 0.001)
 	require.Equal(t, int64(9), snap["requests_today"])
@@ -211,7 +211,7 @@ func TestArchiveDailyFromAggregates(t *testing.T) {
 
 	history, err := store.LoadHistory(ctx, MetricUsage)
 	require.NoError(t, err)
-	var archived map[string]interface{}
+	var archived map[string]any
 	for _, row := range history {
 		if row.Day == day {
 			archived = row.Data
@@ -251,9 +251,9 @@ func TestMergeTodayCostWithByKey(t *testing.T) {
 	})
 	p.FlushNow()
 
-	snap := map[string]interface{}{}
+	snap := map[string]any{}
 	store.MergeToday(ctx, MetricCost, day, snap, TopNCaps{ByKey: 100})
-	byKey, ok := snap["by_key"].([]map[string]interface{})
+	byKey, ok := snap["by_key"].([]map[string]any)
 	require.True(t, ok)
 	require.Len(t, byKey, 1)
 	require.Equal(t, "iw:abc", byKey[0]["key_id"])
@@ -290,7 +290,7 @@ func TestUsageMergeTodayIncludesByProvider(t *testing.T) {
 	})
 	p.FlushNow()
 
-	snap := map[string]interface{}{}
+	snap := map[string]any{}
 	store.MergeToday(ctx, MetricUsage, day, snap, TopNCaps{})
 	byProv, ok := snap["by_provider"].(map[string]map[string]float64)
 	require.True(t, ok)

@@ -1,5 +1,7 @@
 package redact
 
+import "maps"
+
 import "context"
 
 type layeredAnalyzeCache struct {
@@ -16,7 +18,7 @@ func (c *layeredAnalyzeCache) Get(ctx context.Context, analysisText string) ([]S
 		if !ok {
 			continue
 		}
-		for j := 0; j < i; j++ {
+		for j := range i {
 			c.layers[j].Set(ctx, analysisText, spans)
 		}
 		return spans, true
@@ -32,10 +34,8 @@ func (c *layeredAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []stri
 			break
 		}
 		layerHits := layer.GetMulti(ctx, remaining)
-		for text, spans := range layerHits {
-			hits[text] = spans
-		}
-		for j := 0; j < i; j++ {
+		maps.Copy(hits, layerHits)
+		for j := range i {
 			for text, spans := range layerHits {
 				c.layers[j].Set(ctx, text, spans)
 			}

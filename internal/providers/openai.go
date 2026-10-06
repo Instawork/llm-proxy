@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -48,14 +49,13 @@ func NewOpenAIProxy(opts ...ProxyOptions) *OpenAIProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the OpenAI proxy instance
 	openAIProxy := &OpenAIProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(openAIProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(openAIProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)
@@ -153,8 +153,8 @@ func (o *OpenAIProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper
 }
 
 // GetHealthStatus returns the health status of the OpenAI proxy
-func (o *OpenAIProxy) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (o *OpenAIProxy) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"provider":          "openai",
 		"status":            "healthy",
 		"baseURL":           openAIBaseURL,
@@ -231,9 +231,9 @@ type OpenAIResponseOutput struct {
 
 // OpenAIResponseContent represents content in a Responses API output
 type OpenAIResponseContent struct {
-	Type        string        `json:"type"`
-	Text        string        `json:"text,omitempty"`
-	Annotations []interface{} `json:"annotations,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	Annotations []any  `json:"annotations,omitempty"`
 }
 
 // OpenAIResponsesUsage represents usage data for Responses API
@@ -286,47 +286,49 @@ func (o *OpenAIProxy) ParseResponseMetadata(responseBody io.Reader, isStreaming 
 // compatibility endpoints call it when they detect a choices-based body so
 // they do not depend on constructing a concrete OpenAIProxy.
 func parseOpenAIFormatMetadata(responseBody io.Reader, isStreaming bool, provider string) (*LLMResponseMetadata, error) {
-	bodyBytes, err := io.ReadAll(responseBody)
+	bodyBytes, err := readResponseBody(responseBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	// Decompress exactly once here. Clients that send Accept-Encoding: gzip
+	// themselves (the stock OpenAI SDKs do) leave raw gzip in the capture
+	// buffer. Previously the shape probe below inflated the body, then the
+	// chosen parser inflated it again from scratch — two full gunzips of
+	// every gzip response on the hot path. The downstream parsers still
+	// tolerate gzip input for direct callers, but on plain bytes their check
+	// is a two-byte peek.
+	bodyBytes, err = gunzipIfNeeded(bodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
 	}
 
 	var metadata *LLMResponseMetadata
 	if isStreaming {
 		metadata, err = parseOpenAIUnifiedStreamingResponse(bytes.NewReader(bodyBytes))
-	} else {
+	} else if openAIBodyHasOutput(bodyBytes) {
 		// Responses API has "output"; Chat Completions has "choices".
-		// The shape check must run on DECOMPRESSED bytes: clients that send
-		// Accept-Encoding: gzip themselves (the stock OpenAI SDKs do) leave
-		// raw gzip in the capture buffer, and probing that with
-		// json.Unmarshal fails — which used to mis-route Responses API
-		// bodies to the Chat Completions parser and silently record zero
-		// tokens. The downstream parsers decompress independently, so we
-		// only use the decompressed copy for the probe.
-		checkBytes := bodyBytes
-		if dr, derr := DecompressResponseIfNeeded(bytes.NewReader(bodyBytes)); derr == nil {
-			if decompressed, rerr := io.ReadAll(dr); rerr == nil {
-				checkBytes = decompressed
-			}
-			if gz, ok := dr.(*gzip.Reader); ok {
-				_ = gz.Close()
-			}
-		}
-		var checkResponse map[string]interface{}
-		if json.Unmarshal(checkBytes, &checkResponse) == nil {
-			if _, hasOutput := checkResponse["output"]; hasOutput {
-				metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
-			} else {
-				metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
-			}
-		} else {
-			metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
-		}
+		metadata, err = parseOpenAIResponsesNonStreamingResponse(bytes.NewReader(bodyBytes))
+	} else {
+		metadata, err = parseOpenAINonStreamingResponse(bytes.NewReader(bodyBytes))
 	}
 	if metadata != nil {
 		metadata.Provider = provider
 	}
 	return metadata, err
+}
+
+// openAIBodyHasOutput reports whether a (decompressed) non-streaming OpenAI
+// body carries a top-level "output" key, i.e. is a Responses API payload.
+// It decodes only that one field instead of materialising the whole document
+// as map[string]interface{}: Responses bodies routinely run to tens of KB of
+// nested output items, and the probe previously allocated all of it just to
+// test for one key. Malformed JSON probes false and falls through to the Chat
+// Completions parser, which reports the real parse error.
+func openAIBodyHasOutput(body []byte) bool {
+	var probe struct {
+		Output json.RawMessage `json:"output"`
+	}
+	return json.Unmarshal(body, &probe) == nil && probe.Output != nil
 }
 
 // parseOpenAINonStreamingResponse handles standard OpenAI JSON responses
@@ -407,18 +409,16 @@ func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMe
 	log.Printf("🔄 OpenAI: Starting to parse unified streaming response")
 
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Skip empty lines and non-data lines
-		if !strings.HasPrefix(line, "data: ") {
+		// scanner.Bytes aliases the scanner's buffer and is only valid
+		// until the next Scan; every consumer below is done with it by
+		// then, so no per-line string copy is needed.
+		jsonData, isData := bytes.CutPrefix(scanner.Bytes(), sseDataPrefix)
+		if !isData {
 			continue
 		}
 
-		// Extract JSON data
-		jsonData := strings.TrimPrefix(line, "data: ")
-
 		// Skip [DONE] marker
-		if strings.TrimSpace(jsonData) == "[DONE]" {
+		if bytes.Equal(bytes.TrimSpace(jsonData), sseDoneMarker) {
 			log.Printf("🔄 OpenAI: Found [DONE] marker, ending stream parse")
 			break
 		}
@@ -471,9 +471,9 @@ func parseOpenAIUnifiedStreamingResponse(responseBody io.Reader) (*LLMResponseMe
 }
 
 // detectOpenAIAPIType determines whether the streaming response is from Responses API or Chat Completions API
-func detectOpenAIAPIType(jsonData string) string {
-	var checkData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonData), &checkData); err == nil {
+func detectOpenAIAPIType(jsonData []byte) string {
+	var checkData map[string]any
+	if err := json.Unmarshal(jsonData, &checkData); err == nil {
 		// Responses API streaming has "type" field (e.g., "response.output_text.delta")
 		// or has "output" field in the event
 		if typeField, hasType := checkData["type"].(string); hasType &&
@@ -492,10 +492,10 @@ func detectOpenAIAPIType(jsonData string) string {
 }
 
 // parseOpenAIResponsesStreamingChunk processes a single streaming chunk from the Responses API
-func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
+func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finishReason string, thoughtTokens int) (*LLMResponseMetadata, string, string, string, int) {
 	// Try to parse the chunk - could be an event or a delta
-	var chunkData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
+	var chunkData map[string]any
+	if err := json.Unmarshal(jsonData, &chunkData); err != nil {
 		// Log error but continue processing other chunks
 		proxylog.Proxy("openai failed to parse Responses API streaming chunk: %v", err)
 		return nil, model, requestID, finishReason, thoughtTokens
@@ -520,16 +520,16 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 				redact.LogPreview(context.Background(), fmt.Sprintf("%+v", chunkData), 200))
 
 			// Try to extract usage information from either response or event field
-			var dataField map[string]interface{}
+			var dataField map[string]any
 			var fieldName string
 
 			// Check for response field first (actual API format)
-			if responseField, hasResponse := chunkData["response"].(map[string]interface{}); hasResponse {
+			if responseField, hasResponse := chunkData["response"].(map[string]any); hasResponse {
 				dataField = responseField
 				fieldName = "response"
 				log.Printf("🔄 OpenAI Responses API: Response field found: %s",
 					redact.LogPreview(context.Background(), fmt.Sprintf("%+v", responseField), 200))
-			} else if eventField, hasEvent := chunkData["event"].(map[string]interface{}); hasEvent {
+			} else if eventField, hasEvent := chunkData["event"].(map[string]any); hasEvent {
 				// Fallback to event field (test data format)
 				dataField = eventField
 				fieldName = "event"
@@ -553,7 +553,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 				}
 
 				// Extract usage information
-				if usageField, hasUsage := dataField["usage"].(map[string]interface{}); hasUsage {
+				if usageField, hasUsage := dataField["usage"].(map[string]any); hasUsage {
 					inputTokens := 0
 					outputTokens := 0
 					totalTokens := 0
@@ -568,7 +568,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 					if totalVal, ok := usageField["total_tokens"].(float64); ok {
 						totalTokens = int(totalVal)
 					}
-					if outputDetails, ok := usageField["output_tokens_details"].(map[string]interface{}); ok {
+					if outputDetails, ok := usageField["output_tokens_details"].(map[string]any); ok {
 						if reasoningVal, ok := outputDetails["reasoning_tokens"].(float64); ok {
 							reasoningTokens = int(reasoningVal)
 						}
@@ -579,9 +579,9 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 							typeField, fieldName, inputTokens, outputTokens, totalTokens, reasoningTokens)
 
 						// Extract finish reason from output if available
-						if outputField, hasOutput := dataField["output"].([]interface{}); hasOutput {
+						if outputField, hasOutput := dataField["output"].([]any); hasOutput {
 							for _, output := range outputField {
-								if outputMap, ok := output.(map[string]interface{}); ok {
+								if outputMap, ok := output.(map[string]any); ok {
 									if status, ok := outputMap["status"].(string); ok && status != "" && status != "in_progress" {
 										finishReason = status
 										log.Printf("🔄 OpenAI Responses API: Captured finish reason: %s", finishReason)
@@ -618,7 +618,7 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 
 	// Try to parse as a full event with usage data (fallback for other event types)
 	var event OpenAIResponsesEvent
-	if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+	if err := json.Unmarshal(jsonData, &event); err != nil {
 		// Not a full event, continue
 		return nil, model, requestID, finishReason, thoughtTokens
 	}
@@ -671,9 +671,9 @@ func parseOpenAIResponsesStreamingChunk(jsonData string, model, requestID, finis
 }
 
 // parseOpenAICompletionsStreamingChunk processes a single streaming chunk from the Chat Completions API
-func parseOpenAICompletionsStreamingChunk(jsonData string, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
+func parseOpenAICompletionsStreamingChunk(jsonData []byte, model, requestID, finishReason string) (*LLMResponseMetadata, string, string, string) {
 	var streamResponse OpenAIStreamResponse
-	if err := json.Unmarshal([]byte(jsonData), &streamResponse); err != nil {
+	if err := json.Unmarshal(jsonData, &streamResponse); err != nil {
 		// Log error but continue processing other chunks
 		proxylog.Proxy("openai failed to parse streaming chunk: %v", err)
 		return nil, model, requestID, finishReason
@@ -796,15 +796,16 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 		return ""
 	}
 
-	// Parse JSON to extract user field
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+	// Decode only the "user" field; a non-string value reads as absent.
+	var probe struct {
+		User json.RawMessage `json:"user"`
+	}
+	if err := json.Unmarshal(bodyBytes, &probe); err != nil {
 		proxylog.Proxy("openai user ID extraction: error parsing request JSON: %v", err)
 		return ""
 	}
-
-	// Extract user ID from the "user" field
-	if userValue, ok := data["user"].(string); ok && userValue != "" {
+	var userValue string
+	if len(probe.User) > 0 && json.Unmarshal(probe.User, &userValue) == nil && userValue != "" {
 		log.Printf("🔍 OpenAI: Extracted user ID: %s", userValue)
 		return userValue
 	}
@@ -866,66 +867,104 @@ func (o *OpenAIProxy) ExtractRequestModelAndMessages(req *http.Request) (string,
 		return "", nil
 	}
 
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
-		return "", nil
-	}
+	return extractOpenAIModelAndMessages(bodyBytes)
+}
 
-	// Model
-	model := ""
-	if mv, ok := data["model"].(string); ok {
-		model = mv
+// openAIRequestProbe is the minimal typed view of an OpenAI-shaped request
+// used for model and message-text extraction. Polymorphic fields (content,
+// input) are kept as json.RawMessage and decoded per shape below, so the
+// whole body is scanned once without materialising it as a generic map.
+type openAIRequestProbe struct {
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Input    json.RawMessage `json:"input"`
+	Prompt   json.RawMessage `json:"prompt"`
+}
+
+type openAIMessage struct {
+	Content json.RawMessage `json:"content"`
+}
+
+type openAIContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// extractOpenAIModelAndMessages pulls the model and the user-visible text
+// (chat messages, Responses API input, legacy prompt) from a request body.
+// Malformed or non-object JSON yields ("", nil); individual fields of an
+// unexpected shape are skipped rather than failing the whole extraction.
+func extractOpenAIModelAndMessages(body []byte) (string, []string) {
+	var data openAIRequestProbe
+	if err := json.Unmarshal(body, &data); err != nil {
+		// Tolerate shape mismatches in optional fields (e.g. "messages" not
+		// an array) the way the map-based version did: keep what decoded.
+		if _, ok := errors.AsType[*json.UnmarshalTypeError](err); !ok {
+			return "", nil
+		}
 	}
 
 	messages := make([]string, 0, 8)
 
 	// Chat Completions style: messages: [{ role, content }]
-	if rawMsgs, ok := data["messages"].([]interface{}); ok {
-		for _, m := range rawMsgs {
-			if msg, ok := m.(map[string]interface{}); ok {
-				if contentStr, ok := msg["content"].(string); ok && contentStr != "" {
-					messages = append(messages, contentStr)
-					continue
-				}
-				// content can be array for multimodal; collect text parts
-				if parts, ok := msg["content"].([]interface{}); ok {
-					for _, p := range parts {
-						if pm, ok := p.(map[string]interface{}); ok {
-							if t, ok := pm["type"].(string); ok && t == "text" {
-								if txt, ok := pm["text"].(string); ok && txt != "" {
-									messages = append(messages, txt)
-								}
-							}
-						}
-					}
+	for _, msg := range data.Messages {
+		if len(msg.Content) == 0 {
+			continue
+		}
+		var contentStr string
+		if json.Unmarshal(msg.Content, &contentStr) == nil {
+			if contentStr != "" {
+				messages = append(messages, contentStr)
+			}
+			continue
+		}
+		// content can be array for multimodal; collect text parts
+		var parts []openAIContentPart
+		if json.Unmarshal(msg.Content, &parts) == nil {
+			for _, p := range parts {
+				if p.Type == "text" && p.Text != "" {
+					messages = append(messages, p.Text)
 				}
 			}
 		}
 	}
 
-	// Responses API: input can be string or array of blocks {type, text}
-	if inputStr, ok := data["input"].(string); ok && inputStr != "" {
-		messages = append(messages, inputStr)
-	} else if inputArr, ok := data["input"].([]interface{}); ok {
-		for _, it := range inputArr {
-			if m, ok := it.(map[string]interface{}); ok {
-				if t, ok := m["type"].(string); ok && (t == "input_text" || t == "text") {
-					if txt, ok := m["text"].(string); ok && txt != "" {
-						messages = append(messages, txt)
+	// Responses API: input can be string or array of blocks {type, text} or strings
+	if len(data.Input) > 0 {
+		var inputStr string
+		if json.Unmarshal(data.Input, &inputStr) == nil {
+			if inputStr != "" {
+				messages = append(messages, inputStr)
+			}
+		} else {
+			var items []json.RawMessage
+			if json.Unmarshal(data.Input, &items) == nil {
+				for _, it := range items {
+					var s string
+					if json.Unmarshal(it, &s) == nil {
+						if s != "" {
+							messages = append(messages, s)
+						}
+						continue
+					}
+					var block openAIContentPart
+					if json.Unmarshal(it, &block) == nil && (block.Type == "input_text" || block.Type == "text") && block.Text != "" {
+						messages = append(messages, block.Text)
 					}
 				}
-			} else if s, ok := it.(string); ok && s != "" {
-				messages = append(messages, s)
 			}
 		}
 	}
 
 	// Legacy completions: prompt
-	if prompt, ok := data["prompt"].(string); ok && prompt != "" {
-		messages = append(messages, prompt)
+	if len(data.Prompt) > 0 {
+		var prompt string
+		if json.Unmarshal(data.Prompt, &prompt) == nil && prompt != "" {
+			messages = append(messages, prompt)
+		}
 	}
 
-	return model, messages
+	return data.Model, messages
 }
 
 // ValidateAPIKey validates and potentially replaces the API key in the request

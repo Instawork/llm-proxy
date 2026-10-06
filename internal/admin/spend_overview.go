@@ -90,8 +90,8 @@ type spendKeyLister interface {
 
 type spendOverviewService struct {
 	keys               spendKeyLister
-	costSummary        func() map[string]interface{}
-	unmeteredSummary   func() map[string]interface{}
+	costSummary        func() map[string]any
+	unmeteredSummary   func() map[string]any
 	rollup             *adminrollup.Store
 	now                func() time.Time
 	personalMonthlyCap int64
@@ -105,8 +105,8 @@ type spendInputs struct {
 	email           string
 	day, month      string
 	keys            []*apikeys.APIKey
-	snap            map[string]interface{}
-	unmetered       map[string]interface{}
+	snap            map[string]any
+	unmetered       map[string]any
 	rollupBackend   string
 	rollupOK        bool
 	redisByKey      map[string]adminrollup.KeyCostDayStats
@@ -436,7 +436,7 @@ func unionNames(mem map[string]memoryKeyCost, redis map[string]adminrollup.KeyCo
 	return names
 }
 
-func mapRowsFromSnap(snap map[string]interface{}, field string) map[string]map[string]interface{} {
+func mapRowsFromSnap(snap map[string]any, field string) map[string]map[string]any {
 	raw, ok := snap[field]
 	if !ok || raw == nil {
 		return nil
@@ -445,7 +445,7 @@ func mapRowsFromSnap(snap map[string]interface{}, field string) map[string]map[s
 	if err != nil {
 		return nil
 	}
-	var rows map[string]map[string]interface{}
+	var rows map[string]map[string]any
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil
 	}

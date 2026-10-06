@@ -2,6 +2,7 @@ package circuit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -69,6 +70,13 @@ type RedisStore struct {
 
 const redisStorePingTimeout = 2 * time.Second
 
+// redisStateReadTimeout bounds each GetState round-trip. A healthy
+// same-region Redis answers in single-digit milliseconds; anything slower
+// than this is treated like any other Redis error and fails open to Closed
+// rather than holding the request for the caller's (streaming-length)
+// deadline.
+const redisStateReadTimeout = 100 * time.Millisecond
+
 // NewRedisStore constructs a RedisStore connected to the address in cfg.
 //
 // Connection inputs are resolved in this order:
@@ -110,6 +118,11 @@ func NewRedisStore(cfg Config) (*RedisStore, error) {
 	if cfg.RedisDBSet {
 		opts.DB = cfg.RedisDB
 	}
+	// go-redis v9 only applies context deadlines to the socket read when
+	// this is on; otherwise every per-call WithTimeout in this store (and
+	// the fail-open bound in GetState) silently degrades to the client's
+	// 3 s default ReadTimeout.
+	opts.ContextTimeoutEnabled = true
 
 	client := redis.NewClient(opts)
 	pingCtx, cancel := context.WithTimeout(context.Background(), redisStorePingTimeout)
@@ -198,11 +211,24 @@ func (s *RedisStore) rollupKey(provider string) string {
 // HalfOpen and the transport runs a probe.  If no traffic arrives before the
 // marker itself expires the circuit silently falls back to Closed — safe
 // default behaviour after a long idle.
+//
+// GetState sits on the request path twice per request (key and provider
+// scope), so it is bounded independently of the caller's context: the
+// request context typically carries a long streaming deadline, which is
+// not a useful bound for a Redis read. The state key and the half-open
+// marker are fetched in one pipelined round-trip, and any error — including
+// the short deadline elapsing — fails open to Closed, consistent with the
+// store's Redis error policy.
 func (s *RedisStore) GetState(ctx context.Context, key string) (State, error) {
-	val, err := s.rdb.Get(ctx, s.stateKey(key)).Result()
-	if err != nil && err != redis.Nil {
-		// On Redis errors, fail open (treat as closed) to avoid taking down the
-		// service because of a Redis blip.
+	ctx, cancel := context.WithTimeout(ctx, redisStateReadTimeout)
+	defer cancel()
+
+	pipe := s.rdb.Pipeline()
+	stateCmd := pipe.Get(ctx, s.stateKey(key))
+	markerCmd := pipe.Exists(ctx, s.halfOpenKey(key))
+	// Exec surfaces the first command error, which for a plain Closed
+	// circuit is the GET's redis.Nil; only transport/server errors fail open.
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		s.log.Warn(
 			proxylog.ProxyMsg("circuit.RedisStore: GetState failed open"),
 			"key", key,
@@ -211,7 +237,8 @@ func (s *RedisStore) GetState(ctx context.Context, key string) (State, error) {
 		)
 		return StateClosed, nil
 	}
-	if err == nil {
+
+	if val, err := stateCmd.Result(); err == nil {
 		switch val {
 		case "open":
 			return StateOpen, nil
@@ -220,10 +247,9 @@ func (s *RedisStore) GetState(ctx context.Context, key string) (State, error) {
 		}
 	}
 
-	// stateKey is absent — consult the half-open marker to distinguish a
-	// fresh Closed circuit from one whose cooldown has just elapsed.
-	exists, hoErr := s.rdb.Exists(ctx, s.halfOpenKey(key)).Result()
-	if hoErr == nil && exists == 1 {
+	// stateKey is absent — the half-open marker distinguishes a fresh
+	// Closed circuit from one whose cooldown has just elapsed.
+	if exists, err := markerCmd.Result(); err == nil && exists == 1 {
 		return StateHalfOpen, nil
 	}
 	return StateClosed, nil

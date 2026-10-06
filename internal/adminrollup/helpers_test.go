@@ -31,7 +31,7 @@ func TestConfigFromYAML(t *testing.T) {
 }
 
 func TestChartDaysSorted(t *testing.T) {
-	rows := []map[string]interface{}{
+	rows := []map[string]any{
 		{"day": "2026-06-11"},
 		{"day": "2026-06-09"},
 		{"no_day": 1}, // skipped
@@ -41,7 +41,7 @@ func TestChartDaysSorted(t *testing.T) {
 }
 
 func TestFloatField(t *testing.T) {
-	row := map[string]interface{}{
+	row := map[string]any{
 		"f": float64(1.5),
 		"i": 2,
 		"l": int64(3),

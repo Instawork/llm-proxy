@@ -549,7 +549,7 @@ make help
 make check         # Run all code quality checks
 make fmt           # Format Go code
 make vet           # Run go vet
-make lint          # Run golint
+make lint          # Run staticcheck
 
 # Building
 make build         # Build the binary

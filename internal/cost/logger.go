@@ -32,7 +32,7 @@ func NewFileTransport(outputFile string) *FileTransport {
 }
 
 // FromConfig creates a FileTransport from configuration
-func (ft *FileTransport) FromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func (ft *FileTransport) FromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	switch cfg := transportConfig.(type) {
 	case *config.TransportConfig:
 		if cfg.File == nil {
@@ -41,8 +41,8 @@ func (ft *FileTransport) FromConfig(transportConfig interface{}, logger *slog.Lo
 		logger.Debug("💰 File Transport: Creating from structured config", "path", cfg.File.Path)
 		return NewFileTransport(cfg.File.Path), nil
 
-	case map[string]interface{}:
-		fileConfig, ok := cfg["file"].(map[string]interface{})
+	case map[string]any:
+		fileConfig, ok := cfg["file"].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("file transport configuration not found")
 		}
@@ -59,7 +59,7 @@ func (ft *FileTransport) FromConfig(transportConfig interface{}, logger *slog.Lo
 }
 
 // NewFileTransportFromConfig creates a FileTransport from configuration (convenience function)
-func NewFileTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func NewFileTransportFromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	ft := &FileTransport{}
 	return ft.FromConfig(transportConfig, logger)
 }

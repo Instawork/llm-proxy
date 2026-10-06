@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"time"
@@ -156,12 +157,12 @@ func flattenCostByKey(h map[string]float64) map[string]float64 {
 	return out
 }
 
-func costDataFromAggregates(totals map[string]float64, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]interface{} {
+func costDataFromAggregates(totals map[string]float64, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]any {
 	provRows := buildDimRows(byProvider, nil)
 
-	byProviderOut := make([]map[string]interface{}, 0, len(provRows))
+	byProviderOut := make([]map[string]any, 0, len(provRows))
 	for name, fields := range provRows {
-		row := map[string]interface{}{"name": name}
+		row := map[string]any{"name": name}
 		for f, v := range fields {
 			row[f] = v
 		}
@@ -175,10 +176,10 @@ func costDataFromAggregates(totals map[string]float64, byProvider, byKey, byUser
 
 	keyRows := buildDimRows(byKey, nil)
 	topKeys, otherSpend := topNWithOther(flattenCostByKey(byKey), caps.ByKey)
-	byKeyOut := make([]map[string]interface{}, 0, len(topKeys)+1)
+	byKeyOut := make([]map[string]any, 0, len(topKeys)+1)
 	for _, p := range topKeys {
 		fields := keyRows[p.Name]
-		row := map[string]interface{}{"key_id": p.Name}
+		row := map[string]any{"key_id": p.Name}
 		if fields != nil {
 			for f, v := range fields {
 				row[f] = v
@@ -189,7 +190,7 @@ func costDataFromAggregates(totals map[string]float64, byProvider, byKey, byUser
 		byKeyOut = append(byKeyOut, row)
 	}
 	if otherSpend > 0 {
-		byKeyOut = append(byKeyOut, map[string]interface{}{
+		byKeyOut = append(byKeyOut, map[string]any{
 			"key_id":    "other_key",
 			"spend_usd": otherSpend,
 		})
@@ -211,9 +212,7 @@ func costScopeMapFromRows(rows map[string]map[string]float64, top []nameVal, oth
 	for _, p := range top {
 		if fields := rows[p.Name]; fields != nil {
 			m := make(map[string]float64, len(fields))
-			for f, v := range fields {
-				m[f] = v
-			}
+			maps.Copy(m, fields)
 			out[p.Name] = m
 			continue
 		}
@@ -225,8 +224,8 @@ func costScopeMapFromRows(rows map[string]map[string]float64, top []nameVal, oth
 	return out
 }
 
-func costScalarsFromTotals(totals map[string]float64) map[string]interface{} {
-	return map[string]interface{}{
+func costScalarsFromTotals(totals map[string]float64) map[string]any {
+	return map[string]any{
 		"spend_today_usd":        totals["spend_usd"],
 		"input_spend_today_usd":  totals["input_spend_usd"],
 		"output_spend_today_usd": totals["output_spend_usd"],
@@ -236,7 +235,7 @@ func costScalarsFromTotals(totals map[string]float64) map[string]interface{} {
 	}
 }
 
-func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]interface{} {
+func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byKey, byUser map[string]float64, caps TopNCaps) map[string]any {
 	data := usageScalarsFromTotals(totals)
 	if len(byModel) > 0 {
 		data["by_model"] = scopeMapFromDim(byModel)
@@ -255,8 +254,8 @@ func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byK
 	return data
 }
 
-func usageScalarsFromTotals(totals map[string]float64) map[string]interface{} {
-	return map[string]interface{}{
+func usageScalarsFromTotals(totals map[string]float64) map[string]any {
+	return map[string]any{
 		"requests_today": int64(totals["requests"]),
 		"tokens_today":   int64(totals["tokens"]),
 	}
@@ -279,9 +278,7 @@ func scopeMapFromDim(h map[string]float64) map[string]map[string]float64 {
 	out := make(map[string]map[string]float64, len(rows))
 	for member, fields := range rows {
 		m := make(map[string]float64, len(fields))
-		for f, v := range fields {
-			m[f] = v
-		}
+		maps.Copy(m, fields)
 		out[member] = m
 	}
 	return out
@@ -298,7 +295,7 @@ func scopeMapFromNames(top []nameVal, other float64, kind string) map[string]map
 	return out
 }
 
-func piiDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKey map[string]float64, caps TopNCaps) map[string]interface{} {
+func piiDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKey map[string]float64, caps TopNCaps) map[string]any {
 	scanned := totals["requests_scanned"]
 	withPII := totals["requests_with_pii"]
 	failOpen := totals["fail_open"]
@@ -333,7 +330,7 @@ func piiDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKe
 		topKeysOut = append(topKeysOut, nameVal{Name: "other_key", Val: otherKeys})
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"requests_scanned":  int64(scanned),
 		"requests_with_pii": int64(withPII),
 		"entities_total":    int64(totals["entities_total"]),
@@ -347,7 +344,7 @@ func piiDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKe
 	}
 }
 
-func idGateDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKey map[string]float64, caps TopNCaps) map[string]interface{} {
+func idGateDataFromAggregates(totals map[string]float64, byEntity, byProvider, byKey map[string]float64, caps TopNCaps) map[string]any {
 	byEntityOut := make([]nameVal, 0, len(byEntity))
 	for k, v := range byEntity {
 		byEntityOut = append(byEntityOut, nameVal{Name: k, Val: v})
@@ -371,7 +368,7 @@ func idGateDataFromAggregates(totals map[string]float64, byEntity, byProvider, b
 		topKeysOut = append(topKeysOut, nameVal{Name: "other_key", Val: otherKeys})
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"requests_with_images": int64(totals["requests_with_images"]),
 		"requests_blocked":     int64(totals["requests_blocked"]),
 		"requests_cleared":     int64(totals["requests_cleared"]),
@@ -384,10 +381,10 @@ func idGateDataFromAggregates(totals map[string]float64, byEntity, byProvider, b
 	}
 }
 
-func kvFromNameVals(vals []nameVal) []map[string]interface{} {
-	out := make([]map[string]interface{}, len(vals))
+func kvFromNameVals(vals []nameVal) []map[string]any {
+	out := make([]map[string]any, len(vals))
 	for i, v := range vals {
-		out[i] = map[string]interface{}{"name": v.Name, "count": int64(v.Val)}
+		out[i] = map[string]any{"name": v.Name, "count": int64(v.Val)}
 	}
 	return out
 }
@@ -396,9 +393,9 @@ func modelStatusDataFromAggregates(
 	totals map[string]float64,
 	byRetired, byDeprecated, byUnknown map[string]float64,
 	_ TopNCaps,
-) map[string]interface{} {
+) map[string]any {
 	const limit = 100
-	return map[string]interface{}{
+	return map[string]any{
 		"retired_total":    int64(totals["retired_total"]),
 		"deprecated_total": int64(totals["deprecated_total"]),
 		"unknown_total":    int64(totals["unknown_total"]),
@@ -425,7 +422,7 @@ func topNMap(m map[string]float64, n int) []nameVal {
 	return out
 }
 
-func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64) map[string]interface{} {
+func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, byKey map[string]float64) map[string]any {
 	byProvOut := make(map[string]int64, len(byProvider))
 	for k, v := range byProvider {
 		byProvOut[k] = int64(v)
@@ -434,7 +431,7 @@ func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, by
 	for k, v := range byKey {
 		byKeyOut[k] = int64(v)
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"checks_total":     int64(totals["checks_total"]),
 		"blocked_open":     int64(totals["blocked_open"]),
 		"probes_started":   int64(totals["probes_started"]),
@@ -448,7 +445,7 @@ func circuitActivityDataFromAggregates(totals map[string]float64, byProvider, by
 
 // unmeteredDataFromAggregates shapes unmetered-request hashes: by_key fields
 // are "<key_id>|<endpoint>" so the result nests key → endpoint → count.
-func unmeteredDataFromAggregates(totals map[string]float64, byEndpoint, byKey map[string]float64) map[string]interface{} {
+func unmeteredDataFromAggregates(totals map[string]float64, byEndpoint, byKey map[string]float64) map[string]any {
 	byKeyOut := make(map[string]map[string]int64)
 	for k, v := range byKey {
 		member, endpoint, ok := parseDimMemberField(k)
@@ -460,14 +457,14 @@ func unmeteredDataFromAggregates(totals map[string]float64, byEndpoint, byKey ma
 		}
 		byKeyOut[member][endpoint] = int64(v)
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"requests_today": int64(totals["requests"]),
 		"by_endpoint":    kvFromNameVals(topNMap(byEndpoint, 0)),
 		"by_key":         byKeyOut,
 	}
 }
 
-func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason map[string]float64) map[string]interface{} {
+func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason map[string]float64) map[string]any {
 	byProvOut := make(map[string]int64, len(byProvider))
 	for k, v := range byProvider {
 		byProvOut[k] = int64(v)
@@ -476,7 +473,7 @@ func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason
 	for k, v := range byReason {
 		byReasonOut[k] = int64(v)
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"requests_total":   int64(totals["requests_total"]),
 		"requests_allowed": int64(totals["requests_allowed"]),
 		"requests_blocked": int64(totals["requests_blocked"]),
@@ -487,17 +484,13 @@ func rateLimitDataFromAggregates(totals map[string]float64, byProvider, byReason
 
 // hourlyRowFromTotals maps raw Redis hourly hash fields to the scalar names
 // the admin dashboard charts expect (matching daily_history naming).
-func hourlyRowFromTotals(metric string, hour int, totals map[string]float64) map[string]interface{} {
-	row := map[string]interface{}{"hour": hour}
+func hourlyRowFromTotals(metric string, hour int, totals map[string]float64) map[string]any {
+	row := map[string]any{"hour": hour}
 	switch metric {
 	case MetricCost:
-		for k, v := range costScalarsFromTotals(totals) {
-			row[k] = v
-		}
+		maps.Copy(row, costScalarsFromTotals(totals))
 	case MetricUsage:
-		for k, v := range usageScalarsFromTotals(totals) {
-			row[k] = v
-		}
+		maps.Copy(row, usageScalarsFromTotals(totals))
 	default:
 		for k, v := range totals {
 			row[k] = v

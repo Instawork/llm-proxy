@@ -22,7 +22,7 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	var health map[string]interface{}
+	var health map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		t.Fatalf("Failed to decode health response: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestHealth(t *testing.T) {
 	if providers, ok := health["providers"]; !ok {
 		t.Error("Health check missing providers")
 	} else {
-		providersMap := providers.(map[string]interface{})
+		providersMap := providers.(map[string]any)
 		expectedProviders := []string{"openai", "anthropic", "gemini"}
 
 		for _, provider := range expectedProviders {

@@ -93,7 +93,7 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 	defer server.Close()
 
 	// Create a streaming request WITHOUT explicit stream_options
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"model": "gpt-3.5-turbo",
 		"messages": []map[string]string{
 			{
@@ -141,7 +141,7 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 	scanner := bufio.NewScanner(resp.Body)
 	chunkCount := 0
 	hasUsage := false
-	var usageData map[string]interface{}
+	var usageData map[string]any
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -166,7 +166,7 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue
@@ -175,7 +175,7 @@ func TestOpenAI_StreamOptionsInjection(t *testing.T) {
 		// Check for usage information (this should be present due to our injection)
 		if usage, ok := chunk["usage"]; ok && usage != nil {
 			hasUsage = true
-			usageData = usage.(map[string]interface{})
+			usageData = usage.(map[string]any)
 			t.Logf("Found usage data in chunk: %+v", usageData)
 		}
 

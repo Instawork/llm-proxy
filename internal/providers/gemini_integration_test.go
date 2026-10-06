@@ -56,7 +56,6 @@ func TestGeminiIntegration_Models(t *testing.T) {
 
 	// Test each model with both streaming and non-streaming
 	for _, model := range geminiTestModels {
-		model := model // capture range variable
 
 		// Non-streaming subtest for each model
 		t.Run(fmt.Sprintf("%s/NonStreaming", model.name), func(t *testing.T) {
@@ -84,8 +83,8 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 	scenarios := []struct {
 		name                 string
 		model                geminiTestModel
-		contents             []map[string]interface{}
-		generationConfig     map[string]interface{}
+		contents             []map[string]any
+		generationConfig     map[string]any
 		safetySettings       []map[string]string
 		stream               bool
 		includeCodeExecution bool
@@ -93,14 +92,14 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 		{
 			name:  "SimpleQuestion",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "What is the capital of France?"},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.0,
 				"maxOutputTokens": 50,
 			},
@@ -109,7 +108,7 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 		{
 			name:  "MultiTurnConversation",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"role": "user",
 					"parts": []map[string]string{
@@ -129,7 +128,7 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.7,
 				"maxOutputTokens": 150,
 			},
@@ -138,14 +137,14 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 		{
 			name:  "StreamingResponse",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "Write a haiku about programming."},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.9,
 				"maxOutputTokens": 100,
 			},
@@ -154,14 +153,14 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 		{
 			name:  "WithSafetySettings",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "Tell me a story."},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.7,
 				"maxOutputTokens": 200,
 			},
@@ -180,14 +179,14 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 		{
 			name:  "SystemInstruction",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "What's the weather like?"},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.5,
 				"maxOutputTokens": 100,
 			},
@@ -197,10 +196,8 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 
 	// Run each scenario as a subtest
 	for _, scenario := range scenarios {
-		scenario := scenario // capture range variable
-
 		t.Run(fmt.Sprintf("%s_%s", scenario.model.name, scenario.name), func(t *testing.T) {
-			requestBody := map[string]interface{}{
+			requestBody := map[string]any{
 				"contents": scenario.contents,
 			}
 
@@ -258,7 +255,7 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 					t.Fatalf("Failed to read response body: %v", err)
 				}
 
-				var response map[string]interface{}
+				var response map[string]any
 				if err := json.Unmarshal(bodyBytes, &response); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -289,11 +286,9 @@ func TestGeminiIntegration_CountTokens(t *testing.T) {
 
 	// Test count tokens for each model
 	for _, model := range geminiTestModels {
-		model := model // capture range variable
-
 		t.Run(fmt.Sprintf("%s/CountTokens", model.name), func(t *testing.T) {
-			requestBody := map[string]interface{}{
-				"contents": []map[string]interface{}{
+			requestBody := map[string]any{
+				"contents": []map[string]any{
 					{
 						"parts": []map[string]string{
 							{"text": model.testPrompt},
@@ -332,7 +327,7 @@ func TestGeminiIntegration_CountTokens(t *testing.T) {
 				t.Fatalf("Failed to read response body: %v", err)
 			}
 
-			var response map[string]interface{}
+			var response map[string]any
 			if err := json.Unmarshal(bodyBytes, &response); err != nil {
 				t.Fatalf("Failed to decode response: %v", err)
 			}
@@ -359,7 +354,6 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 
 	// Test each model with both v1 and v1beta endpoints
 	for _, model := range geminiTestModels {
-		model := model // capture range variable
 
 		// Test v1beta non-streaming
 		t.Run(fmt.Sprintf("%s/V1Beta/NonStreaming", model.name), func(t *testing.T) {
@@ -401,8 +395,6 @@ func TestGeminiIntegration_V1BetaRoutes(t *testing.T) {
 	}
 
 	for _, model := range embeddingModels {
-		model := model // capture range variable
-
 		t.Run(fmt.Sprintf("%s/V1Beta/EmbedContent", model.name), func(t *testing.T) {
 			testGeminiV1BetaEmbedContent(t, server, providerManager, apiKey, model)
 		})
@@ -423,8 +415,8 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 	scenarios := []struct {
 		name                 string
 		model                geminiTestModel
-		contents             []map[string]interface{}
-		generationConfig     map[string]interface{}
+		contents             []map[string]any
+		generationConfig     map[string]any
 		safetySettings       []map[string]string
 		stream               bool
 		includeCodeExecution bool
@@ -432,14 +424,14 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 		{
 			name:  "V1Beta_SimpleQuestion",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "What is the capital of France?"},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.0,
 				"maxOutputTokens": 50,
 			},
@@ -448,7 +440,7 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 		{
 			name:  "V1Beta_MultiTurnConversation",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"role": "user",
 					"parts": []map[string]string{
@@ -468,7 +460,7 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.7,
 				"maxOutputTokens": 150,
 			},
@@ -477,14 +469,14 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 		{
 			name:  "V1Beta_StreamingResponse",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "Write a haiku about programming."},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.9,
 				"maxOutputTokens": 100,
 			},
@@ -493,14 +485,14 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 		{
 			name:  "V1Beta_WithSafetySettings",
 			model: geminiTestModels[0],
-			contents: []map[string]interface{}{
+			contents: []map[string]any{
 				{
 					"parts": []map[string]string{
 						{"text": "Tell me a story."},
 					},
 				},
 			},
-			generationConfig: map[string]interface{}{
+			generationConfig: map[string]any{
 				"temperature":     0.7,
 				"maxOutputTokens": 200,
 			},
@@ -520,10 +512,8 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 
 	// Run each scenario as a subtest
 	for _, scenario := range scenarios {
-		scenario := scenario // capture range variable
-
 		t.Run(fmt.Sprintf("%s_%s", scenario.model.name, scenario.name), func(t *testing.T) {
-			requestBody := map[string]interface{}{
+			requestBody := map[string]any{
 				"contents": scenario.contents,
 			}
 
@@ -581,7 +571,7 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 					t.Fatalf("Failed to read response body: %v", err)
 				}
 
-				var response map[string]interface{}
+				var response map[string]any
 				if err := json.Unmarshal(bodyBytes, &response); err != nil {
 					t.Fatalf("Failed to decode response: %v", err)
 				}
@@ -602,8 +592,8 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 
 // Helper function for non-streaming tests
 func testGeminiNonStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model geminiTestModel) {
-	requestBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	requestBody := map[string]any{
+		"contents": []map[string]any{
 			{
 				"parts": []map[string]string{
 					{
@@ -646,7 +636,7 @@ func testGeminiNonStreaming(t *testing.T, server *httptest.Server, providerManag
 	}
 
 	// Parse JSON for basic validation
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -677,8 +667,8 @@ func testGeminiNonStreaming(t *testing.T, server *httptest.Server, providerManag
 
 // Helper function for streaming tests
 func testGeminiStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model geminiTestModel) {
-	requestBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	requestBody := map[string]any{
+		"contents": []map[string]any{
 			{
 				"parts": []map[string]string{
 					{
@@ -743,7 +733,7 @@ func testGeminiStreaming(t *testing.T, server *httptest.Server, providerManager 
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue
@@ -811,11 +801,9 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 	}
 
 	for _, model := range embeddingModels {
-		model := model // capture range variable
-
 		t.Run(model.name, func(t *testing.T) {
-			requestBody := map[string]interface{}{
-				"content": map[string]interface{}{
+			requestBody := map[string]any{
+				"content": map[string]any{
 					"parts": []map[string]string{
 						{"text": model.text},
 					},
@@ -857,7 +845,7 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 				t.Fatalf("Failed to read response body: %v", err)
 			}
 
-			var response map[string]interface{}
+			var response map[string]any
 			if err := json.Unmarshal(bodyBytes, &response); err != nil {
 				t.Fatalf("Failed to decode response: %v", err)
 			}
@@ -890,8 +878,8 @@ func TestGeminiIntegration_EmbedContent(t *testing.T) {
 
 // Helper function for v1beta non-streaming tests
 func testGeminiV1BetaNonStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model geminiTestModel) {
-	requestBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	requestBody := map[string]any{
+		"contents": []map[string]any{
 			{
 				"parts": []map[string]string{
 					{
@@ -934,7 +922,7 @@ func testGeminiV1BetaNonStreaming(t *testing.T, server *httptest.Server, provide
 	}
 
 	// Parse JSON for basic validation
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -965,8 +953,8 @@ func testGeminiV1BetaNonStreaming(t *testing.T, server *httptest.Server, provide
 
 // Helper function for v1beta streaming tests
 func testGeminiV1BetaStreaming(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model geminiTestModel) {
-	requestBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	requestBody := map[string]any{
+		"contents": []map[string]any{
 			{
 				"parts": []map[string]string{
 					{
@@ -1031,7 +1019,7 @@ func testGeminiV1BetaStreaming(t *testing.T, server *httptest.Server, providerMa
 		}
 
 		chunkCount++
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			t.Logf("Warning: failed to parse chunk: %v", err)
 			continue
@@ -1070,8 +1058,8 @@ func testGeminiV1BetaStreaming(t *testing.T, server *httptest.Server, providerMa
 
 // Helper function for v1beta count tokens tests
 func testGeminiV1BetaCountTokens(t *testing.T, server *httptest.Server, providerManager *ProviderManager, apiKey string, model geminiTestModel) {
-	requestBody := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	requestBody := map[string]any{
+		"contents": []map[string]any{
 			{
 				"parts": []map[string]string{
 					{"text": model.testPrompt},
@@ -1110,7 +1098,7 @@ func testGeminiV1BetaCountTokens(t *testing.T, server *httptest.Server, provider
 		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
@@ -1130,8 +1118,8 @@ func testGeminiV1BetaEmbedContent(t *testing.T, server *httptest.Server, provide
 	text    string
 },
 ) {
-	requestBody := map[string]interface{}{
-		"content": map[string]interface{}{
+	requestBody := map[string]any{
+		"content": map[string]any{
 			"parts": []map[string]string{
 				{"text": model.text},
 			},
@@ -1168,7 +1156,7 @@ func testGeminiV1BetaEmbedContent(t *testing.T, server *httptest.Server, provide
 		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}

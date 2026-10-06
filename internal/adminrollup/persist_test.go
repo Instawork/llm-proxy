@@ -13,7 +13,7 @@ func TestQueueTodayLegacyFlush(t *testing.T) {
 	p := NewPersister(store, MetricCost)
 	day := time.Now().UTC().Format("2006-01-02")
 
-	p.QueueToday(day, map[string]interface{}{
+	p.QueueToday(day, map[string]any{
 		"spend_today_usd": 3.14,
 		"requests_today":  int64(2),
 	})
@@ -39,8 +39,8 @@ func TestArchiveImmediatelyFlushesPendingToday(t *testing.T) {
 	p := NewPersister(store, MetricPII)
 	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 
-	p.QueueToday(day, map[string]interface{}{"requests_scanned": int64(9)})
-	p.ArchiveImmediately(day, map[string]interface{}{"requests_scanned": int64(9)})
+	p.QueueToday(day, map[string]any{"requests_scanned": int64(9)})
+	p.ArchiveImmediately(day, map[string]any{"requests_scanned": int64(9)})
 
 	ctx := context.Background()
 	history, err := store.LoadHistory(ctx, MetricPII)

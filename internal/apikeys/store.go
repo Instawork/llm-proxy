@@ -136,7 +136,7 @@ func RedactKey(k string) string {
 // We log field names rather than the updates map directly because some
 // update payloads include sensitive provider keys (e.g. `actual_key`)
 // that should never be persisted into logs in cleartext.
-func updateFieldNames(updates map[string]interface{}) []string {
+func updateFieldNames(updates map[string]any) []string {
 	names := make([]string, 0, len(updates))
 	for k := range updates {
 		names = append(names, k)
@@ -222,8 +222,19 @@ type Store struct {
 	tableName string
 	logger    *slog.Logger
 	// firstMarked dedupes MarkFirstRequest DynamoDB writes within a process.
+	// Values are the time.Time the key was first marked; entries older than
+	// firstMarkedGrace are swept on the next successful write so the map
+	// does not grow with every proxy key the process has ever served.
 	firstMarked sync.Map
 }
+
+// firstMarkedGrace is how long a key stays in the MarkFirstRequest dedupe
+// map after its first_request_at write. Key records are re-read from
+// DynamoDB on every request and callers skip MarkFirstRequest once
+// FirstRequestAt is populated, so the map only has to absorb the
+// eventually-consistent reads that still show the field empty right after
+// the write.
+const firstMarkedGrace = time.Minute
 
 // StoreConfig holds configuration for the API key store
 type StoreConfig struct {
@@ -635,8 +646,7 @@ func (s *Store) CreatePersonalKey(ctx context.Context, ownerEmail, provider, act
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil, ErrOwnerKeyExists
 		}
 		return nil, fmt.Errorf("failed to acquire owner/provider lock: %w", err)
@@ -736,14 +746,18 @@ func (s *Store) GetKeyRecord(ctx context.Context, key string) (*APIKey, error) {
 
 // MarkFirstRequest records the first tracked LLM request time for a proxy key.
 // Idempotent: no-op when first_request_at is already set. Uses an in-process
-// dedupe map so hot keys do not hammer DynamoDB on every request.
+// dedupe map so hot keys do not hammer DynamoDB on every request; callers
+// should also skip the call when the key record they already hold has
+// FirstRequestAt set, which is what lets the map evict settled keys.
 func (s *Store) MarkFirstRequest(ctx context.Context, key string, at time.Time) error {
 	if !HasKeyPrefix(key) {
 		return nil
 	}
-	if _, loaded := s.firstMarked.LoadOrStore(key, struct{}{}); loaded {
+	now := time.Now()
+	if _, loaded := s.firstMarked.LoadOrStore(key, now); loaded {
 		return nil
 	}
+	defer s.sweepFirstMarked(now)
 	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{
@@ -757,14 +771,37 @@ func (s *Store) MarkFirstRequest(ctx context.Context, key string, at time.Time) 
 		},
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil
 		}
 		s.firstMarked.Delete(key)
 		return fmt.Errorf("mark first request: %w", err)
 	}
 	return nil
+}
+
+// sweepFirstMarked forgets dedupe entries whose write landed more than
+// firstMarkedGrace ago. Runs only when a new key is marked, so the map is
+// bounded by the number of keys first seen within the grace window rather
+// than by the process lifetime.
+func (s *Store) sweepFirstMarked(now time.Time) {
+	cutoff := now.Add(-firstMarkedGrace)
+	s.firstMarked.Range(func(k, v any) bool {
+		if markedAt, ok := v.(time.Time); ok && markedAt.Before(cutoff) {
+			s.firstMarked.Delete(k)
+		}
+		return true
+	})
+}
+
+// firstMarkedLen reports the dedupe map size (tests only).
+func (s *Store) firstMarkedLen() int {
+	n := 0
+	s.firstMarked.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
 }
 
 // GetKey retrieves an API key by its iw: prefixed key
@@ -785,7 +822,7 @@ func (s *Store) GetKey(ctx context.Context, key string) (*APIKey, error) {
 }
 
 // UpdateKey updates an existing API key
-func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]interface{}) error {
+func (s *Store) UpdateKey(ctx context.Context, key string, updates map[string]any) error {
 	// Build update expression
 	var updateExpr strings.Builder
 	var removeParts []string
@@ -1108,8 +1145,7 @@ func (s *Store) TryAcquireSweepLease(ctx context.Context, holder string, ttl tim
 		},
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to acquire sweep lease: %w", err)

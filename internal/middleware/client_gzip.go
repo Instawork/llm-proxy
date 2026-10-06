@@ -58,7 +58,7 @@ func clientAcceptsGzip(acceptEncoding string) bool {
 	if acceptEncoding == "" {
 		return false
 	}
-	for _, part := range strings.Split(acceptEncoding, ",") {
+	for part := range strings.SplitSeq(acceptEncoding, ",") {
 		enc := strings.TrimSpace(strings.Split(part, ";")[0])
 		if enc == "gzip" || enc == "*" {
 			return true

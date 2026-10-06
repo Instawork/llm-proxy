@@ -50,14 +50,13 @@ func NewGeminiProxy(opts ...ProxyOptions) *GeminiProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the Gemini proxy instance
 	geminiProxy := &GeminiProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(geminiProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(geminiProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance. Gemini historically
 	// needed a longer ResponseHeaderTimeout than other providers; the shared default
@@ -182,8 +181,8 @@ func (g *GeminiProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTripper
 }
 
 // GetHealthStatus returns the health status of the Gemini proxy
-func (g *GeminiProxy) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (g *GeminiProxy) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"provider":          "gemini",
 		"status":            "healthy",
 		"baseURL":           geminiBaseURL,
@@ -257,7 +256,7 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 		defer gzipReader.Close()
 	}
 
-	bodyBytes, err := io.ReadAll(decompressedReader)
+	bodyBytes, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -626,7 +625,7 @@ func (g *GeminiProxy) ExtractRequestModelAndMessages(req *http.Request) (string,
 		return "", nil
 	}
 
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		return "", nil
 	}
@@ -638,9 +637,9 @@ func (g *GeminiProxy) ExtractRequestModelAndMessages(req *http.Request) (string,
 	} else {
 		// Fallback: extract from path like /v1/models/gemini-1.5-pro:generateContent
 		path := req.URL.Path
-		idx := strings.Index(path, "/models/")
-		if idx >= 0 {
-			m := path[idx+len("/models/"):]
+		_, after, ok := strings.Cut(path, "/models/")
+		if ok {
+			m := after
 			// trim suffix after :
 			if j := strings.Index(m, ":"); j >= 0 {
 				m = m[:j]
@@ -651,12 +650,12 @@ func (g *GeminiProxy) ExtractRequestModelAndMessages(req *http.Request) (string,
 
 	messages := make([]string, 0, 8)
 	// Gemini content structure: contents: [{role, parts:[{text:...}, ...]}]
-	if contents, ok := data["contents"].([]interface{}); ok {
+	if contents, ok := data["contents"].([]any); ok {
 		for _, c := range contents {
-			if cm, ok := c.(map[string]interface{}); ok {
-				if parts, ok := cm["parts"].([]interface{}); ok {
+			if cm, ok := c.(map[string]any); ok {
+				if parts, ok := cm["parts"].([]any); ok {
 					for _, p := range parts {
-						if pm, ok := p.(map[string]interface{}); ok {
+						if pm, ok := p.(map[string]any); ok {
 							if txt, ok := pm["text"].(string); ok && txt != "" {
 								messages = append(messages, txt)
 							}

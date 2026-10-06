@@ -111,6 +111,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/key-requests/mine", roleHandler(auth, permissions.MinRole(permissions.ListMyKeyRequests), h.handleListMyKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/key-requests/{id}", roleHandler(auth, permissions.MinRole(permissions.ReviewKeyRequest), h.handleReviewKeyRequest)).Methods(http.MethodPatch, http.MethodOptions)
 
+	mountPprof(adminRouter, auth)
 	mountSPA(adminRouter)
 
 	logger.Info("Admin dashboard routes registered", "prefix", "/admin")

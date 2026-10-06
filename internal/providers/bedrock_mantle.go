@@ -117,7 +117,7 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		anthropicRegion = region
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 	mantle := &BedrockMantleProxy{
 		proxy:           proxy,
 		region:          region,
@@ -126,13 +126,16 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		modelProjects:   opt.MantleModelProjects,
 		taskSigV4Auth:   opt.MantleTaskSigV4Auth,
 	}
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
+	// Rewrite (not Director) so ReverseProxy strips inbound X-Forwarded-* and
+	// Forwarded and never appends the client IP; nothing client-identifying
+	// is left to leak into the SigV4 canonical request.
+	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		req := pr.Out
 		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/"+bedrockMantleName)
 		if req.URL.RawPath != "" {
 			req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/"+bedrockMantleName)
 		}
-		originalDirector(req)
 		// Retarget Anthropic Messages traffic to the region where Claude Mantle
 		// SKUs are provisioned. OpenAI traffic keeps the default region host.
 		host := targetURL.Host
@@ -240,9 +243,6 @@ type sigV4Transport struct {
 }
 
 func (t *sigV4Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// ReverseProxy may re-add X-Forwarded-For after Director; strip hop headers
-	// again immediately before signing so they never enter the canonical request.
-	stripMantleClientHopHeaders(req)
 	payload, err := readAndRestoreMantleBody(req)
 	if err != nil {
 		return nil, fmt.Errorf("read Bedrock Mantle request body: %w", err)
@@ -438,12 +438,12 @@ func (b *BedrockMantleProxy) WrapTransport(fn func(http.RoundTripper) http.Round
 	b.proxy.Transport = fn(b.proxy.Transport)
 }
 
-func (b *BedrockMantleProxy) GetHealthStatus() map[string]interface{} {
+func (b *BedrockMantleProxy) GetHealthStatus() map[string]any {
 	auth := "proxy_api_key_and_task_sigv4"
 	if b.taskSigV4Auth {
 		auth = "task_sigv4"
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"provider":          bedrockMantleName,
 		"status":            "healthy",
 		"baseURL":           b.baseURL,
@@ -639,7 +639,7 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 	if isStreaming {
 		return parseMantleStream(decompressedReader)
 	}
-	body, err := io.ReadAll(decompressedReader)
+	body, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, err
 	}
@@ -647,20 +647,20 @@ func (b *BedrockMantleProxy) ParseResponseMetadata(responseBody io.Reader, isStr
 		Choices json.RawMessage `json:"choices"`
 	}
 	if json.Unmarshal(body, &responseType) == nil && responseType.Choices != nil {
-		return parseOpenAIFormatMetadata(bytes.NewReader(body), false, bedrockMantleName)
+		return parseOpenAIFormatMetadata(NewBodyReader(body), false, bedrockMantleName)
 	}
 	return parseMantleMetadata(body, false)
 }
 
 func parseMantleStream(responseBody io.Reader) (*LLMResponseMetadata, error) {
-	data, err := io.ReadAll(responseBody)
+	data, err := readResponseBody(responseBody)
 	if err != nil {
 		return nil, err
 	}
 	if mantleStreamLooksAnthropic(data) {
-		return parseAnthropicFormatMetadata(bytes.NewReader(data), true, bedrockMantleName)
+		return parseAnthropicFormatMetadata(NewBodyReader(data), true, bedrockMantleName)
 	}
-	return parseMantleOpenAIStream(bytes.NewReader(data))
+	return parseMantleOpenAIStream(NewBodyReader(data))
 }
 
 func mantleStreamLooksAnthropic(data []byte) bool {

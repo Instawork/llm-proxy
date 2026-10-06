@@ -77,7 +77,7 @@ func resolveTSC(webDir string) string {
 
 func parseTSFindings(raw []byte) []Finding {
 	var out []Finding
-	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(raw), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

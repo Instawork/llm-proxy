@@ -2,6 +2,7 @@ package adminrollup
 
 import (
 	"encoding/json"
+	"maps"
 	"sort"
 )
 
@@ -9,7 +10,7 @@ import (
 // fleet-wide Redis totals onto a live snapshot.
 
 // SnapInt64 coerces JSON-ish snapshot values to int64.
-func SnapInt64(v interface{}) int64 {
+func SnapInt64(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
@@ -25,7 +26,7 @@ func SnapInt64(v interface{}) int64 {
 }
 
 // SnapFloat64 coerces JSON-ish snapshot values to float64.
-func SnapFloat64(v interface{}) float64 {
+func SnapFloat64(v any) float64 {
 	switch n := v.(type) {
 	case float64:
 		return n
@@ -41,7 +42,7 @@ func SnapFloat64(v interface{}) float64 {
 }
 
 // MergeSnapInt64Max sets snap[key] to max(existing, local) when local > 0.
-func MergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
+func MergeSnapInt64Max(snap map[string]any, key string, local int64) {
 	if snap == nil || local <= 0 {
 		return
 	}
@@ -51,7 +52,7 @@ func MergeSnapInt64Max(snap map[string]interface{}, key string, local int64) {
 }
 
 // MergeSnapFloat64Max sets snap[key] to max(existing, local) when local > 0.
-func MergeSnapFloat64Max(snap map[string]interface{}, key string, local float64) {
+func MergeSnapFloat64Max(snap map[string]any, key string, local float64) {
 	if snap == nil || local <= 0 {
 		return
 	}
@@ -63,9 +64,7 @@ func MergeSnapFloat64Max(snap map[string]interface{}, key string, local float64)
 // MergeInt64Maps returns per-key max(a, b).
 func MergeInt64Maps(a, b map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(a)+len(b))
-	for k, v := range a {
-		out[k] = v
-	}
+	maps.Copy(out, a)
 	for k, v := range b {
 		if v > out[k] {
 			out[k] = v
@@ -75,7 +74,7 @@ func MergeInt64Maps(a, b map[string]int64) map[string]int64 {
 }
 
 // NameCountMapFromSnap parses {name,count} rows from a snapshot field.
-func NameCountMapFromSnap(raw interface{}) map[string]int64 {
+func NameCountMapFromSnap(raw any) map[string]int64 {
 	if raw == nil {
 		return nil
 	}
@@ -83,7 +82,7 @@ func NameCountMapFromSnap(raw interface{}) map[string]int64 {
 	if err != nil {
 		return nil
 	}
-	var rows []map[string]interface{}
+	var rows []map[string]any
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil
 	}
@@ -99,7 +98,7 @@ func NameCountMapFromSnap(raw interface{}) map[string]int64 {
 }
 
 // MergeSnapNameCounts merges local name→count maps into snap[field] as sorted rows.
-func MergeSnapNameCounts(snap map[string]interface{}, field string, local map[string]int64, limit int) {
+func MergeSnapNameCounts(snap map[string]any, field string, local map[string]int64, limit int) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
@@ -111,7 +110,7 @@ func MergeSnapNameCounts(snap map[string]interface{}, field string, local map[st
 }
 
 // MergeSnapInt64Map merges map[string]int64 fields (e.g. by_provider counters).
-func MergeSnapInt64Map(snap map[string]interface{}, field string, local map[string]int64) {
+func MergeSnapInt64Map(snap map[string]any, field string, local map[string]int64) {
 	if snap == nil || len(local) == 0 {
 		return
 	}
@@ -119,7 +118,7 @@ func MergeSnapInt64Map(snap map[string]interface{}, field string, local map[stri
 	switch raw := snap[field].(type) {
 	case map[string]int64:
 		existing = raw
-	case map[string]interface{}:
+	case map[string]any:
 		existing = make(map[string]int64, len(raw))
 		for k, v := range raw {
 			existing[k] = SnapInt64(v)

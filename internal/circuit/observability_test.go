@@ -68,7 +68,7 @@ func captureLogs(buf *bytes.Buffer) *slog.Logger {
 // matches substr, or nil if none.
 func findLogLine(t *testing.T, buf *bytes.Buffer, substr string) map[string]any {
 	t.Helper()
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
@@ -578,7 +578,7 @@ func TestEnforce_FastFailMetric_OnOpenCircuit(t *testing.T) {
 		MaxTransientRetries: 1,
 	}.Defaults()
 	store := NewMemoryStore(cfg)
-	state, _, err := store.RecordTerminalFailure(context.Background(), "openai:gpt-4o") //nolint:errcheck
+	state, _, _ := store.RecordTerminalFailure(context.Background(), "openai:gpt-4o")
 	if state != StateOpen {
 		t.Fatalf("expected state to be Open after RecordTerminalFailure, got %v", state)
 	}

@@ -1,6 +1,6 @@
 # Development Dockerfile for LLM Proxy
 # This is for development use with `go run` - does not build binaries
-FROM golang:1.26-alpine
+FROM golang:1.27-alpine
 
 # Install development dependencies
 RUN apk add --no-cache \

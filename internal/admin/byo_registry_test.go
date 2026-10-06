@@ -23,8 +23,8 @@ func TestHandleListBYOKeys_AggregatesSources(t *testing.T) {
 	_, err := store.BanBYOCredential(ctx, "gemini", geminiMasked, "admin@example.com", "policy")
 	require.NoError(t, err)
 
-	h.deps.PIISummary = func() map[string]interface{} {
-		return map[string]interface{}{
+	h.deps.PIISummary = func() map[string]any {
+		return map[string]any{
 			"available": true,
 			"top_keys": []nameCountRow{
 				{Name: anthropicMasked, Count: 12},
@@ -35,8 +35,8 @@ func TestHandleListBYOKeys_AggregatesSources(t *testing.T) {
 			},
 		}
 	}
-	h.deps.CostSummary = func() map[string]interface{} {
-		return map[string]interface{}{
+	h.deps.CostSummary = func() map[string]any {
+		return map[string]any{
 			"available": true,
 			"by_key": []costKeyRow{
 				{KeyID: anthropicMasked, Requests: 3, SpendUSD: 1.25},

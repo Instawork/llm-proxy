@@ -13,12 +13,14 @@ func TestClassifyEndpoint(t *testing.T) {
 		"/bedrock/model/anthropic.claude-3/invoke-with-response-stream": EndpointMetered,
 		"/openai/v1/chat/completions/":                                  EndpointMetered,
 
-		"/gemini/v1beta/models":                EndpointPassthrough,
-		"/gemini/upload/v1beta/files":          EndpointPassthrough,
-		"/anthropic/v1/messages/count_tokens":  EndpointPassthrough,
-		"/openai/v1/realtime/client_secrets":   EndpointPassthrough,
-		"/gemini/v1beta/files/t66gxk29np7q":    EndpointPassthrough,
-		"/openai/v1/files/file-abc123/content": EndpointPassthrough,
+		"/gemini/v1beta/models":                      EndpointPassthrough,
+		"/gemini/upload/v1beta/files":                EndpointPassthrough,
+		"/anthropic/v1/messages/count_tokens":        EndpointPassthrough,
+		"/openai/v1/realtime/client_secrets":         EndpointPassthrough,
+		"/gemini/v1beta/files/t66gxk29np7q":          EndpointPassthrough,
+		"/openai/v1/files/file-abc123/content":       EndpointPassthrough,
+		"/gemini/v1beta/cachedContents":              EndpointPassthrough,
+		"/gemini/v1beta/cachedContents/sxsdslx5skq5": EndpointPassthrough,
 
 		"/gemini/v1beta/interactions":     EndpointMetered,
 		"/openai/v1/audio/transcriptions": EndpointUnknown,
@@ -39,6 +41,8 @@ func TestEndpointTemplate(t *testing.T) {
 		"/gemini/v1beta/interactions":                                           "/gemini/v1beta/interactions",
 		"/gemini/v1beta/files/t66gxk29np7q":                                     "/gemini/v1beta/files/{id}",
 		"/openai/v1/files/file-abc123/content":                                  "/openai/v1/files/{id}/content",
+		"/gemini/v1beta/cachedContents":                                         "/gemini/v1beta/cachedContents",
+		"/gemini/v1beta/cachedContents/sxsdslx5skq5":                            "/gemini/v1beta/cachedContents/{id}",
 	}
 	for path, want := range cases {
 		if got := EndpointTemplate(path); got != want {

@@ -284,8 +284,7 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	}); err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			existing, getErr := s.getProfileItem(ctx, email)
 			if getErr != nil {
 				return User{}, false, getErr
@@ -355,8 +354,7 @@ func (s *Store) CreateUser(ctx context.Context, email string, role Role) (User, 
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return User{}, fmt.Errorf("user already exists")
 		}
 		return User{}, err
@@ -393,8 +391,7 @@ func (s *Store) SetRole(ctx context.Context, email string, role Role) error {
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return fmt.Errorf("user not found")
 		}
 		return err
@@ -421,8 +418,7 @@ func (s *Store) RevokeSessions(ctx context.Context, email string, now time.Time)
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return fmt.Errorf("user not found")
 		}
 		return err
@@ -445,8 +441,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return fmt.Errorf("user not found")
 		}
 		return err
@@ -532,8 +527,7 @@ func (s *Store) RecordShareAwareness(ctx context.Context, email, shareID string)
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil
 		}
 		return err

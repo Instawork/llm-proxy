@@ -244,11 +244,11 @@ func redactFailureReason(err error) string {
 
 func parseAnalyzeStatusCode(msg string) int {
 	const prefix = "analyze returned "
-	idx := strings.Index(msg, prefix)
-	if idx < 0 {
+	_, after, ok := strings.Cut(msg, prefix)
+	if !ok {
 		return 0
 	}
-	rest := msg[idx+len(prefix):]
+	rest := after
 	end := strings.IndexByte(rest, ':')
 	if end < 0 {
 		end = len(rest)

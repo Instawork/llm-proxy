@@ -19,7 +19,7 @@ type unmeteredResponse struct {
 	Endpoints []unmeteredEndpointResponse `json:"endpoints"`
 }
 
-func unmeteredSource(snap map[string]interface{}) string {
+func unmeteredSource(snap map[string]any) string {
 	if asString(snap["backend"]) == "redis" {
 		return "redis"
 	}
@@ -46,13 +46,13 @@ func sortUnmeteredEndpoints(rows []unmeteredEndpointResponse) {
 }
 
 // unmeteredForKey reads one key's endpoint counts from the unmetered snapshot.
-func unmeteredForKey(snap map[string]interface{}, masked string) unmeteredResponse {
+func unmeteredForKey(snap map[string]any, masked string) unmeteredResponse {
 	byKey, _ := snap["by_key"].(map[string]map[string]int64)
 	return unmeteredFromCounts(unmeteredSource(snap), byKey[masked])
 }
 
 // unmeteredFleet reads the fleet-wide totals, including requests that carried no proxy key.
-func unmeteredFleet(snap map[string]interface{}) unmeteredResponse {
+func unmeteredFleet(snap map[string]any) unmeteredResponse {
 	resp := unmeteredFromCounts(unmeteredSource(snap), adminrollup.NameCountMapFromSnap(snap["by_endpoint"]))
 	resp.Requests = adminrollup.SnapInt64(snap["requests_today"])
 	return resp
