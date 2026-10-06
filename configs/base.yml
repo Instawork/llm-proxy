@@ -642,6 +642,8 @@ providers:
           output: 4.50
       "gpt-5.4-nano":
         enabled: true
+        deprecated: true # announced 2026-10-01; vendor shutdown 2027-04-01
+        replacement: "gpt-6-luna"
         aliases: ["gpt-5.4-nano-2026-03-05", "gpt-5.4-nano-2026-03-17"]
         limits:
           tokens_per_minute: 450_000
@@ -805,6 +807,25 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+      # GPT-6.1 Sol (released 2026-09-29, audit-10-05-2026): same $2/$10 list as
+      # gpt-6-sol; the card prices prompts >272K input at 2x input / 1.5x output.
+      "gpt-6.1-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
       "gpt-6-luna":
         enabled: true
         aliases: []
@@ -846,10 +867,13 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 25.00
             output: 112.50
-      # Codex line: gpt-5.3-codex is the current model (Responses API); the
-      # gpt-5/5.1/5.2-codex snapshots shut down 2026-07-23.
+      # Codex line: gpt-5.3-codex (Responses API) was deprecated 2026-10-01 with
+      # a 2027-04-01 shutdown; the gpt-5/5.1/5.2-codex snapshots shut down
+      # 2026-07-23.
       "gpt-5.3-codex":
         enabled: true
+        deprecated: true # announced 2026-10-01; vendor shutdown 2027-04-01
+        replacement: "gpt-6-sol"
         aliases: []
         limits:
           tokens_per_minute: 450_000
@@ -904,6 +928,8 @@ providers:
           output: 168.00
       "gpt-5.1":
         enabled: true
+        deprecated: true # announced 2026-10-01; vendor shutdown 2027-04-01
+        replacement: "gpt-6-sol"
         aliases: ["gpt-5.1-2025-11-13"]
         limits:
           tokens_per_minute: 450_000
@@ -1087,6 +1113,22 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+      # Claude Sonnet 5.5 (released 2026-09-28, audit-10-05-2026): $2/$10 list,
+      # 1M context at standard pricing; vendor replacement for Sonnet 4.5.
+      "claude-sonnet-5-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        pricing:
+          input: 2.00
+          output: 10.00
+      # Sonnet 5 is vendor "legacy" since Sonnet 5.5 shipped (no sunset announced).
       "claude-sonnet-5":
         enabled: true
         aliases: []
@@ -1116,6 +1158,8 @@ providers:
           output: 15.00
       "claude-sonnet-4-5":
         enabled: true
+        deprecated: true # announced 2026-09-30; vendor retirement 2026-11-30
+        replacement: "claude-sonnet-5-5"
         aliases: ["claude-sonnet-4-5-20250929", "claude-sonnet-4.5"]
         limits:
           tokens_per_minute: 80_000
@@ -1353,6 +1397,37 @@ providers:
             "global.anthropic.claude-opus-5-5":
               input: 4.00
               output: 20.00
+      # Claude Sonnet 5.5 on Bedrock (launch 2026-09-28, audit-10-05-2026). AWS
+      # card: bedrock-runtime takes the us./eu. geo or global.* profile ids (no
+      # au./jp./in. yet); the bare id is Mantle-only (mirrored under bedrock-mantle).
+      "us.anthropic.claude-sonnet-5-5":
+        enabled: true
+        aliases:
+          [
+            "eu.anthropic.claude-sonnet-5-5",
+            "global.anthropic.claude-sonnet-5-5",
+            "claude-sonnet-5-5-bedrock",
+            "claude-sonnet-5.5-bedrock",
+            "claude-sonnet-5-5-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 80_000
+          requests_per_minute: 1_000
+          tokens_per_day: 1_920_000
+          requests_per_day: 1_440_000
+          burst_tokens: 8_000
+          burst_requests: 100
+        # Native $2/$10 plus the 10% regional premium. Flat: 1M context at
+        # standard pricing.
+        pricing:
+          input: 2.20
+          output: 11.00
+          overrides:
+            # global.* routes worldwide and bills the Anthropic list rate; the
+            # 10% premium above applies to regional (us./eu.) profiles.
+            "global.anthropic.claude-sonnet-5-5":
+              input: 2.00
+              output: 10.00
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1528,6 +1603,115 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 20.00
             output: 75.00
+      # GPT-6 Sol / GPT-6 Luna on Bedrock (launch 2026-09-22, audit-09-28-2026).
+      # Runtime accepts only the us./global. profiles (no in-Region id); the AWS
+      # card prices US Geo CRIS at OpenAI list +10% and Global CRIS at list, with
+      # a >272K tier at 2x input / 1.5x output. Limits mirror the gpt-5.6 siblings.
+      "us.openai.gpt-6-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
+      "global.openai.gpt-6-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
+      # GPT-6.1 Sol (Bedrock launch 2026-09-29, audit-10-05-2026): same card
+      # shape as gpt-6-sol — us./global. profiles only, US Geo CRIS at list +10%,
+      # Global CRIS at list, >272K tier at 2x input / 1.5x output.
+      "us.openai.gpt-6.1-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
+      "global.openai.gpt-6.1-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
+      "us.openai.gpt-6-luna":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 0.11
+            output: 0.55
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 0.22
+            output: 0.825
+      "global.openai.gpt-6-luna":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 0.10
+            output: 0.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 0.20
+            output: 0.75
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK MANTLE PROVIDER (OpenAI-compatible API + task-role SigV4)
@@ -1616,6 +1800,40 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 22.00
             output: 82.50
+      # GPT-6 Sol / Luna (Bedrock launch 2026-09-22, audit-09-28-2026): Mantle
+      # in-Region = OpenAI list +10%, >272K tier at 2x input / 1.5x output.
+      "openai.gpt-6-sol":
+        enabled: true
+        aliases: ["gpt-6-sol-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
+      "openai.gpt-6-luna":
+        enabled: true
+        aliases: ["gpt-6-luna-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 0.11
+            output: 0.55
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 0.22
+            output: 0.825
+      # GPT-6.1 Sol (Bedrock launch 2026-09-29, audit-10-05-2026): Mantle
+      # in-Region (us-east-1) = OpenAI list +10%, >272K tier at 2x / 1.5x.
+      "openai.gpt-6.1-sol":
+        enabled: true
+        aliases: ["gpt-6.1-sol-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
       # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
       # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
       # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
@@ -1671,6 +1889,14 @@ providers:
         pricing:
           input: 4.40
           output: 22.00
+      # Claude Sonnet 5.5 (launch 2026-09-28, audit-10-05-2026): $2/$10 list plus
+      # the 10% in-region premium.
+      "anthropic.claude-sonnet-5-5":
+        enabled: true
+        aliases: ["claude-sonnet-5-5"]
+        pricing:
+          input: 2.20
+          output: 11.00
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
