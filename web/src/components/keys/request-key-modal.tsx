@@ -10,7 +10,7 @@ import { KEY_REQUEST_NAME_MAX, slugifyKeyName } from "../../lib/key-request-name
 import { useCreateKeyRequest, useMe, useMyKeyRequests } from "../../hooks/queries";
 import type { KeyRequestRecord, Provider } from "../../types";
 
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
+const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock", "openrouter"];
 
 function formatTime(value?: string): string {
   if (!value) return "—";

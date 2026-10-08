@@ -89,7 +89,7 @@ func isProviderPath(path string) bool {
 		}
 	}
 	switch circuit.ProviderFromPath(path) {
-	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
+	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle", "openrouter":
 		return true
 	}
 	return false

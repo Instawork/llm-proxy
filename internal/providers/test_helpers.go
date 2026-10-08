@@ -91,6 +91,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 	bedrockProvider := NewBedrockProxy()
 	manager.RegisterProvider(bedrockProvider)
 
+	manager.RegisterProvider(NewOpenRouterProxy())
+
 	// Register routes centrally
 	for name, provider := range manager.GetAllProviders() {
 		// Direct provider routes

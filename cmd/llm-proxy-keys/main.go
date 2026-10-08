@@ -34,7 +34,7 @@ func main() {
 	var (
 		configDir     = flag.String("config-dir", "configs", "Path to configuration directory")
 		environment   = flag.String("env", "dev", "Environment (dev, staging, production)")
-		provider      = flag.String("provider", "", "Provider name (openai, anthropic, gemini)")
+		provider      = flag.String("provider", "", "Provider name (openai, anthropic, gemini, openrouter)")
 		actualKey     = flag.String("key", "", "Actual provider API key")
 		description   = flag.String("desc", "", "Description for the key")
 		costLimit     = flag.Int64("cost-limit", 10000, "Daily cost limit in cents (default: $100)")
@@ -147,7 +147,7 @@ func loadConfig(configDir, environment string) (*config.YAMLConfig, error) {
 // handleCreate creates a new API key
 func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, logger *slog.Logger) {
 	// Validate provider
-	validProviders := []string{"openai", "anthropic", "gemini"}
+	validProviders := []string{"openai", "anthropic", "gemini", "openrouter"}
 	isValid := slices.Contains(validProviders, provider)
 	if !isValid {
 		logger.Error("Invalid provider", "provider", provider, "valid", validProviders)

@@ -284,6 +284,25 @@ func TestGetProviderFromRequest_BedrockMetaURL(t *testing.T) {
 	}
 }
 
+func TestGetProviderFromRequest_OpenRouter(t *testing.T) {
+	manager := providers.NewProviderManager()
+	manager.RegisterProvider(providers.NewOpenAIProxy())
+	manager.RegisterProvider(providers.NewOpenRouterProxy())
+
+	for _, path := range []string{
+		"/openrouter/api/v1/chat/completions",
+		"/meta/finch-agent/openrouter/api/v1/chat/completions",
+	} {
+		provider := GetProviderFromRequest(manager, httptest.NewRequest("POST", path, nil))
+		if provider == nil {
+			t.Fatalf("Expected provider to be found for %s", path)
+		}
+		if provider.GetName() != "openrouter" {
+			t.Errorf("%s: expected provider name 'openrouter', got '%s'", path, provider.GetName())
+		}
+	}
+}
+
 func TestGetProviderFromRequest_UnknownPath(t *testing.T) {
 	manager := providers.NewProviderManager()
 

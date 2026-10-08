@@ -689,6 +689,8 @@ func providerBasePath(provider string) string {
 		return "/anthropic"
 	case "gemini":
 		return "/gemini"
+	case "openrouter":
+		return "/openrouter/api/v1"
 	default:
 		return "/" + provider
 	}

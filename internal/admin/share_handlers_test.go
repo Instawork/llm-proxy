@@ -98,6 +98,7 @@ func TestProviderBasePath(t *testing.T) {
 	assert.Equal(t, "/anthropic", providerBasePath("anthropic"))
 	assert.Equal(t, "/gemini", providerBasePath("gemini"))
 	assert.Equal(t, "/bedrock", providerBasePath("bedrock"))
+	assert.Equal(t, "/openrouter/api/v1", providerBasePath("openrouter"))
 }
 
 func TestHandleCreateShare(t *testing.T) {

@@ -220,6 +220,7 @@ func TestSafeProviderName_AllowlistedProvidersPassThrough(t *testing.T) {
 		"openai":           "openai",
 		"anthropic":        "anthropic",
 		"gemini":           "gemini",
+		"openrouter":       "openrouter",
 		"":                 "unknown",
 		"injected; rm -rf": "unknown",
 		"OPENAI":           "unknown", // case-sensitive on purpose
