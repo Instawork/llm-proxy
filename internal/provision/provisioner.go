@@ -13,6 +13,7 @@ const (
 	UpstreamKindGCPAPIKey            = "gcp_api_key"
 	UpstreamKindAnthropicPooled      = "anthropic_pooled"
 	UpstreamKindAnthropicTiered      = "anthropic_tiered"
+	UpstreamKindOpenRouterShared     = "openrouter_shared"
 
 	TierMetered      = "metered"
 	TierElevated     = "elevated"

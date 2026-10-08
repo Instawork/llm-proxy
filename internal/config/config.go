@@ -661,10 +661,11 @@ type KeyExpiryConfig struct {
 type KeyProvisioningConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// DevFake mints local-only upstream credentials without calling vendor APIs.
-	DevFake   bool                        `yaml:"dev_fake,omitempty"`
-	OpenAI    OpenAIProvisioningConfig    `yaml:"openai,omitempty"`
-	Gemini    GeminiProvisioningConfig    `yaml:"gemini,omitempty"`
-	Anthropic AnthropicProvisioningConfig `yaml:"anthropic,omitempty"`
+	DevFake    bool                         `yaml:"dev_fake,omitempty"`
+	OpenAI     OpenAIProvisioningConfig     `yaml:"openai,omitempty"`
+	Gemini     GeminiProvisioningConfig     `yaml:"gemini,omitempty"`
+	Anthropic  AnthropicProvisioningConfig  `yaml:"anthropic,omitempty"`
+	OpenRouter OpenRouterProvisioningConfig `yaml:"openrouter,omitempty"`
 }
 
 // OpenAIProvisioningConfig mints keys via the OpenAI Admin API.
@@ -686,6 +687,12 @@ type AnthropicProvisioningConfig struct {
 	Tiers       map[string]string `yaml:"tiers,omitempty"`
 	// PoolRedisKey enables the legacy Redis pool provisioner when tiers are unset.
 	PoolRedisKey string `yaml:"pool_redis_key,omitempty"`
+}
+
+// OpenRouterProvisioningConfig assigns one shared OpenRouter API key.
+type OpenRouterProvisioningConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	APIKey  string `yaml:"api_key,omitempty"`
 }
 
 // RateLimitingConfig represents rate limiting feature configuration
