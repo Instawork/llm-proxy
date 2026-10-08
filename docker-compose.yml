@@ -54,6 +54,7 @@ services:
       # localhost in the same task instead.
       - PRESIDIO_ANALYZER_URL=${PRESIDIO_ANALYZER_URL:-http://presidio:3000}
       - OCR_SIDECAR_URL=${OCR_SIDECAR_URL:-http://ocr-sidecar:8000}
+      - OCR_SIDECAR_TOKEN=${OCR_SIDECAR_TOKEN:-dev-ocr-token}
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9002/health" ]
@@ -170,6 +171,8 @@ services:
       # its own model (~1.5 GB) — size memory as workers × 1.5 GB.
       #   intra=8 ~450ms/img · intra=4 ~760ms/img · intra=1 ~2.7s/img
       - OCR_ORT_INTRA_THREADS=${OCR_ORT_INTRA_THREADS:-4}
+      # Shared secret llm-proxy sends in X-OCR-Token; dev-only default.
+      - OCR_SIDECAR_TOKEN=${OCR_SIDECAR_TOKEN:-dev-ocr-token}
       - OCR_PROC_WORKERS=${OCR_PROC_WORKERS:-}
       - OCR_MAX_WORKERS=${OCR_MAX_WORKERS:-1}
     healthcheck:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import time
 import urllib.error
@@ -24,7 +25,10 @@ def _post_image(url: str, image_path: Path, timeout: float) -> tuple[float, int,
     req = urllib.request.Request(
         f"{url.rstrip('/')}/extract-text",
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token"),
+        },
         method="POST",
     )
     start = time.perf_counter()

@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -6,11 +7,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import onnxruntime as ort
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from onnxtr.io import DocumentFile
 from onnxtr.models import ocr_predictor
 from onnxtr.models.engine import EngineConfig
+from starlette.datastructures import UploadFile
 
 logger = logging.getLogger("ocr_sidecar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -55,6 +57,19 @@ OCR_INFER_TIMEOUT_SEC = _env_float("OCR_INFER_TIMEOUT_SEC", 30.0)
 # entrypoint.sh sets this explicitly and derives worker count from it.
 OCR_ORT_INTRA_THREADS = _env_int("OCR_ORT_INTRA_THREADS", 4)
 OCR_ORT_INTER_THREADS = _env_int("OCR_ORT_INTER_THREADS", 1)
+
+# The sidecar sits on an internal ALB reachable from the whole VPC, so every
+# caller must present the shared token llm-proxy sends in X-OCR-Token. Startup
+# refuses to run without one rather than silently accepting anonymous uploads.
+OCR_SIDECAR_TOKEN = os.getenv("OCR_SIDECAR_TOKEN", "").strip()
+if not OCR_SIDECAR_TOKEN:
+    raise SystemExit("OCR_SIDECAR_TOKEN is required")
+# Cap the upload before it is buffered; matches id_gate.max_image_bytes upstream.
+OCR_MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
+if OCR_MAX_IMAGE_BYTES <= 0:
+    raise SystemExit("OCR_MAX_IMAGE_BYTES must be positive")
+# Slack for multipart boundaries and part headers when checking Content-Length.
+_MULTIPART_OVERHEAD = 16 * 1024
 
 
 def _engine_cfg() -> EngineConfig:
@@ -114,13 +129,55 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+class _BodyTooLarge(Exception):
+    pass
+
+
+def _capped_receive(receive, limit: int):
+    """Wrap the ASGI receive so the body is rejected as it streams in.
+
+    Content-Length may be absent (chunked) or wrong, so the cap has to be
+    enforced on bytes actually received, before Starlette spools any part.
+    """
+    total = 0
+
+    async def inner():
+        nonlocal total
+        message = await receive()
+        if message["type"] == "http.request":
+            total += len(message.get("body", b""))
+            if total > limit:
+                raise _BodyTooLarge()
+        return message
+
+    return inner
+
+
 @app.post("/extract-text")
-async def extract_text(image: UploadFile = File(...)) -> JSONResponse:
+async def extract_text(request: Request) -> JSONResponse:
+    # Authenticate from headers alone, before the multipart body is parsed; a
+    # declared UploadFile parameter would spool the upload first and let
+    # anonymous callers burn disk and CPU.
+    if not hmac.compare_digest(request.headers.get("x-ocr-token", ""), OCR_SIDECAR_TOKEN):
+        raise HTTPException(status_code=401, detail="missing or invalid X-OCR-Token")
+    body_limit = OCR_MAX_IMAGE_BYTES + _MULTIPART_OVERHEAD
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > body_limit:
+        raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
     if predictor is None or executor is None or gate is None:
         raise HTTPException(status_code=503, detail="OCR service not ready")
 
+    capped = Request(request.scope, _capped_receive(request.receive, body_limit))
     try:
+        form = await capped.form()
+        image = form.get("image")
+        if not isinstance(image, UploadFile):
+            raise HTTPException(status_code=400, detail="multipart field 'image' is required")
         img_bytes = await image.read()
+    except _BodyTooLarge as exc:
+        raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES") from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("failed to read upload")
         raise HTTPException(status_code=400, detail=f"invalid upload: {exc}") from exc

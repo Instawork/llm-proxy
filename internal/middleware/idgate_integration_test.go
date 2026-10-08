@@ -65,6 +65,9 @@ func requireOCRSidecar(t *testing.T) string {
 		t.Skip("Skipping ID gate integration test; set LLM_PROXY_ID_GATE_INTEGRATION=1 " +
 			"(and `docker compose up -d ocr-sidecar`)")
 	}
+	if strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")) == "" {
+		t.Skip("Skipping ID gate integration test; OCR_SIDECAR_TOKEN is required")
+	}
 	target := os.Getenv("OCR_SIDECAR_URL")
 	if target == "" {
 		target = "http://localhost:8010"
@@ -117,7 +120,7 @@ func TestIntegration_IDGate_TestdataManifest(t *testing.T) {
 	dir := idGateTestdataDir(t)
 	manifest := loadIDGateManifest(t)
 
-	ocrClient := ocr.New(ocrURL, 60*time.Second)
+	ocrClient := ocr.New(ocrURL, os.Getenv("OCR_SIDECAR_TOKEN"), 60*time.Second)
 	redactor, err := redact.New(redact.Config{
 		AnalyzerURL:    presidioURL,
 		Timeout:        15 * time.Second,
@@ -164,7 +167,7 @@ func TestIntegration_OCRSidecar_TestdataExtractsText(t *testing.T) {
 	ocrURL := requireOCRSidecar(t)
 	dir := idGateTestdataDir(t)
 	manifest := loadIDGateManifest(t)
-	client := ocr.New(ocrURL, 60*time.Second)
+	client := ocr.New(ocrURL, os.Getenv("OCR_SIDECAR_TOKEN"), 60*time.Second)
 
 	for _, tc := range manifest.Cases {
 		t.Run(tc.File, func(t *testing.T) {

@@ -29,11 +29,15 @@ func TestClientExtractText(t *testing.T) {
 			http.Error(w, "unexpected filename", http.StatusBadRequest)
 			return
 		}
+		if r.Header.Get("X-OCR-Token") != "test-token" {
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "PASSPORT 123456789"})
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, 2*time.Second)
+	client := New(srv.URL, "test-token", 2*time.Second)
 	text, err := client.ExtractText(context.Background(), []byte("fake-image"), "image-0.bin")
 	if err != nil {
 		t.Fatalf("ExtractText: %v", err)
@@ -49,7 +53,7 @@ func TestClientExtractTextErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, time.Second)
+	client := New(srv.URL, "test-token", time.Second)
 	_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
 	if err == nil {
 		t.Fatal("expected error")
