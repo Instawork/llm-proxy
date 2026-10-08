@@ -30,6 +30,9 @@ type RuntimeConfig struct {
 	AnthropicTiersFromYAML bool
 	AnthropicPoolKey       string
 
+	OpenRouterEnabled bool
+	OpenRouterAPIKey  string
+
 	RedisURL string
 }
 
@@ -45,6 +48,8 @@ func RuntimeFromYAML(cfg config.KeyProvisioningConfig) RuntimeConfig {
 		AnthropicEnabled:     cfg.Anthropic.Enabled,
 		AnthropicDefaultTier: cfg.Anthropic.DefaultTier,
 		AnthropicPoolKey:     cfg.Anthropic.PoolRedisKey,
+		OpenRouterEnabled:    cfg.OpenRouter.Enabled,
+		OpenRouterAPIKey:     strings.TrimSpace(os.ExpandEnv(cfg.OpenRouter.APIKey)),
 	}
 	if rt.AnthropicDefaultTier == "" {
 		rt.AnthropicDefaultTier = TierMetered
@@ -130,6 +135,10 @@ func NewManagerFromRuntime(rt RuntimeConfig, logger *slog.Logger) (*Manager, err
 			client := redis.NewClient(opts)
 			byProvider["anthropic"] = NewAnthropicPool(client, rt.AnthropicPoolKey, rt.AnthropicAdminKey)
 		}
+	}
+
+	if rt.OpenRouterEnabled && rt.OpenRouterAPIKey != "" {
+		byProvider["openrouter"] = NewOpenRouterShared(rt.OpenRouterAPIKey)
 	}
 
 	return NewManager(logger, byProvider), nil
