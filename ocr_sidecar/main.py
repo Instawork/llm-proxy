@@ -66,6 +66,8 @@ if not OCR_SIDECAR_TOKEN:
     raise SystemExit("OCR_SIDECAR_TOKEN is required")
 # Cap the upload before it is buffered; matches id_gate.max_image_bytes upstream.
 OCR_MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
+if OCR_MAX_IMAGE_BYTES <= 0:
+    raise SystemExit("OCR_MAX_IMAGE_BYTES must be positive")
 # Slack for multipart boundaries and part headers when checking Content-Length.
 _MULTIPART_OVERHEAD = 16 * 1024
 

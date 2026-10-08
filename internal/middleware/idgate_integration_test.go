@@ -65,6 +65,9 @@ func requireOCRSidecar(t *testing.T) string {
 		t.Skip("Skipping ID gate integration test; set LLM_PROXY_ID_GATE_INTEGRATION=1 " +
 			"(and `docker compose up -d ocr-sidecar`)")
 	}
+	if strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")) == "" {
+		t.Skip("Skipping ID gate integration test; OCR_SIDECAR_TOKEN is required")
+	}
 	target := os.Getenv("OCR_SIDECAR_URL")
 	if target == "" {
 		target = "http://localhost:8010"
