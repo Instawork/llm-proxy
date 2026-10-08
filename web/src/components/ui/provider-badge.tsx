@@ -1,6 +1,6 @@
 import { FaAws } from "react-icons/fa";
 import { RiOpenaiFill } from "react-icons/ri";
-import { SiAnthropic, SiGooglegemini } from "react-icons/si";
+import { SiAnthropic, SiGooglegemini, SiOpenrouter } from "react-icons/si";
 import type { IconType } from "react-icons";
 
 const PROVIDER_ICONS: Record<string, { Icon: IconType; className: string }> = {
@@ -9,6 +9,7 @@ const PROVIDER_ICONS: Record<string, { Icon: IconType; className: string }> = {
   gemini: { Icon: SiGooglegemini, className: "text-[#4285F4]" },
   bedrock: { Icon: FaAws, className: "text-[#FF9900]" },
   "bedrock-mantle": { Icon: FaAws, className: "text-[#FF9900]" },
+  openrouter: { Icon: SiOpenrouter, className: "text-[#6467F2]" },
 };
 
 export function ProviderIcon({

@@ -2,7 +2,8 @@ import type { CostLimitPeriod } from "./format";
 import { costLimitFormFromKey } from "./format";
 import type { APIKey, PiiRedactSetting, Provider, UpdateAPIKeyRequest } from "../types";
 
-export const KEY_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
+export const KEY_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock", "openrouter"];
+// Viewer personal keys must be auto-provisioned; OpenRouter has no provisioner.
 export const VIEWER_PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "bedrock"];
 
 export const BEDROCK_AWS_AUTH_PROVIDERS: Provider[] = ["bedrock"];

@@ -72,6 +72,20 @@ export function n8nSetupGuide(provider: Provider, baseUrl: string): N8nSetupGuid
         ],
         note: "Bedrock via llm-proxy requires client-side SigV4 URL rewriting — not supported by n8n's built-in Bedrock node.",
       };
+    case "openrouter":
+      return {
+        credentialLabel: "OpenAI",
+        nodeLabel: "OpenAI Chat Model",
+        urlField: "Base URL",
+        credentialImage: openaiCredential,
+        nodeImage: openaiNodeCredential,
+        steps: [
+          "Credentials → Add credential → OpenAI (OpenRouter speaks the OpenAI API).",
+          `Set Base URL to ${baseUrl} (no trailing slash).`,
+          "Paste your openrouter iw: proxy key in API Key.",
+          "In your workflow, add an OpenAI Chat Model node, pick that credential, and enter an OpenRouter model id such as deepseek/deepseek-v4-pro.",
+        ],
+      };
     default:
       return null;
   }
