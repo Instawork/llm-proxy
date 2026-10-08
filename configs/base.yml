@@ -689,6 +689,9 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 10.00
             output: 45.00
+      # Flat (audit-10-05-2026, card re-read): unlike gpt-5.4-pro / gpt-5.5, the
+      # GPT-5.5 Pro card publishes no ">272K input tokens at 2x/1.5x" tier
+      # despite its 1.05M context window, so the whole window bills $30/$180.
       "gpt-5.5-pro":
         enabled: true
         aliases: ["gpt-5.5-pro-2026-04-23"]
@@ -700,12 +703,8 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          - threshold: 272_000
-            input: 30.00
-            output: 180.00
-          - threshold: 0 # Fallback for prompts > 272k input tokens
-            input: 60.00
-            output: 270.00
+          input: 30.00
+          output: 180.00
       # -----------------------------------------------------------------------
       # GPT-5.6 family (GA 2026-07-09). Sol/Terra/Luna are durable capability
       # tiers replacing the mini/nano suffixes. No dated snapshots published
