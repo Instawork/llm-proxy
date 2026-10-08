@@ -42,7 +42,7 @@ func AdapterForContext(ctx context.Context) ContentAdapter {
 // adapter that applies every provider's rules when name is unknown.
 func AdapterForProvider(name string) ContentAdapter {
 	switch name {
-	case "openai":
+	case "openai", "openrouter":
 		return openAIContentAdapter{}
 	case "anthropic":
 		return anthropicContentAdapter{}

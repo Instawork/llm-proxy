@@ -92,6 +92,32 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	}
 }
 
+func TestAPIKeyValidationMiddleware_OpenRouterRouteIsAuthenticated(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	path := "/openrouter/api/v1/chat/completions"
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenRouterProxy())
+	handler := APIKeyValidationMiddleware(pm, &mockAPIKeyStore{}, true, nil)(ok)
+
+	req := httptest.NewRequest("POST", path, nil)
+	req.Header.Set("Authorization", "Bearer valid") // mock store scopes this key to openai
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("openai-scoped key on the openrouter route: expected 401, got %d", rec.Code)
+	}
+
+	unregistered := APIKeyValidationMiddleware(providers.NewProviderManager(), &mockAPIKeyStore{}, true, nil)(ok)
+	req = httptest.NewRequest("POST", path, nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec = httptest.NewRecorder()
+	unregistered.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("disabled openrouter provider: expected 502, got %d", rec.Code)
+	}
+}
+
 func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())

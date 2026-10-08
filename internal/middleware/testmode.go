@@ -31,6 +31,7 @@ var knownProviders = map[string]struct{}{
 	"gemini":         {},
 	"bedrock":        {},
 	"bedrock-mantle": {},
+	"openrouter":     {},
 }
 
 // safeProviderName returns provider verbatim when it appears in

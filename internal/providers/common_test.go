@@ -35,7 +35,7 @@ func TestHealth(t *testing.T) {
 		t.Error("Health check missing providers")
 	} else {
 		providersMap := providers.(map[string]any)
-		expectedProviders := []string{"openai", "anthropic", "gemini"}
+		expectedProviders := []string{"openai", "anthropic", "gemini", "openrouter"}
 
 		for _, provider := range expectedProviders {
 			if _, exists := providersMap[provider]; !exists {
@@ -74,11 +74,11 @@ func TestProviderManager(t *testing.T) {
 	}
 
 	// Test getting all providers. setupTestServer now registers
-	// openai/anthropic/gemini/bedrock; assert each is present rather
-	// than baking in the count so adding a future provider doesn't
+	// openai/anthropic/gemini/bedrock/openrouter; assert each is present
+	// rather than baking in the count so adding a future provider doesn't
 	// trip a regression check on this scaffolding test.
 	allProviders := providerManager.GetAllProviders()
-	for _, name := range []string{"openai", "anthropic", "gemini", "bedrock"} {
+	for _, name := range []string{"openai", "anthropic", "gemini", "bedrock", "openrouter"} {
 		if _, ok := allProviders[name]; !ok {
 			t.Errorf("Expected provider %q to be registered", name)
 		}

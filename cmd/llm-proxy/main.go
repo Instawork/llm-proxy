@@ -739,6 +739,7 @@ func circuitModelExtractor(
 	geminiProvider *providers.GeminiProxy,
 	bedrockProvider *providers.BedrockProxy,
 	bedrockMantleProvider *providers.BedrockMantleProxy,
+	openRouterProvider *providers.OpenRouterProxy,
 ) circuit.ModelFromRequestFunc {
 	return func(req *http.Request) string {
 		if req == nil || req.URL == nil {
@@ -772,6 +773,12 @@ func circuitModelExtractor(
 				return ""
 			}
 			model, _ := providers.RequestModelAndMessages(bedrockMantleProvider, req)
+			return model
+		case strings.HasPrefix(path, "/openrouter/"):
+			if openRouterProvider == nil {
+				return ""
+			}
+			model, _ := providers.RequestModelAndMessages(openRouterProvider, req)
 			return model
 		}
 		return ""
@@ -1425,14 +1432,15 @@ func buildMantleModelProjects(cfg config.ProviderConfig) map[string]string {
 // runServer starts and runs the LLM proxy server
 // registerProviders constructs each provider proxy, registers it with the
 // global provider manager, and returns concrete handles needed by the
-// circuit-breaker wiring below. Bedrock is opt-in via
-// `providers.bedrock.enabled: true` so existing deployments are unaffected.
+// circuit-breaker wiring below. Bedrock and OpenRouter are opt-in via
+// `providers.<name>.enabled: true` so existing deployments are unaffected.
 func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	openAI *providers.OpenAIProxy,
 	anthropic *providers.AnthropicProxy,
 	gemini *providers.GeminiProxy,
 	bedrock *providers.BedrockProxy,
 	bedrockMantle *providers.BedrockMantleProxy,
+	openRouter *providers.OpenRouterProxy,
 ) {
 	baseOpts := providers.ProxyOptions{DisableGzip: disableGzip}
 	if disableGzip {
@@ -1488,7 +1496,17 @@ func registerProviders(yamlConfig *config.YAMLConfig, disableGzip bool) (
 	} else {
 		logger.Info("☁️  Bedrock Mantle provider: DISABLED (set providers.bedrock-mantle.enabled: true to enable)")
 	}
-	return openAI, anthropic, gemini, bedrock, bedrockMantle
+	if openRouterCfg, ok := yamlConfig.Providers["openrouter"]; ok && openRouterCfg.Enabled {
+		openRouterOpts := baseOpts
+		openRouterOpts.ResponseHeaderTimeout = yamlConfig.ResponseHeaderTimeoutFor("openrouter")
+		openRouter = providers.NewOpenRouterProxy(openRouterOpts)
+		globalProviderManager.RegisterProvider(openRouter)
+		circuitBreakerProviders = append(circuitBreakerProviders, "openrouter")
+		logger.Info("🔀 OpenRouter provider: ENABLED")
+	} else {
+		logger.Info("🔀 OpenRouter provider: DISABLED (set providers.openrouter.enabled: true to enable)")
+	}
+	return openAI, anthropic, gemini, bedrock, bedrockMantle, openRouter
 }
 
 // transportWrapper is the slice of a provider proxy that the startup wiring
@@ -1521,6 +1539,7 @@ type serverDeps struct {
 	gemini         *providers.GeminiProxy
 	bedrock        *providers.BedrockProxy
 	bedrockMantle  *providers.BedrockMantleProxy
+	openRouter     *providers.OpenRouterProxy
 	namedProviders []namedProvider
 
 	// redactor is nil when no PII/redact/ID-gate feature needs Presidio or
@@ -1598,7 +1617,7 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 	initRateLimiter(yamlConfig)
 	initCircuitBreaker(yamlConfig)
 
-	deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle = registerProviders(yamlConfig, disableGzip)
+	deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle, deps.openRouter = registerProviders(yamlConfig, disableGzip)
 	deps.namedProviders = []namedProvider{
 		{"openai", deps.openAI},
 		{"anthropic", deps.anthropic},
@@ -1609,6 +1628,9 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 	}
 	if deps.bedrockMantle != nil {
 		deps.namedProviders = append(deps.namedProviders, namedProvider{"bedrock-mantle", deps.bedrockMantle})
+	}
+	if deps.openRouter != nil {
+		deps.namedProviders = append(deps.namedProviders, namedProvider{"openrouter", deps.openRouter})
 	}
 	wrapProviderTransports(deps)
 
@@ -1705,7 +1727,7 @@ func wrapProviderTransports(deps *serverDeps) {
 		// is missing, which keeps test fixtures and Datadog-less
 		// deployments working unchanged.
 		circuitMetrics := initializeCircuitMetrics(yamlConfig)
-		modelFn := circuitModelExtractor(deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle)
+		modelFn := circuitModelExtractor(deps.openAI, deps.anthropic, deps.gemini, deps.bedrock, deps.bedrockMantle, deps.openRouter)
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
@@ -2172,6 +2194,9 @@ func logStartupSummary(deps *serverDeps) {
 	}
 	if deps.bedrockMantle != nil {
 		logger.Info("Bedrock Mantle API endpoints available", "url", "http://"+listenAddr+"/bedrock-mantle/", "region", deps.bedrockMantle.GetHealthStatus()["region"])
+	}
+	if deps.openRouter != nil {
+		logger.Info("OpenRouter API endpoints available", "url", "http://"+listenAddr+"/openrouter/api/v1/")
 	}
 	logger.Info("Meta routes with user ID available", "pattern", "http://"+listenAddr+"/meta/{userID}/{provider}/")
 }

@@ -2115,6 +2115,49 @@ providers:
           input: 0.30
           output: 2.50
 
+  # OpenRouter (OpenAI-compatible Chat Completions at /openrouter/api/v1).
+  # Model ids are OpenRouter slugs and keep their vendor namespace. Prices are
+  # OpenRouter's /api/v1/models list rates (USD per 1M tokens); the vendor
+  # audit does not cover OpenRouter yet, so refresh these by hand.
+  openrouter:
+    enabled: true
+    models:
+      "deepseek/deepseek-v4.1-flash":
+        enabled: true
+        pricing:
+          input: 0.05
+          output: 1.20
+      "deepseek/deepseek-v4-pro":
+        enabled: true
+        pricing:
+          input: 0.21
+          output: 0.42
+      "moonshotai/kimi-k3":
+        enabled: true
+        pricing:
+          input: 0.62
+          output: 15.00
+      "qwen/qwen3.8-flash":
+        enabled: true
+        pricing:
+          input: 0.15
+          output: 0.47
+      "meta-llama/llama-4-maverick":
+        enabled: true
+        pricing:
+          input: 0.19
+          output: 0.65
+      "mistralai/mistral-large-4-0":
+        enabled: true
+        pricing:
+          input: 0.68
+          output: 2.09
+      "z-ai/glm-5.3-flash":
+        enabled: true
+        pricing:
+          input: 0.15
+          output: 0.50
+
 # =============================================================================
 # DEFAULT RATE LIMITS (FALLBACKS)
 #
