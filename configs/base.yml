@@ -1186,6 +1186,28 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
+      # Claude Haiku 5.5 (released 2026-10-07, two days after audit-10-05-2026;
+      # verified on the model card and pricing page 2026-10-08). The one Claude
+      # 4.6+ model priced by prompt length: "a prompt of over 100,000 tokens pays
+      # higher prices" — 5x on both input and output, so this must stay tiered.
+      # No dated snapshot. Haiku 4.5 stays Active (no deprecation announced).
+      "claude-haiku-5-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          - threshold: 100_000
+            input: 0.10
+            output: 0.50
+          - threshold: 0 # Fallback for prompts > 100k input tokens
+            input: 0.50
+            output: 2.50
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
@@ -1427,6 +1449,55 @@ providers:
             "global.anthropic.claude-sonnet-5-5":
               input: 2.00
               output: 10.00
+      # Claude Haiku 5.5 on Bedrock (launch 2026-10-07, AWS card read 2026-10-08;
+      # not yet in any audit). bedrock-runtime takes the us./eu./au./jp. geo or
+      # global.* profile ids; the bare id is Mantle-only (mirrored under
+      # bedrock-mantle). Anthropic's 100K prompt-length tier carries over, so
+      # geo (list +10%) and global (list) are separate entries — `overrides`
+      # only works with flat pricing.
+      "us.anthropic.claude-haiku-5-5":
+        enabled: true
+        aliases:
+          [
+            "eu.anthropic.claude-haiku-5-5",
+            "au.anthropic.claude-haiku-5-5",
+            "jp.anthropic.claude-haiku-5-5",
+            "claude-haiku-5-5-bedrock",
+            "claude-haiku-5.5-bedrock",
+            "claude-haiku-5-5-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          - threshold: 100_000
+            input: 0.11
+            output: 0.55
+          - threshold: 0 # Fallback for prompts > 100k input tokens
+            input: 0.55
+            output: 2.75
+      # global.* routes worldwide and bills the Anthropic list rate.
+      "global.anthropic.claude-haiku-5-5":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 100_000
+          requests_per_minute: 1_000
+          tokens_per_day: 2_400_000
+          requests_per_day: 1_440_000
+          burst_tokens: 10_000
+          burst_requests: 100
+        pricing:
+          - threshold: 100_000
+            input: 0.10
+            output: 0.50
+          - threshold: 0 # Fallback for prompts > 100k input tokens
+            input: 0.50
+            output: 2.50
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1896,6 +1967,18 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+      # Claude Haiku 5.5 (launch 2026-10-07, AWS card read 2026-10-08): Anthropic
+      # list plus the 10% in-region premium, keeping the 100K prompt-length tier.
+      "anthropic.claude-haiku-5-5":
+        enabled: true
+        aliases: ["claude-haiku-5-5"]
+        pricing:
+          - threshold: 100_000
+            input: 0.11
+            output: 0.55
+          - threshold: 0 # Fallback for prompts > 100k input tokens
+            input: 0.55
+            output: 2.75
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
