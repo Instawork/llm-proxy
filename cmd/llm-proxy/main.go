@@ -774,7 +774,8 @@ func circuitModelExtractor(
 			}
 			model, _ := providers.RequestModelAndMessages(bedrockMantleProvider, req)
 			return model
-		case strings.HasPrefix(path, "/openrouter/"):
+		case strings.HasPrefix(path, "/openrouter/"),
+			strings.HasPrefix(path, providers.OpenRouterUpstreamPathPrefix):
 			if openRouterProvider == nil {
 				return ""
 			}

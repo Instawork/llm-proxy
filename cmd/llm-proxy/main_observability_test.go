@@ -96,6 +96,12 @@ func TestCircuitModelExtractor_DispatchesToRealProviders(t *testing.T) {
 			want: "deepseek/deepseek-v4-pro",
 		},
 		{
+			name: "openrouter rewritten upstream path (as seen by the circuit transport)",
+			path: "/api/v1/chat/completions",
+			body: `{"model":"moonshotai/kimi-k3","messages":[]}`,
+			want: "moonshotai/kimi-k3",
+		},
+		{
 			name: "non-matching path returns empty",
 			path: "/healthz",
 			body: ``,

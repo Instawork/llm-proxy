@@ -164,6 +164,10 @@ func TestOpenRouter_ExtractRequestModelAndMessagesAndUser(t *testing.T) {
 	assert.Equal(t, []string{"be brief", "hello"}, messages)
 	assert.Equal(t, "finch-agent", or.UserIDFromRequest(req))
 
+	upstream := httptest.NewRequest(http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", strings.NewReader(body))
+	model, _ = or.ExtractRequestModelAndMessages(upstream)
+	assert.Equal(t, "z-ai/glm-5.3-flash", model, "circuit transport sees the rewritten upstream path")
+
 	other := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body))
 	model, messages = or.ExtractRequestModelAndMessages(other)
 	assert.Empty(t, model)

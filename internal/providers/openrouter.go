@@ -22,6 +22,9 @@ const (
 	// the generic rewrite forwards /api/v1/... unchanged after stripping the
 	// /openrouter prefix.
 	openRouterBaseURL = "https://openrouter.ai"
+	// OpenRouterUpstreamPathPrefix is the path prefix of rewritten upstream
+	// requests. No other provider's upstream API lives under it.
+	OpenRouterUpstreamPathPrefix = "/api/v1/"
 )
 
 // OpenRouterProxy forwards OpenAI-compatible Chat Completions traffic to
@@ -159,8 +162,13 @@ func (o *OpenRouterProxy) RegisterExtraRoutes(_ *mux.Router) {}
 
 // ExtractRequestModelAndMessages returns the model and message text of an
 // OpenAI-shaped request body for token estimation. Restores req.Body.
+// Accepts both the inbound /openrouter/... path and the rewritten upstream
+// /api/v1/... path that the circuit breaker transport sees.
 func (o *OpenRouterProxy) ExtractRequestModelAndMessages(req *http.Request) (string, []string) {
-	if req == nil || req.Method != http.MethodPost || !strings.HasPrefix(req.URL.Path, "/"+openRouterName+"/") {
+	if req == nil || req.Method != http.MethodPost {
+		return "", nil
+	}
+	if path := req.URL.Path; !strings.HasPrefix(path, "/"+openRouterName+"/") && !strings.HasPrefix(path, OpenRouterUpstreamPathPrefix) {
 		return "", nil
 	}
 	body, err := readAndRestoreOpenRouterBody(req)
