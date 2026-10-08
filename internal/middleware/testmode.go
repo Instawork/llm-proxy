@@ -31,6 +31,7 @@ var knownProviders = map[string]struct{}{
 	"gemini":         {},
 	"bedrock":        {},
 	"bedrock-mantle": {},
+	"openrouter":     {},
 }
 
 // safeProviderName returns provider verbatim when it appears in
@@ -126,8 +127,8 @@ func writeDegradedResponse(w http.ResponseWriter, provider, signal string) {
 		signal, safeProviderName(provider))
 	msg = proxylog.ProxyMsg(msg)
 
-	body := map[string]interface{}{
-		"error": map[string]interface{}{
+	body := map[string]any{
+		"error": map[string]any{
 			"message": msg,
 			"type":    "provider_degraded",
 			"code":    "provider_degraded",

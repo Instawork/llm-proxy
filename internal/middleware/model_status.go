@@ -44,7 +44,7 @@ func ModelStatusMiddleware(
 				}
 			}
 
-			model, _ := provider.ExtractRequestModelAndMessages(r)
+			model, _ := providers.RequestModelAndMessages(provider, r)
 			if model == "" {
 				next.ServeHTTP(w, r)
 				return

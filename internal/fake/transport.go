@@ -137,10 +137,12 @@ func (t *Transport) estimateTokens(req *http.Request) (int, string) {
 }
 
 func (t *Transport) jsonResponse(req *http.Request, status int, body []byte) *http.Response {
+	header := make(http.Header)
+	header.Set("Content-Type", "application/json")
 	return &http.Response{
 		StatusCode: status,
 		Status:     http.StatusText(status),
-		Header:     make(http.Header),
+		Header:     header,
 		Body:       io.NopCloser(bytes.NewReader(body)),
 		Request:    req,
 	}

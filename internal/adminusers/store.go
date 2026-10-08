@@ -35,18 +35,21 @@ type User struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
+	// SessionsRevokedAt invalidates every session cookie issued before it.
+	SessionsRevokedAt time.Time `json:"-"`
 }
 
 type userItem struct {
-	PK          string    `dynamodbav:"pk"`
-	SK          string    `dynamodbav:"sk"`
-	Email       string    `dynamodbav:"email"`
-	Name        string    `dynamodbav:"name,omitempty"`
-	Picture     string    `dynamodbav:"picture,omitempty"`
-	Role        string    `dynamodbav:"role"`
-	CreatedAt   time.Time `dynamodbav:"created_at"`
-	UpdatedAt   time.Time `dynamodbav:"updated_at"`
-	LastLoginAt time.Time `dynamodbav:"last_login_at,omitempty"`
+	PK                string    `dynamodbav:"pk"`
+	SK                string    `dynamodbav:"sk"`
+	Email             string    `dynamodbav:"email"`
+	Name              string    `dynamodbav:"name,omitempty"`
+	Picture           string    `dynamodbav:"picture,omitempty"`
+	Role              string    `dynamodbav:"role"`
+	CreatedAt         time.Time `dynamodbav:"created_at"`
+	UpdatedAt         time.Time `dynamodbav:"updated_at"`
+	LastLoginAt       time.Time `dynamodbav:"last_login_at,omitempty"`
+	SessionsRevokedAt time.Time `dynamodbav:"sessions_revoked_at,omitempty"`
 }
 
 type shareAwarenessItem struct {
@@ -210,13 +213,14 @@ func (s *Store) getProfileItem(ctx context.Context, email string) (*userItem, er
 func itemToUser(item *userItem) User {
 	role, _ := ParseRole(item.Role)
 	return User{
-		Email:       item.Email,
-		Name:        item.Name,
-		Picture:     item.Picture,
-		Role:        role,
-		CreatedAt:   item.CreatedAt,
-		UpdatedAt:   item.UpdatedAt,
-		LastLoginAt: item.LastLoginAt,
+		Email:             item.Email,
+		Name:              item.Name,
+		Picture:           item.Picture,
+		Role:              role,
+		CreatedAt:         item.CreatedAt,
+		UpdatedAt:         item.UpdatedAt,
+		LastLoginAt:       item.LastLoginAt,
+		SessionsRevokedAt: item.SessionsRevokedAt,
 	}
 }
 
@@ -240,6 +244,9 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			CreatedAt:   existing.CreatedAt,
 			UpdatedAt:   now,
 			LastLoginAt: now,
+			// Carry the revocation forward: a fresh login must not resurrect
+			// cookies issued before the last logout.
+			SessionsRevokedAt: existing.SessionsRevokedAt,
 		}
 		av, err := attributevalue.MarshalMap(item)
 		if err != nil {
@@ -277,8 +284,7 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 		Item:                av,
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	}); err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			existing, getErr := s.getProfileItem(ctx, email)
 			if getErr != nil {
 				return User{}, false, getErr
@@ -287,6 +293,7 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			item.CreatedAt = existing.CreatedAt
 			item.UpdatedAt = now
 			item.LastLoginAt = now
+			item.SessionsRevokedAt = existing.SessionsRevokedAt
 			av, err := attributevalue.MarshalMap(item)
 			if err != nil {
 				return User{}, false, err
@@ -347,8 +354,7 @@ func (s *Store) CreateUser(ctx context.Context, email string, role Role) (User, 
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return User{}, fmt.Errorf("user already exists")
 		}
 		return User{}, err
@@ -385,8 +391,34 @@ func (s *Store) SetRole(ctx context.Context, email string, role Role) error {
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
+			return fmt.Errorf("user not found")
+		}
+		return err
+	}
+	return nil
+}
+
+// RevokeSessions invalidates every session issued before now for email.
+func (s *Store) RevokeSessions(ctx context.Context, email string, now time.Time) error {
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.tableName),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: userPK(email)},
+			"sk": &types.AttributeValueMemberS{Value: profileSK},
+		},
+		UpdateExpression: aws.String("SET sessions_revoked_at = :at"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":at": &types.AttributeValueMemberS{Value: now.UTC().Format(time.RFC3339Nano)},
+		},
+		ConditionExpression: aws.String("attribute_exists(pk)"),
+	})
+	if err != nil {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return fmt.Errorf("user not found")
 		}
 		return err
@@ -409,8 +441,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return fmt.Errorf("user not found")
 		}
 		return err
@@ -496,8 +527,7 @@ func (s *Store) RecordShareAwareness(ctx context.Context, email, shareID string)
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
 	if err != nil {
-		var cond *types.ConditionalCheckFailedException
-		if errors.As(err, &cond) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil
 		}
 		return err

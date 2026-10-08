@@ -44,6 +44,47 @@ func TestRuntimeFromYAML_AnthropicTierExpandEnv(t *testing.T) {
 	assert.Equal(t, UpstreamKindAnthropicTiered, res.UpstreamKind)
 }
 
+func TestRuntimeFromYAML_OpenRouterSharedKey(t *testing.T) {
+	t.Setenv("LLM_PROXY_OPENROUTER_API_KEY", "sk-or-v1-shared")
+
+	rt := RuntimeFromYAML(config.KeyProvisioningConfig{
+		Enabled: true,
+		OpenRouter: config.OpenRouterProvisioningConfig{
+			Enabled: true,
+			APIKey:  "${LLM_PROXY_OPENROUTER_API_KEY}",
+		},
+	})
+
+	mgr, err := NewManagerFromRuntime(rt, nil)
+	require.NoError(t, err)
+
+	p, ok := mgr.ForProvider("openrouter")
+	require.True(t, ok)
+
+	res, err := p.Provision(t.Context(), ProvisionRequest{Name: "test"})
+	require.NoError(t, err)
+	assert.Equal(t, "sk-or-v1-shared", res.ActualKey)
+	assert.Equal(t, UpstreamKindOpenRouterShared, res.UpstreamKind)
+	require.NoError(t, p.Revoke(t.Context(), res.UpstreamID, res.UpstreamKind))
+}
+
+func TestRuntimeFromYAML_OpenRouterUnsetKeySkipsProvisioner(t *testing.T) {
+	t.Setenv("LLM_PROXY_OPENROUTER_API_KEY", "")
+
+	rt := RuntimeFromYAML(config.KeyProvisioningConfig{
+		Enabled: true,
+		OpenRouter: config.OpenRouterProvisioningConfig{
+			Enabled: true,
+			APIKey:  "${LLM_PROXY_OPENROUTER_API_KEY}",
+		},
+	})
+
+	mgr, err := NewManagerFromRuntime(rt, nil)
+	require.NoError(t, err)
+	_, ok := mgr.ForProvider("openrouter")
+	assert.False(t, ok)
+}
+
 func TestRuntimeFromYAML_OpenAIProjectExpandEnv(t *testing.T) {
 	t.Setenv("LLM_PROXY_OPENAI_PROJECT_ID", "proj-from-env")
 

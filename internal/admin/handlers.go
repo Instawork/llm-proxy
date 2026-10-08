@@ -15,6 +15,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/keyexpiry"
+	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/provision"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
 	"github.com/gorilla/mux"
@@ -32,14 +33,14 @@ const (
 type handler struct {
 	deps     *Deps
 	auth     *authenticator
-	issuance *tokenBucketLimiter
+	issuance *middleware.TokenBucketLimiter
 }
 
 func newHandler(deps Deps, auth *authenticator) *handler {
 	return &handler{
 		deps:     &deps,
 		auth:     auth,
-		issuance: newTokenBucketLimiter(personalKeyIssuanceRefillPerSec, personalKeyIssuanceBurst),
+		issuance: middleware.NewTokenBucketLimiter(personalKeyIssuanceRefillPerSec, personalKeyIssuanceBurst),
 	}
 }
 
@@ -205,7 +206,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			if !h.issuance.allow(strings.ToLower(user.Email), time.Now()) {
+			if !h.issuance.Allow(strings.ToLower(user.Email), time.Now()) {
 				h.deps.Logger.Warn("admin: personal key issuance rate limited", "email", user.Email, "provider", req.Provider)
 				w.Header().Set("Retry-After", "3600")
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many keys provisioned recently; try again later"})
@@ -282,8 +283,7 @@ func (h *handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 	key, err := h.createOrgKey(r, role, req)
 	if err != nil {
-		var httpErr *orgKeyError
-		if errors.As(err, &httpErr) {
+		if httpErr, ok := errors.AsType[*orgKeyError](err); ok {
 			writeJSON(w, httpErr.status, map[string]string{"error": httpErr.message})
 			return
 		}
@@ -358,7 +358,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	updates := map[string]interface{}{}
+	updates := map[string]any{}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}
@@ -503,10 +503,10 @@ func (h *handler) handleProvisioning(w http.ResponseWriter, r *http.Request) {
 	if enabled, ok := raw["enabled"].(bool); ok {
 		resp.Enabled = enabled
 	}
-	if providers, ok := raw["providers"].(map[string]interface{}); ok {
+	if providers, ok := raw["providers"].(map[string]any); ok {
 		resp.Providers = make(map[string]ProvisioningProvider, len(providers))
 		for name, entry := range providers {
-			m, _ := entry.(map[string]interface{})
+			m, _ := entry.(map[string]any)
 			p := ProvisioningProvider{}
 			if v, ok := m["auto_provision"].(bool); ok {
 				p.AutoProvision = v
@@ -543,7 +543,7 @@ func (h *handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	resp := ConfigResponse{
 		Enabled: cfg.Enabled,
-		Features: map[string]interface{}{
+		Features: map[string]any{
 			"cost_tracking":      cfg.Features.CostTracking.Enabled,
 			"api_key_management": cfg.Features.APIKeyManagement.Enabled,
 			"rate_limiting":      cfg.Features.RateLimiting.Enabled,
@@ -581,7 +581,7 @@ func (h *handler) handlePII(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"enabled":                enabled,
 		"allow_per_key_override": allowPerKey,
 		"fail_mode":              failMode,
@@ -593,12 +593,12 @@ func (h *handler) handlePII(w http.ResponseWriter, r *http.Request) {
 	if h.deps.PIISummary != nil {
 		resp["stats"] = h.deps.PIISummary()
 	} else {
-		resp["stats"] = map[string]interface{}{"available": false}
+		resp["stats"] = map[string]any{"available": false}
 	}
 	if h.deps.IDGateSummary != nil {
 		resp["id_gate_stats"] = h.deps.IDGateSummary()
 	} else {
-		resp["id_gate_stats"] = map[string]interface{}{"available": false}
+		resp["id_gate_stats"] = map[string]any{"available": false}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -611,7 +611,7 @@ func (h *handler) handleUsage(w http.ResponseWriter, r *http.Request) {
 		enabled = cfg.Features.CostTracking.Enabled
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"enabled": enabled,
 		"source":  "cost_tracking",
 	}
@@ -619,7 +619,7 @@ func (h *handler) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if h.deps.UsageSummary != nil {
 		resp["stats"] = h.deps.UsageSummary()
 	} else {
-		resp["stats"] = map[string]interface{}{"available": false}
+		resp["stats"] = map[string]any{"available": false}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -689,6 +689,8 @@ func providerBasePath(provider string) string {
 		return "/anthropic"
 	case "gemini":
 		return "/gemini"
+	case "openrouter":
+		return "/openrouter/api/v1"
 	default:
 		return "/" + provider
 	}
@@ -728,7 +730,7 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"id":         link.ID(),
 		"url":        h.publicAdminUIBaseURL(r) + "/share/" + link.ID(),
 		"provider":   link.Provider,
@@ -776,7 +778,7 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		"id", link.ID(),
 		"key", apikeys.RedactKey(record.PK),
 		"provider", record.Provider,
-		"client_ip", clientIP(r),
+		"client_ip", middleware.TrustedClientIP(r),
 		"created_by", link.CreatedBy,
 	)
 
@@ -791,7 +793,7 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 
 	base := h.publicBaseURL(r)
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"id":          link.ID(),
 		"provider":    record.Provider,
 		"key":         record.PK,
@@ -874,36 +876,36 @@ func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) handleCircuitActivity(w http.ResponseWriter, r *http.Request) {
 	if h.deps.CircuitActivity == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"available": false})
+		writeJSON(w, http.StatusOK, map[string]any{"available": false})
 		return
 	}
 	writeJSON(w, http.StatusOK, h.deps.CircuitActivity())
 }
 
 func (h *handler) handleModelStatus(w http.ResponseWriter, r *http.Request) {
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"registry": modelStatusRegistry(h.deps.YAMLConfig),
 	}
 	if h.deps.ModelStatusSummary != nil {
 		resp["stats"] = h.deps.ModelStatusSummary()
 	} else {
-		resp["stats"] = map[string]interface{}{"available": false}
+		resp["stats"] = map[string]any{"available": false}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func modelStatusRegistry(cfg *config.YAMLConfig) map[string]interface{} {
-	retired := make([]map[string]interface{}, 0)
-	deprecated := make([]map[string]interface{}, 0)
+func modelStatusRegistry(cfg *config.YAMLConfig) map[string]any {
+	retired := make([]map[string]any, 0)
+	deprecated := make([]map[string]any, 0)
 	if cfg == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"retired":    retired,
 			"deprecated": deprecated,
 		}
 	}
 	for provider, models := range cfg.RetiredModels {
 		for canonical, entry := range models {
-			retired = append(retired, map[string]interface{}{
+			retired = append(retired, map[string]any{
 				"provider":     provider,
 				"model":        canonical,
 				"retired_date": entry.RetiredDate,
@@ -923,7 +925,7 @@ func modelStatusRegistry(cfg *config.YAMLConfig) map[string]interface{} {
 			if !mc.Deprecated {
 				continue
 			}
-			deprecated = append(deprecated, map[string]interface{}{
+			deprecated = append(deprecated, map[string]any{
 				"provider":    provider,
 				"model":       canonical,
 				"replacement": mc.Replacement,
@@ -937,7 +939,7 @@ func modelStatusRegistry(cfg *config.YAMLConfig) map[string]interface{} {
 		}
 		return deprecated[i]["model"].(string) < deprecated[j]["model"].(string)
 	})
-	return map[string]interface{}{
+	return map[string]any{
 		"retired":    retired,
 		"deprecated": deprecated,
 	}
@@ -1007,7 +1009,7 @@ func (h *handler) handleCost(w http.ResponseWriter, r *http.Request) {
 		transports = append(transports, entry)
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"enabled":         ct.Enabled,
 		"async":           ct.Async,
 		"workers":         ct.Workers,
@@ -1020,7 +1022,7 @@ func (h *handler) handleCost(w http.ResponseWriter, r *http.Request) {
 	if h.deps.CostSummary != nil {
 		resp["stats"] = h.deps.CostSummary()
 	} else {
-		resp["stats"] = map[string]interface{}{"available": false}
+		resp["stats"] = map[string]any{"available": false}
 	}
 
 	writeJSON(w, http.StatusOK, resp)

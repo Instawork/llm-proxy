@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,7 @@ func TestNotifications_ProvidersPerEnvironment(t *testing.T) {
 		{"production.yml", "sendgrid"},
 	}
 	for _, c := range cases {
+		t.Setenv("ENVIRONMENT", strings.TrimSuffix(c.env, ".yml"))
 		cfg, err := LoadAndMergeConfigs([]string{
 			filepath.Join(configsDir, "base.yml"),
 			filepath.Join(configsDir, c.env),

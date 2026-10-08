@@ -60,12 +60,37 @@ var passthroughSuffixes = []string{
 	"/count_tokens",   // Anthropic
 	"/batches",        // Anthropic / OpenAI batch jobs; usage lands in async results
 	"/client_secrets", // OpenAI Realtime bootstrap; the session itself is a websocket
+	"/cachedContents", // Gemini explicit cache create / list; storage is billed per token-hour, tokens at generateContent time
 }
 
 // passthroughSegments match anywhere in the path.
 var passthroughSegments = []string{
-	"/upload/",   // Gemini resumable upload
-	"/realtime/", // OpenAI Realtime
+	"/upload/",         // Gemini resumable upload
+	"/realtime/",       // OpenAI Realtime
+	"/files/",          // Gemini files.get / files.delete, OpenAI file retrieve / content
+	"/cachedContents/", // Gemini cachedContents.get / patch / delete
+}
+
+// blockedSegments are vendor account-administration surfaces. The proxy only
+// brokers inference, so a proxy key must never reach the org/admin APIs the
+// shared upstream credential is entitled to.
+var blockedSegments = []string{
+	"/organization/",  // OpenAI Admin API: projects, users, admin keys, audit logs
+	"/fine_tuning/",   // OpenAI fine-tuning jobs billed to the org account
+	"/organizations/", // Anthropic Admin API: members, workspaces, api keys
+	"/tunedModels/",   // Gemini tuned-model management
+}
+
+// IsBlockedVendorPath reports whether path targets a vendor administration
+// surface the proxy refuses to forward.
+func IsBlockedVendorPath(path string) bool {
+	p := strings.TrimSuffix(path, "/") + "/"
+	for _, s := range blockedSegments {
+		if strings.Contains(p, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // ClassifyEndpoint reports how the proxy treats a provider request path.
@@ -95,6 +120,11 @@ var (
 	modelIDRe     = regexp.MustCompile(`/models?/[^/:]+(:[0-9]+)?`)
 	opaqueIDRe    = regexp.MustCompile(`/[A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]{15,}`)
 	modelIDPrefix = regexp.MustCompile(`^/models?/`)
+	// Gemini file names (files/t66gxk29np7q) and cache names
+	// (cachedContents/sxsdslx5skq5) are shorter than opaqueIDRe's floor, so
+	// collapse them by position instead of shape.
+	fileIDRe  = regexp.MustCompile(`/files/[^/]+`)
+	cacheIDRe = regexp.MustCompile(`/cachedContents/[^/]+`)
 )
 
 // EndpointTemplate collapses per-request identifiers (meta names, model ids,
@@ -105,5 +135,7 @@ func EndpointTemplate(path string) string {
 	path = modelIDRe.ReplaceAllStringFunc(path, func(m string) string {
 		return modelIDPrefix.FindString(m) + "{model}"
 	})
+	path = fileIDRe.ReplaceAllString(path, "/files/{id}")
+	path = cacheIDRe.ReplaceAllString(path, "/cachedContents/{id}")
 	return opaqueIDRe.ReplaceAllString(path, "/{id}")
 }

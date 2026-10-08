@@ -216,6 +216,7 @@ func TestDeployedYAML_NoDevCORSOrigin(t *testing.T) {
 			t.Fatalf("%s.yml must not carry dev_cors_origin, got %q", env, got)
 		}
 	}
+	t.Setenv("ENVIRONMENT", "dev")
 	merged, err := config.LoadAndMergeConfigs([]string{
 		filepath.Join(configsDir, "base.yml"),
 		filepath.Join(configsDir, "dev.yml"),

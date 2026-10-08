@@ -17,12 +17,12 @@ func RedactScopeKey(scope string) string {
 	if scope == "" || scope == "global" {
 		return scope
 	}
-	idx := strings.Index(scope, ":")
-	if idx < 0 {
+	before, after, ok := strings.Cut(scope, ":")
+	if !ok {
 		return scope
 	}
-	kind := scope[:idx]
-	rest := scope[idx+1:]
+	kind := before
+	rest := after
 	switch kind {
 	case "key":
 		return "key:" + redactScopeSecret(rest)

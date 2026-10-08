@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -33,7 +34,7 @@ func main() {
 	var (
 		configDir     = flag.String("config-dir", "configs", "Path to configuration directory")
 		environment   = flag.String("env", "dev", "Environment (dev, staging, production)")
-		provider      = flag.String("provider", "", "Provider name (openai, anthropic, gemini)")
+		provider      = flag.String("provider", "", "Provider name (openai, anthropic, gemini, openrouter)")
 		actualKey     = flag.String("key", "", "Actual provider API key")
 		description   = flag.String("desc", "", "Description for the key")
 		costLimit     = flag.Int64("cost-limit", 10000, "Daily cost limit in cents (default: $100)")
@@ -146,14 +147,8 @@ func loadConfig(configDir, environment string) (*config.YAMLConfig, error) {
 // handleCreate creates a new API key
 func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, logger *slog.Logger) {
 	// Validate provider
-	validProviders := []string{"openai", "anthropic", "gemini"}
-	isValid := false
-	for _, p := range validProviders {
-		if provider == p {
-			isValid = true
-			break
-		}
-	}
+	validProviders := []string{"openai", "anthropic", "gemini", "openrouter"}
+	isValid := slices.Contains(validProviders, provider)
 	if !isValid {
 		logger.Error("Invalid provider", "provider", provider, "valid", validProviders)
 		os.Exit(1)
@@ -162,7 +157,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	// Parse tags
 	tags := make(map[string]string)
 	if tagsStr != "" {
-		for _, tag := range strings.Split(tagsStr, ",") {
+		for tag := range strings.SplitSeq(tagsStr, ",") {
 			parts := strings.SplitN(tag, "=", 2)
 			if len(parts) == 2 {
 				tags[parts[0]] = parts[1]
@@ -202,7 +197,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	if len(apiKey.Tags) > 0 {
 		fmt.Printf("Tags:        %v\n", apiKey.Tags)
 	}
-	fmt.Printf("\n🔑 Use this key in your API requests by replacing your provider key with: %s\n", apiKey.PK)
+	fmt.Printf("\n🔑 Send this key in place of your provider key (Authorization: Bearer / x-api-key / x-goog-api-key), never in the URL.\n")
 }
 
 // handleList lists all API keys
@@ -280,7 +275,7 @@ func handleDelete(ctx context.Context, store *apikeys.Store, keyID string, logge
 
 // handleDisable disables an API key
 func handleDisable(ctx context.Context, store *apikeys.Store, keyID string, logger *slog.Logger) {
-	err := store.UpdateKey(ctx, keyID, map[string]interface{}{
+	err := store.UpdateKey(ctx, keyID, map[string]any{
 		"enabled": false,
 	})
 	if err != nil {
@@ -293,7 +288,7 @@ func handleDisable(ctx context.Context, store *apikeys.Store, keyID string, logg
 
 // handleEnable enables an API key
 func handleEnable(ctx context.Context, store *apikeys.Store, keyID string, logger *slog.Logger) {
-	err := store.UpdateKey(ctx, keyID, map[string]interface{}{
+	err := store.UpdateKey(ctx, keyID, map[string]any{
 		"enabled": true,
 	})
 	if err != nil {

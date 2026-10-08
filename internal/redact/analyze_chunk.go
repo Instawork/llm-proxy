@@ -57,10 +57,7 @@ func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, err
 	// pathologically small analyze_chunk_chars (e.g. 1) turn a multi-MB field
 	// into millions of goroutines blocked on a semaphore, exhausting memory
 	// before the shared deadline even expires.
-	workers := limit
-	if workers > len(chunks) {
-		workers = len(chunks)
-	}
+	workers := min(limit, len(chunks))
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -167,10 +164,7 @@ func chunkRunes(runes []rune, maxChars, overlapChars int) []textChunk {
 // boundary doesn't land mid-word. Falls back to end when none is found.
 func whitespaceSplitPoint(runes []rune, start, end int) int {
 	const maxLookback = 200
-	floor := end - maxLookback
-	if floor < start {
-		floor = start
-	}
+	floor := max(end-maxLookback, start)
 	for i := end; i > floor; i-- {
 		if isJSONWhitespace(runes[i-1]) {
 			return i

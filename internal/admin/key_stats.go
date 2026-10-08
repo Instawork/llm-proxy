@@ -181,7 +181,7 @@ type memoryKeyCost struct {
 	OutputTokens   int64
 }
 
-func recentRowsFromSnap(snap map[string]interface{}, field string) []map[string]interface{} {
+func recentRowsFromSnap(snap map[string]any, field string) []map[string]any {
 	raw, ok := snap[field]
 	if !ok || raw == nil {
 		return nil
@@ -190,7 +190,7 @@ func recentRowsFromSnap(snap map[string]interface{}, field string) []map[string]
 	if err != nil {
 		return nil
 	}
-	var rows []map[string]interface{}
+	var rows []map[string]any
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil
 	}
@@ -202,7 +202,7 @@ func recentRowsFromSnap(snap map[string]interface{}, field string) []map[string]
 // the exact Redis row. The key detail page and the spend overview both call it
 // so a key never shows two different figures.
 func keyCostToday(
-	snap map[string]interface{},
+	snap map[string]any,
 	masked, rawKey, day string,
 	redis adminrollup.KeyCostDayStats,
 	redisOK, rollupBound bool,
@@ -215,7 +215,7 @@ func keyCostToday(
 	return mergeKeyCostStats(mem, redis, redisOK, rollupBound)
 }
 
-func memoryCostForKey(snap map[string]interface{}, masked, rawKey string) memoryKeyCost {
+func memoryCostForKey(snap map[string]any, masked, rawKey string) memoryKeyCost {
 	for _, row := range recentRowsFromSnap(snap, "by_key") {
 		id := asString(row["key_id"])
 		if id != masked && id != rawKey {
@@ -226,7 +226,7 @@ func memoryCostForKey(snap map[string]interface{}, masked, rawKey string) memory
 	return memoryKeyCost{}
 }
 
-func memoryCostFromRow(row map[string]interface{}) memoryKeyCost {
+func memoryCostFromRow(row map[string]any) memoryKeyCost {
 	return memoryKeyCost{
 		SpendUSD:       asFloat(row["spend_usd"]),
 		InputSpendUSD:  asFloat(row["input_spend_usd"]),
@@ -237,7 +237,7 @@ func memoryCostFromRow(row map[string]interface{}) memoryKeyCost {
 	}
 }
 
-func memoryPIIForKey(summary func() map[string]interface{}, masked string) int64 {
+func memoryPIIForKey(summary func() map[string]any, masked string) int64 {
 	snap := safeSummary(summary)
 	for _, row := range recentRowsFromSnap(snap, "top_keys") {
 		if asString(row["name"]) == masked {
@@ -303,8 +303,8 @@ func recentPIIOnUTCDay(events []keyPIIRecentResponse, day string) []keyPIIRecent
 	return out
 }
 
-func memoryRecentCostForKeyFromSnap(snap map[string]interface{}, masked, rawKey string) []map[string]interface{} {
-	out := make([]map[string]interface{}, 0)
+func memoryRecentCostForKeyFromSnap(snap map[string]any, masked, rawKey string) []map[string]any {
+	out := make([]map[string]any, 0)
 	for _, row := range recentRowsFromSnap(snap, "recent") {
 		id := asString(row["key_id"])
 		if id == masked || id == rawKey {
@@ -314,9 +314,9 @@ func memoryRecentCostForKeyFromSnap(snap map[string]interface{}, masked, rawKey 
 	return out
 }
 
-func memoryRecentPIIForKey(summary func() map[string]interface{}, masked string) []map[string]interface{} {
+func memoryRecentPIIForKey(summary func() map[string]any, masked string) []map[string]any {
 	snap := safeSummary(summary)
-	out := make([]map[string]interface{}, 0)
+	out := make([]map[string]any, 0)
 	for _, row := range recentRowsFromSnap(snap, "recent") {
 		if asString(row["key_id"]) == masked {
 			out = append(out, row)
@@ -325,7 +325,7 @@ func memoryRecentPIIForKey(summary func() map[string]interface{}, masked string)
 	return out
 }
 
-func sanitizeRecentCost(rows []map[string]interface{}) []keyCostRecentResponse {
+func sanitizeRecentCost(rows []map[string]any) []keyCostRecentResponse {
 	out := make([]keyCostRecentResponse, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, keyCostRecentResponse{
@@ -343,11 +343,11 @@ func sanitizeRecentCost(rows []map[string]interface{}) []keyCostRecentResponse {
 	return out
 }
 
-func sanitizeRecentPII(rows []map[string]interface{}) []keyPIIRecentResponse {
+func sanitizeRecentPII(rows []map[string]any) []keyPIIRecentResponse {
 	out := make([]keyPIIRecentResponse, 0, len(rows))
 	for _, row := range rows {
 		entityCounts := map[string]int{}
-		if raw, ok := row["entity_counts"].(map[string]interface{}); ok {
+		if raw, ok := row["entity_counts"].(map[string]any); ok {
 			for k, v := range raw {
 				entityCounts[k] = int(asFloat(v))
 			}
@@ -365,23 +365,23 @@ func sanitizeRecentPII(rows []map[string]interface{}) []keyPIIRecentResponse {
 	return out
 }
 
-func safeSummary(summary func() map[string]interface{}) map[string]interface{} {
+func safeSummary(summary func() map[string]any) map[string]any {
 	if summary == nil {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
 	snap := summary()
 	if snap == nil {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
 	return snap
 }
 
-func asString(v interface{}) string {
+func asString(v any) string {
 	s, _ := v.(string)
 	return s
 }
 
-func asFloat(v interface{}) float64 {
+func asFloat(v any) float64 {
 	switch n := v.(type) {
 	case float64:
 		return n

@@ -85,7 +85,7 @@ func TestMemoryLimiterDailyWindow(t *testing.T) {
 	scope := ScopeKeys{Provider: "openai", Model: "gpt-4o", UserID: "u3"}
 	now := time.Now()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if res, _ := lim.CheckAndReserve(context.Background(), "x", scope, 10, now); !res.Allowed {
 			t.Fatalf("request %d should be allowed", i)
 		}

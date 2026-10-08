@@ -7,6 +7,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/gorilla/mux"
 )
@@ -65,7 +66,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	// A per-client token bucket caps abuse/DoS against this unauthenticated
 	// endpoint (guessing the UUID is already infeasible). Generous enough for
 	// legitimate use: a 10-request burst refilling at 1/sec per client IP.
-	publicAPI.Use(newTokenBucketLimiter(1, 10).middleware)
+	publicAPI.Use(ipLimitMiddleware(middleware.NewTokenBucketLimiter(1, 10)))
 	publicAPI.HandleFunc("/share/{id}", h.handleGetShare).Methods(http.MethodGet, http.MethodOptions)
 
 	api := adminRouter.PathPrefix("/api").Subrouter()
@@ -110,6 +111,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/key-requests/mine", roleHandler(auth, permissions.MinRole(permissions.ListMyKeyRequests), h.handleListMyKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/key-requests/{id}", roleHandler(auth, permissions.MinRole(permissions.ReviewKeyRequest), h.handleReviewKeyRequest)).Methods(http.MethodPatch, http.MethodOptions)
 
+	mountPprof(adminRouter, auth)
 	mountSPA(adminRouter)
 
 	logger.Info("Admin dashboard routes registered", "prefix", "/admin")

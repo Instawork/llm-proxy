@@ -68,35 +68,12 @@ func EndpointLabel(path string, status int) string {
 	return label
 }
 
-func intMapDelta(cur, prev map[string]int64) map[string]float64 {
-	out := make(map[string]float64)
-	for k, v := range cur {
-		if dv := float64(v - prev[k]); dv != 0 {
-			out[k] = dv
-		}
-	}
-	return out
-}
-
-func copyIntMap(m map[string]int64) map[string]int64 {
-	out := make(map[string]int64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
-}
-
 func (r *Recorder) maybeRollDay(now time.Time) {
-	day := now.UTC().Format("2006-01-02")
-	if r.dayKey == day {
+	// RollDay swaps the day key under r.mu and runs flush + archive off
+	// the lock; only the in-memory reset below happens here.
+	if !r.RollDay(&r.dayKey, now, adminrollup.MetricUnmetered, adminrollup.TopNCaps{}) {
 		return
 	}
-	oldDay := r.dayKey
-	r.dayKey = day
-	r.FlushRollup()
-	go func() {
-		r.ArchiveDayFromAggregatesElected(adminrollup.MetricUnmetered, oldDay, adminrollup.TopNCaps{})
-	}()
 	r.flushed = flushed{}
 	r.total = 0
 	r.byEndpoint = make(map[string]int64)
@@ -107,8 +84,8 @@ func (r *Recorder) deltaLocked() adminrollup.Delta {
 	return adminrollup.Delta{
 		Totals: map[string]float64{"requests": float64(r.total - r.flushed.total)},
 		Dimensions: map[string]map[string]float64{
-			"by_endpoint": intMapDelta(r.byEndpoint, r.flushed.byEndpoint),
-			"by_key":      intMapDelta(r.byKey, r.flushed.byKey),
+			"by_endpoint": adminrollup.IntMapDelta(r.byEndpoint, r.flushed.byEndpoint),
+			"by_key":      adminrollup.IntMapDelta(r.byKey, r.flushed.byKey),
 		},
 	}
 }
@@ -116,7 +93,7 @@ func (r *Recorder) deltaLocked() adminrollup.Delta {
 func (r *Recorder) publishLocked() {
 	dayKey := r.dayKey
 	delta := r.deltaLocked()
-	r.flushed = flushed{total: r.total, byEndpoint: copyIntMap(r.byEndpoint), byKey: copyIntMap(r.byKey)}
+	r.flushed = flushed{total: r.total, byEndpoint: adminrollup.CopyIntMap(r.byEndpoint), byKey: adminrollup.CopyIntMap(r.byKey)}
 	r.mu.Unlock()
 	r.QueueDelta(dayKey, delta)
 	r.mu.Lock()
@@ -167,20 +144,21 @@ func (r *Recorder) RecordRequest(keyID, endpoint string) {
 
 // Snapshot returns a JSON-serialisable view for the admin API:
 // requests_today, by_endpoint ([{name,count}]) and by_key (key → endpoint → count).
-func (r *Recorder) Snapshot() map[string]interface{} {
+func (r *Recorder) Snapshot() map[string]any {
 	if r == nil {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 
 	r.mu.RLock()
-	localActive := r.dayKey == today
+	bucketDay := r.dayKey
+	localActive := bucketDay == today
 	var total int64
 	var localByEndpoint map[string]int64
 	localByKey := map[string]map[string]int64{}
 	if localActive {
 		total = r.total
-		localByEndpoint = copyIntMap(r.byEndpoint)
+		localByEndpoint = adminrollup.CopyIntMap(r.byEndpoint)
 		localByKey = nestByKey(r.byKey)
 	}
 	r.mu.RUnlock()
@@ -189,21 +167,27 @@ func (r *Recorder) Snapshot() map[string]interface{} {
 	if r.RollupBound() {
 		backend = "redis"
 	}
-	snap := map[string]interface{}{
+	snap := map[string]any{
 		"available":      true,
 		"backend":        backend,
 		"day":            today,
 		"requests_today": int64(0),
-		"by_endpoint":    []map[string]interface{}{},
+		"by_endpoint":    []map[string]any{},
 		"by_key":         map[string]map[string]int64{},
 	}
 	r.MergeToday(adminrollup.MetricUnmetered, today, snap, adminrollup.TopNCaps{})
 	if localActive {
-		adminrollup.MergeSnapInt64Max(snap, "requests_today", total)
-		adminrollup.MergeSnapNameCounts(snap, "by_endpoint", localByEndpoint, 0)
-		snap["by_key"] = mergeByKey(byKeyFromSnap(snap["by_key"]), localByKey)
+		mergeLocalUnmeteredIntoSnap(snap, total, localByEndpoint, localByKey)
 	}
 	return snap
+}
+
+// mergeLocalUnmeteredIntoSnap restores this instance's in-process totals on
+// top of the fleet-wide rollup (see statslint's stats-post-merge-restore).
+func mergeLocalUnmeteredIntoSnap(snap map[string]any, total int64, byEndpoint map[string]int64, byKey map[string]map[string]int64) {
+	adminrollup.MergeSnapInt64Max(snap, "requests_today", total)
+	adminrollup.MergeSnapNameCounts(snap, "by_endpoint", byEndpoint, 0)
+	snap["by_key"] = mergeByKey(byKeyFromSnap(snap["by_key"]), byKey)
 }
 
 func nestByKey(flat map[string]int64) map[string]map[string]int64 {
@@ -221,7 +205,7 @@ func nestByKey(flat map[string]int64) map[string]map[string]int64 {
 	return out
 }
 
-func byKeyFromSnap(raw interface{}) map[string]map[string]int64 {
+func byKeyFromSnap(raw any) map[string]map[string]int64 {
 	if m, ok := raw.(map[string]map[string]int64); ok {
 		return m
 	}
@@ -233,7 +217,7 @@ func byKeyFromSnap(raw interface{}) map[string]map[string]int64 {
 func mergeByKey(a, b map[string]map[string]int64) map[string]map[string]int64 {
 	out := make(map[string]map[string]int64, len(a)+len(b))
 	for k, v := range a {
-		out[k] = copyIntMap(v)
+		out[k] = adminrollup.CopyIntMap(v)
 	}
 	for k, v := range b {
 		out[k] = adminrollup.MergeInt64Maps(out[k], v)

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,22 +31,28 @@ func formatNumber(n int64) string {
 
 	// Convert to string and add commas
 	str := fmt.Sprintf("%d", n)
-	result := ""
+	var result strings.Builder
 
 	for i, char := range str {
 		if i > 0 && (len(str)-i)%3 == 0 {
-			result += ","
+			result.WriteString(",")
 		}
-		result += string(char)
+		result.WriteString(string(char))
 	}
 
-	return result
+	return result.String()
 }
 
 // YAMLConfig represents the main YAML configuration structure
 type YAMLConfig struct {
 	// Global settings
 	Enabled bool `yaml:"enabled"`
+
+	// BindAddress is the interface the HTTP server listens on. Empty means
+	// every interface. The sidecar profile pins it to 127.0.0.1 so a
+	// co-located proxy that trusts task networking is not reachable on the
+	// task ENI from the rest of the VPC.
+	BindAddress string `yaml:"bind_address,omitempty"`
 
 	// Features configuration
 	Features FeaturesConfig `yaml:"features"`
@@ -652,10 +661,11 @@ type KeyExpiryConfig struct {
 type KeyProvisioningConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// DevFake mints local-only upstream credentials without calling vendor APIs.
-	DevFake   bool                        `yaml:"dev_fake,omitempty"`
-	OpenAI    OpenAIProvisioningConfig    `yaml:"openai,omitempty"`
-	Gemini    GeminiProvisioningConfig    `yaml:"gemini,omitempty"`
-	Anthropic AnthropicProvisioningConfig `yaml:"anthropic,omitempty"`
+	DevFake    bool                         `yaml:"dev_fake,omitempty"`
+	OpenAI     OpenAIProvisioningConfig     `yaml:"openai,omitempty"`
+	Gemini     GeminiProvisioningConfig     `yaml:"gemini,omitempty"`
+	Anthropic  AnthropicProvisioningConfig  `yaml:"anthropic,omitempty"`
+	OpenRouter OpenRouterProvisioningConfig `yaml:"openrouter,omitempty"`
 }
 
 // OpenAIProvisioningConfig mints keys via the OpenAI Admin API.
@@ -677,6 +687,12 @@ type AnthropicProvisioningConfig struct {
 	Tiers       map[string]string `yaml:"tiers,omitempty"`
 	// PoolRedisKey enables the legacy Redis pool provisioner when tiers are unset.
 	PoolRedisKey string `yaml:"pool_redis_key,omitempty"`
+}
+
+// OpenRouterProvisioningConfig assigns one shared OpenRouter API key.
+type OpenRouterProvisioningConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	APIKey  string `yaml:"api_key,omitempty"`
 }
 
 // RateLimitingConfig represents rate limiting feature configuration
@@ -763,7 +779,7 @@ func (c *RedisConfig) UnmarshalYAML(value *yaml.Node) error {
 
 // MarshalYAML preserves the distinction between omitted db and explicit db: 0
 // across config merge round-trips.
-func (c RedisConfig) MarshalYAML() (interface{}, error) {
+func (c RedisConfig) MarshalYAML() (any, error) {
 	out := redisConfigYAML{
 		URL:      c.URL,
 		Address:  c.Address,
@@ -859,7 +875,7 @@ type ModelConfig struct {
 	Replacement string   `yaml:"replacement,omitempty"`
 	Aliases     []string `yaml:"aliases,omitempty"` // Alternative model names
 	// Pricing can be a single price, or a list of tiers.
-	Pricing interface{} `yaml:"pricing,omitempty"`
+	Pricing any `yaml:"pricing,omitempty"`
 	// ProjectID scopes upstream requests for this model to a specific provider
 	// project. Currently consumed only by the Bedrock Mantle proxy, which sends
 	// it as the OpenAI-Project header so Mantle resolves data-retention (and
@@ -1017,12 +1033,12 @@ func mergeConfigs(base, env *YAMLConfig) (*YAMLConfig, error) {
 	}
 
 	// Parse both as generic maps for merging
-	var baseMap map[string]interface{}
+	var baseMap map[string]any
 	if err := yaml.Unmarshal(baseBytes, &baseMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal base config to map: %w", err)
 	}
 
-	var envMap map[string]interface{}
+	var envMap map[string]any
 	if err := yaml.Unmarshal(envBytes, &envMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal environment config to map: %w", err)
 	}
@@ -1063,7 +1079,7 @@ func mergeConfigFromYAMLFile(base *YAMLConfig, filename string) (*YAMLConfig, er
 		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
 	}
 
-	var overlayMap map[string]interface{}
+	var overlayMap map[string]any
 	if err := yaml.Unmarshal(data, &overlayMap); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML config %s: %w", filename, err)
 	}
@@ -1073,7 +1089,7 @@ func mergeConfigFromYAMLFile(base *YAMLConfig, filename string) (*YAMLConfig, er
 		return nil, fmt.Errorf("failed to marshal base config: %w", err)
 	}
 
-	var baseMap map[string]interface{}
+	var baseMap map[string]any
 	if err := yaml.Unmarshal(baseBytes, &baseMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal base config to map: %w", err)
 	}
@@ -1103,20 +1119,18 @@ func mergeConfigFromYAMLFile(base *YAMLConfig, filename string) (*YAMLConfig, er
 
 // deepMerge recursively merges map b into map a
 // Values in b override values in a
-func deepMerge(a, b map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
+func deepMerge(a, b map[string]any) map[string]any {
+	result := make(map[string]any)
 
 	// Copy all values from a
-	for k, v := range a {
-		result[k] = v
-	}
+	maps.Copy(result, a)
 
 	// Merge values from b
 	for k, v := range b {
 		if existingValue, exists := result[k]; exists {
 			// If both values are maps, merge them recursively
-			if existingMap, ok := existingValue.(map[string]interface{}); ok {
-				if newMap, ok := v.(map[string]interface{}); ok {
+			if existingMap, ok := existingValue.(map[string]any); ok {
+				if newMap, ok := v.(map[string]any); ok {
 					result[k] = deepMerge(existingMap, newMap)
 					continue
 				}
@@ -1183,6 +1197,9 @@ func (c *YAMLConfig) SaveYAMLConfig(filename string) error {
 func (c *YAMLConfig) Validate() error {
 	if c.Providers == nil {
 		return fmt.Errorf("providers configuration is required")
+	}
+	if c.BindAddress != "" && net.ParseIP(c.BindAddress) == nil {
+		return fmt.Errorf("bind_address must be an IP address (got %q)", c.BindAddress)
 	}
 
 	// Validate transport configuration if cost tracking is enabled
@@ -1474,10 +1491,12 @@ func (c *YAMLConfig) validateRedactAPIConfig() error {
 }
 
 // isLocalEnvironment reports whether ENVIRONMENT names a local or fuzz
-// deployment, the only places dev-only auth bypasses may be enabled.
+// deployment, the only places dev-only auth bypasses may be enabled. An unset
+// ENVIRONMENT is not local: a deployed image that lost the variable must fail
+// validation rather than come up with dev bypasses on.
 func isLocalEnvironment(env string) bool {
 	switch env {
-	case "", "dev", "local", "fuzz", "fuzz-mem":
+	case "dev", "local", "fuzz", "fuzz-mem":
 		return true
 	}
 	return false
@@ -1703,14 +1722,14 @@ func (c *YAMLConfig) ParsePricing() error {
 }
 
 // parseModelPricing handles the logic of parsing the `interface{}` pricing field.
-func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
+func parseModelPricing(pricingData any) (*ModelPricing, error) {
 	mp := &ModelPricing{}
 
 	switch v := pricingData.(type) {
-	case []interface{}:
+	case []any:
 		// It's a list of tiers.
 		for _, tierData := range v {
-			tierMap, ok := tierData.(map[string]interface{})
+			tierMap, ok := tierData.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("invalid pricing tier format")
 			}
@@ -1730,13 +1749,13 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 			}
 			mp.Tiers = append(mp.Tiers, tier)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		// It's a simple price, has overrides, or already processed tiers.
 
 		// Check if it has already-processed tiers (from config merging)
-		if tiers, ok := v["tiers"].([]interface{}); ok {
+		if tiers, ok := v["tiers"].([]any); ok {
 			for _, tierData := range tiers {
-				tierMap, ok := tierData.(map[string]interface{})
+				tierMap, ok := tierData.(map[string]any)
 				if !ok {
 					return nil, fmt.Errorf("invalid pricing tier format in tiers array")
 				}
@@ -1774,10 +1793,10 @@ func parseModelPricing(pricingData interface{}) (*ModelPricing, error) {
 			mp.Tiers = []PricingTier{tier}
 		}
 
-		if overrides, ok := v["overrides"].(map[string]interface{}); ok {
+		if overrides, ok := v["overrides"].(map[string]any); ok {
 			mp.Overrides = make(map[string]Pricing)
 			for alias, overrideData := range overrides {
-				overrideMap := overrideData.(map[string]interface{})
+				overrideMap := overrideData.(map[string]any)
 				pricing := Pricing{}
 				if in, ok := overrideMap["input"].(float64); ok {
 					pricing.Input = in
@@ -1813,10 +1832,8 @@ func (c *YAMLConfig) GetModelConfig(provider, model string) (*ModelConfig, strin
 		return &mc, model
 	}
 	for canonicalName, mc := range providerConfig.Models {
-		for _, alias := range mc.Aliases {
-			if alias == model {
-				return &mc, canonicalName
-			}
+		if slices.Contains(mc.Aliases, model) {
+			return &mc, canonicalName
 		}
 	}
 	return nil, ""
@@ -1836,10 +1853,8 @@ func (c *YAMLConfig) LookupRetiredModel(provider, model string) (RetiredModelEnt
 		return entry, true
 	}
 	for _, entry := range providerModels {
-		for _, alias := range entry.Aliases {
-			if alias == model {
-				return entry, true
-			}
+		if slices.Contains(entry.Aliases, model) {
+			return entry, true
 		}
 	}
 	return RetiredModelEntry{}, false
@@ -1865,10 +1880,8 @@ func (c *YAMLConfig) GetModelPricing(provider, model string, inputTokens int) (*
 		}
 		// Check if the model is an alias.
 		for canonicalName, mc := range providerConfig.Models {
-			for _, alias := range mc.Aliases {
-				if alias == modelName {
-					return &mc, canonicalName
-				}
+			if slices.Contains(mc.Aliases, modelName) {
+				return &mc, canonicalName
 			}
 		}
 		return nil, ""

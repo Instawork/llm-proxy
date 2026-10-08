@@ -51,7 +51,7 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	pm.RegisterProvider(op)
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -92,12 +92,38 @@ func TestAPIKeyValidationMiddleware(t *testing.T) {
 	}
 }
 
+func TestAPIKeyValidationMiddleware_OpenRouterRouteIsAuthenticated(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	path := "/openrouter/api/v1/chat/completions"
+
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenRouterProxy())
+	handler := APIKeyValidationMiddleware(pm, &mockAPIKeyStore{}, true, nil)(ok)
+
+	req := httptest.NewRequest("POST", path, nil)
+	req.Header.Set("Authorization", "Bearer valid") // mock store scopes this key to openai
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("openai-scoped key on the openrouter route: expected 401, got %d", rec.Code)
+	}
+
+	unregistered := APIKeyValidationMiddleware(providers.NewProviderManager(), &mockAPIKeyStore{}, true, nil)(ok)
+	req = httptest.NewRequest("POST", path, nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec = httptest.NewRecorder()
+	unregistered.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("disabled openrouter provider: expected 502, got %d", rec.Code)
+	}
+}
+
 func TestAPIKeyValidationMiddleware_StashesSkPrefixedProxyKeyInContext(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	iwKey := apikeys.KeyPrefix + "proxy"
 	if !strings.HasPrefix(iwKey, "sk-") {
@@ -162,7 +188,7 @@ func TestAPIKeyValidationMiddleware_StashesByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	var byoID string
 	var proxyRecord *apikeys.APIKey
@@ -190,7 +216,7 @@ func TestAPIKeyValidationMiddleware_ProxyKeyHasNoByoCredentialID(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	byoID := "sentinel"
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +238,7 @@ func TestAPIKeyValidationMiddleware_RejectsBYOKeyWhenDisabled(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, false)
+	mw := APIKeyValidationMiddleware(pm, store, false, nil)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -236,7 +262,7 @@ func TestAPIKeyValidationMiddleware_RejectsBannedBYOKey(t *testing.T) {
 			"openai:" + apikeys.CredentialHashSuffix("valid"): true,
 		},
 	}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -283,7 +309,7 @@ func TestAPIKeyValidationMiddleware_RejectsDisabledProxyKeyWhenValidateAPIKeyIsN
 	pm.RegisterProvider(providers.NewBedrockProxy())
 
 	store := &mockRejectingProxyKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -313,7 +339,7 @@ func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 	pm.RegisterProvider(providers.NewOpenAIProxy())
 
 	store := &mockAPIKeyStore{}
-	mw := APIKeyValidationMiddleware(pm, store, true)
+	mw := APIKeyValidationMiddleware(pm, store, true, nil)
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -325,5 +351,137 @@ func TestAPIKeyValidationMiddleware_SkipsRedact(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected /redact to bypass provider key validation, got %d", rec.Code)
+	}
+}
+
+// A proxy key in ?key= is refused even when the store would accept it: the
+// URL is written to every access log between the client and the proxy.
+func TestAPIKeyValidationMiddleware_RejectsProxyKeyInQueryString(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	mw := APIKeyValidationMiddleware(pm, &mockProxyKeyStore{}, true, nil)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	iwKey := apikeys.KeyPrefix + "proxy"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/openai/v1/chat/completions?key="+iwKey, nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("query-string proxy key: expected 401, got %d", rec.Code)
+	}
+
+	req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer "+iwKey)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("header proxy key: expected 200, got %d", rec.Code)
+	}
+}
+
+type mockGeminiProxyKeyStore struct {
+	mockAPIKeyStore
+}
+
+func (m *mockGeminiProxyKeyStore) ValidateAndGetActualKey(ctx context.Context, key string) (string, string, error) {
+	if key == apikeys.KeyPrefix+"proxy" {
+		return "actual-proxy", "gemini", nil
+	}
+	return m.mockAPIKeyStore.ValidateAndGetActualKey(ctx, key)
+}
+
+func (m *mockGeminiProxyKeyStore) LookupProxyKey(_ context.Context, bearer string) (*apikeys.APIKey, error) {
+	if bearer == apikeys.KeyPrefix+"proxy" {
+		return &apikeys.APIKey{PK: bearer, Provider: "gemini"}, nil
+	}
+	return nil, nil
+}
+
+// n8n's Gemini credential can only send ?key=; the model list GET it uses for
+// the credential test and model dropdown stays open, everything else on Gemini
+// still requires a header.
+// n8n's Google Gemini(PaLM) credential is query-string auth only and sends
+// the proxy key as ?key= on every call — the model list, generateContent,
+// and uploads alike — so the exemption covers all Gemini routes, not just
+// the model list GET that #94 originally scoped it to.
+func TestAPIKeyValidationMiddleware_AllowsGeminiProxyKeyInQuery(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewGeminiProxy())
+	mw := APIKeyValidationMiddleware(pm, &mockGeminiProxyKeyStore{}, true, nil)
+	var gotQueryKey string
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQueryKey = r.URL.Query().Get("key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	iwKey := apikeys.KeyPrefix + "proxy"
+
+	for _, tc := range []struct{ method, target string }{
+		{"GET", "/gemini/v1beta/models?key=" + iwKey},
+		{"POST", "/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + iwKey},
+		{"GET", "/gemini/v1beta/models/gemini-2.5-flash?key=" + iwKey},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: expected 200, got %d", tc.method, tc.target, rec.Code)
+		}
+	}
+	if gotQueryKey != "actual-proxy" {
+		t.Fatalf("expected query key translated to upstream key, got %q", gotQueryKey)
+	}
+}
+
+// The header-only rule still applies to every non-Gemini provider.
+func TestAPIKeyValidationMiddleware_RejectsProxyKeyInQuery_NonGemini(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	mw := APIKeyValidationMiddleware(pm, &mockAPIKeyStore{}, true, nil)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	iwKey := apikeys.KeyPrefix + "known"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/openai/v1/chat/completions?key="+iwKey, nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+// Repeated rejected credentials from one client are refused with 429 before
+// reaching the key store; a valid key from another client is unaffected.
+func TestAPIKeyValidationMiddleware_ThrottlesRepeatedFailures(t *testing.T) {
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	guard := NewAuthFailureGuard()
+	mw := APIKeyValidationMiddleware(pm, &mockAPIKeyStore{}, true, guard)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	var last int
+	for i := 0; i <= authFailureBurst; i++ {
+		req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+		req.RemoteAddr = "203.0.113.9:4444"
+		req.Header.Set("Authorization", "Bearer "+apikeys.KeyPrefix+"unknown")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		last = rec.Code
+		if i < authFailureBurst && last != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d", i, last)
+		}
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures expected 429, got %d", authFailureBurst, last)
+	}
+
+	other := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+	other.RemoteAddr = "198.51.100.2:4444"
+	other.Header.Set("Authorization", "Bearer valid")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, other)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unrelated client: expected 200, got %d", rec.Code)
 	}
 }

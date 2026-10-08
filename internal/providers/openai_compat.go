@@ -126,14 +126,19 @@ func requestBodyHasStreamTrue(req *http.Request, providerName string) bool {
 		}
 	}
 
-	var requestData map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &requestData); err != nil {
+	return bodyStreamFlag(bodyBytes)
+}
+
+// bodyStreamFlag reports whether a JSON request body carries a top-level
+// boolean "stream": true. It decodes just that field rather than the whole
+// document into map[string]interface{}; a non-boolean "stream" or malformed
+// JSON reads as false, matching the previous behaviour.
+func bodyStreamFlag(body []byte) bool {
+	var probe struct {
+		Stream *bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
 		return false
 	}
-	if streamValue, exists := requestData["stream"]; exists {
-		if streamBool, ok := streamValue.(bool); ok {
-			return streamBool
-		}
-	}
-	return false
+	return probe.Stream != nil && *probe.Stream
 }

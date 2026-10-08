@@ -19,6 +19,17 @@ func TestInferProviderFromMaskedID(t *testing.T) {
 	assert.Equal(t, "anthropic", InferProviderFromMaskedID("sk-ant-…"+CredentialHashSuffix("x")))
 	assert.Equal(t, "gemini", InferProviderFromMaskedID("AIza…"+CredentialHashSuffix("x")))
 	assert.Equal(t, "openai", InferProviderFromMaskedID("sk-proj-…"+CredentialHashSuffix("x")))
+	assert.Equal(t, "openrouter", InferProviderFromMaskedID("sk-or-…"+CredentialHashSuffix("x")))
+}
+
+func TestValidateBYOBanRequest_OpenRouter(t *testing.T) {
+	masked := "sk-or-…" + CredentialHashSuffix("sk-or-v1-test")
+	provider, err := ValidateBYOBanRequest("openrouter", masked)
+	require.NoError(t, err)
+	assert.Equal(t, "openrouter", provider)
+
+	_, err = ValidateBYOBanRequest("openai", masked)
+	assert.Error(t, err, "an OpenRouter credential must not be banned under the openai route")
 }
 
 func TestBYOKeyLookup(t *testing.T) {

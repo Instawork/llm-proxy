@@ -21,6 +21,11 @@
 
 enabled: true
 
+# Loopback only: the co-located app reaches this container over localhost in
+# the shared task network namespace, and task_sigv4 below accepts callers with
+# no credential, so the port must not be reachable from the VPC via the task ENI.
+bind_address: "127.0.0.1"
+
 providers:
   bedrock-mantle:
     auth: task_sigv4

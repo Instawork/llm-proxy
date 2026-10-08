@@ -48,6 +48,9 @@ func openAISuccess(model string, inTok, outTok, cachedTok int, content string) [
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
 		"model":   model,
+		// Real OpenAI and OpenRouter responses always carry it, and the OpenRouter
+		// SDK rejects bodies without the key.
+		"system_fingerprint": nil,
 		"choices": []map[string]any{
 			{
 				"index": 0,

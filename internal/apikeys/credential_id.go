@@ -15,14 +15,14 @@ var byoPrefixProviders = []struct {
 	{"sk-ant-", "anthropic"},
 	{"sk-proj-", "openai"},
 	{"sk-svcacct-", "openai"},
-	{"sk-or-", "openai"},
+	{"sk-or-", "openrouter"},
 	{"sk-", "openai"},
 	{"AIza", "gemini"},
 }
 
 func isSupportedProxyProvider(provider string) bool {
 	switch normalizeProvider(provider) {
-	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
+	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle", "openrouter":
 		return true
 	default:
 		return false

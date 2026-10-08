@@ -105,7 +105,7 @@ func TestRedisLimiterMinuteWindowsDoNotCarryOver(t *testing.T) {
 	t0 := time.Date(2026, 7, 24, 12, 0, 59, 0, time.UTC)
 	t1 := t0.Add(time.Second)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		res, err := lim.CheckAndReserve(context.Background(), "w1", scope, 1, t0)
 		require.NoError(t, err)
 		require.True(t, res.Allowed, "W1 reserve %d", i)
@@ -115,7 +115,7 @@ func TestRedisLimiterMinuteWindowsDoNotCarryOver(t *testing.T) {
 
 	// W1's key is deliberately left unexpired (no FastForward), reproducing the
 	// sub-second overlap at the boundary.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		res, err := lim.CheckAndReserve(context.Background(), "w2", scope, 1, t1)
 		require.NoError(t, err)
 		require.True(t, res.Allowed, "W2 must start on a full budget, reserve %d", i)

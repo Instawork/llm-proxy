@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "gemini" | "bedrock";
+export type Provider = "openai" | "anthropic" | "gemini" | "bedrock" | "openrouter";
 
 export type PiiRedactSetting = boolean | null;
 

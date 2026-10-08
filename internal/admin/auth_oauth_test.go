@@ -76,7 +76,7 @@ func (td *testOIDCServer) serveDiscovery(w http.ResponseWriter, _ *http.Request)
 func (td *testOIDCServer) serveJWKS(w http.ResponseWriter, _ *http.Request) {
 	n := base64.RawURLEncoding.EncodeToString(td.privateKey.PublicKey.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"keys": []map[string]string{
 			{
 				"kty": "RSA",
@@ -129,7 +129,7 @@ func (td *testOIDCServer) mintIDToken(claims idTokenClaims) string {
 			Expiry:   jwt.NewNumericDate(now.Add(time.Hour)),
 			IssuedAt: jwt.NewNumericDate(now),
 		}).
-		Claims(map[string]interface{}{
+		Claims(map[string]any{
 			"email":          claims.email,
 			"email_verified": claims.emailVerified,
 			"name":           claims.name,
@@ -189,8 +189,7 @@ func TestLoadAuthConfig_EnvOverrides(t *testing.T) {
 	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "override.com")
 	t.Setenv("LLM_PROXY_ADMIN_OAUTH_REDIRECT_URL", "https://llm.example.com/admin/auth/callback")
 
-	cfg, err := loadAuthConfig("example.com", "cid", "csecret", "ssecret")
-	require.NoError(t, err)
+	cfg := loadAuthConfig(config.LoadAdminAuthEnv(), "example.com", "cid", "csecret", "ssecret")
 	assert.Equal(t, "override.com", cfg.allowedDomain)
 	assert.Equal(t, "https://llm.example.com/admin/auth/callback", cfg.redirectURL)
 	assert.Equal(t, "cid", cfg.clientID)
@@ -559,4 +558,61 @@ func TestRegisterRoutes_OAuthLoginRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/auth/login", nil))
 	assert.Equal(t, http.StatusFound, rec.Code)
+}
+
+func TestHandleLogout_RejectsCrossSite(t *testing.T) {
+	oidcSrv := newTestOIDCServer(t)
+	auth := newTestOAuthAuthenticator(t, oidcSrv, "example.com")
+
+	for name, hdr := range map[string]http.Header{
+		"sec-fetch-site cross-site": {"Sec-Fetch-Site": {"cross-site"}},
+		"foreign origin":            {"Origin": {"https://evil.example.net"}},
+		"null origin":               {"Origin": {"null"}},
+		"same host, http scheme":    {"Origin": {"http://llm.example.com"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://llm.example.com/admin/auth/logout", nil)
+			req.Header = hdr
+			rec := httptest.NewRecorder()
+			auth.handleLogout(rec, req)
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+		})
+	}
+
+	for name, hdr := range map[string]http.Header{
+		"same origin":     {"Origin": {"https://llm.example.com"}, "Sec-Fetch-Site": {"same-origin"}},
+		"no browser hdrs": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://llm.example.com/admin/auth/logout", nil)
+			req.Header = hdr
+			rec := httptest.NewRecorder()
+			auth.handleLogout(rec, req)
+			assert.Equal(t, http.StatusNoContent, rec.Code)
+		})
+	}
+}
+
+func TestSessionRevoked(t *testing.T) {
+	revoked := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	assert.False(t, sessionRevoked(revoked.Add(-time.Hour).UnixNano(), time.Time{}), "no revocation on record")
+	assert.True(t, sessionRevoked(revoked.Add(-time.Hour).UnixNano(), revoked), "issued before logout")
+	assert.True(t, sessionRevoked(0, revoked), "legacy cookie without issued_at")
+	assert.False(t, sessionRevoked(revoked.Add(time.Millisecond).UnixNano(), revoked), "re-login right after logout")
+}
+
+func TestNewAuthenticator_SecureCookieDefault(t *testing.T) {
+	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECRET", "test-secret-at-least-32-bytes-long")
+	t.Setenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_ID", "")
+	t.Setenv("LLM_PROXY_ADMIN_GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECURE", "")
+
+	dev, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{DevBypassLogin: true}, nil)
+	require.NoError(t, err)
+	assert.False(t, dev.sessionStore.Options.Secure, "plain-http dev bypass keeps Secure off")
+
+	t.Setenv("LLM_PROXY_ADMIN_SESSION_SECURE", "1")
+	forced, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{DevBypassLogin: true}, nil)
+	require.NoError(t, err)
+	assert.True(t, forced.sessionStore.Options.Secure)
 }

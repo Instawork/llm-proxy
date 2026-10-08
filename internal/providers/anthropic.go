@@ -46,14 +46,13 @@ func NewAnthropicProxy(opts ...ProxyOptions) *AnthropicProxy {
 	}
 
 	// Create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy := &httputil.ReverseProxy{}
 
 	// Create the Anthropic proxy instance
 	anthropicProxy := &AnthropicProxy{proxy: proxy}
 
-	// Use the generic director function to handle common proxy logic
-	originalDirector := proxy.Director
-	proxy.Director = CreateGenericDirector(anthropicProxy, targetURL, originalDirector, opt.DisableGzip)
+	// Use the generic rewrite function to handle common proxy logic
+	proxy.Rewrite = CreateGenericRewrite(anthropicProxy, targetURL, opt.DisableGzip)
 
 	// Customize the transport for optimal streaming performance
 	proxy.Transport = newProxyTransport(opt.DisableGzip, opt.ResponseHeaderTimeout)
@@ -145,8 +144,8 @@ func (a *AnthropicProxy) WrapTransport(fn func(http.RoundTripper) http.RoundTrip
 }
 
 // GetHealthStatus returns the health status of the Anthropic proxy
-func (a *AnthropicProxy) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (a *AnthropicProxy) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"provider":          "anthropic",
 		"status":            "healthy",
 		"baseURL":           anthropicBaseURL,
@@ -257,7 +256,7 @@ func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMet
 		defer gzipReader.Close()
 	}
 
-	bodyBytes, err := io.ReadAll(decompressedReader)
+	bodyBytes, err := readResponseBody(decompressedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -499,14 +498,14 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	}
 
 	// Parse JSON to extract metadata.user_id field
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		proxylog.Proxy("anthropic user ID extraction: error parsing request JSON: %v", err)
 		return ""
 	}
 
 	// Extract user ID from the "metadata.user_id" field
-	if metadata, ok := data["metadata"].(map[string]interface{}); ok {
+	if metadata, ok := data["metadata"].(map[string]any); ok {
 		if userValue, ok := metadata["user_id"].(string); ok && userValue != "" {
 			log.Printf("🔍 Anthropic: Extracted user ID: %s", userValue)
 			return userValue
@@ -570,7 +569,7 @@ func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (stri
 		return "", nil
 	}
 
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		return "", nil
 	}
@@ -582,12 +581,12 @@ func (a *AnthropicProxy) ExtractRequestModelAndMessages(req *http.Request) (stri
 
 	messages := make([]string, 0, 8)
 	// Anthropic request: messages: [{role, content: [{type:"text", text:"..."}, ...]}]
-	if rawMsgs, ok := data["messages"].([]interface{}); ok {
+	if rawMsgs, ok := data["messages"].([]any); ok {
 		for _, m := range rawMsgs {
-			if msg, ok := m.(map[string]interface{}); ok {
-				if parts, ok := msg["content"].([]interface{}); ok {
+			if msg, ok := m.(map[string]any); ok {
+				if parts, ok := msg["content"].([]any); ok {
 					for _, p := range parts {
-						if pm, ok := p.(map[string]interface{}); ok {
+						if pm, ok := p.(map[string]any); ok {
 							if t, ok := pm["type"].(string); ok && t == "text" {
 								if txt, ok := pm["text"].(string); ok && txt != "" {
 									messages = append(messages, txt)

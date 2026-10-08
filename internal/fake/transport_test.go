@@ -15,11 +15,11 @@ import (
 )
 
 type countingRT struct {
-	calls int32
+	calls atomic.Int32
 }
 
 func (c *countingRT) RoundTrip(*http.Request) (*http.Response, error) {
-	atomic.AddInt32(&c.calls, 1)
+	c.calls.Add(1)
 	return &http.Response{
 		StatusCode: http.StatusTeapot,
 		Body:       io.NopCloser(strings.NewReader("inner")),
@@ -42,10 +42,16 @@ func TestTransport_Success_NoInnerCall(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	if atomic.LoadInt32(&inner.calls) != 0 {
+	if inner.calls.Load() != 0 {
 		t.Fatal("inner transport must not be called")
 	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q; strict SDKs (openrouter) reject non-JSON success responses", ct)
+	}
 	data, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(data, []byte(`"system_fingerprint":null`)) {
+		t.Fatalf("OpenAI-shaped body must carry system_fingerprint (required by the OpenRouter SDK): %s", data)
+	}
 	p := providers.NewOpenAIProxy()
 	meta, err := p.ParseResponseMetadata(bytes.NewReader(data), false)
 	if err != nil {
@@ -64,7 +70,7 @@ func TestTransport_Disabled_CallsInner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if atomic.LoadInt32(&inner.calls) != 1 {
+	if inner.calls.Load() != 1 {
 		t.Fatal("inner must be called when fake disabled")
 	}
 }
@@ -80,7 +86,7 @@ func TestTransport_Chaos503(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.ContentLength = int64(len(body))
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		resp, err := tr.RoundTrip(req)
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		if err != nil {
@@ -91,6 +97,9 @@ func TestTransport_Chaos503(t *testing.T) {
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("failure Content-Type = %q, want application/json", ct)
+			}
 			return
 		}
 	}
@@ -116,7 +125,7 @@ func TestChaos_PickDeterministicWithSeed(t *testing.T) {
 	c1 := fake.NewChaos(true, 0.5, 42)
 	c2 := fake.NewChaos(true, 0.5, 42)
 	var a, b []fake.Outcome
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		a = append(a, c1.Pick(-1))
 		b = append(b, c2.Pick(-1))
 	}

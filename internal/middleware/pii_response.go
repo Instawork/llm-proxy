@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -68,6 +67,7 @@ func servePIIStreamingRestore(w http.ResponseWriter, r *http.Request, next http.
 		ResponseWriter: headerWriter,
 		registry:       reg,
 		streaming:      true,
+		leaks:          piiLeakCounter{reg: reg},
 	}
 	next.ServeHTTP(restoreWriter, r)
 
@@ -78,7 +78,7 @@ func servePIIStreamingRestore(w http.ResponseWriter, r *http.Request, next http.
 		_, _ = restoreWriter.writeRestored(tail)
 	}
 	finalizePIIRestored(r.Context(), reg)
-	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
+	finalizePIILeaked(r.Context(), restoreWriter.leaks.total())
 	logPIILeakIfNeeded(r, true)
 }
 
@@ -91,11 +91,12 @@ func servePIIBufferedRestore(w http.ResponseWriter, r *http.Request, next http.H
 		ResponseWriter: bufWriter,
 		registry:       reg,
 		streaming:      false,
+		leaks:          piiLeakCounter{reg: reg},
 	}
 	next.ServeHTTP(restoreWriter, r)
 
 	finalizePIIRestored(r.Context(), reg)
-	finalizePIILeaked(r.Context(), reg, restoreWriter.emitted.String())
+	finalizePIILeaked(r.Context(), restoreWriter.leaks.total())
 	if err := bufWriter.commit(); err != nil {
 		proxylog.SlogProxy(slog.Default(), slog.LevelWarn, "pii_restore: failed to commit buffered response",
 			slog.String("error", err.Error()),
@@ -121,9 +122,66 @@ type piiRestoreResponseWriter struct {
 	registry    *redact.Registry
 	streaming   bool
 	carry       []byte
-	emitted     bytes.Buffer
+	leaks       piiLeakCounter
 	jsonMode    bool
 	jsonModeSet bool
+}
+
+// piiLeakScanWindow is how many trailing bytes of the previous restored
+// segment are re-scanned together with the next one. It must exceed the
+// longest placeholder wire form (the JSON-unicode-escaped variant of a long
+// entity name is ~40 bytes) so a placeholder split across two segments is
+// still seen whole.
+const piiLeakScanWindow = 128
+
+// piiLeakCounter counts MASK placeholders that survived restore without
+// retaining the restored response. Before this the writer appended every
+// emitted byte to a second, uncapped copy of the stream purely so the leak
+// count could run once at the end — peak memory for a PII-enabled request
+// was therefore two full copies of the response (three when buffered).
+//
+// Each segment is scanned together with the tail of the previous one, and
+// matches lying entirely inside that tail are subtracted because the
+// previous scan already counted them, so a placeholder straddling two
+// segments is counted exactly once.
+type piiLeakCounter struct {
+	reg   *redact.Registry
+	tail  []byte
+	count int
+}
+
+func (c *piiLeakCounter) observe(seg []byte) {
+	if c.reg == nil || len(seg) == 0 {
+		return
+	}
+	if len(c.tail) == 0 {
+		c.count += c.reg.MaskPlaceholdersRemaining(string(seg))
+	} else {
+		joined := make([]byte, 0, len(c.tail)+len(seg))
+		joined = append(append(joined, c.tail...), seg...)
+		c.count += c.reg.MaskPlaceholdersRemaining(string(joined)) -
+			c.reg.MaskPlaceholdersRemaining(string(c.tail))
+	}
+	c.tail = appendTail(c.tail, seg, piiLeakScanWindow)
+}
+
+func (c *piiLeakCounter) total() int {
+	return c.count
+}
+
+// appendTail returns the last max bytes of tail+seg in a buffer owned by
+// the counter, so it never aliases a caller's reusable write buffer.
+func appendTail(tail, seg []byte, max int) []byte {
+	if len(seg) >= max {
+		return append(tail[:0], seg[len(seg)-max:]...)
+	}
+	keep := max - len(seg)
+	if keep > len(tail) {
+		keep = len(tail)
+	}
+	// Shift the retained suffix of the old tail to the front, then append.
+	copy(tail, tail[len(tail)-keep:])
+	return append(tail[:keep], seg...)
 }
 
 // useJSONRestore decides, once per response, whether restored originals
@@ -172,7 +230,7 @@ func (pw *piiRestoreResponseWriter) writeRestored(restored []byte) (int, error) 
 	if len(restored) == 0 {
 		return 0, nil
 	}
-	pw.emitted.Write(restored)
+	pw.leaks.observe(restored)
 	n, err := pw.ResponseWriter.Write(restored)
 	if err != nil {
 		return n, err

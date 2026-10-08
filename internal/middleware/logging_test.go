@@ -64,8 +64,8 @@ func (mp *MockProvider) Proxy() http.Handler {
 	})
 }
 
-func (mp *MockProvider) GetHealthStatus() map[string]interface{} {
-	return map[string]interface{}{
+func (mp *MockProvider) GetHealthStatus() map[string]any {
+	return map[string]any{
 		"status": "healthy",
 		"name":   mp.name,
 	}

@@ -61,9 +61,9 @@ func testDashboardHandler(t *testing.T) (*handler, *apikeys.Store) {
 	return h, store
 }
 
-func decodeJSONBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]interface{} {
+func decodeJSONBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
-	var out map[string]interface{}
+	var out map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
 	return out
 }
@@ -76,7 +76,7 @@ func TestHandleCost_WithStats(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
 	assert.Equal(t, true, body["enabled"])
-	stats, ok := body["stats"].(map[string]interface{})
+	stats, ok := body["stats"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, stats["available"])
 	assert.Greater(t, stats["requests_today"], float64(0))
@@ -88,7 +88,7 @@ func TestHandleCost_StatsUnavailableWithoutRecorder(t *testing.T) {
 	h.handleCost(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/cost", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
-	stats := body["stats"].(map[string]interface{})
+	stats := body["stats"].(map[string]any)
 	assert.Equal(t, false, stats["available"])
 }
 
@@ -101,7 +101,7 @@ func TestHandleUsageAndPII_StatsUnavailable(t *testing.T) {
 		rec := httptest.NewRecorder()
 		fn(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/stats", nil))
 		require.Equal(t, http.StatusOK, rec.Code)
-		stats := decodeJSONBody(t, rec)["stats"].(map[string]interface{})
+		stats := decodeJSONBody(t, rec)["stats"].(map[string]any)
 		assert.Equal(t, false, stats["available"])
 	}
 }
@@ -137,7 +137,7 @@ func TestHandleUsage_WithStats(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
-	stats := body["stats"].(map[string]interface{})
+	stats := body["stats"].(map[string]any)
 	assert.Equal(t, true, stats["available"])
 	assert.Equal(t, "cost_tracking", body["source"])
 }
@@ -149,7 +149,7 @@ func TestHandlePII_WithStats(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
-	stats := body["stats"].(map[string]interface{})
+	stats := body["stats"].(map[string]any)
 	assert.Equal(t, true, stats["available"])
 	assert.Equal(t, true, body["enabled"])
 }
@@ -161,10 +161,10 @@ func TestHandleConfig(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
-	features, ok := body["features"].(map[string]interface{})
+	features, ok := body["features"].(map[string]any)
 	require.True(t, ok)
 	assert.Contains(t, features, "rate_limiting")
-	providers, ok := body["providers"].(map[string]interface{})
+	providers, ok := body["providers"].(map[string]any)
 	require.True(t, ok)
 	assert.NotEmpty(t, providers)
 }
@@ -210,7 +210,7 @@ func TestHandleCircuitActivity(t *testing.T) {
 	assert.Equal(t, true, body["available"])
 	assert.Equal(t, float64(1), body["probes_started"])
 	assert.Equal(t, float64(1), body["probes_succeeded"])
-	events, ok := body["recent_events"].([]interface{})
+	events, ok := body["recent_events"].([]any)
 	require.True(t, ok)
 	require.NotEmpty(t, events)
 }
@@ -231,15 +231,15 @@ func TestHandleModelStatus(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	body := decodeJSONBody(t, rec)
-	stats, ok := body["stats"].(map[string]interface{})
+	stats, ok := body["stats"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, stats["available"])
 	assert.Equal(t, float64(1), stats["retired_total"])
 	assert.Equal(t, float64(1), stats["unknown_total"])
 
-	registry, ok := body["registry"].(map[string]interface{})
+	registry, ok := body["registry"].(map[string]any)
 	require.True(t, ok)
-	retired, ok := registry["retired"].([]interface{})
+	retired, ok := registry["retired"].([]any)
 	require.True(t, ok)
 	require.NotEmpty(t, retired)
 }
@@ -250,7 +250,7 @@ func TestHandleModelStatus_Unavailable(t *testing.T) {
 	h.handleModelStatus(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/model-status", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := decodeJSONBody(t, rec)
-	stats := body["stats"].(map[string]interface{})
+	stats := body["stats"].(map[string]any)
 	assert.Equal(t, false, stats["available"])
 }
 
@@ -284,7 +284,7 @@ func TestHandleListKeys(t *testing.T) {
 	h.handleListKeys(rec, authenticatedRequest(t, h, http.MethodGet, "/admin/api/keys", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var keys []map[string]interface{}
+	var keys []map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&keys))
 	require.Len(t, keys, 1)
 	assert.Equal(t, "openai", keys[0]["provider"])

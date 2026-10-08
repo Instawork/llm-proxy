@@ -41,24 +41,24 @@ func TestShouldEnforceBedrockForPIIOff(t *testing.T) {
 		assert.False(t, ShouldEnforceBedrockForPIIOff(true, &APIKey{}))
 	})
 	t.Run("global on explicit off", func(t *testing.T) {
-		assert.True(t, ShouldEnforceBedrockForPIIOff(true, &APIKey{RedactPII: boolPtr(false)}))
+		assert.True(t, ShouldEnforceBedrockForPIIOff(true, &APIKey{RedactPII: new(false)}))
 	})
 	t.Run("global off inherit", func(t *testing.T) {
 		assert.False(t, ShouldEnforceBedrockForPIIOff(false, &APIKey{}))
 	})
 	t.Run("global off explicit off", func(t *testing.T) {
-		assert.True(t, ShouldEnforceBedrockForPIIOff(false, &APIKey{RedactPII: boolPtr(false)}))
+		assert.True(t, ShouldEnforceBedrockForPIIOff(false, &APIKey{RedactPII: new(false)}))
 	})
 	t.Run("global off explicit on", func(t *testing.T) {
-		assert.False(t, ShouldEnforceBedrockForPIIOff(false, &APIKey{RedactPII: boolPtr(true)}))
+		assert.False(t, ShouldEnforceBedrockForPIIOff(false, &APIKey{RedactPII: new(true)}))
 	})
 }
 
 func TestValidatePIIOffBedrockPolicy(t *testing.T) {
-	err := ValidatePIIOffBedrockPolicy(true, "openai", boolPtr(false))
+	err := ValidatePIIOffBedrockPolicy(true, "openai", new(false))
 	require.Error(t, err)
 
-	err = ValidatePIIOffBedrockPolicy(true, "bedrock", boolPtr(false))
+	err = ValidatePIIOffBedrockPolicy(true, "bedrock", new(false))
 	require.NoError(t, err)
 
 	err = ValidatePIIOffBedrockPolicy(false, "openai", nil)

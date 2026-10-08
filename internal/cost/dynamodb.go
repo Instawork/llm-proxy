@@ -130,7 +130,7 @@ func (dt *DynamoDBTransport) verifyTableExists(ctx context.Context) error {
 }
 
 // FromConfig creates a DynamoDBTransport from configuration
-func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func (dt *DynamoDBTransport) FromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	switch cfg := transportConfig.(type) {
 	case *configPkg.TransportConfig:
 		if cfg.DynamoDB == nil {
@@ -149,8 +149,8 @@ func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slo
 		}
 		return NewDynamoDBTransport(config)
 
-	case map[string]interface{}:
-		dynamoConfig, ok := cfg["dynamodb"].(map[string]interface{})
+	case map[string]any:
+		dynamoConfig, ok := cfg["dynamodb"].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("dynamodb transport configuration not found")
 		}
@@ -182,7 +182,7 @@ func (dt *DynamoDBTransport) FromConfig(transportConfig interface{}, logger *slo
 }
 
 // NewDynamoDBTransportFromConfig creates a DynamoDBTransport from configuration (convenience function)
-func NewDynamoDBTransportFromConfig(transportConfig interface{}, logger *slog.Logger) (Transport, error) {
+func NewDynamoDBTransportFromConfig(transportConfig any, logger *slog.Logger) (Transport, error) {
 	dt := &DynamoDBTransport{}
 	return dt.FromConfig(transportConfig, logger)
 }

@@ -2,6 +2,7 @@ package redact
 
 import (
 	"context"
+	"slices"
 )
 
 type providerCtxKey struct{}
@@ -41,7 +42,7 @@ func AdapterForContext(ctx context.Context) ContentAdapter {
 // adapter that applies every provider's rules when name is unknown.
 func AdapterForProvider(name string) ContentAdapter {
 	switch name {
-	case "openai":
+	case "openai", "openrouter":
 		return openAIContentAdapter{}
 	case "anthropic":
 		return anthropicContentAdapter{}
@@ -60,12 +61,7 @@ func AdapterForProvider(name string) ContentAdapter {
 }
 
 func hasPathAncestor(path []string, key string) bool {
-	for _, seg := range path {
-		if seg == key {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(path, key)
 }
 
 type unionContentAdapter struct{}

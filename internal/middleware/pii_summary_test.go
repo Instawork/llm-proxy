@@ -59,9 +59,64 @@ func TestFinalizePIILeaked_CountsRemainingPlaceholders(t *testing.T) {
 	reg := redact.NewRegistry()
 	ph := reg.Placeholder("EMAIL_ADDRESS", "leak@example.com")
 	ctx := attachPIISummary(context.Background(), newPIISummary(PIIOutcomeOK, map[string]int{"EMAIL_ADDRESS": 1}))
-	finalizePIILeaked(ctx, reg, `{"text":"`+ph+`"}`)
+	leaks := piiLeakCounter{reg: reg}
+	leaks.observe([]byte(`{"text":"` + ph + `"}`))
+	finalizePIILeaked(ctx, leaks.total())
 	if got := piiSummaryHolderFromContext(ctx).Leaked; got != 1 {
 		t.Fatalf("leaked = %d, want 1", got)
+	}
+}
+
+// The incremental counter must agree with a whole-text count no matter how
+// the restored response is split into segments — including splits that fall
+// inside a placeholder — while retaining no more than the scan window.
+func TestPIILeakCounter_MatchesWholeTextCountAcrossSplits(t *testing.T) {
+	reg := redact.NewRegistry()
+	email := reg.Placeholder("EMAIL_ADDRESS", "leak@example.com")
+	person := reg.Placeholder("PERSON", "Jane Doe")
+	reg.Placeholder("PHONE_NUMBER", "555-0100")
+	text := `data: {"text":"hello ` + email + ` and ` + person + ` again ` + email + `"}` + "\n\n" +
+		`data: {"text":"` + strings.Repeat("filler text ", 40) + person + `"}` + "\n\n"
+	want := reg.MaskPlaceholdersRemaining(text)
+	if want != 4 {
+		t.Fatalf("whole-text count = %d, want 4 (fixture sanity)", want)
+	}
+
+	for _, size := range []int{1, 2, 3, 5, 7, 11, 16, 50, 97, 200, len(text), len(text) + 10} {
+		c := piiLeakCounter{reg: reg}
+		for off := 0; off < len(text); off += size {
+			end := off + size
+			if end > len(text) {
+				end = len(text)
+			}
+			// Hand the counter a buffer we immediately clobber, as
+			// ReverseProxy's reused copy buffer would.
+			seg := []byte(text[off:end])
+			c.observe(seg)
+			for i := range seg {
+				seg[i] = 'X'
+			}
+			if len(c.tail) > piiLeakScanWindow {
+				t.Fatalf("segment size %d: retained %d bytes, cap is %d", size, len(c.tail), piiLeakScanWindow)
+			}
+		}
+		if got := c.total(); got != want {
+			t.Fatalf("segment size %d: leaked = %d, want %d", size, got, want)
+		}
+	}
+}
+
+func TestPIILeakCounter_NilRegistryAndEmptySegmentsAreNoOps(t *testing.T) {
+	var c piiLeakCounter
+	c.observe([]byte("<PII_PERSON_1>"))
+	if c.total() != 0 {
+		t.Fatalf("nil registry counted %d leaks", c.total())
+	}
+	c = piiLeakCounter{reg: redact.NewRegistry()}
+	c.observe(nil)
+	c.observe([]byte{})
+	if c.total() != 0 || len(c.tail) != 0 {
+		t.Fatalf("empty segments changed state: count=%d tail=%q", c.total(), c.tail)
 	}
 }
 

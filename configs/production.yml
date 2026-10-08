@@ -48,6 +48,9 @@ features:
           metered: "${LLM_PROXY_ANTHROPIC_KEY_METERED}"
           elevated: "${LLM_PROXY_ANTHROPIC_KEY_ELEVATED}"
           unrestricted: "${LLM_PROXY_ANTHROPIC_KEY_UNRESTRICTED}"
+      openrouter:
+        enabled: true
+        api_key: "${LLM_PROXY_OPENROUTER_API_KEY}"
     expiry:
       enabled: true
       sweep_interval_seconds: 900

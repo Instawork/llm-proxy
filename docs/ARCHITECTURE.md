@@ -129,13 +129,17 @@ Every vendor implements `providers.Provider`:
 | --- | --- | --- |
 | `openai` | `api.openai.com` | `Authorization: Bearer` pass-through |
 | `anthropic` | `api.anthropic.com` | `x-api-key` pass-through |
-| `gemini` | Google Generative Language API | `?key=` or header |
+| `gemini` | Google Generative Language API | `x-goog-api-key` header (`?key=` only for BYO Google keys) |
 | `bedrock` | `bedrock-runtime.{region}.amazonaws.com` | SigV4 passthrough — proxy strips `/bedrock` only |
+| `openrouter` | `openrouter.ai` (clients use base URL `/openrouter/api/v1`) | `Authorization: Bearer` pass-through; OpenAI-shaped responses parsed by the shared OpenAI parser |
 
 `CreateGenericDirector` strips `/<provider>` from the path before forwarding.
-Bedrock is opt-in via `providers.bedrock.enabled: true`.
+`VendorPathPolicyMiddleware` refuses vendor account-administration paths
+(`/organization/`, `/fine_tuning/`, `/organizations/`, `/tunedModels/`) so a
+proxy key never reaches the org APIs the shared upstream credential can use.
+Bedrock and OpenRouter are opt-in via `providers.<name>.enabled: true`.
 
-### `LLMResponseMetadata`
+## # `LLMResponseMetadata`
 
 Canonical post-response snapshot consumed by cost tracking and stats:
 
@@ -345,9 +349,16 @@ assets are unavailable.
 2. Use `CreateGenericDirector` + `newProxyTransport` (or a custom transport)
 3. Implement streaming detection and `ParseResponseMetadata` for that vendor's JSON/SSE
 4. Add `WrapTransport` for circuit/fake injection (copy an existing provider)
-5. Register in `registerProviders` in `cmd/llm-proxy/main.go`
-6. Add pricing entries under `providers.<name>.models` in YAML
-7. Add integration tests
+5. Register in `registerProviders` in `cmd/llm-proxy/main.go`, add it to
+   `namedProviders` and `circuitModelExtractor`
+6. Add the route prefix to `middleware.isProviderRoute` and
+   `middleware.GetProviderFromRequest` — without them the API-key middleware
+   never sees the provider and the route is proxied unauthenticated — plus the
+   other name allowlists (`getProviderFromPath`, `testmode.knownProviders`,
+   `apikeys.isSupportedProxyProvider`, `redact.AdapterForProvider`,
+   `admin.providerBasePath`, the web `Provider` type)
+7. Add pricing entries under `providers.<name>.models` in YAML
+8. Add integration tests
 
 For request-signed upstreams (SigV4, mTLS), use passthrough mode: no-op
 `ValidateAPIKey`, never mutate signed headers or body, strip only your URL prefix.

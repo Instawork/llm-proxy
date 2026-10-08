@@ -9,7 +9,7 @@ const BYO_PREFIX_PROVIDERS: [string, Provider][] = [
   ["sk-ant-", "anthropic"],
   ["sk-proj-", "openai"],
   ["sk-svcacct-", "openai"],
-  ["sk-or-", "openai"],
+  ["sk-or-", "openrouter"],
   ["sk-", "openai"],
   ["AIza", "gemini"],
 ];

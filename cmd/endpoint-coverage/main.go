@@ -82,14 +82,14 @@ func main() {
 // isProviderPath mirrors middleware.isProviderRoute plus the /meta/{name}/
 // prefix that attributes a request to a named caller.
 func isProviderPath(path string) bool {
-	if strings.HasPrefix(path, "/meta/") {
-		rest := strings.TrimPrefix(path, "/meta/")
+	if after, ok := strings.CutPrefix(path, "/meta/"); ok {
+		rest := after
 		if idx := strings.Index(rest, "/"); idx > 0 {
 			path = rest[idx:]
 		}
 	}
 	switch circuit.ProviderFromPath(path) {
-	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle":
+	case "openai", "anthropic", "gemini", "bedrock", "bedrock-mantle", "openrouter":
 		return true
 	}
 	return false

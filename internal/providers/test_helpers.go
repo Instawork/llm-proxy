@@ -91,6 +91,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 	bedrockProvider := NewBedrockProxy()
 	manager.RegisterProvider(bedrockProvider)
 
+	manager.RegisterProvider(NewOpenRouterProxy())
+
 	// Register routes centrally
 	for name, provider := range manager.GetAllProviders() {
 		// Direct provider routes
@@ -107,7 +109,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *ProviderManager) {
 
 	// Health check endpoint
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]interface{}{
+		response := map[string]any{
 			"status":    "healthy",
 			"service":   "llm-proxy",
 			"providers": manager.GetHealthStatus(),

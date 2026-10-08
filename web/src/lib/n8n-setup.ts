@@ -57,6 +57,7 @@ export function n8nSetupGuide(provider: Provider, baseUrl: string): N8nSetupGuid
           "Paste your iw: proxy key in API Key.",
           "In your workflow, add a Google Gemini Chat Model node and pick that credential.",
         ],
+        note: "This credential sends the key as ?key= on every call; the proxy allows that for Gemini so the Google Gemini Chat Model node, the regular Google Gemini node, and HTTP Request nodes all work with a proxy key.",
       };
     case "bedrock":
       return {
@@ -70,6 +71,20 @@ export function n8nSetupGuide(provider: Provider, baseUrl: string): N8nSetupGuid
           `For Bedrock Mantle Claude models, use an Anthropic credential/node with Base URL set to ${baseUrl}/bedrock-mantle/anthropic and the same proxy key.`,
         ],
         note: "Bedrock via llm-proxy requires client-side SigV4 URL rewriting — not supported by n8n's built-in Bedrock node.",
+      };
+    case "openrouter":
+      return {
+        credentialLabel: "OpenAI",
+        nodeLabel: "OpenAI Chat Model",
+        urlField: "Base URL",
+        credentialImage: openaiCredential,
+        nodeImage: openaiNodeCredential,
+        steps: [
+          "Credentials → Add credential → OpenAI (OpenRouter speaks the OpenAI API).",
+          `Set Base URL to ${baseUrl} (no trailing slash).`,
+          "Paste your openrouter iw: proxy key in API Key.",
+          "In your workflow, add an OpenAI Chat Model node, pick that credential, and enter an OpenRouter model id such as deepseek/deepseek-v4-pro.",
+        ],
       };
     default:
       return null;

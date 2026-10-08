@@ -62,7 +62,7 @@ func readRedisCommand(reader *bufio.Reader) ([]string, error) {
 	}
 
 	parts := make([]string, 0, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		lenLine, err := reader.ReadString('\n')
 		if err != nil {
 			return nil, err
@@ -105,6 +105,9 @@ func TestNewRedisStore_URLOnly(t *testing.T) {
 	}
 	if opts.DB != 3 {
 		t.Fatalf("want DB=3, got %d", opts.DB)
+	}
+	if !opts.ContextTimeoutEnabled {
+		t.Fatal("ContextTimeoutEnabled must be on or per-call deadlines never reach the socket read")
 	}
 }
 

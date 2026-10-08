@@ -256,7 +256,8 @@ func isMergeLocalCall(name string) bool {
 	switch name {
 	case "mergeLocalCostTotalsIntoSnap", "mergeLocalUsageIntoSnap", "mergeLocalPIIIntoSnap",
 		"mergeLocalCircuitIntoSnap", "mergeLocalIDGateIntoSnap", "mergeLocalModelStatusIntoSnap",
-		"mergeLocalByKeyIntoSnap", "mergeLocalByProviderIntoSnap", "mergeLocalRateLimitIntoSnap":
+		"mergeLocalByKeyIntoSnap", "mergeLocalByProviderIntoSnap", "mergeLocalRateLimitIntoSnap",
+		"mergeLocalUnmeteredIntoSnap":
 		return true
 	default:
 		return false

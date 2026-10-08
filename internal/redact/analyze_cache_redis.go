@@ -63,10 +63,7 @@ func (c *redisAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string
 		if err := ctx.Err(); err != nil {
 			break
 		}
-		end := start + redisMGetChunkSize
-		if end > len(keys) {
-			end = len(keys)
-		}
+		end := min(start+redisMGetChunkSize, len(keys))
 		chunk := keys[start:end]
 
 		vals, err := c.rdb.MGet(ctx, chunk...).Result()
