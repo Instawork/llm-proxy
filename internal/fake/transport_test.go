@@ -45,7 +45,13 @@ func TestTransport_Success_NoInnerCall(t *testing.T) {
 	if inner.calls.Load() != 0 {
 		t.Fatal("inner transport must not be called")
 	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q; strict SDKs (openrouter) reject non-JSON success responses", ct)
+	}
 	data, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(data, []byte(`"system_fingerprint":null`)) {
+		t.Fatalf("OpenAI-shaped body must carry system_fingerprint (required by the OpenRouter SDK): %s", data)
+	}
 	p := providers.NewOpenAIProxy()
 	meta, err := p.ParseResponseMetadata(bytes.NewReader(data), false)
 	if err != nil {
@@ -91,6 +97,9 @@ func TestTransport_Chaos503(t *testing.T) {
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("failure Content-Type = %q, want application/json", ct)
+			}
 			return
 		}
 	}
