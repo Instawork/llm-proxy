@@ -4,16 +4,17 @@
 
 <img height="250" alt="Screenshot 2025-09-08 at 10 10 08 AM" src="https://github.com/user-attachments/assets/5c6ecf7f-14bf-4d67-ba48-f250c80e3205" />
 
-A simple, Go-based alternative to the `litellm` proxy, without all the extra stuff you don't need! A modular reverse proxy that forwards requests to various LLM providers (OpenAI, Anthropic, Gemini, AWS Bedrock) using Go and the Gorilla web toolkit.
+A simple, Go-based alternative to the `litellm` proxy, without all the extra stuff you don't need! A modular reverse proxy that forwards requests to various LLM providers (OpenAI, Anthropic, Gemini, AWS Bedrock, OpenRouter) using Go and the Gorilla web toolkit.
 
 ## Features
 
-- **Multi-provider support**: Full support for OpenAI, Anthropic, Gemini, and AWS Bedrock
+- **Multi-provider support**: Full support for OpenAI, Anthropic, Gemini, AWS Bedrock, and OpenRouter
 - **Streaming Support**: Native streaming support for all providers
 - **OpenAI Integration**: Complete OpenAI API compatibility with `/openai` prefix
 - **Anthropic Integration**: Claude API support with `/anthropic` prefix
 - **Gemini Integration**: Google Gemini API support with `/gemini` prefix
 - **AWS Bedrock Integration**: Anthropic Claude (and any other Converse API model) on Bedrock via a transparent SigV4-passthrough — clients sign with their own AWS credentials, proxy forwards bytes verbatim
+- **OpenRouter Integration**: OpenAI-compatible access to OpenRouter-hosted models (DeepSeek, Kimi, Qwen, …) with `/openrouter/api/v1` as the SDK base URL
 - **Comprehensive Logging**: Request/response monitoring with streaming detection
 - **CORS Support**: Browser-based application compatibility
 - **Health Check**: Detailed health status for all providers
@@ -464,6 +465,15 @@ against the canonical AWS URL and the upstream sees a path identical to what
 was signed. See the [architecture section](#architecture) for the passthrough
 contract.
 
+### OpenRouter
+
+- `POST /openrouter/api/v1/chat/completions` - OpenRouter chat completions (streaming supported)
+- `*  /openrouter/api/v1/*` - All other OpenRouter API endpoints
+
+Point an OpenAI-compatible SDK at `/openrouter/api/v1` with an `openrouter`
+proxy key; model ids are OpenRouter slugs such as `deepseek/deepseek-v4-pro`.
+Enabled via `providers.openrouter.enabled`.
+
 ## Architecture
 
 The proxy is built with a modular architecture:
@@ -473,6 +483,7 @@ The proxy is built with a modular architecture:
 - **`providers/anthropic.go`**: Anthropic proxy implementation with streaming support
 - **`providers/gemini.go`**: Gemini proxy implementation with streaming support
 - **`providers/bedrock.go`**: AWS Bedrock transparent SigV4 passthrough with eventstream usage parsing
+- **`providers/openrouter.go`**: OpenRouter proxy (OpenAI-compatible, metered with the shared OpenAI parser)
 - **`providers/provider.go`**: Common interfaces and provider management
 
 ### Credential modes
