@@ -689,9 +689,13 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 10.00
             output: 45.00
-      # Flat (audit-10-05-2026, card re-read): unlike gpt-5.4-pro / gpt-5.5, the
-      # GPT-5.5 Pro card publishes no ">272K input tokens at 2x/1.5x" tier
-      # despite its 1.05M context window, so the whole window bills $30/$180.
+      # Tiered again (audit-10-12-2026): the card still prints no ">272K" sentence
+      # (the basis of the flat ruling in #106), but the full "All models" Standard
+      # table at developers.openai.com/api/docs/pricing.md prints
+      # "gpt-5.5-pro (<272K context length) | $30.00 | - | - | $180.00 | $60.00 |
+      # - | - | $270.00", i.e. an explicit >272K column (Batch/Flex rows print "-"
+      # there). The rendered HTML page only shows the short-context columns, so
+      # earlier runs never saw this. Published tier -> encoded.
       "gpt-5.5-pro":
         enabled: true
         aliases: ["gpt-5.5-pro-2026-04-23"]
@@ -703,8 +707,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 30.00
-          output: 180.00
+          - threshold: 272_000
+            input: 30.00
+            output: 180.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 60.00
+            output: 270.00
       # -----------------------------------------------------------------------
       # GPT-5.6 family (GA 2026-07-09). Sol/Terra/Luna are durable capability
       # tiers replacing the mini/nano suffixes. No dated snapshots published
@@ -866,6 +874,25 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 25.00
             output: 112.50
+      # GPT-5.5 Cyber (limited preview since 2026-05-07, Trusted Access for
+      # Cyber). First seen in the pricing.md "Cyber" table on audit-10-12-2026:
+      # "gpt-5.5-cyber | $12.50 | $1.25 | - | $75.00" with "-" in every
+      # long-context column; the card /models/gpt-5.5-cyber is 404, so there is
+      # no ">272K" sentence to apply -> flat. The help-center Daybreak article
+      # names the Responses API model gpt-5.5-cyber-preview (same version).
+      "gpt-5.5-cyber":
+        enabled: true
+        aliases: ["gpt-5.5-cyber-preview"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 12.50
+          output: 75.00
       # Codex line: gpt-5.3-codex (Responses API) was deprecated 2026-10-01 with
       # a 2027-04-01 shutdown; the gpt-5/5.1/5.2-codex snapshots shut down
       # 2026-07-23.
@@ -955,6 +982,23 @@ providers:
         pricing:
           input: 15.00
           output: 120.00
+      # Search-specialised GPT-5 SKU behind the web search tool. Token rates from
+      # the pricing.md "Specialized" table ("Search | gpt-5-search-api | $1.25 |
+      # $0.125 | $10.00"); the per-call web-search tool fee is separate and not
+      # tracked here. No model card, changelog or deprecation entry exists.
+      "gpt-5-search-api":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 1.25
+          output: 10.00
 
   # ---------------------------------------------------------------------------
   # ANTHROPIC PROVIDER
@@ -1238,8 +1282,13 @@ providers:
       burst_requests: 100
 
     models:
+      # AWS moved Claude Sonnet 4.5 to Legacy on 2026-10-08 (model-lifecycle
+      # legacy page: EOL 2027-04-08, "Regional (US/EU/AU/JP) Inference" and
+      # "Global Inference" ids, Mantle not supported). Prices unchanged.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "us.anthropic.claude-sonnet-5-5"
         aliases:
           [
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -1419,13 +1468,15 @@ providers:
               input: 4.00
               output: 20.00
       # Claude Sonnet 5.5 on Bedrock (launch 2026-09-28, audit-10-05-2026). AWS
-      # card: bedrock-runtime takes the us./eu. geo or global.* profile ids (no
-      # au./jp./in. yet); the bare id is Mantle-only (mirrored under bedrock-mantle).
+      # card: bedrock-runtime takes the us./eu./au. geo or global.* profile ids
+      # (au. added on the card by 2026-10-12; no jp./in. yet); the bare id is
+      # Mantle-only (mirrored under bedrock-mantle).
       "us.anthropic.claude-sonnet-5-5":
         enabled: true
         aliases:
           [
             "eu.anthropic.claude-sonnet-5-5",
+            "au.anthropic.claude-sonnet-5-5",
             "global.anthropic.claude-sonnet-5-5",
             "claude-sonnet-5-5-bedrock",
             "claude-sonnet-5.5-bedrock",
@@ -1445,7 +1496,7 @@ providers:
           output: 11.00
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
-            # 10% premium above applies to regional (us./eu.) profiles.
+            # 10% premium above applies to regional (us./eu./au.) profiles.
             "global.anthropic.claude-sonnet-5-5":
               input: 2.00
               output: 10.00
@@ -1917,8 +1968,13 @@ providers:
           output: 82.50
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
+      # Legacy on AWS since 2026-10-08 (EOL 2027-04-08), mirroring the bedrock
+      # entry; the AWS card lists no Mantle id for Sonnet 4.5, so these keys
+      # only cover callers that still send the dated id to /anthropic/v1.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "anthropic.claude-sonnet-5-5"
         aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
         # >200K tier removed 2026-04-30 with the 1M-context beta retirement.
         pricing:
@@ -2029,8 +2085,14 @@ providers:
         pricing:
           input: 0.50
           output: 3.00
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.6-flash; no shutdown date announced. Removed from the pricing
+      # page, so the last published list rate stays encoded (the id still
+      # serves traffic and must not be priced at zero).
       "gemini-3.5-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.6-flash
+        replacement: "gemini-3.6-flash"
         aliases: ["gemini-flash-3.5"]
         limits:
           tokens_per_minute: 3_000_000
@@ -2059,8 +2121,13 @@ providers:
         pricing:
           input: 1.50
           output: 7.50
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.8-flash; no shutdown date announced. Removed from the pricing
+      # page; the last published list rate stays encoded.
       "gemini-3.7-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.8-flash
+        replacement: "gemini-3.8-flash"
         aliases: ["gemini-flash-3.7", "gemini-3-7-flash"]
         limits:
           tokens_per_minute: 3_000_000
