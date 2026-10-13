@@ -93,6 +93,25 @@ export interface APIKey {
   base_url?: string;
   first_request_at?: string | null;
   masked_key_id?: string;
+  /** How the caller relates to this key; "viewer" means a read-only grant. */
+  access?: "owner" | "manager" | "viewer";
+  read_only?: boolean;
+  /** Explicit per-key viewers; only returned to editors and admins. */
+  viewer_emails?: string[];
+  /** Cost data returned with read-only shared keys. */
+  spend?: SharedKeySpend;
+}
+
+export interface SharedKeySpend {
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+  cap?: SpendCap;
+  rollup_available: boolean;
+}
+
+export interface KeyViewersResponse {
+  viewers: string[];
+  requester_email?: string;
 }
 
 export interface ProvisioningProviderStatus {
