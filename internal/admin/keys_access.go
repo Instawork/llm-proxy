@@ -23,16 +23,31 @@ func isViewerPersonalProvider(provider string) bool {
 	return ok
 }
 
-func canAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
-	return permissions.CanAccessKey(role, userEmail, key)
+func canViewKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
+	return permissions.CanViewKey(role, userEmail, key)
 }
 
+func canMutateKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
+	return permissions.CanMutateKey(role, userEmail, key)
+}
+
+// keyAction is what a handler intends to do with a loaded key.
+type keyAction int
+
+const (
+	// keyActionRead needs read access only (detail, stats).
+	keyActionRead keyAction = iota
+	// keyActionWrite needs write access (update, delete, share).
+	keyActionWrite
+)
+
 // loadAccessibleKey resolves the caller, loads keyID, and checks the caller
-// may access it. On failure it writes the response and returns ok=false. The
+// may act on it. On failure it writes the response and returns ok=false. The
 // store is never read before the caller is authenticated, and a key the
-// caller may not access is reported as 404 so viewers cannot probe which
-// key IDs exist.
-func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyID string) (*apikeys.APIKey, *UserResponse, adminusers.Role, bool) {
+// caller may not even view is reported as 404 so viewers cannot probe which
+// key IDs exist. A read-only grantee already knows the key exists, so a write
+// attempt gets an honest 403 instead.
+func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyID string, action keyAction) (*apikeys.APIKey, *UserResponse, adminusers.Role, bool) {
 	user, err := h.auth.currentUser(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -57,18 +72,22 @@ func (h *handler) loadAccessibleKey(w http.ResponseWriter, r *http.Request, keyI
 		}
 		return nil, nil, "", false
 	}
-	if !canAccessKey(role, user.Email, record) {
+	if !canViewKey(role, user.Email, record) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		return nil, nil, "", false
+	}
+	if action == keyActionWrite && !canMutateKey(role, user.Email, record) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return nil, nil, "", false
 	}
 	return record, user, role, true
 }
 
-// canDeleteShareLink allows anyone who may access the shared key, plus the
+// canDeleteShareLink allows anyone who may mutate the shared key, plus the
 // link's creator (so a viewer can always revoke a link they minted). key is
 // nil when the shared key no longer exists.
 func canDeleteShareLink(role adminusers.Role, userEmail string, link *apikeys.ShareLink, key *apikeys.APIKey) bool {
-	if canAccessKey(role, userEmail, key) {
+	if canMutateKey(role, userEmail, key) {
 		return true
 	}
 	return strings.TrimSpace(link.CreatedBy) != "" && strings.EqualFold(link.CreatedBy, userEmail)
@@ -80,7 +99,7 @@ func filterKeysForUser(role adminusers.Role, email string, keys []*apikeys.APIKe
 	}
 	filtered := make([]*apikeys.APIKey, 0, len(keys))
 	for _, k := range keys {
-		if canAccessKey(role, email, k) {
+		if canViewKey(role, email, k) {
 			filtered = append(filtered, k)
 		}
 	}

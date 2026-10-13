@@ -88,21 +88,6 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
-## Viewing service keys as a viewer
-
-Org-wide **service keys** (keys with no `owner_email`) are hidden from viewers by default. An admin can grant an individual viewer **read-only visibility** of them:
-
-- **Dashboard**: Users page → *Add user* or *Edit* → check **Can view service keys** (viewer role only). The viewer's API Keys page then shows a read-only **Service keys** section.
-- **API**: `PATCH /admin/api/users/{email}` with `{"can_view_service_keys": true}` (the `role` field is now optional; send either or both), or `can_view_service_keys` on `POST /admin/api/users`. `GET /admin/api/me` reports the effective `can_view_service_keys` for the caller.
-- **CLI**: `llm-proxy-users set-service-key-access -email user@example.com -enabled=true` (`-enabled=false` revokes; the user is created as a viewer if missing). `list` and `get` show the current state.
-
-What the grant allows:
-
-- `GET /admin/api/service-keys` lists non-personal keys (optional `?provider=`). Editors and admins may call it too; viewers without the grant get `403`.
-- Entries carry metadata, configured cost limits (`daily_cost_limit`, `monthly_cost_limit`) and current spend in a `spend` block: `today` and `month` (spend, plus requests and tokens for today), the effective `cap`, and `rollup_available`. Spend reuses the same cost-tracker/rollup merge as the spend overview and per-key stats. The `key` field is the masked key ID, and `actual_key`, `owner_email`, and `requester_email` are omitted, so the grant never exposes a usable credential. Editors/admins keep full access via `GET /admin/api/keys`.
-- Nothing else changes: `GET/PATCH/DELETE /admin/api/keys/{key}`, `/stats`, share links, and the viewer's own `GET /admin/api/keys` list still return `404` / personal keys only for service keys.
-- The grant is stored on the user record (`can_view_service_keys`) and survives sign-ins and role changes; it only has effect while the role is viewer, since editors and admins can always view service keys.
-
 ## Key expiry
 
 Any key (org-wide or personal) can have an optional expiry date, set from the admin UI (presets: 1 day, 7 days, 30 days, 90 days, or a custom date) or via the API's `expires_at` field. `expires_at` is stored as an absolute RFC3339 UTC timestamp.

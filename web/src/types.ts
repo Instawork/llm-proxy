@@ -18,8 +18,6 @@ export interface AdminUser {
   picture?: string;
   role?: AdminRole;
   can_bypass_pii_off_non_bedrock_policy?: boolean;
-  /** Effective visibility of org-wide service keys (always true for editors/admins). */
-  can_view_service_keys?: boolean;
   editor_limits?: EditorLimits;
   viewer_limits?: ViewerLimits;
 }
@@ -32,19 +30,15 @@ export interface AdminUserRecord {
   created_at: string;
   updated_at: string;
   last_login_at?: string;
-  /** Stored grant; only takes effect while the role is viewer. */
-  can_view_service_keys?: boolean;
 }
 
 export interface CreateAdminUserRequest {
   email: string;
   role: AdminRole;
-  can_view_service_keys?: boolean;
 }
 
-export interface UpdateAdminUserRequest {
-  role?: AdminRole;
-  can_view_service_keys?: boolean;
+export interface UpdateAdminUserRoleRequest {
+  role: AdminRole;
 }
 
 export type KeyRequestStatus = "pending" | "approved" | "rejected";
@@ -99,25 +93,6 @@ export interface APIKey {
   base_url?: string;
   first_request_at?: string | null;
   masked_key_id?: string;
-}
-
-export interface ServiceKeySpendWindow {
-  spend_usd: number;
-  requests?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-}
-
-export interface ServiceKeySpend {
-  today: ServiceKeySpendWindow;
-  month: ServiceKeySpendWindow & { month: string };
-  cap?: { period: "daily" | "monthly"; cents: number };
-  rollup_available: boolean;
-}
-
-/** Read-only service key entry: metadata, cost limits, and spend. No usable credential. */
-export interface ServiceKey extends APIKey {
-  spend: ServiceKeySpend;
 }
 
 export interface ProvisioningProviderStatus {

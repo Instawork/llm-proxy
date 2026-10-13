@@ -35,9 +35,6 @@ type User struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
-	// CanViewServiceKeys grants a viewer read-only visibility of org-wide
-	// service keys. Editors and admins can always see them regardless.
-	CanViewServiceKeys bool `json:"can_view_service_keys"`
 	// SessionsRevokedAt invalidates every session cookie issued before it.
 	SessionsRevokedAt time.Time `json:"-"`
 }
@@ -53,8 +50,6 @@ type userItem struct {
 	UpdatedAt         time.Time `dynamodbav:"updated_at"`
 	LastLoginAt       time.Time `dynamodbav:"last_login_at,omitempty"`
 	SessionsRevokedAt time.Time `dynamodbav:"sessions_revoked_at,omitempty"`
-
-	CanViewServiceKeys bool `dynamodbav:"can_view_service_keys,omitempty"`
 }
 
 type shareAwarenessItem struct {
@@ -226,8 +221,6 @@ func itemToUser(item *userItem) User {
 		UpdatedAt:         item.UpdatedAt,
 		LastLoginAt:       item.LastLoginAt,
 		SessionsRevokedAt: item.SessionsRevokedAt,
-
-		CanViewServiceKeys: item.CanViewServiceKeys,
 	}
 }
 
@@ -254,8 +247,6 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			// Carry the revocation forward: a fresh login must not resurrect
 			// cookies issued before the last logout.
 			SessionsRevokedAt: existing.SessionsRevokedAt,
-
-			CanViewServiceKeys: existing.CanViewServiceKeys,
 		}
 		av, err := attributevalue.MarshalMap(item)
 		if err != nil {
@@ -303,7 +294,6 @@ func (s *Store) EnsureUser(ctx context.Context, email, name, picture string) (Us
 			item.UpdatedAt = now
 			item.LastLoginAt = now
 			item.SessionsRevokedAt = existing.SessionsRevokedAt
-			item.CanViewServiceKeys = existing.CanViewServiceKeys
 			av, err := attributevalue.MarshalMap(item)
 			if err != nil {
 				return User{}, false, err
@@ -396,38 +386,6 @@ func (s *Store) SetRole(ctx context.Context, email string, role Role) error {
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":role":       &types.AttributeValueMemberS{Value: string(parsedRole)},
-			":updated_at": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
-		},
-		ConditionExpression: aws.String("attribute_exists(pk)"),
-	})
-	if err != nil {
-		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
-			return fmt.Errorf("user not found")
-		}
-		return err
-	}
-	return nil
-}
-
-// SetServiceKeyAccess grants or revokes a user's read-only visibility of
-// org-wide service keys. It is independent of role: the flag is retained when
-// the role changes, but only takes effect for viewers.
-func (s *Store) SetServiceKeyAccess(ctx context.Context, email string, allowed bool) error {
-	email, err := normalizeEmail(email)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(s.tableName),
-		Key: map[string]types.AttributeValue{
-			"pk": &types.AttributeValueMemberS{Value: userPK(email)},
-			"sk": &types.AttributeValueMemberS{Value: profileSK},
-		},
-		UpdateExpression: aws.String("SET can_view_service_keys = :allowed, updated_at = :updated_at"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":allowed":    &types.AttributeValueMemberBOOL{Value: allowed},
 			":updated_at": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
 		},
 		ConditionExpression: aws.String("attribute_exists(pk)"),

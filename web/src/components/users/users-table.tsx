@@ -65,22 +65,6 @@ export default function UsersTable({
         cell: ({ getValue }) => <RoleBadge role={getValue<AdminRole>()} />,
       },
       {
-        id: "service_keys",
-        accessorFn: (row) => (row.role !== "viewer" ? "role" : row.can_view_service_keys ? "granted" : "no"),
-        header: "Service keys",
-        cell: ({ row }) => {
-          const user = row.original;
-          if (user.role !== "viewer") {
-            return <span className="text-xs text-base-content/50">via role</span>;
-          }
-          return user.can_view_service_keys ? (
-            <span className="badge badge-success badge-outline badge-sm">Can view</span>
-          ) : (
-            <span className="text-base-content/40">—</span>
-          );
-        },
-      },
-      {
         id: "last_login_at",
         accessorKey: "last_login_at",
         header: "Last login",
@@ -102,7 +86,7 @@ export default function UsersTable({
           return (
             <div className="flex justify-end gap-2">
               <button type="button" className="btn btn-ghost btn-xs" disabled={isSelf} onClick={() => onEdit(user)}>
-                Edit
+                Edit role
               </button>
               <button
                 type="button"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { can, canViewServiceKeySection, permissions, type Permission } from "./permissions";
+import { can, permissions, type Permission } from "./permissions";
 import type { AdminRole } from "../types";
 
 type CanCase = {
@@ -106,22 +106,5 @@ describe("permissions helpers", () => {
     expect(permissions.canBulkGenerateOrgKeys("admin")).toBe(false);
     expect(permissions.canRequestServiceKey("admin")).toBe(false);
     expect(permissions.requiresProvisionedKeysOnly("admin")).toBe(false);
-  });
-});
-
-describe("canViewServiceKeySection", () => {
-  it("shows only for viewers holding the grant", () => {
-    expect(canViewServiceKeySection({ role: "viewer", can_view_service_keys: true })).toBe(true);
-    expect(canViewServiceKeySection({ role: "viewer", can_view_service_keys: false })).toBe(false);
-    expect(canViewServiceKeySection({ role: "viewer" })).toBe(false);
-  });
-
-  it("is hidden for editors and admins, who see service keys in the main table", () => {
-    expect(canViewServiceKeySection({ role: "editor", can_view_service_keys: true })).toBe(false);
-    expect(canViewServiceKeySection({ role: "admin", can_view_service_keys: true })).toBe(false);
-  });
-
-  it("is hidden before the user loads", () => {
-    expect(canViewServiceKeySection(undefined)).toBe(false);
   });
 });

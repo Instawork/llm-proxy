@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
@@ -18,7 +19,6 @@ type UserResponse struct {
 	Picture                         string                `json:"picture,omitempty"`
 	Role                            string                `json:"role"`
 	CanBypassPIIOffNonBedrockPolicy bool                  `json:"can_bypass_pii_off_non_bedrock_policy"`
-	CanViewServiceKeys              bool                  `json:"can_view_service_keys"`
 	EditorLimits                    *EditorLimitsResponse `json:"editor_limits,omitempty"`
 	ViewerLimits                    *ViewerLimitsResponse `json:"viewer_limits,omitempty"`
 }
@@ -42,23 +42,17 @@ type AdminUserRecord struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
-	// CanViewServiceKeys is the stored grant. It only takes effect for
-	// viewers; editors and admins can always view service keys.
-	CanViewServiceKeys bool `json:"can_view_service_keys"`
 }
 
 // CreateUserRequest pre-provisions a user.
 type CreateUserRequest struct {
-	Email              string `json:"email"`
-	Role               string `json:"role"`
-	CanViewServiceKeys bool   `json:"can_view_service_keys,omitempty"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
 }
 
-// UpdateUserRoleRequest patches a user's role and/or service-key visibility.
-// Fields left out are unchanged; at least one must be present.
+// UpdateUserRoleRequest changes a user's role.
 type UpdateUserRoleRequest struct {
-	Role               *string `json:"role,omitempty"`
-	CanViewServiceKeys *bool   `json:"can_view_service_keys,omitempty"`
+	Role string `json:"role"`
 }
 
 // KeyRequestResponse is a user-submitted request for an org-wide service key.
@@ -135,6 +129,15 @@ type KeyResponse struct {
 	ProxyBase        string            `json:"proxy_base,omitempty"`
 	BaseURL          string            `json:"base_url,omitempty"`
 	FirstRequestAt   *time.Time        `json:"first_request_at,omitempty"`
+	// Access is the caller's relationship to the key: "manager", "owner", or
+	// "viewer" (read-only grantee). ReadOnly is true for "viewer".
+	Access   string `json:"access,omitempty"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+	// ViewerEmails is only returned to managers.
+	ViewerEmails []string `json:"viewer_emails,omitempty"`
+	// Spend is only attached to read-only entries, which have no other
+	// per-key spend view in the list.
+	Spend *keySpend `json:"spend,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
@@ -286,21 +289,37 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	return resp
 }
 
-// ServiceKeyResponse is the read-only view of an org-wide service key shown to
-// viewers granted service-key visibility: key metadata (including configured
-// cost limits) plus current spend.
-type ServiceKeyResponse struct {
-	KeyResponse
-	Spend serviceKeySpend `json:"spend"`
-}
-
-// serviceKeyListResponse carries metadata and spend only: the usable proxy
-// credential and the requester's identity are withheld.
-func serviceKeyListResponse(k *apikeys.APIKey, spend serviceKeySpend) ServiceKeyResponse {
-	resp := keyToResponse(k, false)
-	resp.Key = resp.MaskedKeyID
-	resp.RequesterEmail = ""
-	return ServiceKeyResponse{KeyResponse: resp, Spend: spend}
+// keyResponseForAccess shapes a key for the caller's access level. Read-only
+// grantees get metadata, cost limits, and (when supplied) spend only: the
+// usable proxy credential, upstream details, tags, rate limits, owner,
+// requester, and other grantees' emails are all withheld, and the key is
+// identified by its masked ID.
+func keyResponseForAccess(k *apikeys.APIKey, access permissions.KeyAccess, spend *keySpend) KeyResponse {
+	if access != permissions.AccessViewer {
+		resp := keyToResponse(k, false)
+		resp.Access = string(access)
+		if access == permissions.AccessManager {
+			resp.ViewerEmails = k.ViewerEmails
+		}
+		return resp
+	}
+	masked := apikeys.MaskKeyID(k.PK)
+	return KeyResponse{
+		Key:              masked,
+		MaskedKeyID:      masked,
+		Provider:         k.Provider,
+		Description:      k.Description,
+		DailyCostLimit:   k.DailyCostLimit,
+		MonthlyCostLimit: k.MonthlyCostLimit,
+		Enabled:          k.Enabled,
+		CreatedAt:        k.CreatedAt,
+		UpdatedAt:        k.UpdatedAt,
+		ExpiresAt:        k.ExpiresAt,
+		FirstRequestAt:   k.FirstRequestAt,
+		Access:           string(access),
+		ReadOnly:         true,
+		Spend:            spend,
+	}
 }
 
 func keyDetailResponse(k *apikeys.APIKey, proxyBase string) KeyResponse {

@@ -103,14 +103,6 @@ func (h *handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
 		return
 	}
-	if req.CanViewServiceKeys {
-		if err := h.deps.UserStore.SetServiceKeyAccess(r.Context(), u.Email, true); err != nil {
-			h.deps.Logger.Error("admin: grant service key access failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "user created but failed to grant service key access"})
-			return
-		}
-		u.CanViewServiceKeys = true
-	}
 	writeJSON(w, http.StatusCreated, userRecordFromStore(u))
 }
 
@@ -129,63 +121,45 @@ func (h *handler) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if req.Role == nil && req.CanViewServiceKeys == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role or can_view_service_keys is required"})
+	role, err := adminusers.ParseRole(req.Role)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if req.Role != nil {
-		role, err := adminusers.ParseRole(*req.Role)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-
-		actor, err := h.auth.currentUser(r)
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if strings.EqualFold(actor.Email, email) {
-			target, getErr := h.deps.UserStore.GetUser(r.Context(), email)
-			if getErr == nil && target.Role == adminusers.RoleAdmin && role != adminusers.RoleAdmin {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cannot demote your own admin account"})
-				return
-			}
-		}
-
-		if err := h.guardLastAdminDemotion(r, email, role); err != nil {
-			writeLastAdminGuardError(w, h, err, "update user")
-			return
-		}
-
-		if err := h.deps.UserStore.SetRole(r.Context(), email, role); err != nil {
-			h.writeUpdateUserError(w, err, "failed to update user")
+	actor, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if strings.EqualFold(actor.Email, email) {
+		target, getErr := h.deps.UserStore.GetUser(r.Context(), email)
+		if getErr == nil && target.Role == adminusers.RoleAdmin && role != adminusers.RoleAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cannot demote your own admin account"})
 			return
 		}
 	}
 
-	if req.CanViewServiceKeys != nil {
-		if err := h.deps.UserStore.SetServiceKeyAccess(r.Context(), email, *req.CanViewServiceKeys); err != nil {
-			h.writeUpdateUserError(w, err, "failed to update user")
+	if err := h.guardLastAdminDemotion(r, email, role); err != nil {
+		writeLastAdminGuardError(w, h, err, "update user")
+		return
+	}
+
+	if err := h.deps.UserStore.SetRole(r.Context(), email, role); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 			return
 		}
+		h.deps.Logger.Error("admin: update user role failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update user"})
+		return
 	}
 	u, err := h.deps.UserStore.GetUser(r.Context(), email)
 	if err != nil {
-		writeJSON(w, http.StatusOK, AdminUserRecord{Email: email})
+		writeJSON(w, http.StatusOK, AdminUserRecord{Email: email, Role: string(role)})
 		return
 	}
 	writeJSON(w, http.StatusOK, userRecordFromStore(u))
-}
-
-func (h *handler) writeUpdateUserError(w http.ResponseWriter, err error, msg string) {
-	if strings.Contains(err.Error(), "not found") {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
-		return
-	}
-	h.deps.Logger.Error("admin: update user failed", "error", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 }
 
 func (h *handler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {

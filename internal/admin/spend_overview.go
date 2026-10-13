@@ -194,29 +194,28 @@ func (s spendOverviewService) loadSpend(ctx context.Context, in *spendInputs, hi
 	}
 }
 
-// serviceKeySpend is the read-only spend block attached to each entry of the
-// service-keys list.
-type serviceKeySpend struct {
+// keySpend is the read-only spend block attached to shared-key list entries.
+type keySpend struct {
 	Today           keyCostStatsResponse `json:"today"`
 	Month           keyCostMonthResponse `json:"month"`
 	Cap             *spendCapResponse    `json:"cap,omitempty"`
 	RollupAvailable bool                 `json:"rollup_available"`
 }
 
-// ServiceKeySpend computes per-key spend for keys using the same merge rules
-// as the spend overview, keyed by the key's raw ID. Callers must not expose
-// the raw ID; it is only a lookup handle.
-func (s spendOverviewService) ServiceKeySpend(ctx context.Context, keys []*apikeys.APIKey) map[string]serviceKeySpend {
+// KeySpend computes per-key spend for keys using the same merge rules as the
+// spend overview, keyed by the key's raw ID. Callers must not expose the raw
+// ID; it is only a lookup handle.
+func (s spendOverviewService) KeySpend(ctx context.Context, keys []*apikeys.APIKey) map[string]keySpend {
 	in := s.newInputs(adminusers.RoleEditor, "")
 	in.keys = keys
 	s.loadSpend(ctx, &in, false)
 
-	out := make(map[string]serviceKeySpend, len(keys))
+	out := make(map[string]keySpend, len(keys))
 	for _, k := range keys {
 		masked := middleware.MaskKeyID(k.PK)
 		redis, redisOK := in.redisByKey[masked]
 		today := keyCostToday(in.snap, masked, k.PK, in.day, redis, redisOK && in.rollupOK, in.rollupOK)
-		out[k.PK] = serviceKeySpend{
+		out[k.PK] = keySpend{
 			Today:           today,
 			Month:           keyCostMonth(in.month, in.monthByKey[masked], in.rollupOK, in.rollupOK, today.SpendUSD),
 			Cap:             resolveSpendCap(k, in.personalCap),
@@ -243,7 +242,7 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	}
 
 	for _, k := range in.keys {
-		if k == nil || !canAccessKey(in.role, in.email, k) {
+		if k == nil || !canMutateKey(in.role, in.email, k) {
 			continue
 		}
 		masked := middleware.MaskKeyID(k.PK)
