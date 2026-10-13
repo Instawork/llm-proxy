@@ -1,4 +1,4 @@
-import type { AdminRole } from "../types";
+import type { AdminRole, AdminUser } from "../types";
 
 import { roleAtLeast } from "./rbac";
 
@@ -123,4 +123,13 @@ export function canManageByoBans(role: AdminRole | undefined): boolean {
 
 export function canManageKeyPolicy(role: AdminRole | undefined): boolean {
   return permissions.canManageKeyPolicy(role);
+}
+
+/**
+ * Whether the signed-in user gets the read-only service-key section of the
+ * keys page. Editors and admins already see every key in the main table, so
+ * only viewers with the grant need it.
+ */
+export function canViewServiceKeySection(user: Pick<AdminUser, "role" | "can_view_service_keys"> | undefined): boolean {
+  return user?.role === "viewer" && user.can_view_service_keys === true;
 }

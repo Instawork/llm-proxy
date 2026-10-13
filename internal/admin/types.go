@@ -18,6 +18,7 @@ type UserResponse struct {
 	Picture                         string                `json:"picture,omitempty"`
 	Role                            string                `json:"role"`
 	CanBypassPIIOffNonBedrockPolicy bool                  `json:"can_bypass_pii_off_non_bedrock_policy"`
+	CanViewServiceKeys              bool                  `json:"can_view_service_keys"`
 	EditorLimits                    *EditorLimitsResponse `json:"editor_limits,omitempty"`
 	ViewerLimits                    *ViewerLimitsResponse `json:"viewer_limits,omitempty"`
 }
@@ -41,17 +42,23 @@ type AdminUserRecord struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
+	// CanViewServiceKeys is the stored grant. It only takes effect for
+	// viewers; editors and admins can always view service keys.
+	CanViewServiceKeys bool `json:"can_view_service_keys"`
 }
 
 // CreateUserRequest pre-provisions a user.
 type CreateUserRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email              string `json:"email"`
+	Role               string `json:"role"`
+	CanViewServiceKeys bool   `json:"can_view_service_keys,omitempty"`
 }
 
-// UpdateUserRoleRequest changes a user's role.
+// UpdateUserRoleRequest patches a user's role and/or service-key visibility.
+// Fields left out are unchanged; at least one must be present.
 type UpdateUserRoleRequest struct {
-	Role string `json:"role"`
+	Role               *string `json:"role,omitempty"`
+	CanViewServiceKeys *bool   `json:"can_view_service_keys,omitempty"`
 }
 
 // KeyRequestResponse is a user-submitted request for an org-wide service key.
@@ -276,6 +283,16 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 		resp.ActualKey = maskedActualKey
 	}
 	resp.Provisioned = k.Provisioned
+	return resp
+}
+
+// serviceKeyListResponse is the read-only view of an org-wide service key
+// shown to viewers granted service-key visibility. It carries metadata only:
+// the usable proxy credential and the requester's identity are withheld.
+func serviceKeyListResponse(k *apikeys.APIKey) KeyResponse {
+	resp := keyToResponse(k, false)
+	resp.Key = resp.MaskedKeyID
+	resp.RequesterEmail = ""
 	return resp
 }
 

@@ -12,6 +12,7 @@ import PiiOffConfirmDialog, {
   needsPiiOffConfirmation,
 } from "../../components/keys/pii-off-confirm-dialog";
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
+import ServiceKeysPanel from "../../components/keys/service-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
 import {
@@ -44,7 +45,7 @@ import {
   VIEWER_PROVIDERS,
   type KeyFormState,
 } from "../../lib/key-form";
-import { permissions } from "../../lib/permissions";
+import { canViewServiceKeySection, permissions } from "../../lib/permissions";
 import {
   useBYOKeys,
   useConfig,
@@ -55,6 +56,7 @@ import {
   useKeyRequests,
   useKeys,
   useMe,
+  useServiceKeys,
   usePII,
   useProvisioning,
 } from "../../hooks/queries";
@@ -176,6 +178,8 @@ export default function KeysPage() {
 
   const filter = providerFilter || undefined;
   const { data: keys = [], isLoading, error } = useKeys();
+  const showServiceKeys = canViewServiceKeySection(me);
+  const serviceKeysQuery = useServiceKeys(showServiceKeys);
   const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
   const deleteKey = useDeleteKey();
@@ -821,6 +825,14 @@ export default function KeysPage() {
               />
             )}
           </div>
+
+          {showServiceKeys ? (
+            <ServiceKeysPanel
+              keys={serviceKeysQuery.data ?? []}
+              isLoading={serviceKeysQuery.isLoading}
+              error={serviceKeysQuery.error}
+            />
+          ) : null}
 
           <ApiKeysModal
             open={modalOpen}

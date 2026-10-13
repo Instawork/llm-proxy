@@ -157,3 +157,53 @@ func TestEnsureUserCreateRaceRetries(t *testing.T) {
 	assert.False(t, created)
 	assert.Equal(t, "Race Again", user.Name)
 }
+
+func TestSetServiceKeyAccess(t *testing.T) {
+	store := testUserStore(t)
+	ctx := context.Background()
+
+	_, err := store.CreateUser(ctx, "viewer@example.com", RoleViewer)
+	require.NoError(t, err)
+
+	got, err := store.GetUser(ctx, "viewer@example.com")
+	require.NoError(t, err)
+	assert.False(t, got.CanViewServiceKeys)
+
+	require.NoError(t, store.SetServiceKeyAccess(ctx, "Viewer@Example.com", true))
+	got, err = store.GetUser(ctx, "viewer@example.com")
+	require.NoError(t, err)
+	assert.True(t, got.CanViewServiceKeys)
+	assert.Equal(t, RoleViewer, got.Role)
+
+	require.NoError(t, store.SetServiceKeyAccess(ctx, "viewer@example.com", false))
+	got, err = store.GetUser(ctx, "viewer@example.com")
+	require.NoError(t, err)
+	assert.False(t, got.CanViewServiceKeys)
+}
+
+func TestServiceKeyAccessSurvivesLoginAndRoleChange(t *testing.T) {
+	store := testUserStore(t)
+	ctx := context.Background()
+
+	_, err := store.CreateUser(ctx, "viewer@example.com", RoleViewer)
+	require.NoError(t, err)
+	require.NoError(t, store.SetServiceKeyAccess(ctx, "viewer@example.com", true))
+
+	got, created, err := store.EnsureUser(ctx, "viewer@example.com", "Vi Ewer", "")
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.True(t, got.CanViewServiceKeys)
+
+	require.NoError(t, store.SetRole(ctx, "viewer@example.com", RoleEditor))
+	got, err = store.GetUser(ctx, "viewer@example.com")
+	require.NoError(t, err)
+	assert.True(t, got.CanViewServiceKeys)
+	assert.Equal(t, RoleEditor, got.Role)
+}
+
+func TestSetServiceKeyAccessNotFound(t *testing.T) {
+	store := testUserStore(t)
+	err := store.SetServiceKeyAccess(context.Background(), "missing@example.com", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}

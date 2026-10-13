@@ -99,6 +99,8 @@ func userRecordFromStore(u adminusers.User) AdminUserRecord {
 		CreatedAt:   u.CreatedAt,
 		UpdatedAt:   u.UpdatedAt,
 		LastLoginAt: u.LastLoginAt,
+
+		CanViewServiceKeys: u.CanViewServiceKeys,
 	}
 }
 

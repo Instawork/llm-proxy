@@ -137,7 +137,7 @@ func TestHandleUpdateUserRole(t *testing.T) {
 	_, err := h.deps.UserStore.CreateUser(context.Background(), "promote@example.com", adminusers.RoleViewer)
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(UpdateUserRoleRequest{Role: "editor"})
+	body, _ := json.Marshal(UpdateUserRoleRequest{Role: ptr("editor")})
 	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/promote@example.com", body)
 	req = mux.SetURLVars(req, map[string]string{"email": "promote@example.com"})
 	rec := httptest.NewRecorder()
@@ -151,7 +151,7 @@ func TestHandleUpdateUserRole(t *testing.T) {
 
 func TestHandleUpdateUserRoleNotFound(t *testing.T) {
 	h, _ := testAdminHandler(t)
-	body, _ := json.Marshal(UpdateUserRoleRequest{Role: "editor"})
+	body, _ := json.Marshal(UpdateUserRoleRequest{Role: ptr("editor")})
 	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/nobody@example.com", body)
 	req = mux.SetURLVars(req, map[string]string{"email": "nobody@example.com"})
 	rec := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func TestHandleUpdateUserRoleNotFound(t *testing.T) {
 
 func TestHandleUpdateUserRoleBlocksSelfDemote(t *testing.T) {
 	h, _ := testAdminHandler(t)
-	body, _ := json.Marshal(UpdateUserRoleRequest{Role: "editor"})
+	body, _ := json.Marshal(UpdateUserRoleRequest{Role: ptr("editor")})
 	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/admin@example.com", body)
 	req = mux.SetURLVars(req, map[string]string{"email": "admin@example.com"})
 	rec := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func TestHandleUpdateUserRoleBlocksLastAdminDemotion(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, h.deps.UserStore.DeleteUser(ctx, "admin@example.com"))
 
-	body, _ := json.Marshal(UpdateUserRoleRequest{Role: "viewer"})
+	body, _ := json.Marshal(UpdateUserRoleRequest{Role: ptr("viewer")})
 	req := authenticatedRequestAs(t, h, "other@example.com", http.MethodPatch, "/admin/api/users/other@example.com", body)
 	req = mux.SetURLVars(req, map[string]string{"email": "other@example.com"})
 	rec := httptest.NewRecorder()
@@ -349,4 +349,76 @@ func TestHandleDevLoginExplicitRoleOverridesDefault(t *testing.T) {
 	user, err := h.deps.UserStore.GetUser(context.Background(), "dev@example.com")
 	require.NoError(t, err)
 	assert.Equal(t, adminusers.RoleViewer, user.Role)
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestHandleUpdateUserGrantsServiceKeyAccessWithoutRole(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	ctx := context.Background()
+	_, err := h.deps.UserStore.CreateUser(ctx, "grantee@example.com", adminusers.RoleViewer)
+	require.NoError(t, err)
+
+	patch := func(body string) *httptest.ResponseRecorder {
+		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/grantee@example.com", []byte(body))
+		req = mux.SetURLVars(req, map[string]string{"email": "grantee@example.com"})
+		rec := httptest.NewRecorder()
+		h.handleUpdateUserRole(rec, req)
+		return rec
+	}
+
+	rec := patch(`{"can_view_service_keys":true}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var user AdminUserRecord
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &user))
+	assert.Equal(t, "viewer", user.Role)
+	assert.True(t, user.CanViewServiceKeys)
+
+	rec = patch(`{"role":"editor"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &user))
+	assert.Equal(t, "editor", user.Role)
+	assert.True(t, user.CanViewServiceKeys, "role-only patch must leave the grant untouched")
+
+	rec = patch(`{"can_view_service_keys":false}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &user))
+	assert.False(t, user.CanViewServiceKeys)
+	assert.Equal(t, "editor", user.Role)
+}
+
+func TestHandleUpdateUserRequiresRoleOrGrant(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/admin@example.com", []byte(`{}`))
+	req = mux.SetURLVars(req, map[string]string{"email": "admin@example.com"})
+	rec := httptest.NewRecorder()
+	h.handleUpdateUserRole(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHandleUpdateUserGrantNotFound(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/users/nobody@example.com", []byte(`{"can_view_service_keys":true}`))
+	req = mux.SetURLVars(req, map[string]string{"email": "nobody@example.com"})
+	rec := httptest.NewRecorder()
+	h.handleUpdateUserRole(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestHandleCreateUserWithServiceKeyAccess(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	body, _ := json.Marshal(CreateUserRequest{Email: "newviewer@example.com", CanViewServiceKeys: true})
+	req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/users", body)
+	rec := httptest.NewRecorder()
+	h.handleCreateUser(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var user AdminUserRecord
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &user))
+	assert.Equal(t, "viewer", user.Role)
+	assert.True(t, user.CanViewServiceKeys)
+
+	stored, err := h.deps.UserStore.GetUser(context.Background(), "newviewer@example.com")
+	require.NoError(t, err)
+	assert.True(t, stored.CanViewServiceKeys)
 }

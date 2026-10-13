@@ -125,6 +125,43 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handleListServiceKeys lists org-wide (non-personal) keys read-only. Editors
+// and admins always may; viewers need the can_view_service_keys grant. The
+// response withholds the proxy credential (see serviceKeyListResponse), and
+// the grant confers no access to the per-key routes.
+func (h *handler) handleListServiceKeys(w http.ResponseWriter, r *http.Request) {
+	if h.deps.APIKeyStore == nil {
+		h.writeAPIKeyStoreUnavailable(w)
+		return
+	}
+
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if !user.CanViewServiceKeys {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	keys, err := h.deps.APIKeyStore.ListKeys(r.Context(), r.URL.Query().Get("provider"))
+	if err != nil {
+		h.deps.Logger.Error("admin: list service keys failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list service keys"})
+		return
+	}
+
+	resp := make([]KeyResponse, 0, len(keys))
+	for _, k := range keys {
+		if apikeys.IsPersonalKey(k) {
+			continue
+		}
+		resp = append(resp, serviceKeyListResponse(k))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *handler) globalPIIEnabled() bool {
 	if h.deps.YAMLConfig == nil {
 		return false

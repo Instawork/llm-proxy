@@ -24,7 +24,7 @@ import type {
   ShareCreateResponse,
   ShareInfo,
   SpendOverviewResponse,
-  UpdateAdminUserRoleRequest,
+  UpdateAdminUserRequest,
   UpdateAPIKeyRequest,
   ReviewKeyRequestBody,
   BYOBanRecord,
@@ -37,6 +37,7 @@ import { usePollInterval } from "./use-poll-interval";
 export const queryKeys = {
   me: ["admin", "me"] as const,
   keys: (provider?: string) => ["admin", "keys", provider ?? "all"] as const,
+  serviceKeys: ["admin", "service-keys"] as const,
   key: (key: string) => ["admin", "keys", "detail", key] as const,
   keyStats: (key: string) => ["admin", "keys", "stats", key] as const,
   spendOverview: ["admin", "spend-overview"] as const,
@@ -71,6 +72,15 @@ export function useKeys(provider?: Provider) {
     queryKey: queryKeys.keys(provider),
     queryFn: () => apiFetch<APIKey[]>(`/admin/api/keys${query}`),
     enabled: roleAtLeast(role, "viewer"),
+  });
+}
+
+/** Read-only list of org-wide service keys for viewers granted visibility. */
+export function useServiceKeys(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.serviceKeys,
+    queryFn: () => apiFetch<APIKey[]>("/admin/api/service-keys"),
+    enabled,
   });
 }
 
@@ -315,13 +325,13 @@ export function useCreateUser() {
   });
 }
 
-export function useUpdateUserRole() {
+export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ email, role }: { email: string; role: UpdateAdminUserRoleRequest["role"] }) =>
+    mutationFn: ({ email, ...patch }: { email: string } & UpdateAdminUserRequest) =>
       apiFetch<AdminUserRecord>(`/admin/api/users/${encodeURIComponent(email)}`, {
         method: "PATCH",
-        body: JSON.stringify({ role }),
+        body: JSON.stringify(patch),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.users });

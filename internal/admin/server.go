@@ -87,6 +87,7 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/config", roleHandler(auth, permissions.MinRole(permissions.ViewConfig), h.handleConfig)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys", roleHandler(auth, permissions.MinRole(permissions.ListKeys), h.handleListKeys)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys", roleHandler(auth, permissions.MinRole(permissions.CreateKey), h.handleCreateKey)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/service-keys", roleHandler(auth, permissions.MinRole(permissions.ListServiceKeys), h.handleListServiceKeys)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/provisioning", roleHandler(auth, permissions.MinRole(permissions.Provisioning), h.handleProvisioning)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}/stats", roleHandler(auth, permissions.MinRole(permissions.KeyStats), h.handleKeyStats)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.GetKey), h.handleGetKey)).Methods(http.MethodGet, http.MethodOptions)

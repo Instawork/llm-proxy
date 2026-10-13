@@ -8,7 +8,7 @@ import {
   useCreateUser,
   useDeleteUser,
   useMe,
-  useUpdateUserRole,
+  useUpdateUser,
   useUsers,
 } from "../../hooks/queries";
 import type { AdminRole, AdminUserRecord } from "../../types";
@@ -19,7 +19,7 @@ export default function UsersPage() {
   const { data: me } = useMe();
   const usersQuery = useUsers();
   const createUser = useCreateUser();
-  const updateRole = useUpdateUserRole();
+  const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
   const toast = useToast();
 
@@ -28,7 +28,9 @@ export default function UsersPage() {
   const [deleteTarget, setDeleteTarget] = useState<AdminUserRecord | null>(null);
   const [addEmail, setAddEmail] = useState("");
   const [addRole, setAddRole] = useState<AdminRole>("viewer");
+  const [addServiceKeys, setAddServiceKeys] = useState(false);
   const [editRole, setEditRole] = useState<AdminRole>("viewer");
+  const [editServiceKeys, setEditServiceKeys] = useState(false);
 
   const adminCount = useMemo(
     () => (usersQuery.data ?? []).filter((u) => u.role === "admin").length,
@@ -40,11 +42,16 @@ export default function UsersPage() {
   const onAddSubmit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await createUser.mutateAsync({ email: addEmail.trim(), role: addRole });
+      await createUser.mutateAsync({
+        email: addEmail.trim(),
+        role: addRole,
+        ...(addRole === "viewer" && addServiceKeys ? { can_view_service_keys: true } : {}),
+      });
       toast.push("User added", "success");
       setAddOpen(false);
       setAddEmail("");
       setAddRole("viewer");
+      setAddServiceKeys(false);
     } catch (err) {
       toast.push(err instanceof Error ? err.message : "Failed to add user", "error");
     }
@@ -54,11 +61,18 @@ export default function UsersPage() {
     e.preventDefault();
     if (!editUser) return;
     try {
-      await updateRole.mutateAsync({ email: editUser.email, role: editRole });
-      toast.push("Role updated", "success");
+      const patch: { role?: AdminRole; can_view_service_keys?: boolean } = {};
+      if (editRole !== editUser.role) patch.role = editRole;
+      if (editServiceKeys !== Boolean(editUser.can_view_service_keys)) {
+        patch.can_view_service_keys = editServiceKeys;
+      }
+      if (Object.keys(patch).length > 0) {
+        await updateUser.mutateAsync({ email: editUser.email, ...patch });
+      }
+      toast.push("User updated", "success");
       setEditUser(null);
     } catch (err) {
-      toast.push(err instanceof Error ? err.message : "Failed to update role", "error");
+      toast.push(err instanceof Error ? err.message : "Failed to update user", "error");
     }
   };
 
@@ -99,6 +113,7 @@ export default function UsersPage() {
           onEdit={(user) => {
             setEditUser(user);
             setEditRole(user.role);
+            setEditServiceKeys(Boolean(user.can_view_service_keys));
           }}
           onDelete={setDeleteTarget}
         />
@@ -133,6 +148,21 @@ export default function UsersPage() {
                   ))}
                 </select>
               </label>
+              <label className="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={addServiceKeys}
+                  disabled={addRole !== "viewer"}
+                  onChange={(e) => setAddServiceKeys(e.target.checked)}
+                />
+                <span className="label-text">
+                  Can view service keys
+                  <span className="block text-xs text-base-content/60">
+                    Read-only access to org-wide service keys. Editors and admins always have it.
+                  </span>
+                </span>
+              </label>
               <div className="modal-action">
                 <button type="button" className="btn btn-ghost" onClick={() => setAddOpen(false)}>
                   Cancel
@@ -154,7 +184,7 @@ export default function UsersPage() {
       {editUser ? (
         <dialog className="modal modal-open">
           <div className="modal-box">
-            <h3 className="text-lg font-semibold">Edit role</h3>
+            <h3 className="text-lg font-semibold">Edit user</h3>
             <p className="mt-1 text-sm text-base-content/60">{editUser.email}</p>
             <form className="mt-4 space-y-4" onSubmit={onEditSubmit}>
               <label className="form-control w-full">
@@ -172,11 +202,26 @@ export default function UsersPage() {
                   ))}
                 </select>
               </label>
+              <label className="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={editServiceKeys}
+                  disabled={editRole !== "viewer"}
+                  onChange={(e) => setEditServiceKeys(e.target.checked)}
+                />
+                <span className="label-text">
+                  Can view service keys
+                  <span className="block text-xs text-base-content/60">
+                    Read-only access to org-wide service keys. Editors and admins always have it.
+                  </span>
+                </span>
+              </label>
               <div className="modal-action">
                 <button type="button" className="btn btn-ghost" onClick={() => setEditUser(null)}>
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary" disabled={updateRole.isPending}>
+                <button type="submit" className="btn btn-primary" disabled={updateUser.isPending}>
                   Save
                 </button>
               </div>

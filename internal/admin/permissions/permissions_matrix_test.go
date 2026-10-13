@@ -26,6 +26,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleViewer, ShareKey, true},
 		{adminusers.RoleViewer, DeleteOwnKey, true},
 		{adminusers.RoleViewer, SpendOverview, true},
+		{adminusers.RoleViewer, ListServiceKeys, false},
 		{adminusers.RoleViewer, ViewMonitoring, false},
 		{adminusers.RoleViewer, UpdateKeyPolicy, false},
 		{adminusers.RoleViewer, ViewAllOrgKeys, false},
@@ -43,6 +44,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleEditor, ViewConfig, true},
 		{adminusers.RoleEditor, UpdateKeyPolicy, true},
 		{adminusers.RoleEditor, ViewAllOrgKeys, true},
+		{adminusers.RoleEditor, ListServiceKeys, true},
 		{adminusers.RoleEditor, CreateOrgKey, true},
 		{adminusers.RoleEditor, UpdateKeyDescription, true},
 		{adminusers.RoleEditor, PasteProviderKey, false},
@@ -133,6 +135,20 @@ func TestCanAccessKeyMatrix(t *testing.T) {
 	assert.False(t, CanAccessKey(adminusers.RoleViewer, "viewer@example.com", otherPersonal))
 }
 
+func TestCanViewServiceKeysMatrix(t *testing.T) {
+	assert.False(t, CanViewServiceKeys(adminusers.RoleViewer, false))
+	assert.True(t, CanViewServiceKeys(adminusers.RoleViewer, true))
+	assert.True(t, CanViewServiceKeys(adminusers.RoleEditor, false))
+	assert.True(t, CanViewServiceKeys(adminusers.RoleAdmin, false))
+	assert.False(t, CanViewServiceKeys(adminusers.Role("bogus"), true))
+}
+
+func TestGrantDoesNotWidenKeyAccess(t *testing.T) {
+	orgKey := &apikeys.APIKey{OwnerEmail: ""}
+	assert.False(t, CanAccessKey(adminusers.RoleViewer, "viewer@example.com", orgKey))
+	assert.False(t, CanDeleteKey(adminusers.RoleViewer, "viewer@example.com", orgKey))
+}
+
 func TestCanDeleteKeyMatrix(t *testing.T) {
 	orgKey := &apikeys.APIKey{OwnerEmail: ""}
 	personal := &apikeys.APIKey{OwnerEmail: "viewer@example.com"}
@@ -171,7 +187,7 @@ func TestAllRoutePermissionsHaveMinRole(t *testing.T) {
 	routePermissions := []Permission{
 		ViewMonitoring, ViewConfig, ListKeys, CreateKey, GetKey, UpdateKey, DeleteKey,
 		ShareKey, Provisioning, KeyStats, SpendOverview, ManageUsers, ManageBYO, ListKeyRequests,
-		CreateKeyRequest, ReviewKeyRequest, ListMyKeyRequests,
+		CreateKeyRequest, ReviewKeyRequest, ListMyKeyRequests, ListServiceKeys,
 	}
 	for _, p := range routePermissions {
 		_, ok := minRole[p]

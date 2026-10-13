@@ -29,6 +29,7 @@ const (
 	CreateKeyRequest  Permission = "create_key_request"
 	ReviewKeyRequest  Permission = "review_key_request"
 	ListMyKeyRequests Permission = "list_my_key_requests"
+	ListServiceKeys   Permission = "list_service_keys"
 
 	UpdateKeyDescription     Permission = "update_key_description"
 	UpdateKeyPolicy          Permission = "update_key_policy"
@@ -59,6 +60,7 @@ var minRole = map[Permission]adminusers.Role{
 	CreateKeyRequest:  adminusers.RoleViewer,
 	ReviewKeyRequest:  adminusers.RoleAdmin,
 	ListMyKeyRequests: adminusers.RoleViewer,
+	ListServiceKeys:   adminusers.RoleViewer,
 }
 
 // MinRole returns the minimum role required to reach a route guarded by p.
@@ -72,7 +74,7 @@ func MinRole(p Permission) adminusers.Role {
 // Can reports whether role may exercise a capability (may be stricter than MinRole).
 func Can(role adminusers.Role, p Permission) bool {
 	switch p {
-	case ViewMonitoring, ViewConfig, UpdateKeyPolicy, ViewAllOrgKeys, CreateOrgKey:
+	case ViewMonitoring, ViewConfig, UpdateKeyPolicy, ViewAllOrgKeys, CreateOrgKey, ListServiceKeys:
 		return role.AtLeast(adminusers.RoleEditor)
 	case PasteProviderKey, DeleteOrgKey, ManageUsers, ManageBYO, ReviewKeyRequest,
 		ListKeyRequests:
@@ -89,6 +91,13 @@ func Can(role adminusers.Role, p Permission) bool {
 	default:
 		return false
 	}
+}
+
+// CanViewServiceKeys reports whether the user may list org-wide service keys.
+// Editors and admins always can; a viewer needs an explicit grant
+// (adminusers.User.CanViewServiceKeys), which only ever confers read access.
+func CanViewServiceKeys(role adminusers.Role, granted bool) bool {
+	return Can(role, ListServiceKeys) || (role == adminusers.RoleViewer && granted)
 }
 
 // CanAccessKey reports whether the user may read or mutate a specific key record.

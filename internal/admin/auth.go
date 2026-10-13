@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
@@ -486,6 +487,7 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 	picture, _ := session.Values[sessionUserPicture].(string)
 
 	role := string(adminusers.RoleViewer)
+	serviceKeyGrant := false
 	if a.userStore != nil {
 		u, err := a.userStore.GetUser(r.Context(), email)
 		if err != nil {
@@ -496,6 +498,7 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 			return nil, fmt.Errorf("session revoked")
 		}
 		role = string(u.Role)
+		serviceKeyGrant = u.CanViewServiceKeys
 		if u.Name != "" {
 			name = u.Name
 		}
@@ -510,6 +513,7 @@ func (a *authenticator) currentUser(r *http.Request) (*UserResponse, error) {
 		Picture:                         picture,
 		Role:                            role,
 		CanBypassPIIOffNonBedrockPolicy: role == string(adminusers.RoleAdmin) || apikeys.CanBypassPIIOffNonBedrockPolicy(email),
+		CanViewServiceKeys:              permissions.CanViewServiceKeys(adminusers.Role(role), serviceKeyGrant),
 	}
 	if role == string(adminusers.RoleEditor) && a.editorLimits.MaxDailyCostLimitCents > 0 {
 		resp.EditorLimits = &EditorLimitsResponse{
