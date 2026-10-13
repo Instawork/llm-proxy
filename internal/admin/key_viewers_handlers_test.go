@@ -437,3 +437,14 @@ func TestApprovedKeyRequesterCanViewTheirKey(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "viewer", decode[KeyResponse](t, rec).Access)
 }
+
+func TestAllowedDomainPrecedence(t *testing.T) {
+	h, _ := testAdminHandler(t)
+	assert.Equal(t, "example.com", h.allowedDomain(), "default")
+
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "corp.test")
+	assert.Equal(t, "corp.test", h.allowedDomain(), "env overrides default")
+
+	h.deps.YAMLConfig = nil
+	assert.Equal(t, "corp.test", h.allowedDomain(), "env applies without YAML")
+}
