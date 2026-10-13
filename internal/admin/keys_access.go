@@ -23,10 +23,12 @@ func isViewerPersonalProvider(provider string) bool {
 	return ok
 }
 
+// canViewKey reports whether the caller may read key (owner, manager, or grantee).
 func canViewKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
 	return permissions.CanViewKey(role, userEmail, key)
 }
 
+// canMutateKey reports whether the caller may modify, delete, or share key.
 func canMutateKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
 	return permissions.CanMutateKey(role, userEmail, key)
 }

@@ -129,3 +129,10 @@ func TestStore_AddKeyViewersConcurrent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got.ViewerEmails, 8)
 }
+
+func TestStore_UpdateViewerSetOnDeletedKeyReportsNotFound(t *testing.T) {
+	store, _ := newFakeStore(t)
+	err := store.updateViewerSet(context.Background(), KeyPrefix+"gone", "ADD", []string{"a@example.com"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}

@@ -108,6 +108,8 @@ func (s *Store) RemoveKeyViewer(ctx context.Context, key, email string) (*APIKey
 	return s.GetKeyRecord(ctx, key)
 }
 
+// updateViewerSet applies an atomic ADD or DELETE on the viewer_emails string
+// set, so concurrent grants never overwrite each other.
 func (s *Store) updateViewerSet(ctx context.Context, key, action string, emails []string) error {
 	sorted := append([]string(nil), emails...)
 	sort.Strings(sorted)
@@ -119,11 +121,14 @@ func (s *Store) updateViewerSet(ctx context.Context, key, action string, emails 
 		UpdateExpression: aws.String(action + " viewer_emails :v SET updated_at = :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":v":   &types.AttributeValueMemberSS{Value: sorted},
-			":now": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			":now": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
 		},
 		ConditionExpression: aws.String("attribute_exists(pk)"),
 	})
 	if err != nil {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
+			return fmt.Errorf("API key not found")
+		}
 		return fmt.Errorf("failed to update API key viewers: %w", err)
 	}
 	return nil

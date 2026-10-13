@@ -24,12 +24,14 @@ type AddKeyViewersRequest struct {
 	Emails []string `json:"emails"`
 }
 
+// keyViewersResponse builds the sorted viewer list returned by every viewers endpoint.
 func keyViewersResponse(k *apikeys.APIKey) KeyViewersResponse {
 	viewers := append([]string{}, k.ViewerEmails...)
 	sort.Strings(viewers)
 	return KeyViewersResponse{Viewers: viewers, RequesterEmail: k.RequesterEmail}
 }
 
+// handleListKeyViewers returns the explicit viewers of a key (editor/admin only).
 func (h *handler) handleListKeyViewers(w http.ResponseWriter, r *http.Request) {
 	if h.deps.APIKeyStore == nil {
 		h.writeAPIKeyStoreUnavailable(w)
@@ -42,6 +44,7 @@ func (h *handler) handleListKeyViewers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, keyViewersResponse(record))
 }
 
+// handleAddKeyViewers grants read-only access to emails in the allowed domain.
 func (h *handler) handleAddKeyViewers(w http.ResponseWriter, r *http.Request) {
 	if h.deps.APIKeyStore == nil {
 		h.writeAPIKeyStoreUnavailable(w)
@@ -84,6 +87,7 @@ func (h *handler) handleAddKeyViewers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, keyViewersResponse(updated))
 }
 
+// handleRemoveKeyViewer revokes one explicit viewer; the implicit requester grant is unaffected.
 func (h *handler) handleRemoveKeyViewer(w http.ResponseWriter, r *http.Request) {
 	if h.deps.APIKeyStore == nil {
 		h.writeAPIKeyStoreUnavailable(w)
@@ -108,6 +112,7 @@ func (h *handler) handleRemoveKeyViewer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, keyViewersResponse(updated))
 }
 
+// writeKeyViewersError maps store errors to client-safe responses.
 func (h *handler) writeKeyViewersError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apikeys.ErrViewersNotAllowed), errors.Is(err, apikeys.ErrTooManyViewers):

@@ -142,6 +142,7 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 	return in, nil
 }
 
+// newInputs seeds spendInputs with the current day, month, and caps.
 func (s spendOverviewService) newInputs(role adminusers.Role, email string) spendInputs {
 	now := s.now().UTC()
 	return spendInputs{

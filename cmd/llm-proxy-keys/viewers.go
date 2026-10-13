@@ -20,6 +20,7 @@ const (
 	viewersRemove viewersAction = "remove"
 )
 
+// runViewersCommand implements `viewers list|add|remove` for one org key.
 func runViewersCommand(args []string) {
 	if len(args) == 0 {
 		printViewersUsage()
@@ -100,10 +101,13 @@ func runViewersCommand(args []string) {
 	}
 }
 
+// viewersActionWrites reports whether the action mutates the key record and so
+// must pass the production guard.
 func viewersActionWrites(a viewersAction) bool {
 	return a == viewersAdd || a == viewersRemove
 }
 
+// executeViewers runs action against store and prints the resulting viewer list.
 func executeViewers(ctx context.Context, store *apikeys.Store, action viewersAction, key string, emails []string) error {
 	var (
 		record *apikeys.APIKey
@@ -124,6 +128,7 @@ func executeViewers(ctx context.Context, store *apikeys.Store, action viewersAct
 	return nil
 }
 
+// printViewers prints the redacted key, implicit requester, and explicit viewers.
 func printViewers(k *apikeys.APIKey) {
 	fmt.Printf("Key:       %s\n", apikeys.RedactKey(k.PK))
 	if k.RequesterEmail != "" {
@@ -162,6 +167,7 @@ func parseViewerEmails(raw string) ([]string, error) {
 	return out, nil
 }
 
+// printViewersUsage prints the viewers subcommand help.
 func printViewersUsage() {
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  %s viewers list   -key sk-iw-... [-env=dev]\n", os.Args[0])
