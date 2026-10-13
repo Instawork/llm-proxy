@@ -3,12 +3,12 @@ import type { ColumnDef } from "@tanstack/react-table";
 
 import DataTable from "../ui/data-table";
 import { EmptyState, ErrorAlert, LoadingBlock, ProviderBadge, StatusBadge } from "../ui/page-header";
-import { formatKeySpendCap } from "../../lib/format";
+import { formatCount, formatKeySpendCap, formatUsd } from "../../lib/format";
 import { formatExpiresAt, isExpired } from "../../lib/key-form";
-import type { APIKey } from "../../types";
+import type { ServiceKey } from "../../types";
 
 interface ServiceKeysPanelProps {
-  keys: APIKey[];
+  keys: ServiceKey[];
   isLoading: boolean;
   error?: Error | null;
 }
@@ -19,7 +19,7 @@ interface ServiceKeysPanelProps {
  * there are no row actions.
  */
 export default function ServiceKeysPanel({ keys, isLoading, error }: ServiceKeysPanelProps) {
-  const columns = useMemo<ColumnDef<APIKey, unknown>[]>(
+  const columns = useMemo<ColumnDef<ServiceKey, unknown>[]>(
     () => [
       {
         id: "name",
@@ -62,6 +62,24 @@ export default function ServiceKeysPanel({ keys, isLoading, error }: ServiceKeys
         accessorFn: (row) => formatKeySpendCap(row),
         header: "Spend cap",
       },
+      {
+        id: "spend_today",
+        accessorFn: (row) => row.spend?.today.spend_usd ?? 0,
+        header: "Spend today",
+        cell: ({ row }) => formatUsd(row.original.spend?.today.spend_usd ?? 0, 2),
+      },
+      {
+        id: "spend_month",
+        accessorFn: (row) => row.spend?.month.spend_usd ?? 0,
+        header: "Spend this month",
+        cell: ({ row }) => formatUsd(row.original.spend?.month.spend_usd ?? 0, 2),
+      },
+      {
+        id: "requests_today",
+        accessorFn: (row) => row.spend?.today.requests ?? 0,
+        header: "Requests today",
+        cell: ({ row }) => formatCount(row.original.spend?.today.requests ?? 0),
+      },
     ],
     [],
   );
@@ -73,7 +91,7 @@ export default function ServiceKeysPanel({ keys, isLoading, error }: ServiceKeys
           Service keys
         </h2>
         <p className="mt-1 max-w-2xl text-sm text-base-content/60">
-          Org-wide keys shared across teams. You have read-only access; to use one, request a key from an admin.
+          Org-wide keys shared across teams, with their spend caps and current spend. You have read-only access; to use one, request a key from an admin.
         </p>
       </div>
       <div className="glass-panel overflow-hidden">

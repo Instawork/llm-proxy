@@ -127,15 +127,7 @@ func (s spendOverviewService) Overview(ctx context.Context, role adminusers.Role
 }
 
 func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, email string) (spendInputs, error) {
-	now := s.now().UTC()
-	in := spendInputs{
-		scope:       spendScopeFleet,
-		role:        role,
-		email:       email,
-		day:         now.Format("2006-01-02"),
-		month:       now.Format("2006-01"),
-		personalCap: s.personalMonthlyCap,
-	}
+	in := s.newInputs(role, email)
 	var err error
 	if role == adminusers.RoleViewer {
 		in.scope = spendScopeMine
@@ -146,11 +138,32 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 	if err != nil {
 		return spendInputs{}, err
 	}
+	s.loadSpend(ctx, &in, true)
+	return in, nil
+}
+
+func (s spendOverviewService) newInputs(role adminusers.Role, email string) spendInputs {
+	now := s.now().UTC()
+	return spendInputs{
+		scope:       spendScopeFleet,
+		role:        role,
+		email:       email,
+		day:         now.Format("2006-01-02"),
+		month:       now.Format("2006-01"),
+		personalCap: s.personalMonthlyCap,
+	}
+}
+
+// loadSpend fills the cost, unmetered, and rollup reads for in.keys. history
+// gates the dashboard-only reads (daily history and, for the fleet scope,
+// provider and user breakdowns).
+func (s spendOverviewService) loadSpend(ctx context.Context, in *spendInputs, history bool) {
+	var err error
 	in.snap = safeSummary(s.costSummary)
 	in.unmetered = safeSummary(s.unmeteredSummary)
 
 	if s.rollup == nil {
-		return in, nil
+		return
 	}
 	in.rollupBackend = s.rollup.Backend()
 	in.historyDays = s.rollup.HistoryDays()
@@ -165,6 +178,9 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 	if in.monthByKey, err = s.rollup.MonthlySpendByKey(ctx, adminrollup.MetricCost, in.month); err != nil {
 		fail("month", err)
 	}
+	if !history {
+		return
+	}
 	if in.history, err = s.rollup.CostDailyHistory(ctx); err != nil {
 		fail("history", err)
 	}
@@ -176,7 +192,38 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 			fail("by_user", err)
 		}
 	}
-	return in, nil
+}
+
+// serviceKeySpend is the read-only spend block attached to each entry of the
+// service-keys list.
+type serviceKeySpend struct {
+	Today           keyCostStatsResponse `json:"today"`
+	Month           keyCostMonthResponse `json:"month"`
+	Cap             *spendCapResponse    `json:"cap,omitempty"`
+	RollupAvailable bool                 `json:"rollup_available"`
+}
+
+// ServiceKeySpend computes per-key spend for keys using the same merge rules
+// as the spend overview, keyed by the key's raw ID. Callers must not expose
+// the raw ID; it is only a lookup handle.
+func (s spendOverviewService) ServiceKeySpend(ctx context.Context, keys []*apikeys.APIKey) map[string]serviceKeySpend {
+	in := s.newInputs(adminusers.RoleEditor, "")
+	in.keys = keys
+	s.loadSpend(ctx, &in, false)
+
+	out := make(map[string]serviceKeySpend, len(keys))
+	for _, k := range keys {
+		masked := middleware.MaskKeyID(k.PK)
+		redis, redisOK := in.redisByKey[masked]
+		today := keyCostToday(in.snap, masked, k.PK, in.day, redis, redisOK && in.rollupOK, in.rollupOK)
+		out[k.PK] = serviceKeySpend{
+			Today:           today,
+			Month:           keyCostMonth(in.month, in.monthByKey[masked], in.rollupOK, in.rollupOK, today.SpendUSD),
+			Cap:             resolveSpendCap(k, in.personalCap),
+			RollupAvailable: in.rollupOK,
+		}
+	}
+	return out
 }
 
 func buildSpendOverview(in spendInputs) spendOverviewResponse {

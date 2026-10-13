@@ -99,7 +99,7 @@ Org-wide **service keys** (keys with no `owner_email`) are hidden from viewers b
 What the grant allows:
 
 - `GET /admin/api/service-keys` lists non-personal keys (optional `?provider=`). Editors and admins may call it too; viewers without the grant get `403`.
-- Entries carry metadata only (provider, description, status, limits, expiry). The `key` field is the masked key ID, and `actual_key`, `owner_email`, and `requester_email` are omitted, so the grant never exposes a usable credential. Editors/admins keep full access via `GET /admin/api/keys`.
+- Entries carry metadata, configured cost limits (`daily_cost_limit`, `monthly_cost_limit`) and current spend in a `spend` block: `today` and `month` (spend, plus requests and tokens for today), the effective `cap`, and `rollup_available`. Spend reuses the same cost-tracker/rollup merge as the spend overview and per-key stats. The `key` field is the masked key ID, and `actual_key`, `owner_email`, and `requester_email` are omitted, so the grant never exposes a usable credential. Editors/admins keep full access via `GET /admin/api/keys`.
 - Nothing else changes: `GET/PATCH/DELETE /admin/api/keys/{key}`, `/stats`, share links, and the viewer's own `GET /admin/api/keys` list still return `404` / personal keys only for service keys.
 - The grant is stored on the user record (`can_view_service_keys`) and survives sign-ins and role changes; it only has effect while the role is viewer, since editors and admins can always view service keys.
 

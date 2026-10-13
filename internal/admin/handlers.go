@@ -127,7 +127,7 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 // handleListServiceKeys lists org-wide (non-personal) keys read-only. Editors
 // and admins always may; viewers need the can_view_service_keys grant. The
-// response withholds the proxy credential (see serviceKeyListResponse), and
+// response withholds the proxy credential (see serviceKeyListResponse), includes spend, and
 // the grant confers no access to the per-key routes.
 func (h *handler) handleListServiceKeys(w http.ResponseWriter, r *http.Request) {
 	if h.deps.APIKeyStore == nil {
@@ -152,12 +152,17 @@ func (h *handler) handleListServiceKeys(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp := make([]KeyResponse, 0, len(keys))
+	serviceKeys := make([]*apikeys.APIKey, 0, len(keys))
 	for _, k := range keys {
-		if apikeys.IsPersonalKey(k) {
-			continue
+		if !apikeys.IsPersonalKey(k) {
+			serviceKeys = append(serviceKeys, k)
 		}
-		resp = append(resp, serviceKeyListResponse(k))
+	}
+	spend := h.spendOverviewService().ServiceKeySpend(r.Context(), serviceKeys)
+
+	resp := make([]ServiceKeyResponse, 0, len(serviceKeys))
+	for _, k := range serviceKeys {
+		resp = append(resp, serviceKeyListResponse(k, spend[k.PK]))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

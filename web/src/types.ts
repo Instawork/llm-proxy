@@ -101,6 +101,25 @@ export interface APIKey {
   masked_key_id?: string;
 }
 
+export interface ServiceKeySpendWindow {
+  spend_usd: number;
+  requests?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+export interface ServiceKeySpend {
+  today: ServiceKeySpendWindow;
+  month: ServiceKeySpendWindow & { month: string };
+  cap?: { period: "daily" | "monthly"; cents: number };
+  rollup_available: boolean;
+}
+
+/** Read-only service key entry: metadata, cost limits, and spend. No usable credential. */
+export interface ServiceKey extends APIKey {
+  spend: ServiceKeySpend;
+}
+
 export interface ProvisioningProviderStatus {
   auto_provision: boolean;
   pool_available?: number;

@@ -286,14 +286,21 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	return resp
 }
 
-// serviceKeyListResponse is the read-only view of an org-wide service key
-// shown to viewers granted service-key visibility. It carries metadata only:
-// the usable proxy credential and the requester's identity are withheld.
-func serviceKeyListResponse(k *apikeys.APIKey) KeyResponse {
+// ServiceKeyResponse is the read-only view of an org-wide service key shown to
+// viewers granted service-key visibility: key metadata (including configured
+// cost limits) plus current spend.
+type ServiceKeyResponse struct {
+	KeyResponse
+	Spend serviceKeySpend `json:"spend"`
+}
+
+// serviceKeyListResponse carries metadata and spend only: the usable proxy
+// credential and the requester's identity are withheld.
+func serviceKeyListResponse(k *apikeys.APIKey, spend serviceKeySpend) ServiceKeyResponse {
 	resp := keyToResponse(k, false)
 	resp.Key = resp.MaskedKeyID
 	resp.RequesterEmail = ""
-	return resp
+	return ServiceKeyResponse{KeyResponse: resp, Spend: spend}
 }
 
 func keyDetailResponse(k *apikeys.APIKey, proxyBase string) KeyResponse {

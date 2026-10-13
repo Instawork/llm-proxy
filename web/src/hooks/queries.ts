@@ -21,6 +21,7 @@ import type {
   ProvisioningStatus,
   Provider,
   RateLimitsResponse,
+  ServiceKey,
   ShareCreateResponse,
   ShareInfo,
   SpendOverviewResponse,
@@ -79,7 +80,7 @@ export function useKeys(provider?: Provider) {
 export function useServiceKeys(enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.serviceKeys,
-    queryFn: () => apiFetch<APIKey[]>("/admin/api/service-keys"),
+    queryFn: () => apiFetch<ServiceKey[]>("/admin/api/service-keys"),
     enabled,
   });
 }
