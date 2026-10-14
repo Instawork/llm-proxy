@@ -100,7 +100,7 @@ An editor or admin can give individual users **read-only** access to a single or
   - `GET /admin/api/keys/{key}/viewers`
   - `POST /admin/api/keys/{key}/viewers` with `{"emails": ["a@example.com"]}` (emails must be in the allowed domain)
   - `DELETE /admin/api/keys/{key}/viewers/{email}`
-- CLI (writes go through the same production guard as other mutating commands):
+- CLI (writes go through the same production guard as other mutating commands; `viewers add` enforces the same allowed domain as the API: `LLM_PROXY_ADMIN_ALLOWED_DOMAIN`, then `admin_dashboard.allowed_domain`, then `example.com`):
 
 ```bash
 ./llm-proxy-keys viewers add    -key sk-iw-... -email a@example.com,b@example.com

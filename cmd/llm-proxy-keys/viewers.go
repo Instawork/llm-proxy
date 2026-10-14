@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 )
 
@@ -69,6 +70,13 @@ func runViewersCommand(args []string) {
 	if !yamlConfig.Features.APIKeyManagement.Enabled {
 		fmt.Fprintf(os.Stderr, "api_key_management is disabled in %s config\n", *environment)
 		os.Exit(1)
+	}
+
+	if action == viewersAdd {
+		if err := checkViewerDomains(viewerEmails, yamlConfig.Features.AdminDashboard.AllowedDomain); err != nil {
+			fmt.Fprintf(os.Stderr, "viewers add: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if viewersActionWrites(action) && *environment == "production" {
@@ -139,6 +147,19 @@ func printViewers(k *apikeys.APIKey) {
 		return
 	}
 	fmt.Printf("Viewers:   %s\n", strings.Join(k.ViewerEmails, ", "))
+}
+
+// checkViewerDomains applies the same allowed-domain rule as the admin API
+// (env var, then YAML, then example.com) so the CLI cannot grant access the
+// dashboard would refuse.
+func checkViewerDomains(emails []string, yamlDomain string) error {
+	domain := admin.ResolveAllowedDomain(yamlDomain)
+	for _, e := range emails {
+		if err := admin.ValidateAllowedEmail(e, domain); err != nil {
+			return fmt.Errorf("%s: %w (allowed: %s)", e, err, domain)
+		}
+	}
+	return nil
 }
 
 // parseViewerEmails splits a comma-separated list, normalizing and

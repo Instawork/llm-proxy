@@ -79,6 +79,24 @@ func isAllowedDomainEmail(email, allowedDomain string) bool {
 	return isAllowedDomain(email[at+1:], allowedDomain)
 }
 
+// ResolveAllowedDomain returns the permitted email domain(s): the
+// LLM_PROXY_ADMIN_ALLOWED_DOMAIN env var, then the YAML value, then example.com.
+// Sign-in, the admin API, and the llm-proxy-keys CLI all use it so they agree.
+func ResolveAllowedDomain(yamlValue string) string {
+	if d := config.LoadAdminAuthEnv().AllowedDomain; d != "" {
+		return d
+	}
+	if yamlValue != "" {
+		return yamlValue
+	}
+	return "example.com"
+}
+
+// ValidateAllowedEmail reports whether email is an address in allowedDomain.
+func ValidateAllowedEmail(email, allowedDomain string) error {
+	return validateAllowedEmail(email, allowedDomain)
+}
+
 func validateAllowedEmail(email, allowedDomain string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if !strings.Contains(email, "@") {

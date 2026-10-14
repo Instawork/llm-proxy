@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/adminusers"
-	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/gorilla/mux"
 )
 
@@ -22,15 +21,10 @@ func (h *handler) writeUserStoreUnavailable(w http.ResponseWriter) {
 // allowedDomain resolves the permitted email domain with the same precedence
 // as sign-in: LLM_PROXY_ADMIN_ALLOWED_DOMAIN, then YAML, then example.com.
 func (h *handler) allowedDomain() string {
-	if d := config.LoadAdminAuthEnv().AllowedDomain; d != "" {
-		return d
+	if h.deps.YAMLConfig == nil {
+		return ResolveAllowedDomain("")
 	}
-	if h.deps.YAMLConfig != nil {
-		if d := h.deps.YAMLConfig.Features.AdminDashboard.AllowedDomain; d != "" {
-			return d
-		}
-	}
-	return "example.com"
+	return ResolveAllowedDomain(h.deps.YAMLConfig.Features.AdminDashboard.AllowedDomain)
 }
 
 func (h *handler) handleListUsers(w http.ResponseWriter, r *http.Request) {

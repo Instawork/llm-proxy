@@ -78,3 +78,19 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	return sb.String()
 }
+
+func TestCheckViewerDomains(t *testing.T) {
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "")
+
+	assert.NoError(t, checkViewerDomains([]string{"a@example.com"}, ""), "default domain")
+	assert.Error(t, checkViewerDomains([]string{"x@gmail.com"}, ""), "outside default domain")
+
+	assert.NoError(t, checkViewerDomains([]string{"a@corp.test", "b@other.test"}, "corp.test,other.test"), "YAML list")
+	err := checkViewerDomains([]string{"a@corp.test", "x@gmail.com"}, "corp.test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "x@gmail.com")
+
+	t.Setenv("LLM_PROXY_ADMIN_ALLOWED_DOMAIN", "env.test")
+	assert.NoError(t, checkViewerDomains([]string{"a@env.test"}, "corp.test"), "env beats YAML")
+	assert.Error(t, checkViewerDomains([]string{"a@corp.test"}, "corp.test"), "YAML ignored when env set")
+}

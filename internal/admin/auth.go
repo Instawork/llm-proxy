@@ -65,13 +65,7 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 	// loadAuthConfig) ensures auth.allowedDomain — the value isAllowedUser checks —
 	// honors the override in every path, including dev-bypass which returns before
 	// loadAuthConfig runs.
-	allowedDomain := env.AllowedDomain
-	if allowedDomain == "" {
-		allowedDomain = adminCfg.AllowedDomain
-	}
-	if allowedDomain == "" {
-		allowedDomain = "example.com"
-	}
+	allowedDomain := ResolveAllowedDomain(adminCfg.AllowedDomain)
 
 	sessionSecret := env.SessionSecret
 	if sessionSecret == "" {
