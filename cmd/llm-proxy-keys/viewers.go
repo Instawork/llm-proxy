@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/mail"
 	"os"
 	"strings"
 
@@ -172,9 +171,8 @@ func parseViewerEmails(raw string) ([]string, error) {
 		if email == "" {
 			continue
 		}
-		addr, err := mail.ParseAddress(email)
-		if err != nil || addr.Address != email {
-			return nil, fmt.Errorf("invalid email %q", email)
+		if err := apikeys.ValidateViewerEmail(email); err != nil {
+			return nil, err
 		}
 		if _, dup := seen[email]; dup {
 			continue

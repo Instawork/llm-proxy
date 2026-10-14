@@ -66,6 +66,10 @@ func (h *handler) handleAddKeyViewers(w http.ResponseWriter, r *http.Request) {
 	emails := make([]string, 0, len(req.Emails))
 	for _, e := range req.Emails {
 		e = apikeys.NormalizeViewerEmail(e)
+		if err := apikeys.ValidateViewerEmail(e); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
+			return
+		}
 		if err := validateAllowedEmail(e, h.allowedDomain()); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -115,7 +119,8 @@ func (h *handler) handleRemoveKeyViewer(w http.ResponseWriter, r *http.Request) 
 // writeKeyViewersError maps store errors to client-safe responses.
 func (h *handler) writeKeyViewersError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, apikeys.ErrViewersNotAllowed), errors.Is(err, apikeys.ErrTooManyViewers):
+	case errors.Is(err, apikeys.ErrViewersNotAllowed), errors.Is(err, apikeys.ErrTooManyViewers),
+		errors.Is(err, apikeys.ErrInvalidViewerEmail):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	case strings.Contains(err.Error(), "not found"):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})

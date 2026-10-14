@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ const MaxKeyViewers = 50
 var (
 	// ErrViewersNotAllowed is returned when viewers are managed on a personal key.
 	ErrViewersNotAllowed = errors.New("viewers can only be granted on org-wide keys")
+	// ErrInvalidViewerEmail is returned for anything that is not a bare address.
+	ErrInvalidViewerEmail = errors.New("invalid viewer email")
 	// ErrTooManyViewers is returned when a grant would exceed MaxKeyViewers.
 	ErrTooManyViewers = fmt.Errorf("a key can have at most %d viewers", MaxKeyViewers)
 )
@@ -28,6 +31,17 @@ var (
 // NormalizeViewerEmail lowercases and trims an email for storage and comparison.
 func NormalizeViewerEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// ValidateViewerEmail reports whether email is a single bare address (no
+// display name, no extra "@"), after normalization.
+func ValidateViewerEmail(email string) error {
+	email = NormalizeViewerEmail(email)
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return fmt.Errorf("%w: %q", ErrInvalidViewerEmail, email)
+	}
+	return nil
 }
 
 // IsKeyViewer reports whether email may read k as a viewer: it is listed in
@@ -69,6 +83,9 @@ func (s *Store) AddKeyViewers(ctx context.Context, key string, emails []string) 
 		e = NormalizeViewerEmail(e)
 		if e == "" {
 			continue
+		}
+		if err := ValidateViewerEmail(e); err != nil {
+			return nil, err
 		}
 		if _, ok := existing[e]; ok {
 			continue

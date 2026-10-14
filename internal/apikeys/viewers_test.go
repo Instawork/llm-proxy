@@ -136,3 +136,26 @@ func TestStore_UpdateViewerSetOnDeletedKeyReportsNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+func TestValidateViewerEmail(t *testing.T) {
+	for _, ok := range []string{"a@example.com", " A@Example.com "} {
+		assert.NoError(t, ValidateViewerEmail(ok), ok)
+	}
+	for _, bad := range []string{"", "nope", "a@b@example.com", "@example.com", "Eve <eve@example.com>", "a b@example.com"} {
+		assert.ErrorIs(t, ValidateViewerEmail(bad), ErrInvalidViewerEmail, bad)
+	}
+}
+
+func TestStore_AddKeyViewersRejectsMalformedEmail(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+	key, err := store.CreateKey(ctx, "openai", "sk-org", "org", 0, nil, nil)
+	require.NoError(t, err)
+
+	_, err = store.AddKeyViewers(ctx, key.PK, []string{"ok@example.com", "a@b@example.com"})
+	assert.ErrorIs(t, err, ErrInvalidViewerEmail)
+
+	got, err := store.GetKeyRecord(ctx, key.PK)
+	require.NoError(t, err)
+	assert.Empty(t, got.ViewerEmails, "a rejected batch must not partially apply")
+}

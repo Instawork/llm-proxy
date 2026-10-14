@@ -403,6 +403,9 @@ func TestAddKeyViewersValidation(t *testing.T) {
 	}{
 		{"no emails", viewersURL, map[string]any{"emails": []string{}}, http.StatusBadRequest},
 		{"not an email", viewersURL, map[string]any{"emails": []string{"nope"}}, http.StatusBadRequest},
+		{"multiple at signs", viewersURL, map[string]any{"emails": []string{"a@b@example.com"}}, http.StatusBadRequest},
+		{"empty local part", viewersURL, map[string]any{"emails": []string{"@example.com"}}, http.StatusBadRequest},
+		{"display name", viewersURL, map[string]any{"emails": []string{"Eve <eve@example.com>"}}, http.StatusBadRequest},
 		{"disallowed domain", viewersURL, map[string]any{"emails": []string{"x@evil.test"}}, http.StatusBadRequest},
 		{"one bad email rejects the batch", viewersURL, map[string]any{"emails": []string{"ok@example.com", "x@evil.test"}}, http.StatusBadRequest},
 		{"personal key", "/admin/api/keys/" + url.PathEscape(f.personal.PK) + "/viewers", map[string]any{"emails": []string{"x@example.com"}}, http.StatusBadRequest},
