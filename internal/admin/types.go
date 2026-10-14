@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/ratelimit"
@@ -128,6 +129,15 @@ type KeyResponse struct {
 	ProxyBase        string            `json:"proxy_base,omitempty"`
 	BaseURL          string            `json:"base_url,omitempty"`
 	FirstRequestAt   *time.Time        `json:"first_request_at,omitempty"`
+	// Access is the caller's relationship to the key: "manager", "owner", or
+	// "viewer" (read-only grantee). ReadOnly is true for "viewer".
+	Access   string `json:"access,omitempty"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+	// ViewerEmails is only returned to managers.
+	ViewerEmails []string `json:"viewer_emails,omitempty"`
+	// Spend is only attached to read-only entries, which have no other
+	// per-key spend view in the list.
+	Spend *keySpend `json:"spend,omitempty"`
 }
 
 // CreateKeyRequest creates a new proxy API key.
@@ -277,6 +287,39 @@ func keyToResponse(k *apikeys.APIKey, includeActualKey bool) KeyResponse {
 	}
 	resp.Provisioned = k.Provisioned
 	return resp
+}
+
+// keyResponseForAccess shapes a key for the caller's access level. Read-only
+// grantees get metadata, cost limits, and (when supplied) spend only: the
+// usable proxy credential, upstream details, tags, rate limits, owner,
+// requester, and other grantees' emails are all withheld, and the key is
+// identified by its masked ID.
+func keyResponseForAccess(k *apikeys.APIKey, access permissions.KeyAccess, spend *keySpend) KeyResponse {
+	if access != permissions.AccessViewer {
+		resp := keyToResponse(k, false)
+		resp.Access = string(access)
+		if access == permissions.AccessManager {
+			resp.ViewerEmails = k.ViewerEmails
+		}
+		return resp
+	}
+	masked := apikeys.MaskKeyID(k.PK)
+	return KeyResponse{
+		Key:              masked,
+		MaskedKeyID:      masked,
+		Provider:         k.Provider,
+		Description:      k.Description,
+		DailyCostLimit:   k.DailyCostLimit,
+		MonthlyCostLimit: k.MonthlyCostLimit,
+		Enabled:          k.Enabled,
+		CreatedAt:        k.CreatedAt,
+		UpdatedAt:        k.UpdatedAt,
+		ExpiresAt:        k.ExpiresAt,
+		FirstRequestAt:   k.FirstRequestAt,
+		Access:           string(access),
+		ReadOnly:         true,
+		Spend:            spend,
+	}
 }
 
 func keyDetailResponse(k *apikeys.APIKey, proxyBase string) KeyResponse {

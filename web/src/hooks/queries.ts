@@ -14,6 +14,7 @@ import type {
   CreateKeyRequestBody,
   HealthResponse,
   KeyRequestRecord,
+  KeyViewersResponse,
   KeyStatsResponse,
   CircuitActivityResponse,
   ModelStatusResponse,
@@ -38,6 +39,7 @@ export const queryKeys = {
   me: ["admin", "me"] as const,
   keys: (provider?: string) => ["admin", "keys", provider ?? "all"] as const,
   key: (key: string) => ["admin", "keys", "detail", key] as const,
+  keyViewers: (key: string) => ["admin", "keys", "viewers", key] as const,
   keyStats: (key: string) => ["admin", "keys", "stats", key] as const,
   spendOverview: ["admin", "spend-overview"] as const,
   config: ["admin", "config"] as const,
@@ -95,6 +97,48 @@ export function useKeyStats(key: string | undefined) {
     refetchInterval,
     refetchIntervalInBackground: true,
   });
+}
+
+export function useKeyViewers(key: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.keyViewers(key ?? ""),
+    queryFn: () =>
+      apiFetch<KeyViewersResponse>(`/admin/api/keys/${encodeURIComponent(key!)}/viewers`),
+    enabled: Boolean(key) && enabled,
+  });
+}
+
+function useViewerMutation<V>(
+  key: string,
+  fn: (variables: V) => Promise<KeyViewersResponse>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.keyViewers(key), data);
+      queryClient.invalidateQueries({ queryKey: queryKeys.key(key) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.keys() });
+    },
+  });
+}
+
+export function useAddKeyViewers(key: string) {
+  return useViewerMutation(key, (emails: string[]) =>
+    apiFetch<KeyViewersResponse>(`/admin/api/keys/${encodeURIComponent(key)}/viewers`, {
+      method: "POST",
+      body: JSON.stringify({ emails }),
+    }),
+  );
+}
+
+export function useRemoveKeyViewer(key: string) {
+  return useViewerMutation(key, (email: string) =>
+    apiFetch<KeyViewersResponse>(
+      `/admin/api/keys/${encodeURIComponent(key)}/viewers/${encodeURIComponent(email)}`,
+      { method: "DELETE" },
+    ),
+  );
 }
 
 export function useSpendOverview() {

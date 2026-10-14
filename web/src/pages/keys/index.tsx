@@ -14,6 +14,7 @@ import PiiOffConfirmDialog, {
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
+import SharedKeysSection from "../../components/keys/shared-keys-section";
 import {
   DeployIcon,
   KeyRequestsTabIcon,
@@ -175,7 +176,11 @@ export default function KeysPage() {
   const [bulkGenerating, setBulkGenerating] = useState(false);
 
   const filter = providerFilter || undefined;
-  const { data: keys = [], isLoading, error } = useKeys();
+  const { data: allKeys = [], isLoading, error } = useKeys();
+  // Read-only shared keys carry masked IDs only; keep them out of every
+  // calculation that assumes the list is the user's own keys.
+  const keys = useMemo(() => allKeys.filter((k) => !k.read_only), [allKeys]);
+  const sharedKeys = useMemo(() => allKeys.filter((k) => k.read_only), [allKeys]);
   const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
   const deleteKey = useDeleteKey();
@@ -821,6 +826,8 @@ export default function KeysPage() {
               />
             )}
           </div>
+
+          <SharedKeysSection keys={sharedKeys} />
 
           <ApiKeysModal
             open={modalOpen}

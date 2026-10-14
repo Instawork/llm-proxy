@@ -18,11 +18,13 @@ func (h *handler) writeUserStoreUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": msg})
 }
 
+// allowedDomain resolves the permitted email domain with the same precedence
+// as sign-in: LLM_PROXY_ADMIN_ALLOWED_DOMAIN, then YAML, then example.com.
 func (h *handler) allowedDomain() string {
 	if h.deps.YAMLConfig == nil {
-		return "example.com"
+		return ResolveAllowedDomain("")
 	}
-	return h.deps.YAMLConfig.Features.AdminDashboard.AllowedDomain
+	return ResolveAllowedDomain(h.deps.YAMLConfig.Features.AdminDashboard.AllowedDomain)
 }
 
 func (h *handler) handleListUsers(w http.ResponseWriter, r *http.Request) {

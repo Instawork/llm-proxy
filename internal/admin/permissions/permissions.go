@@ -29,7 +29,9 @@ const (
 	CreateKeyRequest  Permission = "create_key_request"
 	ReviewKeyRequest  Permission = "review_key_request"
 	ListMyKeyRequests Permission = "list_my_key_requests"
+	ManageKeyViewers  Permission = "manage_key_viewers"
 
+	ViewSharedOrgKeys        Permission = "view_shared_org_keys"
 	UpdateKeyDescription     Permission = "update_key_description"
 	UpdateKeyPolicy          Permission = "update_key_policy"
 	DeleteOwnKey             Permission = "delete_own_key"
@@ -59,6 +61,7 @@ var minRole = map[Permission]adminusers.Role{
 	CreateKeyRequest:  adminusers.RoleViewer,
 	ReviewKeyRequest:  adminusers.RoleAdmin,
 	ListMyKeyRequests: adminusers.RoleViewer,
+	ManageKeyViewers:  adminusers.RoleEditor,
 }
 
 // MinRole returns the minimum role required to reach a route guarded by p.
@@ -72,7 +75,7 @@ func MinRole(p Permission) adminusers.Role {
 // Can reports whether role may exercise a capability (may be stricter than MinRole).
 func Can(role adminusers.Role, p Permission) bool {
 	switch p {
-	case ViewMonitoring, ViewConfig, UpdateKeyPolicy, ViewAllOrgKeys, CreateOrgKey:
+	case ViewMonitoring, ViewConfig, UpdateKeyPolicy, ViewAllOrgKeys, CreateOrgKey, ManageKeyViewers:
 		return role.AtLeast(adminusers.RoleEditor)
 	case PasteProviderKey, DeleteOrgKey, ManageUsers, ManageBYO, ReviewKeyRequest,
 		ListKeyRequests:
@@ -84,22 +87,63 @@ func Can(role adminusers.Role, p Permission) bool {
 	case CreateKeyRequest:
 		return role == adminusers.RoleViewer || role == adminusers.RoleEditor
 	case ListKeys, CreateKey, GetKey, UpdateKey, ShareKey, Provisioning, KeyStats,
-		SpendOverview, ListMyKeyRequests, UpdateKeyDescription, DeleteOwnKey:
+		SpendOverview, ListMyKeyRequests, UpdateKeyDescription, DeleteOwnKey, ViewSharedOrgKeys:
 		return role.AtLeast(adminusers.RoleViewer)
 	default:
 		return false
 	}
 }
 
-// CanAccessKey reports whether the user may read or mutate a specific key record.
-func CanAccessKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
+// KeyAccess is how a caller relates to a key record.
+type KeyAccess string
+
+const (
+	// AccessNone means the caller may not see the key at all.
+	AccessNone KeyAccess = ""
+	// AccessManager is editor/admin access to every key.
+	AccessManager KeyAccess = "manager"
+	// AccessOwner is a viewer's access to their own personal key.
+	AccessOwner KeyAccess = "owner"
+	// AccessViewer is read-only access to an org-wide key the user was
+	// granted (or requested). It never implies any write.
+	AccessViewer KeyAccess = "viewer"
+)
+
+// AccessToKey classifies the caller's relationship to key.
+func AccessToKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) KeyAccess {
 	if role.AtLeast(adminusers.RoleEditor) {
-		return true
+		return AccessManager
 	}
-	if key == nil || strings.TrimSpace(key.OwnerEmail) == "" {
+	if key == nil || !role.AtLeast(adminusers.RoleViewer) {
+		return AccessNone
+	}
+	if owner := strings.TrimSpace(key.OwnerEmail); owner != "" {
+		if strings.EqualFold(owner, userEmail) {
+			return AccessOwner
+		}
+		return AccessNone
+	}
+	if Can(role, ViewSharedOrgKeys) && apikeys.IsKeyViewer(key, userEmail) {
+		return AccessViewer
+	}
+	return AccessNone
+}
+
+// CanViewKey reports whether the user may read a specific key record. It is
+// strictly wider than CanMutateKey: grantees can read but never write.
+func CanViewKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
+	return AccessToKey(role, userEmail, key) != AccessNone
+}
+
+// CanMutateKey reports whether the user may modify, delete, or share a
+// specific key record.
+func CanMutateKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
+	switch AccessToKey(role, userEmail, key) {
+	case AccessManager, AccessOwner:
+		return true
+	default:
 		return false
 	}
-	return strings.EqualFold(key.OwnerEmail, userEmail)
 }
 
 // CanRenameKey reports whether key's description may be changed. Personal
@@ -111,7 +155,7 @@ func CanRenameKey(key *apikeys.APIKey) bool {
 
 // CanDeleteKey reports whether the user may delete the key.
 func CanDeleteKey(role adminusers.Role, userEmail string, key *apikeys.APIKey) bool {
-	if !CanAccessKey(role, userEmail, key) {
+	if !CanMutateKey(role, userEmail, key) {
 		return false
 	}
 	if Can(role, DeleteOrgKey) {

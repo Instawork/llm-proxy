@@ -26,6 +26,8 @@ import { chartPalette } from "../../components/charts/chart-setup";
 import { useKey, useKeyStats, useMe, usePII, useRateLimits } from "../../hooks/queries";
 import { permissions } from "../../lib/permissions";
 import EditKeyModal from "../../components/keys/edit-key-modal";
+import KeyViewersPanel from "../../components/keys/key-viewers-panel";
+import SharedKeyDetail from "../../components/keys/shared-key-detail";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import { UNMETERED_HELP } from "../../lib/spend-overview";
 import { formatExpiresAt, isExpired, type KeyFormTab } from "../../lib/key-form";
@@ -77,6 +79,7 @@ export default function KeyDetailPage() {
   const { data: me } = useMe();
   const isViewer = permissions.isViewer(me?.role);
   const canManagePolicy = permissions.canManageKeyPolicy(me?.role);
+  const canManageViewers = permissions.canManageKeyViewers(me?.role);
   const routeKeyId = keyParam ? decodeKeyRouteParam(keyParam) : undefined;
   const validRoute = isKeyRouteParam(routeKeyId) ? routeKeyId : undefined;
 
@@ -196,6 +199,10 @@ export default function KeyDetailPage() {
 
   if (keyQuery.isPending || statsQuery.isPending || (!isViewer && rateQuery.isPending && !(stats?.rate_usage?.length))) {
     return <LoadingBlock />;
+  }
+
+  if (keyRecord?.read_only) {
+    return <SharedKeyDetail keyRecord={keyRecord} stats={stats} />;
   }
 
   const title = keyRecord?.description?.trim() || "Unnamed key";
@@ -320,6 +327,10 @@ export default function KeyDetailPage() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {keyRecord && !notFound && canManageViewers && !isPersonal ? (
+        <KeyViewersPanel routeKey={validRoute} />
       ) : null}
 
       {keyRecord && !notFound ? (

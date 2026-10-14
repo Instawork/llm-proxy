@@ -27,7 +27,9 @@ export type Permission =
   | "view_all_org_keys"
   | "create_org_key"
   | "bulk_generate_personal_keys"
-  | "bulk_generate_org_keys";
+  | "bulk_generate_org_keys"
+  | "view_shared_org_keys"
+  | "manage_key_viewers";
 
 const EDITOR_PLUS: Permission[] = [
   "view_monitoring",
@@ -35,6 +37,7 @@ const EDITOR_PLUS: Permission[] = [
   "update_key_policy",
   "view_all_org_keys",
   "create_org_key",
+  "manage_key_viewers",
 ];
 
 const ADMIN_ONLY: Permission[] = [
@@ -62,6 +65,7 @@ const VIEWER_PLUS: Permission[] = [
   "list_my_key_requests",
   "update_key_description",
   "delete_own_key",
+  "view_shared_org_keys",
 ];
 
 const adminOnly = new Set<Permission>(ADMIN_ONLY);
@@ -114,6 +118,7 @@ export const permissions = {
     can(role, "bulk_generate_personal_keys"),
   canBulkGenerateOrgKeys: (role: AdminRole | undefined) =>
     can(role, "bulk_generate_org_keys"),
+  canManageKeyViewers: (role: AdminRole | undefined) => can(role, "manage_key_viewers"),
   canManageConfigPage: (role: AdminRole | undefined) => role === "admin",
 };
 

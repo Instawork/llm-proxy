@@ -258,6 +258,8 @@ When `features.admin_dashboard.enabled`:
 
 - **Auth** — Google OAuth (`/admin/auth/*`); dev bypass login in local configs
 - **API** — `/admin/api/*` for keys, usage, cost, PII, rate limits, circuit activity
+- **Key access** — per-key read-only `viewer_emails` (plus the implicit requester); see
+  [API_KEY_MANAGEMENT.md](API_KEY_MANAGEMENT.md#service-key-viewers)
 - **SPA** — React app in `web/`; production build embedded via `-tags embed_ui`
 - **Rollups** — `adminrollup.Store` persists daily aggregates to Redis
 - **RBAC** — `adminusers.Store` in DynamoDB (viewer / editor / admin roles)

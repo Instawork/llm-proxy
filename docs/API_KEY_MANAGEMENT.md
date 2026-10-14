@@ -88,6 +88,29 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.
 
+## Service key viewers
+
+An editor or admin can give individual users **read-only** access to a single org-wide key without changing anyone's role. Access is per key, not per user.
+
+- The key record stores a `viewer_emails` string set. Emails are lowercased; each key holds at most 50 viewers. Personal keys cannot have viewers.
+- The **requester** of a key (`requester_email`, set when a key request is approved) is an implicit viewer and cannot be removed. This also makes the "View" link on an approved request resolve for the requester.
+- Viewers see the key under **Shared with me** on the API Keys page and in a read-only detail page. The response contains the masked key ID, provider, description, enabled state, daily/monthly cost limits, created/expiry dates, and spend (today, this month, cap, 7-day history). It never contains the usable key, the upstream (`actual_key`) credential, owner or requester email, rate-limit overrides, tags, PII settings, or PII/rate-limit telemetry.
+- Viewers cannot mutate: `PATCH`, `DELETE`, and share-link creation on a key they can read return `403`. A key a user has no access to still returns `404`, so existence cannot be probed.
+- Editors and admins manage viewers from the key detail page (**Viewers** panel) or the API:
+  - `GET /admin/api/keys/{key}/viewers`
+  - `POST /admin/api/keys/{key}/viewers` with `{"emails": ["a@example.com"]}` (emails must be in the allowed domain)
+  - `DELETE /admin/api/keys/{key}/viewers/{email}`
+- CLI (writes go through the same production guard as other mutating commands; `viewers add` enforces the same allowed domain as the API: `LLM_PROXY_ADMIN_ALLOWED_DOMAIN`, then `admin_dashboard.allowed_domain`, then `example.com`):
+
+```bash
+./llm-proxy-keys viewers add    -key sk-iw-... -email a@example.com,b@example.com
+./llm-proxy-keys viewers list   -key sk-iw-...
+./llm-proxy-keys viewers remove -key sk-iw-... -email a@example.com
+./llm-proxy-keys -show=sk-iw-...   # also prints the Viewers line
+```
+
+No new DynamoDB index is required. Viewer additions and removals use atomic `ADD`/`DELETE` set updates, so concurrent edits do not overwrite each other. A viewer's "Shared with me" list is built by scanning the keys table and filtering in the service, the same cost profile as the editor key list; add a GSI only if the table grows large enough for that scan to matter.
+
 ## Key expiry
 
 Any key (org-wide or personal) can have an optional expiry date, set from the admin UI (presets: 1 day, 7 days, 30 days, 90 days, or a custom date) or via the API's `expires_at` field. `expires_at` is stored as an absolute RFC3339 UTC timestamp.

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/middleware"
@@ -97,7 +98,7 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, _, _, ok := h.loadAccessibleKey(w, r, keyID)
+	record, user, role, ok := h.loadAccessibleKey(w, r, keyID, keyActionRead)
 	if !ok {
 		return
 	}
@@ -167,6 +168,16 @@ func (h *handler) handleKeyStats(w http.ResponseWriter, r *http.Request) {
 				resp.RateBackend = "memory"
 			}
 		}
+	}
+
+	if permissions.AccessToKey(role, user.Email, record) == permissions.AccessViewer {
+		// Read-only grantees see cost and request volume, not content-safety
+		// or rate-limit telemetry.
+		resp.PIIToday = keyPIIStatsResponse{}
+		resp.PIIHistory = nil
+		resp.RecentPII = nil
+		resp.RateUsage = nil
+		resp.RateBackend = ""
 	}
 
 	writeJSON(w, http.StatusOK, resp)

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -105,7 +106,7 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
 	var keys []*apikeys.APIKey
 	if role == adminusers.RoleViewer {
-		keys, err = h.deps.APIKeyStore.ListKeysByOwner(r.Context(), user.Email, provider)
+		keys, err = h.listKeysForViewer(r.Context(), user.Email, provider)
 	} else {
 		keys, err = h.deps.APIKeyStore.ListKeys(r.Context(), provider)
 		if err == nil {
@@ -118,11 +119,50 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var spend map[string]keySpend
+	var shared []*apikeys.APIKey
+	for _, k := range keys {
+		if permissions.AccessToKey(role, user.Email, k) == permissions.AccessViewer {
+			shared = append(shared, k)
+		}
+	}
+	if len(shared) > 0 {
+		spend = h.spendOverviewService().KeySpend(r.Context(), shared)
+	}
+
 	resp := make([]KeyResponse, 0, len(keys))
 	for _, k := range keys {
-		resp = append(resp, keyToResponse(k, false))
+		access := permissions.AccessToKey(role, user.Email, k)
+		var ks *keySpend
+		if access == permissions.AccessViewer {
+			if v, ok := spend[k.PK]; ok {
+				ks = &v
+			}
+		}
+		resp = append(resp, keyResponseForAccess(k, access, ks))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// listKeysForViewer returns a viewer's personal keys plus the org-wide keys
+// shared with them. Shared keys need a full scan: there is deliberately no
+// index on viewer_emails or requester_email (see docs/API_KEY_MANAGEMENT.md).
+func (h *handler) listKeysForViewer(ctx context.Context, email, provider string) ([]*apikeys.APIKey, error) {
+	owned, err := h.deps.APIKeyStore.ListKeysByOwner(ctx, email, provider)
+	if err != nil {
+		return nil, err
+	}
+	all, err := h.deps.APIKeyStore.ListKeys(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	keys := owned
+	for _, k := range all {
+		if apikeys.IsKeyViewer(k, email) {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
 }
 
 func (h *handler) globalPIIEnabled() bool {
@@ -301,12 +341,30 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, _, _, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"], keyActionRead)
 	if !ok {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyDetailResponse(record, h.publicBaseURL(r)))
+	access := permissions.AccessToKey(role, user.Email, record)
+	if access == permissions.AccessViewer {
+		resp := keyResponseForAccess(record, access, nil)
+		if spend, found := h.spendOverviewService().KeySpend(r.Context(), []*apikeys.APIKey{record})[record.PK]; found {
+			resp.Spend = &spend
+		}
+		if base := h.publicBaseURL(r); base != "" {
+			resp.ProxyBase = base
+			resp.BaseURL = base + providerBasePath(record.Provider)
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp := keyDetailResponse(record, h.publicBaseURL(r))
+	resp.Access = string(access)
+	if access == permissions.AccessManager {
+		resp.ViewerEmails = record.ViewerEmails
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +386,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, _, role, ok := h.loadAccessibleKey(w, r, keyID)
+	existing, _, role, ok := h.loadAccessibleKey(w, r, keyID, keyActionWrite)
 	if !ok {
 		return
 	}
@@ -472,7 +530,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"], keyActionWrite)
 	if !ok {
 		return
 	}
@@ -714,7 +772,7 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, user, _, ok := h.loadAccessibleKey(w, r, req.Key)
+	record, user, _, ok := h.loadAccessibleKey(w, r, req.Key, keyActionWrite)
 	if !ok {
 		return
 	}
