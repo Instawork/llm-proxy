@@ -1,0 +1,19 @@
+greenfinch.toml
+  s_fd528823e8d35d::t_0c34d3a58f6f39 1-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "81fa6bd53c23484a1ada47056790596dc7a132ac",
+  "prompts": {},
+  "sessions": {
+    "s_fd528823e8d35d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "",
+        "model": "unknown"
+      },
+      "human_author": "Eric Hagman <eric@instawork.com>"
+    }
+  }
+}
