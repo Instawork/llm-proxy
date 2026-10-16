@@ -1,0 +1,175 @@
+# Greenfinch merge-risk policy for Instawork/llm-proxy: the repo-owned layer of the policy
+# Greenfinch (iw-greenfinch) scores pull requests with. It sits on top of the central
+# policy in Instawork/bdk-automations (agents/pr-automerge/policies/repos/Instawork__llm-proxy.toml),
+# which keeps the stack list, the automerge and merge settings, the reviewer identity, the
+# coverage artifact location and any lift of a base or stack rule (`unblock_paths`);
+# everything in this file is owned here and can be changed with a PR to this repository.
+#
+# How it is read: from the head commit of a PR's base branch, never from the PR itself,
+# so a change to this file takes effect once it is merged and a PR cannot loosen the
+# policy it is judged by.
+#
+# How it merges: scalars override the inherited value per key; lists append to the
+# inherited ones, deduplicated by glob / regex / area name / value; `replace = ["<list>"]`
+# starts a list from scratch and `[remove]` drops inherited entries by key. This file can
+# only tighten the policy: floors and the base layer's deny rules survive every edit, and
+# a key that may not be set in-repo is ignored with a note in the review footer.
+#
+# Check an edit locally from a bdk-automations checkout:
+#   bash scripts/agents.sh lint-policy /path/to/greenfinch.toml Instawork/llm-proxy
+# and see the resolved policy on any PR with `@iw-greenfinch config`.
+# Reference: https://instawork.atlassian.net/wiki/spaces/EN/pages/4848680999/What+is+Greenfinch
+# ("Configuring your repo with greenfinch.toml").
+
+version = 1
+test_paths = ["**/*_test.go", "integration/**", "web/**/*.test.ts", "web/**/*.test.tsx"]
+dependency_manifests = ["go.mod", "web/package.json"]
+areas = [
+  { name = "proxy", prefixes = ["cmd/llm-proxy/"] },
+  { name = "cmd", prefixes = ["cmd/"] },
+  { name = "middleware", prefixes = ["internal/middleware/"] },
+  { name = "auth", prefixes = ["internal/apikeys/", "internal/admin/", "internal/adminusers/", "internal/provision/"] },
+  { name = "pii", prefixes = ["internal/pii/", "internal/redact/", "internal/redactapi/"] },
+  { name = "limits", prefixes = ["internal/ratelimit/", "internal/circuit/", "internal/cost/"] },
+  { name = "providers", prefixes = ["internal/providers/"] },
+  { name = "internal", prefixes = ["internal/"] },
+  { name = "configs", prefixes = ["configs/"] },
+  { name = "audits", prefixes = ["audits/"] },
+  { name = "integration", prefixes = ["integration/"] },
+  { name = "ocr", prefixes = ["ocr_sidecar/"] },
+  { name = "web", prefixes = ["web/"] },
+  { name = "build", prefixes = ["Makefile", "go.mod", "go.sum"] },
+  { name = "ci", prefixes = [".circleci/", ".github/"] },
+]
+
+[[ignored_paths]]
+glob = "audits/**/*.json"
+reason = "generated audit output"
+
+[[blocked_paths]]
+glob = "internal/middleware/**"
+reason = "request middleware applies to every proxied call"
+
+[[blocked_paths]]
+glob = "internal/apikeys/**"
+reason = "api key issuance and validation"
+
+[[blocked_paths]]
+glob = "internal/admin/**"
+reason = "admin api"
+
+[[blocked_paths]]
+glob = "internal/adminusers/**"
+reason = "admin user management"
+
+[[blocked_paths]]
+glob = "internal/provision/**"
+reason = "key provisioning"
+
+[[blocked_paths]]
+glob = "internal/pii/**"
+reason = "pii detection"
+
+[[blocked_paths]]
+glob = "internal/redact/**"
+reason = "redaction"
+
+[[blocked_paths]]
+glob = "internal/redactapi/**"
+reason = "redaction api"
+
+[[blocked_paths]]
+glob = "internal/ratelimit/**"
+reason = "rate limiting"
+
+[[blocked_paths]]
+glob = "internal/circuit/**"
+reason = "provider circuit breaker"
+
+[[blocked_paths]]
+glob = "internal/cost/**"
+reason = "cost accounting and budgets"
+
+[[blocked_paths]]
+glob = "configs/production.y*ml"
+reason = "production configuration"
+
+[[blocked_paths]]
+glob = "configs/staging.y*ml"
+reason = "staging configuration"
+
+[[blocked_paths]]
+glob = "**/recognizers.y*ml"
+reason = "pii recognizer definitions"
+
+[[blocked_paths]]
+glob = "Makefile"
+reason = "build and release recipes"
+
+[[blocked_paths]]
+glob = "ocr_sidecar/**"
+reason = "ocr sidecar image and runtime"
+
+[[blocked_paths]]
+glob = "web/src/lib/permissions*"
+reason = "ui permission checks"
+
+[[blocked_paths]]
+glob = "web/src/lib/rbac*"
+reason = "ui role checks"
+
+[[blocked_patterns]]
+regex = '(?i)^\s*(features|bypass|dev_bypass_login|admin|cors|allowed_origins|limits|max_body_bytes|timeout_ms_max|redaction|pii)\s*:'
+reason = "proxy behaviour toggled in config"
+files = "configs/**"
+
+[[blocked_patterns]]
+regex = '(?i)^\s*enabled\s*:\s*false\b'
+reason = "feature disabled in config"
+files = "configs/**"
+
+[[blocked_patterns]]
+regex = '(?i)\b(provider|model)s?\s*:\s*$|\bbase_url\s*:'
+reason = "provider routing changed"
+files = "configs/**"
+
+[[blocked_patterns]]
+regex = '\b(Authorization|X-Api-Key|x-api-key|Bearer)\b'
+reason = "auth header handling"
+files = "internal/**"
+
+[[blocked_patterns]]
+regex = '\bpanic\('
+reason = "panic in request path"
+files = "internal/**"
+
+[[blocked_patterns]]
+regex = '\bos\.(Getenv|LookupEnv)\('
+reason = "environment read outside the config loader"
+files = "internal/**"
+
+[[blocked_patterns]]
+regex = '\b(InsecureSkipVerify|http\.ListenAndServe\(|tls\.Config\{)'
+reason = "transport security"
+files = "**/*.go"
+
+[[ast_rules]]
+lang = "go"
+rule = { kind = "go_statement" }
+effect = "block"
+reason = "new goroutine in the proxy"
+files = "internal/**"
+
+[[ast_rules]]
+lang = "go"
+rule = { kind = "import_spec", has = { kind = "interpreted_string_literal", regex = '^"(unsafe|reflect)"$' } }
+effect = "block"
+reason = "unsafe or reflect import"
+files = "**/*.go"
+
+[[ast_rules]]
+lang = "go"
+rule = { kind = "composite_literal", has = { kind = "keyed_element", stopBy = "end", has = { kind = "literal_element", regex = "(TableName|ConditionExpression|UpdateExpression|KeyConditionExpression|ExpressionAttribute)" } } }
+effect = "block"
+reason = "dynamodb key or expression literal"
+files = "internal/**"
