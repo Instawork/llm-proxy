@@ -430,6 +430,8 @@ providers:
           output: 30.00
       "gpt-4.1":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -443,6 +445,8 @@ providers:
           output: 8.00
       "gpt-4.1-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-mini-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -471,6 +475,8 @@ providers:
           output: 0.40
       "gpt-4o":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14); gpt-4o-2024-05-13 already 2026-10-23
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-2024-05-13", "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"]
         limits:
           tokens_per_minute: 450_000
@@ -488,6 +494,8 @@ providers:
               output: 15.00
       "gpt-4o-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-mini-2024-07-18"]
         limits:
           tokens_per_minute: 2_000_000
@@ -2051,6 +2059,23 @@ providers:
       burst_requests: 100
 
     models:
+      # Flagship reasoning model (GA 2026-10-13). Flat pricing, no prompt-length
+      # tier. Introductory 2.00/10.00 through 2026-11-30; the 4.00/20.00 list
+      # rate below applies from 2026-12-01 and is what we encode. Limits copied
+      # from gemini-3.1-pro pending a vendor quota page for this id.
+      "gemini-4-argon":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 4.00
+          output: 20.00
       "gemini-3.1-pro":
         enabled: true
         # gemini-3.1-pro-preview-customtools is the Custom Tools endpoint id; the
