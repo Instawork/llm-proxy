@@ -152,19 +152,35 @@ func listShowsSpend(access permissions.KeyAccess) bool {
 }
 
 // listKeysForViewer returns a viewer's personal keys plus the org-wide keys
-// shared with them. Shared keys need a full scan: there is deliberately no
-// index on viewer_emails or requester_email (see docs/API_KEY_MANAGEMENT.md).
+// shared with them.
 func (h *handler) listKeysForViewer(ctx context.Context, email, provider string) ([]*apikeys.APIKey, error) {
-	owned, err := h.deps.APIKeyStore.ListKeysByOwner(ctx, email, provider)
+	return viewerKeys(ctx, h.deps.APIKeyStore, email, provider)
+}
+
+// viewerKeys returns the keys a viewer-role user can see: personal keys they
+// own plus org-wide keys shared with them (viewer_emails or requester). Shared
+// keys need a full scan: there is deliberately no index on viewer_emails or
+// requester_email (see docs/API_KEY_MANAGEMENT.md). Keys are de-duplicated by
+// PK.
+func viewerKeys(ctx context.Context, store spendKeyLister, email, provider string) ([]*apikeys.APIKey, error) {
+	owned, err := store.ListKeysByOwner(ctx, email, provider)
 	if err != nil {
 		return nil, err
 	}
-	all, err := h.deps.APIKeyStore.ListKeys(ctx, provider)
+	all, err := store.ListKeys(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
-	keys := owned
+	seen := make(map[string]struct{}, len(owned))
+	keys := make([]*apikeys.APIKey, 0, len(owned))
+	for _, k := range owned {
+		seen[k.PK] = struct{}{}
+		keys = append(keys, k)
+	}
 	for _, k := range all {
+		if _, dup := seen[k.PK]; dup {
+			continue
+		}
 		if apikeys.IsKeyViewer(k, email) {
 			keys = append(keys, k)
 		}

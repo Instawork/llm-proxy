@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { KeyCostEventsTable, KeyPiiEventsTable, KeyRateUsageTable } from "../../components/keys/key-detail-tables";
@@ -43,7 +43,8 @@ import {
   maskKeyId,
 } from "../../lib/format";
 import { decodeKeyRouteParam, isKeyRouteParam, isMaskedKeyRouteParam, isProxyKey, keyDetailPath, keySetupPath } from "../../lib/key-routes";
-import { dismissKeySetup, isKeySetupDismissed } from "../../lib/key-setup-dismiss";
+import { keyHasBeenUsed } from "../../lib/key-usage";
+import SetupGuidePanel from "../../components/keys/setup-guide-panel";
 import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-stats";
 import type { KeyStatsSource } from "../../types";
 
@@ -88,19 +89,10 @@ export default function KeyDetailPage() {
   const piiQuery = usePII();
   const rateQuery = useRateLimits();
   const [tab, setTab] = useState<DetailTab>("cost");
-  const tabDefaultedRef = useRef(false);
   const [editModalTab, setEditModalTab] = useState<KeyFormTab | null>(null);
 
   const keyRecord = keyQuery.data;
   const proxyKey = keyRecord?.key;
-  const [setupDismissed, setSetupDismissed] = useState(() =>
-    proxyKey ? isKeySetupDismissed(proxyKey) : false,
-  );
-
-  useEffect(() => {
-    if (!proxyKey) return;
-    setSetupDismissed(isKeySetupDismissed(proxyKey));
-  }, [proxyKey]);
 
   useEffect(() => {
     if (!routeKeyId || !isProxyKey(routeKeyId) || isMaskedKeyRouteParam(routeKeyId)) return;
@@ -149,36 +141,7 @@ export default function KeyDetailPage() {
     rateQuery.refetch();
   };
 
-  const requestsToday = costToday?.requests ?? 0;
-  const statsLoaded = !statsQuery.isPending;
-
-  const hasBeenUsed = Boolean(
-    keyRecord?.first_request_at
-    || (statsLoaded && (
-      requestsToday > 0
-      || (unmeteredToday?.requests ?? 0) > 0
-      || (costMonth?.spend_usd ?? 0) > 0
-      || recentCost.length > 0
-    )),
-  );
-
-  const setupMode = Boolean(
-    isViewer && keyRecord && !hasBeenUsed && !setupDismissed,
-  );
-
-  useEffect(() => {
-    if (tabDefaultedRef.current || keyQuery.isPending || statsQuery.isPending || !validRoute) return;
-    tabDefaultedRef.current = true;
-    if (isViewer && !hasBeenUsed && !setupDismissed) {
-      setTab("usage");
-    }
-  }, [hasBeenUsed, isViewer, keyQuery.isPending, setupDismissed, statsQuery.isPending, validRoute]);
-
-  const dismissSetup = () => {
-    if (!proxyKey) return;
-    dismissKeySetup(proxyKey);
-    setSetupDismissed(true);
-  };
+  const hasBeenUsed = keyHasBeenUsed(keyRecord, stats);
 
   const sdkBaseUrl = keyRecord?.base_url;
 
@@ -335,326 +298,303 @@ export default function KeyDetailPage() {
 
       {keyRecord && !notFound ? (
         <>
-          {setupMode ? (
-            <div className="glass-panel space-y-5 p-5 lg:p-6">
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold">Get set up</h2>
-                <p className="text-sm text-base-content/70">
-                  It looks like you haven&apos;t used this key yet. Point your SDK at the proxy with the snippets
-                  below — once we see your first request, usage and spend stats will show up here automatically.
-                </p>
-              </div>
-              {sdkBaseUrl ? (
-                <ProxyKeyUsagePanel
-                  provider={keyRecord.provider}
-                  baseUrl={sdkBaseUrl}
-                  proxyKey={keyRecord.key}
-                  embedded
-                />
-              ) : (
-                <p className="text-sm text-base-content/60">
-                  SDK base URL is unavailable — refresh the page or open this key from the API Keys list.
-                </p>
-              )}
-              <div className="flex flex-wrap items-center gap-3 border-t border-base-300/60 pt-4">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={dismissSetup}>
-                  Setup already?
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <SpendOverview
-                todayUsd={costToday?.spend_usd ?? 0}
-                monthUsd={costMonth?.spend_usd ?? 0}
-                monthLabel={monthLabel}
-                dailyLimitCents={dailyLimitCents}
-                monthlyLimitCents={monthlyLimitCents}
-                costSource={costSource}
-                monthSource={monthSource}
-                showDailyLimit={costLimitPeriod === "daily" && dailyLimitCents > 0}
-                showMonthlyLimit={costLimitPeriod === "monthly" && monthlyLimitCents > 0}
-              />
+          <SpendOverview
+            todayUsd={costToday?.spend_usd ?? 0}
+            monthUsd={costMonth?.spend_usd ?? 0}
+            monthLabel={monthLabel}
+            dailyLimitCents={dailyLimitCents}
+            monthlyLimitCents={monthlyLimitCents}
+            costSource={costSource}
+            monthSource={monthSource}
+            showDailyLimit={costLimitPeriod === "daily" && dailyLimitCents > 0}
+            showMonthlyLimit={costLimitPeriod === "monthly" && monthlyLimitCents > 0}
+          />
 
-              <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
-                <LiveStat
-                  title="Requests today"
-                  value={(costToday?.requests ?? 0).toLocaleString()}
-                  hint="cost tracker"
-                  source={costSource}
-                />
-                <LiveStat
-                  title="PII detections"
-                  value={(piiToday?.detections ?? 0).toLocaleString()}
-                  hint={`${recentPii.length} recent events`}
-                  source={piiSource}
-                />
-                <LiveStat
-                  title="Input tokens"
-                  value={(costToday?.input_tokens ?? 0).toLocaleString()}
-                  hint="today"
-                  source={costSource}
-                />
+          <div className={`grid gap-4 sm:grid-cols-2 ${isViewer ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
+            <LiveStat
+              title="Requests today"
+              value={(costToday?.requests ?? 0).toLocaleString()}
+              hint="cost tracker"
+              source={costSource}
+            />
+            <LiveStat
+              title="PII detections"
+              value={(piiToday?.detections ?? 0).toLocaleString()}
+              hint={`${recentPii.length} recent events`}
+              source={piiSource}
+            />
+            <LiveStat
+              title="Input tokens"
+              value={(costToday?.input_tokens ?? 0).toLocaleString()}
+              hint="today"
+              source={costSource}
+            />
+            {!isViewer ? (
+              <LiveStat
+                title="Rate usage"
+                value={rateRequestTotal.toLocaleString()}
+                hint="requests in live windows"
+                source={rateSource}
+              />
+            ) : null}
+          </div>
+
+          <div className="glass-panel overflow-hidden">
+            <div className="border-b border-base-300/70 bg-base-100/70 p-2">
+              <div role="tablist" className="flex flex-wrap gap-2" aria-label="Key detail sections">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "usage"}
+                  className={detailTabClass(tab === "usage")}
+                  onClick={() => setTab("usage")}
+                >
+                  Usage
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "cost"}
+                  className={detailTabClass(tab === "cost")}
+                  onClick={() => setTab("cost")}
+                >
+                  Cost
+                  {recentCost.length > 0 ? (
+                    <span className="badge badge-ghost badge-sm border-0">{recentCost.length}</span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "pii"}
+                  className={detailTabClass(tab === "pii")}
+                  onClick={() => setTab("pii")}
+                >
+                  PII
+                  {recentPii.length > 0 ? (
+                    <span className="badge badge-ghost badge-sm border-0">{recentPii.length}</span>
+                  ) : null}
+                </button>
                 {!isViewer ? (
-                  <LiveStat
-                    title="Rate usage"
-                    value={rateRequestTotal.toLocaleString()}
-                    hint="requests in live windows"
-                    source={rateSource}
-                  />
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "rate-limits"}
+                    className={detailTabClass(tab === "rate-limits")}
+                    onClick={() => setTab("rate-limits")}
+                  >
+                    Rate limits
+                    {rateUsage.length > 0 ? (
+                      <span className="badge badge-ghost badge-sm border-0">{rateUsage.length}</span>
+                    ) : null}
+                  </button>
                 ) : null}
               </div>
+            </div>
 
-              <div className="glass-panel overflow-hidden">
-                <div className="border-b border-base-300/70 bg-base-100/70 p-2">
-                  <div role="tablist" className="flex flex-wrap gap-2" aria-label="Key detail sections">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "usage"}
-                      className={detailTabClass(tab === "usage")}
-                      onClick={() => setTab("usage")}
-                    >
-                      Usage
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "cost"}
-                      className={detailTabClass(tab === "cost")}
-                      onClick={() => setTab("cost")}
-                    >
-                      Cost
-                      {recentCost.length > 0 ? (
-                        <span className="badge badge-ghost badge-sm border-0">{recentCost.length}</span>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "pii"}
-                      className={detailTabClass(tab === "pii")}
-                      onClick={() => setTab("pii")}
-                    >
-                      PII
-                      {recentPii.length > 0 ? (
-                        <span className="badge badge-ghost badge-sm border-0">{recentPii.length}</span>
-                      ) : null}
-                    </button>
-                    {!isViewer ? (
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === "rate-limits"}
-                        className={detailTabClass(tab === "rate-limits")}
-                        onClick={() => setTab("rate-limits")}
-                      >
-                        Rate limits
-                        {rateUsage.length > 0 ? (
-                          <span className="badge badge-ghost badge-sm border-0">{rateUsage.length}</span>
-                        ) : null}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+            <div className="space-y-4 p-4 lg:p-5">
+              {tab === "usage" ? (
+                sdkBaseUrl ? (
+                  <ProxyKeyUsagePanel
+                    provider={keyRecord.provider}
+                    baseUrl={sdkBaseUrl}
+                    proxyKey={keyRecord.key}
+                    embedded
+                  />
+                ) : (
+                  <p className="text-sm text-base-content/60">
+                    SDK base URL is unavailable — refresh the page or open this key from the API Keys list.
+                  </p>
+                )
+              ) : null}
 
-                <div className="space-y-4 p-4 lg:p-5">
-                  {tab === "usage" ? (
-                    sdkBaseUrl ? (
-                      <ProxyKeyUsagePanel
-                        provider={keyRecord.provider}
-                        baseUrl={sdkBaseUrl}
-                        proxyKey={keyRecord.key}
-                        embedded
+              {tab === "cost" ? (
+                <>
+                  {stats?.rollup_available && costHistory.length > 0 ? (
+                    <ChartCard
+                      title="Spend over time"
+                      subtitle={`Last 7 days · ${DAILY_HISTORY_SUBTITLE}`}
+                      source="redis"
+                    >
+                      <BarChart
+                        labels={chartLabels(costHistory)}
+                        values={costHistory.map((p) => p.value)}
+                        label="Daily spend (USD)"
+                        colors={costHistory.map(() => chartPalette.primary())}
                       />
-                    ) : (
-                      <p className="text-sm text-base-content/60">
-                        SDK base URL is unavailable — refresh the page or open this key from the API Keys list.
-                      </p>
-                    )
+                    </ChartCard>
                   ) : null}
 
-                  {tab === "cost" ? (
-                    <>
-                      {stats?.rollup_available && costHistory.length > 0 ? (
-                        <ChartCard
-                          title="Spend over time"
-                          subtitle={`Last 7 days · ${DAILY_HISTORY_SUBTITLE}`}
-                          source="redis"
+                  <DetailSection
+                    title="Cost breakdown"
+                    subtitle={
+                      stats?.rollup_available
+                        ? "Fleet rollups from Redis · recent events are memory-only (last 50)"
+                        : "In-process tracked spend · recent events are memory-only (last 50)"
+                    }
+                    source={costSource}
+                  >
+                    {canManagePolicy ? (
+                      <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setEditModalTab("cost")}
                         >
-                          <BarChart
-                            labels={chartLabels(costHistory)}
-                            values={costHistory.map((p) => p.value)}
-                            label="Daily spend (USD)"
-                            colors={costHistory.map(() => chartPalette.primary())}
-                          />
-                        </ChartCard>
-                      ) : null}
-
-                      <DetailSection
-                        title="Cost breakdown"
-                        subtitle={
-                          stats?.rollup_available
-                            ? "Fleet rollups from Redis · recent events are memory-only (last 50)"
-                            : "In-process tracked spend · recent events are memory-only (last 50)"
-                        }
-                        source={costSource}
-                      >
-                        {canManagePolicy ? (
-                          <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => setEditModalTab("cost")}
-                            >
-                              Edit settings
-                            </button>
-                          </div>
-                        ) : null}
-                        <div className="grid gap-4 p-5 lg:grid-cols-2">
-                          <SpendPeriodPanel
-                            title="Today"
-                            subtitle="UTC calendar day"
-                            source={costSource}
-                            spentUsd={costToday?.spend_usd ?? 0}
-                            limitCents={
-                              costLimitPeriod === "daily" && dailyLimitCents > 0
-                                ? dailyLimitCents
-                                : undefined
-                            }
-                            limitLabel={
-                              costLimitPeriod === "daily" && dailyLimitCents > 0
-                                ? "Daily limit"
-                                : undefined
-                            }
-                          >
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <Meta label="Input spend" value={formatUsd(costToday?.input_spend_usd ?? 0)} />
-                              <Meta label="Output spend" value={formatUsd(costToday?.output_spend_usd ?? 0)} />
-                              <Meta label="Requests" value={costToday?.requests ?? 0} />
-                              <Meta label="Input tokens" value={(costToday?.input_tokens ?? 0).toLocaleString()} />
-                              <Meta label="Output tokens" value={(costToday?.output_tokens ?? 0).toLocaleString()} />
-                            </div>
-                          </SpendPeriodPanel>
-                          <SpendPeriodPanel
-                            title="This month"
-                            subtitle={monthLabel}
-                            source={monthSource}
-                            spentUsd={costMonth?.spend_usd ?? 0}
-                            limitCents={
-                              costLimitPeriod === "monthly" && monthlyLimitCents > 0
-                                ? monthlyLimitCents
-                                : undefined
-                            }
-                            limitLabel={
-                              costLimitPeriod === "monthly" && monthlyLimitCents > 0
-                                ? "Monthly limit"
-                                : undefined
-                            }
-                          >
-                            <p className="text-sm text-base-content/60">
-                              Month-to-date total includes today. Prior days are archived in Redis; today may
-                              include live in-process spend before flush.
-                            </p>
-                          </SpendPeriodPanel>
-                        </div>
-                        <KeyCostEventsTable rows={recentCost} />
-                      </DetailSection>
-
-                      {unmeteredToday ? (
-                        <DetailSection
-                          title="Unmetered calls"
-                          subtitle={UNMETERED_HELP}
-                          source={unmeteredToday.source}
-                        >
-                          <UnmeteredEndpointList stats={unmeteredToday} />
-                        </DetailSection>
-                      ) : null}
-                    </>
-                  ) : null}
-
-                  {tab === "pii" ? (
-                    <>
-                      {stats?.rollup_available && piiHistory.length > 0 ? (
-                        <ChartCard
-                          title="PII detections over time"
-                          subtitle={`Last 7 days · ${DAILY_HISTORY_SUBTITLE}`}
-                          source="redis"
-                        >
-                          <BarChart
-                            labels={chartLabels(piiHistory)}
-                            values={piiHistory.map((p) => p.value)}
-                            label="Daily detections"
-                            colors={piiHistory.map(() => chartPalette.warning())}
-                          />
-                        </ChartCard>
-                      ) : null}
-
-                      <DetailSection
-                        title="PII redaction"
-                        subtitle={
-                          stats?.rollup_available
-                            ? "Fleet-wide Redis count · recent events are memory-only (last 50)"
-                            : "Recent events are memory-only (last 50)"
-                        }
-                        source={piiSource}
-                      >
-                        {canManagePolicy ? (
-                          <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() => setEditModalTab("pii")}
-                            >
-                              Edit settings
-                            </button>
-                          </div>
-                        ) : null}
-                        <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-                          <Meta label="Detections today" value={piiToday?.detections ?? 0} />
-                          <Meta label="Recent events" value={recentPii.length} />
-                          {!isViewer ? (
-                            <>
-                              <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
-                              <Meta label="Per-key override" value={piiLabel(keyRecord.redact_pii)} />
-                            </>
-                          ) : null}
-                        </div>
-                        <KeyPiiEventsTable rows={recentPii} />
-                      </DetailSection>
-                    </>
-                  ) : null}
-
-                  {tab === "rate-limits" && !isViewer ? (
-                    <DetailSection
-                      title="Rate limits"
-                      subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
-                      source={rateSource}
-                    >
-                      {canManagePolicy ? (
-                        <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => setEditModalTab("rate-limits")}
-                          >
-                            Edit settings
-                          </button>
-                        </div>
-                      ) : null}
-                      <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-                        <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord.rate_limit_rpm)} />
-                        <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord.rate_limit_tpm)} />
-                        <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord.rate_limit_rpd)} />
-                        <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord.rate_limit_tpd)} />
+                          Edit settings
+                        </button>
                       </div>
-                      <KeyRateUsageTable rows={rateUsage} />
+                    ) : null}
+                    <div className="grid gap-4 p-5 lg:grid-cols-2">
+                      <SpendPeriodPanel
+                        title="Today"
+                        subtitle="UTC calendar day"
+                        source={costSource}
+                        spentUsd={costToday?.spend_usd ?? 0}
+                        limitCents={
+                          costLimitPeriod === "daily" && dailyLimitCents > 0
+                            ? dailyLimitCents
+                            : undefined
+                        }
+                        limitLabel={
+                          costLimitPeriod === "daily" && dailyLimitCents > 0
+                            ? "Daily limit"
+                            : undefined
+                        }
+                      >
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Meta label="Input spend" value={formatUsd(costToday?.input_spend_usd ?? 0)} />
+                          <Meta label="Output spend" value={formatUsd(costToday?.output_spend_usd ?? 0)} />
+                          <Meta label="Requests" value={costToday?.requests ?? 0} />
+                          <Meta label="Input tokens" value={(costToday?.input_tokens ?? 0).toLocaleString()} />
+                          <Meta label="Output tokens" value={(costToday?.output_tokens ?? 0).toLocaleString()} />
+                        </div>
+                      </SpendPeriodPanel>
+                      <SpendPeriodPanel
+                        title="This month"
+                        subtitle={monthLabel}
+                        source={monthSource}
+                        spentUsd={costMonth?.spend_usd ?? 0}
+                        limitCents={
+                          costLimitPeriod === "monthly" && monthlyLimitCents > 0
+                            ? monthlyLimitCents
+                            : undefined
+                        }
+                        limitLabel={
+                          costLimitPeriod === "monthly" && monthlyLimitCents > 0
+                            ? "Monthly limit"
+                            : undefined
+                        }
+                      >
+                        <p className="text-sm text-base-content/60">
+                          Month-to-date total includes today. Prior days are archived in Redis; today may
+                          include live in-process spend before flush.
+                        </p>
+                      </SpendPeriodPanel>
+                    </div>
+                    <KeyCostEventsTable rows={recentCost} />
+                  </DetailSection>
+
+                  {unmeteredToday ? (
+                    <DetailSection
+                      title="Unmetered calls"
+                      subtitle={UNMETERED_HELP}
+                      source={unmeteredToday.source}
+                    >
+                      <UnmeteredEndpointList stats={unmeteredToday} />
                     </DetailSection>
                   ) : null}
-                </div>
-              </div>
-            </>
-          )}
+                </>
+              ) : null}
+
+              {tab === "pii" ? (
+                <>
+                  {stats?.rollup_available && piiHistory.length > 0 ? (
+                    <ChartCard
+                      title="PII detections over time"
+                      subtitle={`Last 7 days · ${DAILY_HISTORY_SUBTITLE}`}
+                      source="redis"
+                    >
+                      <BarChart
+                        labels={chartLabels(piiHistory)}
+                        values={piiHistory.map((p) => p.value)}
+                        label="Daily detections"
+                        colors={piiHistory.map(() => chartPalette.warning())}
+                      />
+                    </ChartCard>
+                  ) : null}
+
+                  <DetailSection
+                    title="PII redaction"
+                    subtitle={
+                      stats?.rollup_available
+                        ? "Fleet-wide Redis count · recent events are memory-only (last 50)"
+                        : "Recent events are memory-only (last 50)"
+                    }
+                    source={piiSource}
+                  >
+                    {canManagePolicy ? (
+                      <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setEditModalTab("pii")}
+                        >
+                          Edit settings
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                      <Meta label="Detections today" value={piiToday?.detections ?? 0} />
+                      <Meta label="Recent events" value={recentPii.length} />
+                      {!isViewer ? (
+                        <>
+                          <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
+                          <Meta label="Per-key override" value={piiLabel(keyRecord.redact_pii)} />
+                        </>
+                      ) : null}
+                    </div>
+                    <KeyPiiEventsTable rows={recentPii} />
+                  </DetailSection>
+                </>
+              ) : null}
+
+              {tab === "rate-limits" && !isViewer ? (
+                <DetailSection
+                  title="Rate limits"
+                  subtitle="Overrides from key config (DynamoDB); usage from rate-limit backend"
+                  source={rateSource}
+                >
+                  {canManagePolicy ? (
+                    <div className="flex justify-end border-b border-base-300/70 px-5 py-3">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setEditModalTab("rate-limits")}
+                      >
+                        Edit settings
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                    <Meta label="RPM override" value={formatLimit(rateOverride?.RequestsPerMinute ?? keyRecord.rate_limit_rpm)} />
+                    <Meta label="TPM override" value={formatLimit(rateOverride?.TokensPerMinute ?? keyRecord.rate_limit_tpm)} />
+                    <Meta label="RPD override" value={formatLimit(rateOverride?.RequestsPerDay ?? keyRecord.rate_limit_rpd)} />
+                    <Meta label="TPD override" value={formatLimit(rateOverride?.TokensPerDay ?? keyRecord.rate_limit_tpd)} />
+                  </div>
+                  <KeyRateUsageTable rows={rateUsage} />
+                </DetailSection>
+              ) : null}
+            </div>
+          </div>
+          {!hasBeenUsed ? (
+            <SetupGuidePanel
+              dismissId={keyRecord.key}
+              provider={keyRecord.provider}
+              baseUrl={sdkBaseUrl}
+              proxyKey={keyRecord.key}
+            />
+          ) : null}
         </>
       ) : null}
 

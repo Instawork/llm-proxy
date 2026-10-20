@@ -14,7 +14,6 @@ import PiiOffConfirmDialog, {
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
-import SharedKeysSection from "../../components/keys/shared-keys-section";
 import {
   DeployIcon,
   KeyRequestsTabIcon,
@@ -593,6 +592,13 @@ export default function KeysPage() {
     return keys.filter((key) => key.provider === filter);
   }, [keys, filter]);
 
+  // Viewers see keys shared with them in the same table as their own; rows are
+  // flagged read_only and render without credentials or write actions.
+  const tableKeys = useMemo(() => {
+    const shared = filter ? sharedKeys.filter((key) => key.provider === filter) : sharedKeys;
+    return [...visibleKeys, ...shared];
+  }, [visibleKeys, sharedKeys, filter]);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -764,7 +770,7 @@ export default function KeysPage() {
             />
           ) : null}
 
-          {showBulkGenerate && visibleKeys.length > 0 ? (
+          {showBulkGenerate && tableKeys.length > 0 ? (
             <BulkGeneratePanel
               providers={bulkProviderStatuses}
               missingCount={bulkTargetProviders.length}
@@ -777,7 +783,7 @@ export default function KeysPage() {
           <div className="glass-panel overflow-hidden">
             {isLoading ? (
               <LoadingBlock />
-            ) : visibleKeys.length === 0 ? (
+            ) : tableKeys.length === 0 ? (
               <EmptyState
                 message={
                   isViewer
@@ -815,7 +821,7 @@ export default function KeysPage() {
               />
             ) : (
               <KeysTable
-                keys={visibleKeys}
+                keys={tableKeys}
                 onShare={onShare}
                 onEdit={openEdit}
                 onDelete={setDeleteTarget}
@@ -826,8 +832,6 @@ export default function KeysPage() {
               />
             )}
           </div>
-
-          <SharedKeysSection keys={sharedKeys} />
 
           <ApiKeysModal
             open={modalOpen}

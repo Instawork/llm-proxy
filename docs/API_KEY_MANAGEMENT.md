@@ -94,7 +94,7 @@ An editor or admin can give individual users **read-only** access to a single or
 
 - The key record stores a `viewer_emails` string set. Emails are lowercased; each key holds at most 50 viewers. Personal keys cannot have viewers.
 - The **requester** of a key (`requester_email`, set when a key request is approved) is an implicit viewer and cannot be removed. This also makes the "View" link on an approved request resolve for the requester.
-- Viewers see the key under **Shared with me** on the API Keys page and in a read-only detail page. The response contains the masked key ID, provider, description, enabled state, daily/monthly cost limits, created/expiry dates, and spend (today, this month, cap, 7-day history). It never contains the usable key, the upstream (`actual_key`) credential, owner or requester email, rate-limit overrides, tags, PII settings, or PII/rate-limit telemetry.
+- Viewers see the key in the same table as their own keys on the API Keys page (marked **Shared**, read-only, with month-to-date spend), under **Your keys** on Overview, and on a read-only detail page. Shared keys are shown with their own spend but are left out of the Overview totals, which cover only keys the viewer owns. A key with no traffic yet still shows its limits and $0.00 spend, with setup guidance in a collapsible panel below. The response contains the masked key ID, provider, description, enabled state, daily/monthly cost limits, created/expiry dates, and spend (today, this month, cap, 7-day history). It never contains the usable key, the upstream (`actual_key`) credential, owner or requester email, rate-limit overrides, tags, PII settings, or PII/rate-limit telemetry.
 - Viewers cannot mutate: `PATCH`, `DELETE`, and share-link creation on a key they can read return `403`. A key a user has no access to still returns `404`, so existence cannot be probed.
 - Editors and admins manage viewers from the key detail page (**Viewers** panel) or the API:
   - `GET /admin/api/keys/{key}/viewers`
@@ -109,7 +109,7 @@ An editor or admin can give individual users **read-only** access to a single or
 ./llm-proxy-keys -show=sk-iw-...   # also prints the Viewers line
 ```
 
-No new DynamoDB index is required. Viewer additions and removals use atomic `ADD`/`DELETE` set updates, so concurrent edits do not overwrite each other. A viewer's "Shared with me" list is built by scanning the keys table and filtering in the service, the same cost profile as the editor key list; add a GSI only if the table grows large enough for that scan to matter.
+No new DynamoDB index is required. Viewer additions and removals use atomic `ADD`/`DELETE` set updates, so concurrent edits do not overwrite each other. A viewer's shared-key rows (key list and Overview) are built by scanning the keys table and filtering in the service, the same cost profile as the editor key list; add a GSI only if the table grows large enough for that scan to matter.
 
 ## Key expiry
 

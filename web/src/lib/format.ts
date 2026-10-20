@@ -74,9 +74,15 @@ export function keyCostLimitPeriod(
 export function formatKeySpendCap(
   key: Pick<
     APIKey,
-    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit" | "spend"
   >,
 ): string {
+  const cap = key.spend?.cap;
+  if (cap && cap.cents > 0) {
+    return cap.period === "monthly"
+      ? formatMonthlyCostLimit(cap.cents)
+      : formatDailyCostLimit(cap.cents);
+  }
   if (keyCostLimitPeriod(key) === "monthly") {
     return formatMonthlyCostLimit(key.monthly_cost_limit);
   }

@@ -3,13 +3,14 @@ import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import KeyLink from "../ui/key-link";
+import { MaskedCredentialId } from "../ui/masked-credential-id";
 import { MaskedKey } from "../ui/masked-key";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { ProviderIcon } from "../ui/provider-badge";
 import { formatKeyMonthSpend, formatKeySpendCap, formatUsd } from "../../lib/format";
 import { formatExpiresAt, isExpired } from "../../lib/key-form";
-import { keySetupPath } from "../../lib/key-routes";
+import { keyDetailPathForMaskedId, keySetupPath } from "../../lib/key-routes";
 import { keyDisplayRows, uniformOr, type KeyRow } from "../../lib/key-stacks";
 import type { APIKey, PiiRedactSetting, Provider } from "../../types";
 
@@ -84,6 +85,19 @@ export default function KeysTable({
               </button>
             );
           }
+          if (original.key.read_only) {
+            return (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <Link
+                  to={keyDetailPathForMaskedId(original.key.masked_key_id ?? original.key.key)}
+                  className="link link-hover link-primary font-medium no-underline"
+                >
+                  {original.key.description?.trim() || "Unnamed key"}
+                </Link>
+                <span className="badge badge-info badge-outline badge-xs">Shared</span>
+              </span>
+            );
+          }
           return (
             <span className={row.depth > 0 ? "pl-6" : undefined}>
               <KeyLink
@@ -107,6 +121,9 @@ export default function KeysTable({
                 {original.keys.length} keys
               </span>
             );
+          }
+          if (original.key.read_only) {
+            return <MaskedCredentialId value={original.key.masked_key_id ?? original.key.key} />;
           }
           return <MaskedKey value={original.key.key} />;
         },
@@ -254,6 +271,18 @@ export default function KeysTable({
           // Actions are per key; a stack row exposes none, only its expanded leaves do.
           if (original.kind === "stack") return null;
           const record = original.key;
+          if (record.read_only) {
+            return (
+              <div className="flex justify-end gap-2">
+                <Link
+                  to={keyDetailPathForMaskedId(record.masked_key_id ?? record.key)}
+                  className="btn btn-ghost btn-xs"
+                >
+                  View
+                </Link>
+              </div>
+            );
+          }
           return (
             <div className="flex justify-end gap-2">
               {viewerMode ? (

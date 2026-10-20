@@ -645,6 +645,8 @@ export interface SpendKeyRow {
   description: string;
   owner_email?: string;
   enabled: boolean;
+  /** Read-only key shared with the caller; excluded from the caller's totals. */
+  shared?: boolean;
   today: KeyCostStats;
   month: KeyCostMonthStats;
   cap?: SpendCap;

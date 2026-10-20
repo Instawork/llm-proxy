@@ -31,6 +31,7 @@ export default function SpendKeyTable({
             className={`link link-hover link-primary no-underline ${row.original.enabled ? "" : "opacity-60"}`}
           >
             <span className="font-medium">{row.original.description || row.original.key_id}</span>
+            {row.original.shared ? <span className="badge badge-info badge-outline badge-xs ml-2">Shared</span> : null}
             <MaskedCredentialId value={row.original.key_id} className="mt-0.5 block opacity-70" />
           </Link>
         ),
