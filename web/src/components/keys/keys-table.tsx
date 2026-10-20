@@ -7,7 +7,7 @@ import { MaskedKey } from "../ui/masked-key";
 import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { ProviderIcon } from "../ui/provider-badge";
-import { formatKeySpendCap } from "../../lib/format";
+import { formatKeyMonthSpend, formatKeySpendCap, formatUsd } from "../../lib/format";
 import { formatExpiresAt, isExpired } from "../../lib/key-form";
 import { keySetupPath } from "../../lib/key-routes";
 import { keyDisplayRows, uniformOr, type KeyRow } from "../../lib/key-stacks";
@@ -167,6 +167,29 @@ export default function KeysTable({
           );
         },
       },
+      ...(viewerMode
+        ? [
+          {
+            id: "monthSpend",
+            accessorFn: (row) =>
+              row.kind === "stack"
+                ? row.keys.reduce((sum, k) => sum + (k.spend?.month.spend_usd ?? 0), 0)
+                : (row.key.spend?.month.spend_usd ?? -1),
+            header: "Spent this month",
+            cell: ({ row }) => {
+              const original = row.original;
+              if (original.kind === "stack") {
+                return (
+                  <span className="whitespace-nowrap" title={original.keys.map(formatKeyMonthSpend).join(" · ")}>
+                    {formatUsd(original.keys.reduce((sum, k) => sum + (k.spend?.month.spend_usd ?? 0), 0))}
+                  </span>
+                );
+              }
+              return <span className="whitespace-nowrap">{formatKeyMonthSpend(original.key)}</span>;
+            },
+          } satisfies ColumnDef<KeyRow>,
+        ]
+        : []),
       {
         id: "costLimit",
         accessorFn: (row) => (row.kind === "stack" ? uniformOr(row.keys, formatKeySpendCap, "Mixed") : formatKeySpendCap(row.key)),

@@ -154,6 +154,11 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   return `$${amount.toFixed(2)}`;
 }
 
+/** Month-to-date spend for a list row, or "—" when the list response carries none. */
+export function formatKeyMonthSpend(key: Pick<APIKey, "spend">): string {
+  return formatUsd(key.spend?.month.spend_usd);
+}
+
 const MASKED_CREDENTIAL_SPLIT = /…|\u2026|\.\.\./;
 
 export const MASKED_CREDENTIAL_HASH_TITLE =

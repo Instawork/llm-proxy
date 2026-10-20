@@ -120,21 +120,21 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var spend map[string]keySpend
-	var shared []*apikeys.APIKey
+	var withSpend []*apikeys.APIKey
 	for _, k := range keys {
-		if permissions.AccessToKey(role, user.Email, k) == permissions.AccessViewer {
-			shared = append(shared, k)
+		if listShowsSpend(permissions.AccessToKey(role, user.Email, k)) {
+			withSpend = append(withSpend, k)
 		}
 	}
-	if len(shared) > 0 {
-		spend = h.spendOverviewService().KeySpend(r.Context(), shared)
+	if len(withSpend) > 0 {
+		spend = h.spendOverviewService().KeySpend(r.Context(), withSpend)
 	}
 
 	resp := make([]KeyResponse, 0, len(keys))
 	for _, k := range keys {
 		access := permissions.AccessToKey(role, user.Email, k)
 		var ks *keySpend
-		if access == permissions.AccessViewer {
+		if listShowsSpend(access) {
 			if v, ok := spend[k.PK]; ok {
 				ks = &v
 			}
@@ -142,6 +142,13 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, keyResponseForAccess(k, access, ks))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// listShowsSpend reports whether a list row carries a spend block. Editors and
+// admins read spend from the overview and key detail pages; viewers have no
+// other list-level view of what their keys have cost.
+func listShowsSpend(access permissions.KeyAccess) bool {
+	return access == permissions.AccessViewer || access == permissions.AccessOwner
 }
 
 // listKeysForViewer returns a viewer's personal keys plus the org-wide keys
