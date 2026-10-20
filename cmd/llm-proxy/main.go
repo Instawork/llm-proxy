@@ -1569,6 +1569,11 @@ func runServer(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip
 // and returns the locals the later stages need. Fatal misconfiguration exits
 // the process here, before a listener is ever bound.
 func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) *serverDeps {
+	if yamlConfig.Features.IDGate.Enabled && env.OCRSidecarToken == "" {
+		logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
+		os.Exit(1)
+	}
+
 	port := env.Port
 	if port == "" {
 		port = defaultPort
@@ -1966,7 +1971,7 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 	if scoreThreshold <= 0 {
 		scoreThreshold = 0.4
 	}
-	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, ocrTimeout), deps.redactor, middleware.IDGateConfig{
+	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, deps.env.OCRSidecarToken, ocrTimeout), deps.redactor, middleware.IDGateConfig{
 		FailClosed:       idGateCfg.FailMode == "closed",
 		MaxBodyBytes:     idGateCfg.MaxBodyBytes,
 		MaxImageBytes:    idGateCfg.MaxImageBytes,
