@@ -433,4 +433,10 @@ func TestRegisterRoutes_RedirectsBareAdminToSlash(t *testing.T) {
 
 	require.Equal(t, http.StatusMovedPermanently, rec.Code)
 	require.Equal(t, "/admin/", rec.Header().Get("Location"))
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/admin?scope=shared", nil)
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMovedPermanently, rec.Code)
+	require.Equal(t, "/admin/?scope=shared", rec.Header().Get("Location"), "query survives the slash redirect")
 }
