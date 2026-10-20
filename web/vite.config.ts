@@ -11,10 +11,10 @@ function redirectBareAdmin() {
     name: "redirect-bare-admin",
     configureServer(server: { middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
       server.middlewares.use((req, res, next) => {
-        const url = (req.url ?? "").split("?")[0];
+        const [url, query] = (req.url ?? "").split("?");
         if (url === "/admin") {
           res.statusCode = 302;
-          res.setHeader("Location", "/admin/");
+          res.setHeader("Location", query ? `/admin/?${query}` : "/admin/");
           res.end();
           return;
         }

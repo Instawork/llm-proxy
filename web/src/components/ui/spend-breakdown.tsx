@@ -13,6 +13,8 @@ export function SpendOverview({
   monthSource,
   showDailyLimit,
   showMonthlyLimit = true,
+  title = "Spend",
+  note,
 }: {
   todayUsd: number;
   monthUsd: number;
@@ -25,12 +27,17 @@ export function SpendOverview({
   showDailyLimit: boolean;
   /** Show monthly limit progress when the key uses a monthly cap. */
   showMonthlyLimit?: boolean;
+  /** Panel heading; the overview uses it to state which keys the totals cover. */
+  title?: string;
+  /** Visible scope note under the subtitle (for example what the totals exclude). */
+  note?: string | null;
 }) {
   return (
     <div className="glass-panel p-5">
       <div className="mb-4">
-        <h3 className="font-semibold">Spend</h3>
+        <h3 className="font-semibold">{title}</h3>
         <p className="text-sm text-base-content/60">UTC day and calendar month · fleet rollups where available</p>
+        {note ? <p className="mt-1 text-sm text-info">{note}</p> : null}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <SpendOverviewColumn

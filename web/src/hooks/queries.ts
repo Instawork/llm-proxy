@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
 import { permissions } from "../lib/permissions";
 import { roleAtLeast } from "../lib/rbac";
+import type { SpendView } from "../lib/spend-overview";
 import type {
   AdminUser,
   AdminUserRecord,
@@ -141,13 +142,19 @@ export function useRemoveKeyViewer(key: string) {
   );
 }
 
-export function useSpendOverview() {
+/** `view` only applies to viewers; editors and admins always get the fleet overview. */
+export function useSpendOverview(view?: SpendView) {
   const { data: me } = useMe();
   const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
+  const scoped = role === "viewer" ? view : undefined;
   return useQuery({
-    queryKey: queryKeys.spendOverview,
-    queryFn: () => apiFetch<SpendOverviewResponse>("/admin/api/spend-overview"),
+    queryKey: [...queryKeys.spendOverview, scoped ?? "fleet"] as const,
+    queryFn: () =>
+      apiFetch<SpendOverviewResponse>(
+        scoped ? `/admin/api/spend-overview?scope=${scoped}` : "/admin/api/spend-overview",
+      ),
+    placeholderData: keepPreviousData,
     enabled: roleAtLeast(role, "viewer"),
     refetchInterval,
     refetchIntervalInBackground: true,

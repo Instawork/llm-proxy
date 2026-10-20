@@ -42,9 +42,15 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	// mounted on the "/admin" prefix subrouter, whose effective matcher is
 	// "/admin/…", so bare "/admin" would otherwise fall through to mux's
 	// default 404. Registered on the parent router because the subrouter
-	// cannot match the slash-less form.
+	// cannot match the slash-less form. The query string is kept: the SPA's
+	// root route renders at "/admin?…" (for example the Overview ?scope=
+	// filter), so dropping it would lose that state on reload.
 	r.HandleFunc("/admin", func(w http.ResponseWriter, req *http.Request) {
-		http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+		target := "/admin/"
+		if req.URL.RawQuery != "" {
+			target += "?" + req.URL.RawQuery
+		}
+		http.Redirect(w, req, target, http.StatusMovedPermanently)
 	}).Methods(http.MethodGet)
 
 	adminRouter := r.PathPrefix("/admin").Subrouter()
