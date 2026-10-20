@@ -6,6 +6,8 @@ import { MaskedCredentialId } from "../ui/masked-credential-id";
 import PageHeader, { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { SpendPeriodPanel } from "../ui/spend-breakdown";
 import { DataSourceBadge } from "../ui/data-source";
+import SetupGuidePanel from "./setup-guide-panel";
+import { keyHasBeenUsed } from "../../lib/key-usage";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import { formatExpiresAt, isExpired } from "../../lib/key-form";
 import {
@@ -132,6 +134,15 @@ export default function SharedKeyDetail({
           />
         </div>
       </div>
+
+      {!keyHasBeenUsed(keyRecord, stats ?? { cost_today: today, cost_month: month }) ? (
+        <SetupGuidePanel
+          shared
+          dismissId={masked}
+          provider={keyRecord.provider}
+          baseUrl={keyRecord.base_url}
+        />
+      ) : null}
     </div>
   );
 }

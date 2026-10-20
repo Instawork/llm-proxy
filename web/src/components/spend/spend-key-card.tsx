@@ -25,7 +25,12 @@ export default function SpendKeyCard({ row, monthLabel }: { row: SpendKeyRow; mo
         <ProviderBadge provider={row.provider} />
       </div>
       {row.owner_email ? <p className="mt-1 truncate text-xs text-base-content/60">{row.owner_email}</p> : null}
-      {!row.enabled ? <span className="badge badge-ghost badge-sm mt-2">Disabled</span> : null}
+      {row.shared || !row.enabled ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {row.shared ? <span className="badge badge-info badge-outline badge-sm">Shared</span> : null}
+          {!row.enabled ? <span className="badge badge-ghost badge-sm">Disabled</span> : null}
+        </div>
+      ) : null}
 
       <div className="mt-4 grid grid-cols-2 gap-4">
         <div>

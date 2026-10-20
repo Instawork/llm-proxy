@@ -135,8 +135,8 @@ type KeyResponse struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 	// ViewerEmails is only returned to managers.
 	ViewerEmails []string `json:"viewer_emails,omitempty"`
-	// Spend is only attached to read-only entries, which have no other
-	// per-key spend view in the list.
+	// Spend is attached to viewer-role list rows (shared keys and the
+	// viewer's own personal keys); editors and admins read spend elsewhere.
 	Spend *keySpend `json:"spend,omitempty"`
 }
 
@@ -298,6 +298,9 @@ func keyResponseForAccess(k *apikeys.APIKey, access permissions.KeyAccess, spend
 	if access != permissions.AccessViewer {
 		resp := keyToResponse(k, false)
 		resp.Access = string(access)
+		if access == permissions.AccessOwner {
+			resp.Spend = spend
+		}
 		if access == permissions.AccessManager {
 			resp.ViewerEmails = k.ViewerEmails
 		}

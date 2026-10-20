@@ -195,6 +195,90 @@ func TestViewerListMergesPersonalAndSharedKeys(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), f.unshared.PK)
 }
 
+func TestViewerListCarriesSpendOnOwnPersonalKey(t *testing.T) {
+	f := newSharedFixture(t)
+	f.cost.RecordRequest("gemini", middleware.MaskKeyID(f.personal.PK), "u", "gemini-pro", 0.5, 0.2, 0.3, 40, 20)
+
+	rec := f.do("owner@example.com", http.MethodGet, "/admin/api/keys", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var own *KeyResponse
+	for _, k := range decode[[]KeyResponse](t, rec) {
+		if k.Access == "owner" {
+			k := k
+			own = &k
+		}
+	}
+	require.NotNil(t, own)
+	require.NotNil(t, own.Spend, "viewers see what their own key has cost in the list")
+	assert.InDelta(t, 0.5, own.Spend.Today.SpendUSD, 1e-9)
+	assert.InDelta(t, 0.5, own.Spend.Month.SpendUSD, 1e-9)
+	require.NotNil(t, own.Spend.Cap)
+	assert.Equal(t, int64(1000), own.Spend.Cap.Cents)
+	assert.Equal(t, f.personal.PK, own.Key, "owner keeps the full credential on their own key")
+}
+
+func TestViewerOverviewListsSharedKeysButKeepsTotalsToOwnKeys(t *testing.T) {
+	f := newSharedFixture(t)
+	ctx := context.Background()
+	_, err := f.store.AddKeyViewers(ctx, f.unshared.PK, []string{"owner@example.com", "Owner@Example.com"})
+	require.NoError(t, err)
+	_, err = f.store.AddKeyViewers(ctx, f.shared.PK, []string{"owner@example.com"})
+	require.NoError(t, err)
+	f.cost.RecordRequest("gemini", middleware.MaskKeyID(f.personal.PK), "u", "gemini-pro", 0.5, 0.2, 0.3, 40, 20)
+
+	rec := f.do("Owner@Example.com", http.MethodGet, "/admin/api/spend-overview", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decode[spendOverviewResponse](t, rec)
+
+	assert.Equal(t, spendScopeMine, body.Scope)
+	require.Len(t, body.Keys, 3, "own key plus two shared keys, no duplicates")
+	sharedByID := map[string]spendKeyRow{}
+	for _, row := range body.Keys {
+		if row.Shared {
+			sharedByID[row.KeyID] = row
+		}
+		assert.Empty(t, row.OwnerEmail)
+	}
+	require.Len(t, sharedByID, 2)
+	sharedRow := sharedByID[apikeys.MaskKeyID(f.shared.PK)]
+	assert.InDelta(t, 0.07, sharedRow.Today.SpendUSD, 1e-9, "shared rows carry their own spend")
+
+	assert.InDelta(t, 0.5, body.Totals.Today.SpendUSD, 1e-9, "totals cover only keys the viewer owns")
+	require.Len(t, body.Providers, 1)
+	assert.Equal(t, "gemini", body.Providers[0].Name)
+
+	raw := rec.Body.String()
+	assert.NotContains(t, raw, f.shared.PK)
+	assert.NotContains(t, raw, f.unshared.PK)
+	assert.NotContains(t, raw, "requester@example.com")
+	assert.NotContains(t, raw, "other-grantee@example.com")
+}
+
+func TestViewerOverviewIncludesRequesterImplicitKeyAndHidesStrangers(t *testing.T) {
+	f := newSharedFixture(t)
+
+	rec := f.do("requester@example.com", http.MethodGet, "/admin/api/spend-overview", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decode[spendOverviewResponse](t, rec)
+	require.Len(t, body.Keys, 1)
+	assert.True(t, body.Keys[0].Shared)
+	assert.Equal(t, apikeys.MaskKeyID(f.shared.PK), body.Keys[0].KeyID)
+	assert.Zero(t, body.Totals.Today.SpendUSD)
+
+	rec = f.do("stranger@example.com", http.MethodGet, "/admin/api/spend-overview", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, decode[spendOverviewResponse](t, rec).Keys)
+}
+
+func TestEditorListHasNoSpendBlock(t *testing.T) {
+	f := newSharedFixture(t)
+	rec := f.do("editor@example.com", http.MethodGet, "/admin/api/keys", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	for _, k := range decode[[]KeyResponse](t, rec) {
+		assert.Nil(t, k.Spend)
+	}
+}
+
 func TestUnrelatedViewerSeesNoSharedKeys(t *testing.T) {
 	f := newSharedFixture(t)
 	rec := f.do("stranger@example.com", http.MethodGet, "/admin/api/keys", nil)

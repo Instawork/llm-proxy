@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
@@ -30,15 +31,19 @@ type spendCapResponse struct {
 }
 
 type spendKeyRow struct {
-	KeyID       string               `json:"key_id"`
-	Provider    string               `json:"provider"`
-	Description string               `json:"description"`
-	OwnerEmail  string               `json:"owner_email,omitempty"`
-	Enabled     bool                 `json:"enabled"`
-	Today       keyCostStatsResponse `json:"today"`
-	Month       keyCostMonthResponse `json:"month"`
-	Cap         *spendCapResponse    `json:"cap,omitempty"`
-	Unmetered   unmeteredResponse    `json:"unmetered"`
+	KeyID       string `json:"key_id"`
+	Provider    string `json:"provider"`
+	Description string `json:"description"`
+	OwnerEmail  string `json:"owner_email,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	// Shared marks a read-only key granted to the caller (viewer_emails or
+	// requester). Shared rows carry their own spend but are left out of the
+	// caller's own totals, providers, history, and unmetered sum.
+	Shared    bool                 `json:"shared,omitempty"`
+	Today     keyCostStatsResponse `json:"today"`
+	Month     keyCostMonthResponse `json:"month"`
+	Cap       *spendCapResponse    `json:"cap,omitempty"`
+	Unmetered unmeteredResponse    `json:"unmetered"`
 }
 
 type spendProviderRow struct {
@@ -131,7 +136,7 @@ func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, em
 	var err error
 	if role == adminusers.RoleViewer {
 		in.scope = spendScopeMine
-		in.keys, err = s.keys.ListKeysByOwner(ctx, email, "")
+		in.keys, err = viewerKeys(ctx, s.keys, email, "")
 	} else {
 		in.keys, err = s.keys.ListKeys(ctx, "")
 	}
@@ -243,7 +248,11 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	}
 
 	for _, k := range in.keys {
-		if k == nil || !canMutateKey(in.role, in.email, k) {
+		if k == nil {
+			continue
+		}
+		access := permissions.AccessToKey(in.role, in.email, k)
+		if access == permissions.AccessNone {
 			continue
 		}
 		masked := middleware.MaskKeyID(k.PK)
@@ -258,6 +267,7 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 			Month:       keyCostMonth(in.month, in.monthByKey[masked], in.rollupOK, in.rollupOK, today.SpendUSD),
 			Cap:         resolveSpendCap(k, in.personalCap),
 			Unmetered:   unmeteredForKey(in.unmetered, masked),
+			Shared:      access == permissions.AccessViewer,
 		}
 		if in.scope == spendScopeFleet {
 			row.OwnerEmail = k.OwnerEmail
@@ -276,9 +286,10 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	})
 
 	if in.scope == spendScopeMine {
-		buildMineSpend(&resp, in)
-		perKey := make([]unmeteredResponse, 0, len(resp.Keys))
-		for _, row := range resp.Keys {
+		owned := ownedSpendRows(resp.Keys)
+		buildMineSpend(&resp, owned, in)
+		perKey := make([]unmeteredResponse, 0, len(owned))
+		for _, row := range owned {
 			perKey = append(perKey, row.Unmetered)
 		}
 		resp.Unmetered = sumUnmetered(unmeteredSource(in.unmetered), perKey)
@@ -288,8 +299,12 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	}
 
 	if in.rollupOK {
+		historyRows := resp.Keys
+		if in.scope == spendScopeMine {
+			historyRows = ownedSpendRows(resp.Keys)
+		}
 		for _, cd := range in.history {
-			resp.History = append(resp.History, spendDayPoint{Day: cd.Day, SpendUSD: historyDaySpend(cd, in.scope, resp.Keys)})
+			resp.History = append(resp.History, spendDayPoint{Day: cd.Day, SpendUSD: historyDaySpend(cd, in.scope, historyRows)})
 		}
 	}
 	resp.History = append(resp.History, spendDayPoint{Day: in.day, SpendUSD: resp.Totals.Today.SpendUSD})
@@ -299,12 +314,23 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	return resp
 }
 
+// ownedSpendRows drops shared rows: totals describe the caller's own keys.
+func ownedSpendRows(rows []spendKeyRow) []spendKeyRow {
+	owned := make([]spendKeyRow, 0, len(rows))
+	for _, row := range rows {
+		if !row.Shared {
+			owned = append(owned, row)
+		}
+	}
+	return owned
+}
+
 // buildMineSpend derives providers and totals from the owned key rows: a viewer
 // holds at most one personal key per provider, so no fleet dimension is needed.
-func buildMineSpend(resp *spendOverviewResponse, in spendInputs) {
+func buildMineSpend(resp *spendOverviewResponse, rows []spendKeyRow, in spendInputs) {
 	byProvider := map[string]*spendProviderRow{}
 	var names []string
-	for _, row := range resp.Keys {
+	for _, row := range rows {
 		p := byProvider[row.Provider]
 		if p == nil {
 			p = &spendProviderRow{

@@ -74,9 +74,15 @@ export function keyCostLimitPeriod(
 export function formatKeySpendCap(
   key: Pick<
     APIKey,
-    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit" | "spend"
   >,
 ): string {
+  const cap = key.spend?.cap;
+  if (cap && cap.cents > 0) {
+    return cap.period === "monthly"
+      ? formatMonthlyCostLimit(cap.cents)
+      : formatDailyCostLimit(cap.cents);
+  }
   if (keyCostLimitPeriod(key) === "monthly") {
     return formatMonthlyCostLimit(key.monthly_cost_limit);
   }
@@ -152,6 +158,11 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   if (amount === 0) return "$0.00";
   if (Math.abs(amount) < 0.01) return `$${amount.toFixed(digits)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+/** Month-to-date spend for a list row, or "—" when the list response carries none. */
+export function formatKeyMonthSpend(key: Pick<APIKey, "spend">): string {
+  return formatUsd(key.spend?.month.spend_usd);
 }
 
 const MASKED_CREDENTIAL_SPLIT = /…|\u2026|\.\.\./;

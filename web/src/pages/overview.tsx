@@ -76,6 +76,12 @@ export default function OverviewPage() {
         </div>
       ) : null}
 
+      {mine && keys.some((row) => row.shared) ? (
+        <p className="text-xs text-base-content/60">
+          Totals cover keys you own. Keys shared with you are read-only and show their own spend.
+        </p>
+      ) : null}
+
       <SpendOverview
         todayUsd={data.totals.today.spend_usd}
         monthUsd={data.totals.month.spend_usd}
