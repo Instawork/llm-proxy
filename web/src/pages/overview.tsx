@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { BarChart, ChartCard, DonutChart } from "../components/charts";
 import { chartPalette } from "../components/charts/chart-setup";
@@ -9,10 +9,20 @@ import { UnmeteredEndpointList } from "../components/spend/unmetered-calls";
 import { LiveStat, SectionPanel } from "../components/ui/data-source";
 import PageHeader, { ErrorAlert, LiveIndicator, LoadingBlock, ProviderBadge } from "../components/ui/page-header";
 import { SpendOverview } from "../components/ui/spend-breakdown";
-import { useSpendOverview } from "../hooks/queries";
+import { useMe, useSpendOverview } from "../hooks/queries";
 import { compact, formatCount, formatMonthYear, formatUsd, scopeLabel } from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
-import { CAVEAT_COPY, SPEND_KEY_CARD_LIMIT, UNMETERED_HELP, sortBySpend } from "../lib/spend-overview";
+import {
+  CAVEAT_COPY,
+  DEFAULT_SPEND_VIEW,
+  SPEND_KEY_CARD_LIMIT,
+  SPEND_VIEW_OPTIONS,
+  UNMETERED_HELP,
+  overviewScopeCopy,
+  parseSpendView,
+  sortBySpend,
+  type SpendView,
+} from "../lib/spend-overview";
 import type { SpendOverviewResponse, SpendProviderRow, SpendUserRow } from "../types";
 
 const PROVIDER_COLORS = [
@@ -24,7 +34,23 @@ const PROVIDER_COLORS = [
 ];
 
 export default function OverviewPage() {
-  const overview = useSpendOverview();
+  const { data: me } = useMe();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isViewer = (me?.role ?? "viewer") === "viewer";
+  const view = parseSpendView(searchParams.get("scope"));
+  const overview = useSpendOverview(isViewer ? view : undefined);
+
+  const setView = (next: SpendView) => {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        if (next === DEFAULT_SPEND_VIEW) params.delete("scope");
+        else params.set("scope", next);
+        return params;
+      },
+      { replace: true },
+    );
+  };
 
   if (overview.isLoading) return <LoadingBlock />;
   if (overview.error) {
@@ -39,6 +65,10 @@ export default function OverviewPage() {
 
   const monthLabel = formatMonthYear(data.month);
   const mine = data.scope === "mine";
+  const activeView = mine ? (data.view ?? view) : null;
+  const sharedCount = data.keys.filter((row) => row.shared).length;
+  const scope = overviewScopeCopy(activeView, { owned: data.keys.length - sharedCount, shared: sharedCount });
+  const scopeSuffix = scope.scopePhrase ? ` · ${scope.scopePhrase}` : "";
   const keys = sortBySpend(data.keys, (row) => row.key_id);
   const providers = sortBySpend(data.providers, (row) => row.name);
   const providersWithSpend = providers.filter((p) => p.today.spend_usd > 0);
@@ -56,7 +86,7 @@ export default function OverviewPage() {
         title="Overview"
         description={
           mine
-            ? "What your API keys have spent today and this month."
+            ? "What your API keys and the keys shared with you have spent today and this month."
             : "What the fleet has spent today and this month, by key, provider, and user."
         }
         actions={
@@ -76,13 +106,11 @@ export default function OverviewPage() {
         </div>
       ) : null}
 
-      {mine && keys.some((row) => row.shared) ? (
-        <p className="text-xs text-base-content/60">
-          Totals cover keys you own. Keys shared with you are read-only and show their own spend.
-        </p>
-      ) : null}
+      {mine ? <SpendViewFilter value={activeView ?? view} onChange={setView} /> : null}
 
       <SpendOverview
+        title={scope.totalsTitle}
+        note={scope.excludesNote}
         todayUsd={data.totals.today.spend_usd}
         monthUsd={data.totals.month.spend_usd}
         monthLabel={monthLabel}
@@ -98,7 +126,7 @@ export default function OverviewPage() {
         <LiveStat
           title="Requests today"
           value={formatCount(data.totals.today.requests)}
-          hint="UTC day"
+          hint={`UTC day${scopeSuffix}`}
           source={data.totals.today.source}
         />
         <LiveStat
@@ -107,7 +135,12 @@ export default function OverviewPage() {
           hint={`${compact(data.totals.today.input_tokens)} in · ${compact(data.totals.today.output_tokens)} out`}
           source={data.totals.today.source}
         />
-        <LiveStat title={mine ? "Your keys" : "Keys"} value={keys.length} hint="tracked" source="dynamodb" />
+        <LiveStat
+          title={mine ? "Your keys" : "Keys"}
+          value={keys.length}
+          hint={mine ? `${keys.length - sharedCount} owned · ${sharedCount} shared` : "tracked"}
+          source="dynamodb"
+        />
         <LiveStat
           title="Providers"
           value={providersWithSpend.length}
@@ -117,7 +150,7 @@ export default function OverviewPage() {
         <LiveStat
           title="Unmetered calls"
           value={formatCount(data.unmetered.requests)}
-          hint="no token usage, not billed"
+          hint={`no token usage, not billed${scopeSuffix}`}
           source={data.unmetered.source}
         />
       </div>
@@ -140,19 +173,19 @@ export default function OverviewPage() {
         ) : keys.length <= SPEND_KEY_CARD_LIMIT ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {keys.map((row) => (
-              <SpendKeyCard key={row.key_id} row={row} monthLabel={monthLabel} />
+              <SpendKeyCard key={row.key_id} row={row} monthLabel={monthLabel} scopeNote={scope.rowNote(row)} />
             ))}
           </div>
         ) : (
           <div className="glass-panel p-5">
-            <SpendKeyTable rows={keys} monthLabel={monthLabel} showOwner={!mine} />
+            <SpendKeyTable rows={keys} monthLabel={monthLabel} showOwner={!mine} scopeNote={scope.rowNote} />
           </div>
         )}
       </section>
 
       <SectionPanel
         title="Unmetered calls"
-        subtitle={UNMETERED_HELP}
+        subtitle={mine ? `${UNMETERED_HELP} Counts cover ${scope.scopePhrase}.` : UNMETERED_HELP}
         source={data.unmetered.source}
       >
         <UnmeteredEndpointList stats={data.unmetered} />
@@ -161,7 +194,7 @@ export default function OverviewPage() {
       <div className="grid gap-4 xl:grid-cols-3">
         <ChartCard
           title="Today by provider"
-          subtitle={`${formatUsd(data.totals.today.spend_usd)} across ${providersWithSpend.length} provider${providersWithSpend.length === 1 ? "" : "s"}`}
+          subtitle={`${formatUsd(data.totals.today.spend_usd)} across ${providersWithSpend.length} provider${providersWithSpend.length === 1 ? "" : "s"}${scopeSuffix}`}
           source={data.totals.today.source}
         >
           {donut.values.length ? (
@@ -177,7 +210,7 @@ export default function OverviewPage() {
           )}
         </ChartCard>
         <div className="xl:col-span-2">
-          <SectionPanel title="Spend by provider" subtitle="Today and month-to-date per upstream provider">
+          <SectionPanel title="Spend by provider" subtitle={`Today and month-to-date per upstream provider${scopeSuffix}`}>
             <SpendPeriodTable<SpendProviderRow>
               rows={providers}
               monthLabel={monthLabel}
@@ -195,7 +228,7 @@ export default function OverviewPage() {
         title="Daily spend"
         subtitle={
           mine
-            ? "UTC daily totals for your keys (today updates live)"
+            ? `UTC daily totals for ${scope.scopePhrase} (today updates live)`
             : "UTC daily totals for the fleet (today updates live)"
         }
         source={data.rollup_available ? "redis" : "memory"}
@@ -209,6 +242,28 @@ export default function OverviewPage() {
       </ChartCard>
 
       {data.fleet ? <FleetSection data={data} monthLabel={monthLabel} /> : null}
+    </div>
+  );
+}
+
+function SpendViewFilter({ value, onChange }: { value: SpendView; onChange: (next: SpendView) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="text-sm text-base-content/60">Show spend for</span>
+      <div role="group" aria-label="Spend scope" className="join">
+        {SPEND_VIEW_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            title={option.hint}
+            aria-pressed={value === option.value}
+            className={`btn btn-sm join-item ${value === option.value ? "btn-primary" : "btn-ghost border-base-300"}`}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

@@ -679,6 +679,8 @@ export type SpendCaveat = "rollup_off" | "history_top_n" | "provider_month_parti
 
 export interface SpendOverviewResponse {
   scope: "mine" | "fleet";
+  /** Which of the viewer's keys the totals cover; absent on the fleet overview. */
+  view?: "all" | "mine" | "shared";
   day: string;
   month: string;
   rollup_available: boolean;

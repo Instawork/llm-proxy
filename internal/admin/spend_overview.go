@@ -25,6 +25,33 @@ const (
 	spendCaveatProviderMonthPartial = "provider_month_partial"
 )
 
+// spendView selects which of a viewer's visible keys drive the overview totals,
+// provider breakdown, history, and unmetered sum. Key rows are always listed in
+// full; the view only changes what is counted. Editors and admins always get the
+// fleet view and ignore it.
+type spendView string
+
+const (
+	spendViewAll    spendView = "all"
+	spendViewMine   spendView = "mine"
+	spendViewShared spendView = "shared"
+)
+
+// parseSpendView maps the scope query value to a view; empty means the default
+// ("mine", keys the viewer owns).
+func parseSpendView(raw string) (spendView, bool) {
+	switch spendView(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", spendViewMine:
+		return spendViewMine, true
+	case spendViewAll:
+		return spendViewAll, true
+	case spendViewShared:
+		return spendViewShared, true
+	default:
+		return "", false
+	}
+}
+
 type spendCapResponse struct {
 	Period string `json:"period"`
 	Cents  int64  `json:"cents"`
@@ -37,8 +64,8 @@ type spendKeyRow struct {
 	OwnerEmail  string `json:"owner_email,omitempty"`
 	Enabled     bool   `json:"enabled"`
 	// Shared marks a read-only key granted to the caller (viewer_emails or
-	// requester). Shared rows carry their own spend but are left out of the
-	// caller's own totals, providers, history, and unmetered sum.
+	// requester). Whether a shared row counts toward the totals depends on the
+	// response's view.
 	Shared    bool                 `json:"shared,omitempty"`
 	Today     keyCostStatsResponse `json:"today"`
 	Month     keyCostMonthResponse `json:"month"`
@@ -75,6 +102,7 @@ type fleetSpendResponse struct {
 
 type spendOverviewResponse struct {
 	Scope           string              `json:"scope"`
+	View            spendView           `json:"view,omitempty"`
 	Day             string              `json:"day"`
 	Month           string              `json:"month"`
 	RollupAvailable bool                `json:"rollup_available"`
@@ -106,6 +134,7 @@ type spendOverviewService struct {
 // spendInputs is everything buildSpendOverview needs, gathered by one round of I/O.
 type spendInputs struct {
 	scope           string
+	view            spendView
 	role            adminusers.Role
 	email           string
 	day, month      string
@@ -123,19 +152,20 @@ type spendInputs struct {
 	personalCap     int64
 }
 
-func (s spendOverviewService) Overview(ctx context.Context, role adminusers.Role, email string) (spendOverviewResponse, error) {
-	in, err := s.load(ctx, role, email)
+func (s spendOverviewService) Overview(ctx context.Context, role adminusers.Role, email string, view spendView) (spendOverviewResponse, error) {
+	in, err := s.load(ctx, role, email, view)
 	if err != nil {
 		return spendOverviewResponse{}, err
 	}
 	return buildSpendOverview(in), nil
 }
 
-func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, email string) (spendInputs, error) {
+func (s spendOverviewService) load(ctx context.Context, role adminusers.Role, email string, view spendView) (spendInputs, error) {
 	in := s.newInputs(role, email)
 	var err error
 	if role == adminusers.RoleViewer {
 		in.scope = spendScopeMine
+		in.view = view
 		in.keys, err = viewerKeys(ctx, s.keys, email, "")
 	} else {
 		in.keys, err = s.keys.ListKeys(ctx, "")
@@ -286,10 +316,11 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	})
 
 	if in.scope == spendScopeMine {
-		owned := ownedSpendRows(resp.Keys)
-		buildMineSpend(&resp, owned, in)
-		perKey := make([]unmeteredResponse, 0, len(owned))
-		for _, row := range owned {
+		resp.View = effectiveView(in.view)
+		counted := countedSpendRows(resp.Keys, resp.View)
+		buildMineSpend(&resp, counted, in)
+		perKey := make([]unmeteredResponse, 0, len(counted))
+		for _, row := range counted {
 			perKey = append(perKey, row.Unmetered)
 		}
 		resp.Unmetered = sumUnmetered(unmeteredSource(in.unmetered), perKey)
@@ -301,7 +332,7 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	if in.rollupOK {
 		historyRows := resp.Keys
 		if in.scope == spendScopeMine {
-			historyRows = ownedSpendRows(resp.Keys)
+			historyRows = countedSpendRows(resp.Keys, resp.View)
 		}
 		for _, cd := range in.history {
 			resp.History = append(resp.History, spendDayPoint{Day: cd.Day, SpendUSD: historyDaySpend(cd, in.scope, historyRows)})
@@ -314,19 +345,31 @@ func buildSpendOverview(in spendInputs) spendOverviewResponse {
 	return resp
 }
 
-// ownedSpendRows drops shared rows: totals describe the caller's own keys.
-func ownedSpendRows(rows []spendKeyRow) []spendKeyRow {
-	owned := make([]spendKeyRow, 0, len(rows))
-	for _, row := range rows {
-		if !row.Shared {
-			owned = append(owned, row)
-		}
+func effectiveView(v spendView) spendView {
+	if v == "" {
+		return spendViewMine
 	}
-	return owned
+	return v
 }
 
-// buildMineSpend derives providers and totals from the owned key rows: a viewer
-// holds at most one personal key per provider, so no fleet dimension is needed.
+// countedSpendRows picks the rows that feed totals for the view. Rows are
+// already de-duplicated by key, so a key is never counted twice in "all".
+func countedSpendRows(rows []spendKeyRow, view spendView) []spendKeyRow {
+	counted := make([]spendKeyRow, 0, len(rows))
+	for _, row := range rows {
+		switch {
+		case view == spendViewAll,
+			view == spendViewShared && row.Shared,
+			view != spendViewShared && !row.Shared:
+			counted = append(counted, row)
+		}
+	}
+	return counted
+}
+
+// buildMineSpend derives providers and totals from the counted key rows. A
+// viewer has no fleet dimension; shared keys can repeat a provider, so rows are
+// grouped by provider.
 func buildMineSpend(resp *spendOverviewResponse, rows []spendKeyRow, in spendInputs) {
 	byProvider := map[string]*spendProviderRow{}
 	var names []string
@@ -597,7 +640,12 @@ func (h *handler) handleSpendOverview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
-	resp, err := h.spendOverviewService().Overview(r.Context(), role, user.Email)
+	view, ok := parseSpendView(r.URL.Query().Get("scope"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope must be one of all, mine, shared"})
+		return
+	}
+	resp, err := h.spendOverviewService().Overview(r.Context(), role, user.Email, view)
 	if err != nil {
 		h.deps.Logger.Error("admin: spend overview failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load spend overview"})

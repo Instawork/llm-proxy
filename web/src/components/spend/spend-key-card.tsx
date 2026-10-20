@@ -10,7 +10,16 @@ import { keyDetailPathForMaskedId } from "../../lib/key-routes";
 import { capFraction } from "../../lib/spend-overview";
 import type { SpendKeyRow } from "../../types";
 
-export default function SpendKeyCard({ row, monthLabel }: { row: SpendKeyRow; monthLabel: string }) {
+export default function SpendKeyCard({
+  row,
+  monthLabel,
+  scopeNote,
+}: {
+  row: SpendKeyRow;
+  monthLabel: string;
+  /** Set when this key's spend is not part of the totals for the selected view. */
+  scopeNote?: string | null;
+}) {
   const cap = capFraction(row);
   return (
     <Link
@@ -51,6 +60,7 @@ export default function SpendKeyCard({ row, monthLabel }: { row: SpendKeyRow; mo
       </div>
 
       <UnmeteredNote stats={row.unmetered} className="mt-3" />
+      {scopeNote ? <p className="mt-3 text-xs text-base-content/50">{scopeNote}</p> : null}
       {cap ? <SpendLimitProgress spentUsd={cap.spentUsd} limitCents={cap.limitCents} label={cap.label} /> : null}
     </Link>
   );

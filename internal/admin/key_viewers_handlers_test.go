@@ -254,6 +254,85 @@ func TestViewerOverviewListsSharedKeysButKeepsTotalsToOwnKeys(t *testing.T) {
 	assert.NotContains(t, raw, "other-grantee@example.com")
 }
 
+func TestViewerOverviewScopeFilterDrivesTotals(t *testing.T) {
+	f := newSharedFixture(t)
+	ctx := context.Background()
+	_, err := f.store.AddKeyViewers(ctx, f.shared.PK, []string{"owner@example.com"})
+	require.NoError(t, err)
+	_, err = f.store.AddKeyViewers(ctx, f.unshared.PK, []string{"owner@example.com"})
+	require.NoError(t, err)
+	f.cost.RecordRequest("gemini", middleware.MaskKeyID(f.personal.PK), "u", "gemini-pro", 0.5, 0.2, 0.3, 40, 20)
+	f.cost.RecordRequest("anthropic", middleware.MaskKeyID(f.unshared.PK), "u", "claude", 0.25, 0.1, 0.15, 10, 5)
+
+	cases := []struct {
+		query     string
+		view      spendView
+		today     float64
+		providers []string
+	}{
+		{"", spendViewMine, 0.5, []string{"gemini"}},
+		{"?scope=mine", spendViewMine, 0.5, []string{"gemini"}},
+		{"?scope=shared", spendViewShared, 0.07 + 0.25, []string{"anthropic", "openai"}},
+		{"?scope=ALL", spendViewAll, 0.5 + 0.07 + 0.25, []string{"anthropic", "gemini", "openai"}},
+	}
+	for _, tc := range cases {
+		t.Run("scope"+tc.query, func(t *testing.T) {
+			rec := f.do("owner@example.com", http.MethodGet, "/admin/api/spend-overview"+tc.query, nil)
+			require.Equal(t, http.StatusOK, rec.Code)
+			body := decode[spendOverviewResponse](t, rec)
+			assert.Equal(t, tc.view, body.View)
+			assert.Len(t, body.Keys, 3, "every visible key is listed once whatever the view")
+			assert.InDelta(t, tc.today, body.Totals.Today.SpendUSD, 1e-9)
+			var names []string
+			for _, p := range body.Providers {
+				names = append(names, p.Name)
+			}
+			assert.Equal(t, tc.providers, names)
+			assert.NotContains(t, rec.Body.String(), f.shared.PK, "shared data stays masked")
+		})
+	}
+}
+
+func TestViewerOverviewRejectsUnknownScope(t *testing.T) {
+	f := newSharedFixture(t)
+	rec := f.do("owner@example.com", http.MethodGet, "/admin/api/spend-overview?scope=everyone", nil)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestEditorOverviewIgnoresScope(t *testing.T) {
+	f := newSharedFixture(t)
+	rec := f.do("editor@example.com", http.MethodGet, "/admin/api/spend-overview?scope=shared", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := decode[spendOverviewResponse](t, rec)
+	assert.Equal(t, spendScopeFleet, body.Scope)
+	assert.Empty(t, body.View)
+}
+
+func TestCountedSpendRows(t *testing.T) {
+	rows := []spendKeyRow{{KeyID: "own"}, {KeyID: "shared", Shared: true}}
+	ids := func(v spendView) []string {
+		var out []string
+		for _, r := range countedSpendRows(rows, v) {
+			out = append(out, r.KeyID)
+		}
+		return out
+	}
+	assert.Equal(t, []string{"own"}, ids(spendViewMine))
+	assert.Equal(t, []string{"own"}, ids(""))
+	assert.Equal(t, []string{"shared"}, ids(spendViewShared))
+	assert.Equal(t, []string{"own", "shared"}, ids(spendViewAll))
+}
+
+func TestParseSpendView(t *testing.T) {
+	for raw, want := range map[string]spendView{"": spendViewMine, " Mine ": spendViewMine, "all": spendViewAll, "SHARED": spendViewShared} {
+		got, ok := parseSpendView(raw)
+		assert.True(t, ok, raw)
+		assert.Equal(t, want, got, raw)
+	}
+	_, ok := parseSpendView("fleet")
+	assert.False(t, ok)
+}
+
 func TestViewerOverviewIncludesRequesterImplicitKeyAndHidesStrangers(t *testing.T) {
 	f := newSharedFixture(t)
 

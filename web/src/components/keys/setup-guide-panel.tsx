@@ -50,6 +50,7 @@ export default function SetupGuidePanel({
             baseUrl={baseUrl}
             proxyKey={proxyKey ?? SHARED_KEY_PLACEHOLDER}
             embedded
+            sharedKey={shared}
           />
         ) : (
           <p className="text-sm text-base-content/60">
