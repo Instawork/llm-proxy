@@ -224,6 +224,54 @@ retired_models:
       replacement: gpt-5.6-sol
       aliases:
         - o4-mini-deep-research-2025-06-26
+    # 2026-10-23 shutdown wave (announced 2026-04-22; developers.openai.com/api/docs/deprecations).
+    "gpt-3.5-turbo":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-terra
+      aliases:
+        - gpt-3.5-turbo-0125
+        - gpt-3.5-turbo-1106
+        - gpt-3.5-turbo-16k
+        - gpt-3.5-turbo-completions
+    "gpt-4":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - gpt-4-0613
+        - gpt-4-0613-completions
+        - gpt-4-completions
+    "gpt-4-turbo":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - gpt-4-turbo-2024-04-09
+        - gpt-4-turbo-completions
+    "gpt-4.1-nano":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-luna
+      aliases:
+        - gpt-4.1-nano-2025-04-14
+    "o1":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o1-2024-12-17
+    "o1-pro":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o1-pro-2024-12-17
+        - o1-pro-2025-03-19
+    "o3-mini":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o3-mini-2025-01-31
+    "o4-mini":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-terra
+      aliases:
+        - o4-mini-2025-04-16
   anthropic:
     "claude-opus-4-1":
       retired_date: "2026-08-05"
@@ -398,38 +446,10 @@ providers:
         pricing:
           input: 0.05
           output: 0.40
-      "gpt-4":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-0613", "gpt-4-0613-completions", "gpt-4-completions"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 30.00
-          output: 60.00
-      "gpt-4-turbo":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-turbo-2024-04-09", "gpt-4-turbo-completions"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 10.00
-          output: 30.00
       "gpt-4.1":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -443,6 +463,8 @@ providers:
           output: 8.00
       "gpt-4.1-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-mini-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -454,23 +476,10 @@ providers:
         pricing:
           input: 0.40
           output: 1.60
-      "gpt-4.1-nano":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-luna"
-        aliases: ["gpt-4.1-nano-2025-04-14"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 0.10
-          output: 0.40
       "gpt-4o":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14); gpt-4o-2024-05-13 shut down 2026-10-23
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-2024-05-13", "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"]
         limits:
           tokens_per_minute: 450_000
@@ -483,11 +492,13 @@ providers:
           input: 2.50
           output: 10.00
           overrides:
-            "gpt-4o-2024-05-13": # vendor shutdown 2026-10-23; later snapshots stay active
+            "gpt-4o-2024-05-13": # shut down 2026-10-23; alias kept per hard rule 8 (parent gpt-4o still live), upstream now 404s
               input: 5.00
               output: 15.00
       "gpt-4o-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-mini-2024-07-18"]
         limits:
           tokens_per_minute: 2_000_000
@@ -499,72 +510,6 @@ providers:
         pricing:
           input: 0.15
           output: 0.60
-      "gpt-3.5-turbo":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23 (gpt-3.5-turbo-1106 on 2026-09-28)
-        replacement: "gpt-5.6-terra"
-        aliases:
-          [
-            "gpt-3.5-turbo-0125",
-            "gpt-3.5-turbo-1106",
-            "gpt-3.5-turbo-16k",
-            "gpt-3.5-turbo-completions",
-          ]
-        limits:
-          tokens_per_minute: 2_000_000
-          requests_per_minute: 5_000
-          tokens_per_day: 48_000_000
-          requests_per_day: 7_200_000
-          burst_tokens: 200_000
-          burst_requests: 500
-        pricing:
-          input: 0.50
-          output: 1.50
-      "o1":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o1-2024-12-17"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 15.00
-          output: 60.00
-      "o3-mini":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o3-mini-2025-01-31"]
-        limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
-        pricing:
-          input: 1.10
-          output: 4.40
-      "o4-mini":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-terra"
-        aliases: ["o4-mini-2025-04-16"]
-        limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
-        pricing:
-          input: 1.10
-          output: 4.40
       "o3":
         enabled: true
         deprecated: true # snapshot o3-2025-04-16 shuts down 2026-12-11
@@ -595,21 +540,6 @@ providers:
         pricing:
           input: 20.00
           output: 80.00
-      "o1-pro":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o1-pro-2024-12-17", "o1-pro-2025-03-19"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 150.00
-          output: 600.00
       "gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-2026-03-05"]
@@ -689,9 +619,13 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 10.00
             output: 45.00
-      # Flat (audit-10-05-2026, card re-read): unlike gpt-5.4-pro / gpt-5.5, the
-      # GPT-5.5 Pro card publishes no ">272K input tokens at 2x/1.5x" tier
-      # despite its 1.05M context window, so the whole window bills $30/$180.
+      # Tiered again (audit-10-12-2026): the card still prints no ">272K" sentence
+      # (the basis of the flat ruling in #106), but the full "All models" Standard
+      # table at developers.openai.com/api/docs/pricing.md prints
+      # "gpt-5.5-pro (<272K context length) | $30.00 | - | - | $180.00 | $60.00 |
+      # - | - | $270.00", i.e. an explicit >272K column (Batch/Flex rows print "-"
+      # there). The rendered HTML page only shows the short-context columns, so
+      # earlier runs never saw this. Published tier -> encoded.
       "gpt-5.5-pro":
         enabled: true
         aliases: ["gpt-5.5-pro-2026-04-23"]
@@ -703,8 +637,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 30.00
-          output: 180.00
+          - threshold: 272_000
+            input: 30.00
+            output: 180.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 60.00
+            output: 270.00
       # -----------------------------------------------------------------------
       # GPT-5.6 family (GA 2026-07-09). Sol/Terra/Luna are durable capability
       # tiers replacing the mini/nano suffixes. No dated snapshots published
@@ -866,6 +804,25 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 25.00
             output: 112.50
+      # GPT-5.5 Cyber (limited preview since 2026-05-07, Trusted Access for
+      # Cyber). First seen in the pricing.md "Cyber" table on audit-10-12-2026:
+      # "gpt-5.5-cyber | $12.50 | $1.25 | - | $75.00" with "-" in every
+      # long-context column; the card /models/gpt-5.5-cyber is 404, so there is
+      # no ">272K" sentence to apply -> flat. The help-center Daybreak article
+      # names the Responses API model gpt-5.5-cyber-preview (same version).
+      "gpt-5.5-cyber":
+        enabled: true
+        aliases: ["gpt-5.5-cyber-preview"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 12.50
+          output: 75.00
       # Codex line: gpt-5.3-codex (Responses API) was deprecated 2026-10-01 with
       # a 2027-04-01 shutdown; the gpt-5/5.1/5.2-codex snapshots shut down
       # 2026-07-23.
@@ -955,6 +912,23 @@ providers:
         pricing:
           input: 15.00
           output: 120.00
+      # Search-specialised GPT-5 SKU behind the web search tool. Token rates from
+      # the pricing.md "Specialized" table ("Search | gpt-5-search-api | $1.25 |
+      # $0.125 | $10.00"); the per-call web-search tool fee is separate and not
+      # tracked here. No model card, changelog or deprecation entry exists.
+      "gpt-5-search-api":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 1.25
+          output: 10.00
 
   # ---------------------------------------------------------------------------
   # ANTHROPIC PROVIDER
@@ -1238,8 +1212,13 @@ providers:
       burst_requests: 100
 
     models:
+      # AWS moved Claude Sonnet 4.5 to Legacy on 2026-10-08 (model-lifecycle
+      # legacy page: EOL 2027-04-08, "Regional (US/EU/AU/JP) Inference" and
+      # "Global Inference" ids, Mantle not supported). Prices unchanged.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "us.anthropic.claude-sonnet-5-5"
         aliases:
           [
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -1419,13 +1398,15 @@ providers:
               input: 4.00
               output: 20.00
       # Claude Sonnet 5.5 on Bedrock (launch 2026-09-28, audit-10-05-2026). AWS
-      # card: bedrock-runtime takes the us./eu. geo or global.* profile ids (no
-      # au./jp./in. yet); the bare id is Mantle-only (mirrored under bedrock-mantle).
+      # card: bedrock-runtime takes the us./eu./au. geo or global.* profile ids
+      # (au. added on the card by 2026-10-12; no jp./in. yet); the bare id is
+      # Mantle-only (mirrored under bedrock-mantle).
       "us.anthropic.claude-sonnet-5-5":
         enabled: true
         aliases:
           [
             "eu.anthropic.claude-sonnet-5-5",
+            "au.anthropic.claude-sonnet-5-5",
             "global.anthropic.claude-sonnet-5-5",
             "claude-sonnet-5-5-bedrock",
             "claude-sonnet-5.5-bedrock",
@@ -1445,7 +1426,7 @@ providers:
           output: 11.00
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
-            # 10% premium above applies to regional (us./eu.) profiles.
+            # 10% premium above applies to regional (us./eu./au.) profiles.
             "global.anthropic.claude-sonnet-5-5":
               input: 2.00
               output: 10.00
@@ -1915,10 +1896,30 @@ providers:
         pricing:
           input: 13.75
           output: 82.50
+      # Daybreak Blue: GPT-5.6 Sol (Bedrock launch 2026-08-12, same Trusted
+      # Access for Cyber gate as Daybreak Red). Mantle-only, us-east-2, no
+      # geo/global inference profiles. First audited 2026-10-26 (card verified
+      # directly): 1,050,000 context, In-Region $4.40/$22.00 up to 272K and
+      # $8.80/$33.00 above, i.e. the same rates as GPT-5.6 Sol on Bedrock.
+      "openai.gpt-daybreak-blue-5.6-sol":
+        enabled: true
+        aliases: ["gpt-daybreak-blue-5.6-sol-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 4.40
+            output: 22.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 8.80
+            output: 33.00
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
+      # Legacy on AWS since 2026-10-08 (EOL 2027-04-08), mirroring the bedrock
+      # entry; the AWS card lists no Mantle id for Sonnet 4.5, so these keys
+      # only cover callers that still send the dated id to /anthropic/v1.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "anthropic.claude-sonnet-5-5"
         aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
         # >200K tier removed 2026-04-30 with the 1M-context beta retirement.
         pricing:
@@ -1995,6 +1996,23 @@ providers:
       burst_requests: 100
 
     models:
+      # Flagship reasoning model (GA 2026-10-13). Flat pricing, no prompt-length
+      # tier. Introductory 2.00/10.00 through 2026-11-30; the 4.00/20.00 list
+      # rate below applies from 2026-12-01 and is what we encode. Limits copied
+      # from gemini-3.1-pro pending a vendor quota page for this id.
+      "gemini-4-argon":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 4.00
+          output: 20.00
       "gemini-3.1-pro":
         enabled: true
         # gemini-3.1-pro-preview-customtools is the Custom Tools endpoint id; the
@@ -2029,8 +2047,14 @@ providers:
         pricing:
           input: 0.50
           output: 3.00
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.6-flash; no shutdown date announced. Removed from the pricing
+      # page, so the last published list rate stays encoded (the id still
+      # serves traffic and must not be priced at zero).
       "gemini-3.5-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.6-flash
+        replacement: "gemini-3.6-flash"
         aliases: ["gemini-flash-3.5"]
         limits:
           tokens_per_minute: 3_000_000
@@ -2059,8 +2083,13 @@ providers:
         pricing:
           input: 1.50
           output: 7.50
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.8-flash; no shutdown date announced. Removed from the pricing
+      # page; the last published list rate stays encoded.
       "gemini-3.7-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.8-flash
+        replacement: "gemini-3.8-flash"
         aliases: ["gemini-flash-3.7", "gemini-3-7-flash"]
         limits:
           tokens_per_minute: 3_000_000
