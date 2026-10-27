@@ -988,6 +988,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 0.25
+          cache_write: 12.50
       # Limited availability (Project Glasswing approved customers only).
       # Same pricing/specs as claude-fable-5-1; inert unless a key has access.
       "claude-mythos-5-1":
@@ -1003,6 +1005,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 0.25
+          cache_write: 12.50
       "claude-fable-5":
         enabled: true
         aliases: []
@@ -1016,6 +1020,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 1.00
+          cache_write: 12.50
       # Limited availability (Project Glasswing approved customers only).
       # Same pricing/specs as claude-fable-5; inert unless a key has access.
       "claude-mythos-5":
@@ -1031,6 +1037,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 1.00
+          cache_write: 12.50
       # Claude Opus 5.5 (2026-09-22, audit-09-23-2026): latest Opus, $4/$20,
       # 1M context / 128K output at standard pricing. Supersedes Opus 5, which
       # Anthropic now lists as legacy (no retirement date announced).
@@ -1047,6 +1055,8 @@ providers:
         pricing:
           input: 4.00
           output: 20.00
+          cache_read: 0.20
+          cache_write: 5.00
       "claude-opus-5":
         enabled: true
         aliases: []
@@ -1060,6 +1070,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4.8"]
@@ -1073,6 +1085,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-7":
         enabled: true
         aliases: ["claude-opus-4.7"]
@@ -1086,6 +1100,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-6":
         enabled: true
         aliases: ["claude-opus-4.6"]
@@ -1099,6 +1115,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-5":
         enabled: true
         aliases: ["claude-opus-4.5", "claude-opus-4-5-20251101"]
@@ -1112,6 +1130,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       # Claude Sonnet 5.5 (released 2026-09-28, audit-10-05-2026): $2/$10 list,
       # 1M context at standard pricing; vendor replacement for Sonnet 4.5.
       "claude-sonnet-5-5":
@@ -1127,6 +1147,8 @@ providers:
         pricing:
           input: 2.00
           output: 10.00
+          cache_read: 0.10
+          cache_write: 2.50
       # Sonnet 5 is vendor "legacy" since Sonnet 5.5 shipped (no sunset announced).
       "claude-sonnet-5":
         enabled: true
@@ -1142,6 +1164,8 @@ providers:
         pricing:
           input: 2.00
           output: 10.00
+          cache_read: 0.20
+          cache_write: 2.50
       "claude-sonnet-4-6":
         enabled: true
         aliases: ["claude-sonnet-4.6"]
@@ -1155,6 +1179,8 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
+          cache_read: 0.30
+          cache_write: 3.75
       "claude-sonnet-4-5":
         enabled: true
         deprecated: true # announced 2026-09-30; vendor retirement 2026-11-30
@@ -1173,6 +1199,8 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
+          cache_read: 0.30
+          cache_write: 3.75
       "claude-haiku-4-5":
         enabled: true
         aliases: ["claude-haiku-4.5", "claude-haiku-4-5-20251001"]
@@ -1186,6 +1214,8 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
+          cache_read: 0.10
+          cache_write: 1.25
       # Claude Haiku 5.5 (released 2026-10-07, two days after audit-10-05-2026;
       # verified on the model card and pricing page 2026-10-08). The one Claude
       # 4.6+ model priced by prompt length: "a prompt of over 100,000 tokens pays
@@ -1205,9 +1235,13 @@ providers:
           - threshold: 100_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.50
             output: 2.50
+            cache_read: 0.05
+            cache_write: 0.625
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
@@ -1264,12 +1298,16 @@ providers:
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-4-5-20250929-v1:0":
               input: 3.00
               output: 15.00
+              cache_read: 0.30
+              cache_write: 3.75
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases:
@@ -1294,12 +1332,16 @@ providers:
         pricing:
           input: 1.10
           output: 5.50
+          cache_read: 0.11
+          cache_write: 1.375
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-haiku-4-5-20251001-v1:0":
               input: 1.00
               output: 5.00
+              cache_read: 0.10
+              cache_write: 1.25
       # Retired on the native Claude API 2026-08-05 but still served on Bedrock:
       # legacy since 2026-07-08, public extended access from 2026-10-08 (price
       # not yet published), EOL 2027-01-08.
@@ -1325,6 +1367,8 @@ providers:
         pricing:
           input: 15.00
           output: 75.00
+          cache_read: 1.50
+          cache_write: 18.75
       "us.anthropic.claude-sonnet-5":
         enabled: true
         aliases:
@@ -1348,12 +1392,16 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.22
+          cache_write: 2.75
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-5":
               input: 2.00
               output: 10.00
+              cache_read: 0.20
+              cache_write: 2.50
       "us.anthropic.claude-sonnet-4-6":
         enabled: true
         aliases:
@@ -1379,12 +1427,16 @@ providers:
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-4-6":
               input: 3.00
               output: 15.00
+              cache_read: 0.30
+              cache_write: 3.75
       # Claude Opus 5.5 on Bedrock (launch 2026-09-22, audit-09-23-2026). AWS
       # card: bedrock-runtime takes the us./eu./au./jp. geo or global.* profile
       # ids; the bare id is Mantle-only (mirrored under bedrock-mantle).
@@ -1412,12 +1464,16 @@ providers:
         pricing:
           input: 4.40
           output: 22.00
+          cache_read: 0.22
+          cache_write: 5.50
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-opus-5-5":
               input: 4.00
               output: 20.00
+              cache_read: 0.20
+              cache_write: 5.00
       # Claude Sonnet 5.5 on Bedrock (launch 2026-09-28, audit-10-05-2026). AWS
       # card: bedrock-runtime takes the us./eu. geo or global.* profile ids (no
       # au./jp./in. yet); the bare id is Mantle-only (mirrored under bedrock-mantle).
@@ -1443,12 +1499,16 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.11
+          cache_write: 2.75
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu.) profiles.
             "global.anthropic.claude-sonnet-5-5":
               input: 2.00
               output: 10.00
+              cache_read: 0.10
+              cache_write: 2.50
       # Claude Haiku 5.5 on Bedrock (launch 2026-10-07, AWS card read 2026-10-08;
       # not yet in any audit). bedrock-runtime takes the us./eu./au./jp. geo or
       # global.* profile ids; the bare id is Mantle-only (mirrored under
@@ -1477,9 +1537,13 @@ providers:
           - threshold: 100_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.55
             output: 2.75
+            cache_read: 0.055
+            cache_write: 0.6875
       # global.* routes worldwide and bills the Anthropic list rate.
       "global.anthropic.claude-haiku-5-5":
         enabled: true
@@ -1495,9 +1559,13 @@ providers:
           - threshold: 100_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.50
             output: 2.50
+            cache_read: 0.05
+            cache_write: 0.625
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1522,12 +1590,16 @@ providers:
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-opus-4-8":
               input: 5.00
               output: 25.00
+              cache_read: 0.50
+              cache_write: 6.25
       # -----------------------------------------------------------------------
       # OpenAI on bedrock-runtime (/openai/v1/responses, /openai/v1/chat/completions).
       # The AWS model cards publish no In-Region price on this endpoint: requests
@@ -1924,12 +1996,16 @@ providers:
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases: ["claude-haiku-4-5", "anthropic.claude-haiku-4-5"]
         pricing:
           input: 1.10
           output: 5.50
+          cache_read: 0.11
+          cache_write: 1.375
       # Mantle catalog IDs (short form).
       # Aliases omit *-bedrock (owned by the bedrock provider) to keep them globally unique.
       "anthropic.claude-sonnet-5":
@@ -1939,18 +2015,24 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.22
+          cache_write: 2.75
       "anthropic.claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4-8"]
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
       "anthropic.claude-opus-5":
         enabled: true
         aliases: ["claude-opus-5"]
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
       # Claude Opus 5.5 (launch 2026-09-22, audit-09-23-2026): $4/$20 list plus
       # the 10% in-region premium.
       "anthropic.claude-opus-5-5":
@@ -1959,6 +2041,8 @@ providers:
         pricing:
           input: 4.40
           output: 22.00
+          cache_read: 0.22
+          cache_write: 5.50
       # Claude Sonnet 5.5 (launch 2026-09-28, audit-10-05-2026): $2/$10 list plus
       # the 10% in-region premium.
       "anthropic.claude-sonnet-5-5":
@@ -1967,6 +2051,8 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.11
+          cache_write: 2.75
       # Claude Haiku 5.5 (launch 2026-10-07, AWS card read 2026-10-08): Anthropic
       # list plus the 10% in-region premium, keeping the 100K prompt-length tier.
       "anthropic.claude-haiku-5-5":
@@ -1976,9 +2062,13 @@ providers:
           - threshold: 100_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.55
             output: 2.75
+            cache_read: 0.055
+            cache_write: 0.6875
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER

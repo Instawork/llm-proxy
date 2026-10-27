@@ -46,6 +46,9 @@ type PricingTier struct {
 	Threshold int     `json:"threshold"` // The token threshold for this tier
 	Input     float64 `json:"input"`     // Cost per 1M input tokens in USD
 	Output    float64 `json:"output"`    // Cost per 1M output tokens in USD
+
+	CacheRead  float64 `json:"cache_read,omitempty"`  // Cost per 1M prompt-cache read tokens in USD
+	CacheWrite float64 `json:"cache_write,omitempty"` // Cost per 1M prompt-cache creation tokens in USD
 }
 
 // ModelPricing represents pricing information for a model (matching config structure)
@@ -613,15 +616,46 @@ func (ct *CostTracker) CalculateCostWithFuzzyMatch(provider, model string, input
 	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
 }
 
+// usesAnthropicCacheBilling reports whether the provider's cache token counts
+// are additive to input_tokens and priced via the tier's cache_read/cache_write.
+// Other providers (e.g. Gemini) report cached tokens inside their prompt count.
+func usesAnthropicCacheBilling(provider string) bool {
+	switch provider {
+	case "anthropic", "bedrock", "bedrock-mantle":
+		return true
+	}
+	return false
+}
+
+// calculateRequestCost prices a request, including prompt-cache tokens for
+// providers that bill them separately. Cache costs are folded into the input cost.
+func (ct *CostTracker) calculateRequestCost(metadata *providers.LLMResponseMetadata) (inputCost, outputCost, totalCost float64, matchedModel string, isEstimate bool, err error) {
+	cacheRead, cacheWrite := 0, 0
+	if usesAnthropicCacheBilling(metadata.Provider) {
+		cacheRead, cacheWrite = metadata.CacheReadInputTokens, metadata.CacheCreationInputTokens
+	}
+
+	promptTokens := metadata.InputTokens + cacheRead + cacheWrite
+	pricing, matchedModel, isEstimate, err := ct.GetPricingForModelWithFuzzyMatch(metadata.Provider, metadata.Model, promptTokens)
+	if err != nil {
+		return 0, 0, 0, "", false, err
+	}
+
+	inputCost = float64(metadata.InputTokens)/1_000_000.0*pricing.Input +
+		float64(cacheRead)/1_000_000.0*pricing.CacheRead +
+		float64(cacheWrite)/1_000_000.0*pricing.CacheWrite
+	outputCost = float64(metadata.OutputTokens) / 1_000_000.0 * pricing.Output
+
+	totalCost = roundUpTo4Decimals(inputCost + outputCost)
+	inputCost = roundUpTo4Decimals(inputCost)
+	outputCost = roundUpTo4Decimals(outputCost)
+	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
+}
+
 // TrackRequest processes a request and writes cost information to transports (sync or async based on configuration).
 func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, userID, ipAddress, endpoint, keyID string) error {
 	// Calculate costs with fuzzy matching fallback
-	inputCost, outputCost, totalCost, matchedModel, isEstimate, err := ct.CalculateCostWithFuzzyMatch(
-		metadata.Provider,
-		metadata.Model,
-		metadata.InputTokens,
-		metadata.OutputTokens,
-	)
+	inputCost, outputCost, totalCost, matchedModel, isEstimate, err := ct.calculateRequestCost(metadata)
 	if err != nil {
 		ct.logger.Debug("Could not calculate cost for request", "provider", metadata.Provider, "model", metadata.Model, "error", err)
 		// Continue with zero costs rather than failing

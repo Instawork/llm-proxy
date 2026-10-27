@@ -105,6 +105,66 @@ func TestCostTracker_TrackRequest_CacheTokens(t *testing.T) {
 	assert.Equal(t, 2500, records[0].CacheCreationInputTokens)
 }
 
+func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
+	newTracker := func() (*CostTracker, *mockTransport) {
+		ct := NewCostTracker()
+		ct.SetSyncMode()
+		mock := &mockTransport{}
+		ct.AddTransport(mock)
+		for _, p := range []string{"anthropic", "gemini"} {
+			ct.SetPricingForModel(p, "m", &ModelPricing{
+				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
+			})
+		}
+		return ct, mock
+	}
+	meta := func(provider string) *providers.LLMResponseMetadata {
+		return &providers.LLMResponseMetadata{
+			Provider:                 provider,
+			Model:                    "m",
+			InputTokens:              1_000_000,
+			OutputTokens:             1_000_000,
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}
+	}
+
+	t.Run("anthropic prices cache tokens from configured rates", func(t *testing.T) {
+		ct, mock := newTracker()
+		require.NoError(t, ct.TrackRequest(meta("anthropic"), "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+		assert.InDelta(t, 15, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
+	})
+
+	t.Run("providers with inclusive cached counts are not surcharged", func(t *testing.T) {
+		ct, mock := newTracker()
+		require.NoError(t, ct.TrackRequest(meta("gemini"), "u", "127.0.0.1", "/v1/interactions", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3, rec.InputCost, 1e-9)
+		assert.InDelta(t, 18, rec.TotalCost, 1e-9)
+	})
+
+	t.Run("tier is selected from the full prompt including cache tokens", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "tiered", &ModelPricing{
+			Tiers: []PricingTier{
+				{Threshold: 100_000, Input: 1, Output: 5, CacheRead: 0.1, CacheWrite: 1.25},
+				{Threshold: 0, Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5},
+			},
+		})
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:             "anthropic",
+			Model:                "tiered",
+			InputTokens:          1_000,
+			CacheReadInputTokens: 200_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 0.01+0.2, rec.InputCost, 1e-9)
+	})
+}
+
 func TestCostTracker_TrackRequest_Async(t *testing.T) {
 	ct := NewCostTracker()
 	ct.ConfigureAsync(1, 10, 1)

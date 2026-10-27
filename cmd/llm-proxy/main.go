@@ -434,6 +434,9 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig, env config.RuntimeEnv)
 						Threshold: tier.Threshold,
 						Input:     tier.Input,
 						Output:    tier.Output,
+
+						CacheRead:  tier.CacheRead,
+						CacheWrite: tier.CacheWrite,
 					})
 				}
 

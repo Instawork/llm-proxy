@@ -156,6 +156,9 @@ func loadPricingFromBaseConfig(t *testing.T, tracker *cost.CostTracker) {
 					Threshold: tier.Threshold,
 					Input:     tier.Input,
 					Output:    tier.Output,
+
+					CacheRead:  tier.CacheRead,
+					CacheWrite: tier.CacheWrite,
 				})
 			}
 			tracker.SetPricingForModel(providerName, modelName, &trackerPricing)

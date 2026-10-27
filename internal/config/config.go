@@ -896,6 +896,11 @@ type PricingTier struct {
 	Threshold int     `yaml:"threshold"` // The token threshold for this tier
 	Input     float64 `yaml:"input"`     // Cost per 1M input tokens in USD
 	Output    float64 `yaml:"output"`    // Cost per 1M output tokens in USD
+
+	// CacheRead and CacheWrite are per-1M-token prices for prompt-cache hits and
+	// 5-minute cache writes, for providers that report them separately from input.
+	CacheRead  float64 `yaml:"cache_read,omitempty"`
+	CacheWrite float64 `yaml:"cache_write,omitempty"`
 }
 
 // ModelPricing represents pricing information for a model, with optional overrides for aliases.
@@ -1721,6 +1726,16 @@ func (c *YAMLConfig) ParsePricing() error {
 	return nil
 }
 
+func pricingNumber(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	}
+	return 0
+}
+
 // parseModelPricing handles the logic of parsing the `interface{}` pricing field.
 func parseModelPricing(pricingData any) (*ModelPricing, error) {
 	mp := &ModelPricing{}
@@ -1747,6 +1762,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 			} else if out, ok := tierMap["output"].(int); ok {
 				tier.Output = float64(out)
 			}
+			tier.CacheRead = pricingNumber(tierMap["cache_read"])
+			tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 			mp.Tiers = append(mp.Tiers, tier)
 		}
 	case map[string]any:
@@ -1775,6 +1792,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 				} else if out, ok := tierMap["output"].(int); ok {
 					tier.Output = float64(out)
 				}
+				tier.CacheRead = pricingNumber(tierMap["cache_read"])
+				tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 				mp.Tiers = append(mp.Tiers, tier)
 			}
 		} else if _, ok := v["input"]; ok {
@@ -1790,6 +1809,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 			} else if out, ok := v["output"].(int); ok {
 				tier.Output = float64(out)
 			}
+			tier.CacheRead = pricingNumber(v["cache_read"])
+			tier.CacheWrite = pricingNumber(v["cache_write"])
 			mp.Tiers = []PricingTier{tier}
 		}
 
