@@ -78,6 +78,10 @@ type CostRecord struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
+	// Prompt-cache tokens, reported separately from InputTokens by Anthropic.
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+
 	// Cost calculation
 	InputCost  float64 `json:"input_cost"`  // Cost for input tokens in USD
 	OutputCost float64 `json:"output_cost"` // Cost for output tokens in USD
@@ -640,6 +644,10 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		InputTokens:  metadata.InputTokens,
 		OutputTokens: metadata.OutputTokens,
 		TotalTokens:  metadata.TotalTokens,
+
+		CacheReadInputTokens:     metadata.CacheReadInputTokens,
+		CacheCreationInputTokens: metadata.CacheCreationInputTokens,
+
 		InputCost:    inputCost,
 		OutputCost:   outputCost,
 		TotalCost:    totalCost,

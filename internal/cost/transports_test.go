@@ -152,6 +152,47 @@ func TestDatadogTransport_NewAndWriteRecord_Defaults(t *testing.T) {
 	assert.NoError(t, zero.Close())
 }
 
+func TestDatadogTransport_WriteRecord_InputAndTotalTokensIncludeCache(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer conn.Close()
+
+	tr, err := NewDatadogTransport(DatadogTransportConfig{
+		Host:      "127.0.0.1",
+		Port:      strings.Split(conn.LocalAddr().String(), ":")[1],
+		Namespace: "llm",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, tr.WriteRecord(&CostRecord{
+		Provider:                 "anthropic",
+		Model:                    "claude-sonnet",
+		InputTokens:              12,
+		OutputTokens:             40,
+		TotalTokens:              52,
+		CacheReadInputTokens:     48000,
+		CacheCreationInputTokens: 2500,
+	}))
+	require.NoError(t, tr.Close())
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+	var payload strings.Builder
+	buf := make([]byte, 65535)
+	for {
+		n, _, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			break
+		}
+		payload.Write(buf[:n])
+	}
+
+	assert.Contains(t, payload.String(), "llm.tokens.input:50512|d")
+	assert.Contains(t, payload.String(), "llm.tokens.output:40|d")
+	assert.Contains(t, payload.String(), "llm.tokens.total:50552|d")
+	assert.NotContains(t, payload.String(), "cache_read")
+	assert.NotContains(t, payload.String(), "cache_creation")
+}
+
 func TestDatadogTransport_FromConfig_StructAndMap(t *testing.T) {
 	host, port, stop := startUDPSink(t)
 	defer stop()

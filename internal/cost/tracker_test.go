@@ -76,6 +76,35 @@ func TestCostTracker_TrackRequest_Sync(t *testing.T) {
 	assert.InDelta(t, 0.0001, records[0].TotalCost, 0.0001)
 }
 
+func TestCostTracker_TrackRequest_CacheTokens(t *testing.T) {
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+
+	ct.SetPricingForModel("anthropic", "claude-sonnet", &ModelPricing{
+		Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15}},
+	})
+
+	meta := &providers.LLMResponseMetadata{
+		Provider:                 "anthropic",
+		Model:                    "claude-sonnet",
+		InputTokens:              12,
+		OutputTokens:             40,
+		CacheReadInputTokens:     48000,
+		CacheCreationInputTokens: 2500,
+	}
+
+	require.NoError(t, ct.TrackRequest(meta, "user1", "127.0.0.1", "/v1/messages", ""))
+
+	records := mock.Records()
+	require.Len(t, records, 1)
+	assert.Equal(t, 12, records[0].InputTokens)
+	assert.Equal(t, 48000, records[0].CacheReadInputTokens)
+	assert.Equal(t, 2500, records[0].CacheCreationInputTokens)
+}
+
 func TestCostTracker_TrackRequest_Async(t *testing.T) {
 	ct := NewCostTracker()
 	ct.ConfigureAsync(1, 10, 1)
