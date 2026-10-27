@@ -31,15 +31,15 @@ type geminiTestModel struct {
 //     per https://ai.google.dev/gemini-api/docs/deprecations) and its
 //     free-tier quota is tiny enough that these tests routinely hit
 //     `429 RESOURCE_EXHAUSTED` on CI.
-//   - `gemini-2.5-flash` is the current stable replacement; it sits in a
-//     different quota bucket and is Google's recommended low-latency default.
+//   - `gemini-2.5-flash` was scheduled for shutdown on October 20, 2026, so
+//     the tests use `gemini-3.5-flash`, its current replacement.
 //   - We prefer the aliased ID (no date suffix) so the tests don't need code
 //     changes on every snapshot; pin to a dated form if you need bit-for-bit
 //     reproducibility.
 var geminiTestModels = []geminiTestModel{
 	{
-		name:       "Gemini-2.5-Flash",
-		modelID:    "gemini-2.5-flash",
+		name:       "Gemini-3.5-Flash",
+		modelID:    "gemini-3.5-flash",
 		testPrompt: "Hello! Can you tell me a short joke?",
 	},
 }

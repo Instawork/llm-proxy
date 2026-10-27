@@ -53,14 +53,6 @@ type openaiTestModel struct {
 // Test models to use in parameterized tests
 var openaiTestModels = []openaiTestModel{
 	{
-		name:        "GPT-3.5-Turbo",
-		modelID:     "gpt-3.5-turbo",
-		endpoint:    "chat",
-		maxTokens:   100,
-		testPrompt:  "Hello! Can you tell me a short joke?",
-		temperature: 0.7,
-	},
-	{
 		name:        "GPT-4o-mini",
 		modelID:     "gpt-4o-mini",
 		endpoint:    "chat",
@@ -128,7 +120,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 	}{
 		{
 			name:  "SimpleQuestion",
-			model: openaiTestModels[0], // GPT-3.5-Turbo
+			model: openaiTestModels[0], // GPT-4o-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "What is the capital of France?"},
 			},
@@ -138,7 +130,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "WithSystemMessage",
-			model: openaiTestModels[0], // GPT-3.5-Turbo
+			model: openaiTestModels[0], // GPT-4o-mini
 			messages: []map[string]string{
 				{"role": "system", "content": "You are a helpful assistant that speaks like a pirate."},
 				{"role": "user", "content": "Tell me about the weather."},
@@ -149,7 +141,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "Conversation",
-			model: openaiTestModels[0], // GPT-3.5-Turbo
+			model: openaiTestModels[0], // GPT-4o-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "Hello, I'm learning Go."},
 				{"role": "assistant", "content": "That's great! Go is an excellent language for building concurrent applications. What would you like to know about Go?"},
@@ -161,7 +153,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "StreamingWithUsage",
-			model: openaiTestModels[0], // GPT-3.5-Turbo
+			model: openaiTestModels[0], // GPT-4o-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "Explain concurrency in one sentence."},
 			},
