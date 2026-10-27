@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,4 +36,26 @@ func TestParseModelPricing_CachePrices(t *testing.T) {
 		assert.Zero(t, mp.Tiers[0].CacheRead)
 		assert.Zero(t, mp.Tiers[0].CacheWrite)
 	})
+}
+
+func TestBaseConfig_ClaudeEntriesHaveCachePrices(t *testing.T) {
+	cfg, err := LoadAndMergeConfigs([]string{"../../configs/base.yml"})
+	require.NoError(t, err)
+
+	checked := 0
+	for _, provider := range []string{"anthropic", "bedrock", "bedrock-mantle"} {
+		for name, model := range cfg.Providers[provider].Models {
+			if !strings.Contains(name, "claude") {
+				continue
+			}
+			mp, ok := model.Pricing.(*ModelPricing)
+			require.True(t, ok, "%s/%s pricing not parsed", provider, name)
+			for i, tier := range mp.Tiers {
+				checked++
+				assert.Positive(t, tier.CacheRead, "%s/%s tier[%d] cache_read", provider, name, i)
+				assert.Positive(t, tier.CacheWrite, "%s/%s tier[%d] cache_write", provider, name, i)
+			}
+		}
+	}
+	assert.NotZero(t, checked)
 }
