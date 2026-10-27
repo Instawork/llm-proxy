@@ -889,6 +889,9 @@ type ModelConfig struct {
 type Pricing struct {
 	Input  float64 `yaml:"input"`  // Cost per 1M input tokens in USD
 	Output float64 `yaml:"output"` // Cost per 1M output tokens in USD
+
+	CacheRead  float64 `yaml:"cache_read,omitempty"`  // Cost per 1M prompt-cache read tokens in USD
+	CacheWrite float64 `yaml:"cache_write,omitempty"` // Cost per 1M prompt-cache write tokens in USD
 }
 
 // PricingTier represents a pricing tier with a token threshold.
@@ -1829,6 +1832,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 				} else if out, ok := overrideMap["output"].(int); ok {
 					pricing.Output = float64(out)
 				}
+				pricing.CacheRead = pricingNumber(overrideMap["cache_read"])
+				pricing.CacheWrite = pricingNumber(overrideMap["cache_write"])
 				mp.Overrides[alias] = pricing
 			}
 		}
@@ -1937,7 +1942,7 @@ func (c *YAMLConfig) GetModelPricing(provider, model string, inputTokens int) (*
 
 		for _, tier := range modelPricing.Tiers {
 			if tier.Threshold == 0 || inputTokens <= tier.Threshold {
-				return &Pricing{Input: tier.Input, Output: tier.Output}, nil
+				return &Pricing{Input: tier.Input, Output: tier.Output, CacheRead: tier.CacheRead, CacheWrite: tier.CacheWrite}, nil
 			}
 		}
 	}

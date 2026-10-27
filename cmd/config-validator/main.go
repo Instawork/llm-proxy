@@ -160,6 +160,12 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 			for alias, p := range mp.Overrides {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] input", alias), p.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] output", alias), p.Output)...)
+				if p.CacheRead != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_read", alias), p.CacheRead)...)
+				}
+				if p.CacheWrite != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_write", alias), p.CacheWrite)...)
+				}
 			}
 		}
 	}

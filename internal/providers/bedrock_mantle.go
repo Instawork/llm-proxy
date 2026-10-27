@@ -771,9 +771,14 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 	if finish == "" {
 		finish = envelope.StopReason
 	}
-	cacheRead := usage.InputTokensDetails.CachedTokens
-	if cacheRead == 0 {
-		cacheRead = usage.CacheReadInputTokens
+	cacheRead := usage.CacheReadInputTokens
+	if cached := usage.InputTokensDetails.CachedTokens; cached > 0 && cacheRead == 0 {
+		// OpenAI-style usage counts cached tokens inside input_tokens and
+		// total_tokens; the cost tracker treats cache tokens as additive
+		// (Anthropic semantics), so take them out here to avoid billing twice.
+		cacheRead = min(cached, input)
+		input -= cacheRead
+		total = max(total-cacheRead, 0)
 	}
 	return &LLMResponseMetadata{
 		Model: envelope.Model, RequestID: envelope.ID, Provider: bedrockMantleName,

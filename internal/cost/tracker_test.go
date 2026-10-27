@@ -146,6 +146,40 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		assert.InDelta(t, 18, rec.TotalCost, 1e-9)
 	})
 
+	t.Run("unset cache prices fall back to the input rate", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "nocache", &ModelPricing{
+			Tiers: []PricingTier{{Threshold: 0, Input: 2, Output: 10}},
+		})
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:                 "anthropic",
+			Model:                    "nocache",
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		assert.InDelta(t, 4, mock.Records()[0].InputCost, 1e-9)
+	})
+
+	t.Run("override keeps its own cache prices", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "us.m", &ModelPricing{
+			Tiers: []PricingTier{{Threshold: 0, Input: 3.3, Output: 16.5, CacheRead: 0.33, CacheWrite: 4.125}},
+			Overrides: map[string]PricingOverride{
+				"global.m": {Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75},
+			},
+		})
+		ct.SetPricingForModel("anthropic", "global.m", ct.pricingConfig["anthropic"]["us.m"])
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:                 "anthropic",
+			Model:                    "global.m",
+			InputTokens:              1_000_000,
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+	})
+
 	t.Run("tier is selected from the full prompt including cache tokens", func(t *testing.T) {
 		ct, mock := newTracker()
 		ct.SetPricingForModel("anthropic", "tiered", &ModelPricing{

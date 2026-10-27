@@ -207,7 +207,10 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 	}
 
 	// Send token metrics
-	cacheTokens := record.CacheReadInputTokens + record.CacheCreationInputTokens
+	cacheTokens := 0
+	if usesAnthropicCacheBilling(record.Provider) {
+		cacheTokens = record.CacheReadInputTokens + record.CacheCreationInputTokens
+	}
 	inputTokens := record.InputTokens + cacheTokens
 	totalTokens := record.TotalTokens + cacheTokens
 	if err := dt.client.Distribution("tokens.input", float64(inputTokens), tags, dt.sampleRate); err != nil {

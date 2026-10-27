@@ -53,11 +53,16 @@ type PricingTier struct {
 
 // ModelPricing represents pricing information for a model (matching config structure)
 type ModelPricing struct {
-	Tiers     []PricingTier `json:"tiers,omitempty"`
-	Overrides map[string]struct {
-		Input  float64 `json:"input"`
-		Output float64 `json:"output"`
-	} `json:"overrides,omitempty"`
+	Tiers     []PricingTier              `json:"tiers,omitempty"`
+	Overrides map[string]PricingOverride `json:"overrides,omitempty"`
+}
+
+// PricingOverride is the per-alias price that replaces a model's tiers.
+type PricingOverride struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
 }
 
 // CostRecord represents a single request with cost information
@@ -496,7 +501,7 @@ func (ct *CostTracker) GetPricingForModel(provider, model string, inputTokens in
 		if modelPricing, exists := providerPricing[model]; exists {
 			// Handle overrides first
 			if override, ok := modelPricing.Overrides[model]; ok {
-				return &PricingTier{Input: override.Input, Output: override.Output}, nil
+				return &PricingTier{Input: override.Input, Output: override.Output, CacheRead: override.CacheRead, CacheWrite: override.CacheWrite}, nil
 			}
 			// Handle tiered pricing
 			if len(modelPricing.Tiers) > 0 {
@@ -641,9 +646,16 @@ func (ct *CostTracker) calculateRequestCost(metadata *providers.LLMResponseMetad
 		return 0, 0, 0, "", false, err
 	}
 
+	cacheReadPrice, cacheWritePrice := pricing.CacheRead, pricing.CacheWrite
+	if cacheReadPrice == 0 {
+		cacheReadPrice = pricing.Input
+	}
+	if cacheWritePrice == 0 {
+		cacheWritePrice = pricing.Input
+	}
 	inputCost = float64(metadata.InputTokens)/1_000_000.0*pricing.Input +
-		float64(cacheRead)/1_000_000.0*pricing.CacheRead +
-		float64(cacheWrite)/1_000_000.0*pricing.CacheWrite
+		float64(cacheRead)/1_000_000.0*cacheReadPrice +
+		float64(cacheWrite)/1_000_000.0*cacheWritePrice
 	outputCost = float64(metadata.OutputTokens) / 1_000_000.0 * pricing.Output
 
 	totalCost = roundUpTo4Decimals(inputCost + outputCost)

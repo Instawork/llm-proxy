@@ -30,6 +30,18 @@ func TestParseModelPricing_CachePrices(t *testing.T) {
 		assert.Equal(t, 0.625, mp.Tiers[1].CacheWrite)
 	})
 
+	t.Run("overrides", func(t *testing.T) {
+		mp, err := parseModelPricing(map[string]any{
+			"input": 3.3, "output": 16.5, "cache_read": 0.33, "cache_write": 4.125,
+			"overrides": map[string]any{
+				"global.m": map[string]any{"input": 3.0, "output": 15, "cache_read": 0.3, "cache_write": 3.75},
+			},
+		})
+		require.NoError(t, err)
+		got := mp.Overrides["global.m"]
+		assert.Equal(t, Pricing{Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}, got)
+	})
+
 	t.Run("omitted", func(t *testing.T) {
 		mp, err := parseModelPricing(map[string]any{"input": 1.0, "output": 2.0})
 		require.NoError(t, err)

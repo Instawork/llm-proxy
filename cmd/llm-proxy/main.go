@@ -441,15 +441,14 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig, env config.RuntimeEnv)
 				}
 
 				if modelPricing.Overrides != nil {
-					costTrackerPricing.Overrides = make(map[string]struct {
-						Input  float64 `json:"input"`
-						Output float64 `json:"output"`
-					})
+					costTrackerPricing.Overrides = make(map[string]cost.PricingOverride)
 					for alias, override := range modelPricing.Overrides {
-						costTrackerPricing.Overrides[alias] = struct {
-							Input  float64 `json:"input"`
-							Output float64 `json:"output"`
-						}{Input: override.Input, Output: override.Output}
+						costTrackerPricing.Overrides[alias] = cost.PricingOverride{
+							Input:      override.Input,
+							Output:     override.Output,
+							CacheRead:  override.CacheRead,
+							CacheWrite: override.CacheWrite,
+						}
 					}
 				}
 
