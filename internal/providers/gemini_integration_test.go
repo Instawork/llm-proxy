@@ -37,6 +37,10 @@ type geminiTestModel struct {
 //   - We prefer the aliased ID (no date suffix) so the tests don't need code
 //     changes on every snapshot; pin to a dated form if you need bit-for-bit
 //     reproducibility.
+//   - Scenario payloads deliberately omit `generationConfig.temperature`:
+//     Google is expected to start rejecting it on the Gemini 3.x family, and
+//     the proxy forwards request bodies verbatim (no parameter stripping), so
+//     any value set here would reach the upstream unchanged.
 var geminiTestModels = []geminiTestModel{
 	{
 		name:       "Gemini-3.6-Flash",
@@ -101,7 +105,6 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.0,
 				"maxOutputTokens": 50,
 			},
 			stream: false,
@@ -130,7 +133,6 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.7,
 				"maxOutputTokens": 150,
 			},
 			stream: false,
@@ -146,7 +148,6 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.9,
 				"maxOutputTokens": 100,
 			},
 			stream: true,
@@ -162,7 +163,6 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.7,
 				"maxOutputTokens": 200,
 			},
 			safetySettings: []map[string]string{
@@ -188,7 +188,6 @@ func TestGeminiIntegration_AdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.5,
 				"maxOutputTokens": 100,
 			},
 			stream: false,
@@ -433,7 +432,6 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.0,
 				"maxOutputTokens": 50,
 			},
 			stream: false,
@@ -462,7 +460,6 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.7,
 				"maxOutputTokens": 150,
 			},
 			stream: false,
@@ -478,7 +475,6 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.9,
 				"maxOutputTokens": 100,
 			},
 			stream: true,
@@ -494,7 +490,6 @@ func TestGeminiIntegration_V1BetaAdvancedScenarios(t *testing.T) {
 				},
 			},
 			generationConfig: map[string]any{
-				"temperature":     0.7,
 				"maxOutputTokens": 200,
 			},
 			safetySettings: []map[string]string{
