@@ -1,6 +1,9 @@
 package config
 
 import (
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,6 +67,55 @@ func TestParseModelPricing_RejectsNonNumericPrices(t *testing.T) {
 			_, err := parseModelPricing(pricing)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "must be a number")
+		})
+	}
+}
+
+func TestParseModelPricing_RejectsNullNonFiniteAndNegativePrices(t *testing.T) {
+	cases := []struct {
+		name    string
+		pricing any
+		want    string
+	}{
+		{"flat input null", map[string]any{"input": nil, "output": 2.0}, "input must be a number, got null"},
+		{"flat cache_read null", map[string]any{"input": 1.0, "output": 2.0, "cache_read": nil}, "cache_read must be a number, got null"},
+		{"flat input nan", map[string]any{"input": math.NaN(), "output": 2.0}, "input must be a finite number"},
+		{"flat output +inf", map[string]any{"input": 1.0, "output": math.Inf(1)}, "output must be a finite number"},
+		{"tier cache_write -inf", []any{map[string]any{"threshold": 0, "input": 1.0, "output": 2.0, "cache_write": math.Inf(-1)}}, "cache_write must be a finite number"},
+		{"flat input negative", map[string]any{"input": -1.0, "output": 2.0}, "input must not be negative"},
+		{"tier threshold negative", []any{map[string]any{"threshold": -5, "input": 1.0, "output": 2.0}}, "threshold must not be negative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseModelPricing(tc.pricing)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestLoadAndMergeConfigs_RejectsInvalidYAMLPrices(t *testing.T) {
+	cases := []struct {
+		name    string
+		pricing string
+		want    string
+	}{
+		{"quoted string", `{input: "3", output: 15}`, "input must be a number, got string"},
+		{"present null", `{input: null, output: 15}`, "input must be a number, got null"},
+		{"yaml nan", `{input: .nan, output: 15}`, "input must be a finite number"},
+		{"yaml inf", `{input: 3, output: .inf}`, "output must be a finite number"},
+		{"negative", `{input: 3, output: -15}`, "output must not be negative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cfg.yml")
+			body := "providers:\n  anthropic:\n    enabled: true\n    models:\n      claude-x:\n        pricing: " + tc.pricing + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+			_, err := LoadAndMergeConfigs([]string{path})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "anthropic/claude-x")
+			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
 }

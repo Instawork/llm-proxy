@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -1729,23 +1730,36 @@ func (c *YAMLConfig) ParsePricing() error {
 	return nil
 }
 
-// pricingNumber reads an optional numeric pricing field. A present value of
-// any non-numeric type (for example a quoted "0.3") is an error rather than a
-// silent zero, since a zero price would bill those tokens for free.
+// pricingNumber reads an optional numeric pricing field. Absent keys are 0.
+// A present value that is null, non-numeric (for example a quoted "0.3"),
+// non-finite (YAML `.nan` / `.inf`) or negative is an error rather than a
+// silent zero or an unusable charge, since a zero price would bill those
+// tokens for free.
 func pricingNumber(m map[string]any, key string) (float64, error) {
 	v, ok := m[key]
-	if !ok || v == nil {
+	if !ok {
 		return 0, nil
 	}
-	switch n := v.(type) {
+	var n float64
+	switch t := v.(type) {
 	case float64:
-		return n, nil
+		n = t
 	case int:
-		return float64(n), nil
+		n = float64(t)
 	case int64:
-		return float64(n), nil
+		n = float64(t)
+	case nil:
+		return 0, fmt.Errorf("%s must be a number, got null", key)
+	default:
+		return 0, fmt.Errorf("%s must be a number, got %T", key, v)
 	}
-	return 0, fmt.Errorf("%s must be a number, got %T", key, v)
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, fmt.Errorf("%s must be a finite number, got %v", key, n)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("%s must not be negative, got %v", key, n)
+	}
+	return n, nil
 }
 
 // pricingTierFromMap reads threshold/input/output/cache_read/cache_write.
