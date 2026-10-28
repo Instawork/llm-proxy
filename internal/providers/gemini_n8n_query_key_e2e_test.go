@@ -71,7 +71,7 @@ func TestGeminiIntegration_N8NQueryKeyOnGenerateContent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url := server.URL + "/gemini/v1beta/models/gemini-3.5-flash:generateContent?key=" + created.PK
+	url := server.URL + "/gemini/v1beta/models/gemini-3.6-flash:generateContent?key=" + created.PK
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")

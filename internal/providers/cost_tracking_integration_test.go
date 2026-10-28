@@ -363,7 +363,7 @@ func TestGeminiIntegration_CostTracking_CreatedKey(t *testing.T) {
 	masked := middleware.MaskKeyID(created.PK)
 
 	baseline := env.recordCount()
-	env.doJSON(t, "/gemini/v1beta/models/gemini-3.5-flash:generateContent",
+	env.doJSON(t, "/gemini/v1beta/models/gemini-3.6-flash:generateContent",
 		map[string]string{"x-goog-api-key": created.PK},
 		map[string]any{
 			"contents": []map[string]any{
@@ -373,7 +373,7 @@ func TestGeminiIntegration_CostTracking_CreatedKey(t *testing.T) {
 		})
 
 	record := env.requireCostTracked(t, baseline, "gemini", masked)
-	assert.Contains(t, record.Model, "gemini-3.5-flash")
+	assert.Contains(t, record.Model, "gemini-3.6-flash")
 }
 
 func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
@@ -397,20 +397,20 @@ func TestGeminiIntegration_CostTracking_CreatedKey_OpenAICompat(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
 			map[string]any{
-				"model":      "gemini-3.5-flash",
+				"model":      "gemini-3.6-flash",
 				"max_tokens": geminiCompatMaxTokens,
 				"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
 			})
 
 		record := env.requireCostTracked(t, baseline, "gemini", masked)
-		assert.Contains(t, record.Model, "gemini-3.5-flash")
+		assert.Contains(t, record.Model, "gemini-3.6-flash")
 	})
 
 	t.Run("Streaming", func(t *testing.T) {
 		baseline := env.recordCount()
 		env.doJSON(t, "/gemini/v1beta/openai/chat/completions", headers,
 			map[string]any{
-				"model":          "gemini-3.5-flash",
+				"model":          "gemini-3.6-flash",
 				"max_tokens":     geminiCompatMaxTokens,
 				"stream":         true,
 				"stream_options": map[string]bool{"include_usage": true},
