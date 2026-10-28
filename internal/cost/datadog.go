@@ -206,7 +206,11 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 		tags = append(tags, fmt.Sprintf("finish_reason:%s", record.FinishReason))
 	}
 
-	// Send token metrics
+	// Send token metrics. For additive providers the record's InputTokens
+	// and TotalTokens exclude cache tokens (Anthropic usage, Bedrock Converse
+	// inputTokens/totalTokens and invocationMetrics inputTokenCount all
+	// report only uncached input), so adding them here yields the full
+	// prompt size rather than a double count.
 	cacheTokens := 0
 	if usesAnthropicCacheBilling(record.Provider) {
 		cacheTokens = record.CacheReadInputTokens + record.CacheCreationInputTokens

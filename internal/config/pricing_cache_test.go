@@ -1,6 +1,9 @@
 package config
 
 import (
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,6 +51,96 @@ func TestParseModelPricing_CachePrices(t *testing.T) {
 		assert.Zero(t, mp.Tiers[0].CacheRead)
 		assert.Zero(t, mp.Tiers[0].CacheWrite)
 	})
+}
+
+func TestParseModelPricing_RejectsNonNumericPrices(t *testing.T) {
+	cases := map[string]any{
+		"flat cache_read string":  map[string]any{"input": 3.0, "output": 15, "cache_read": "0.3"},
+		"flat input string":       map[string]any{"input": "3", "output": 15},
+		"tier list output bool":   []any{map[string]any{"threshold": 0, "input": 1.0, "output": true}},
+		"tiers map cache_write":   map[string]any{"tiers": []any{map[string]any{"threshold": 0, "input": 1.0, "output": 2.0, "cache_write": "3.75"}}},
+		"tier threshold string":   []any{map[string]any{"threshold": "200000", "input": 1.0, "output": 2.0}},
+		"override cache_read map": map[string]any{"input": 3.0, "output": 15, "overrides": map[string]any{"global.m": map[string]any{"input": 3.0, "output": 15, "cache_read": map[string]any{}}}},
+	}
+	for name, pricing := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseModelPricing(pricing)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be a number")
+		})
+	}
+}
+
+func TestParseModelPricing_RejectsNullNonFiniteAndNegativePrices(t *testing.T) {
+	cases := []struct {
+		name    string
+		pricing any
+		want    string
+	}{
+		{"flat input null", map[string]any{"input": nil, "output": 2.0}, "input must be a number, got null"},
+		{"flat cache_read null", map[string]any{"input": 1.0, "output": 2.0, "cache_read": nil}, "cache_read must be a number, got null"},
+		{"flat input nan", map[string]any{"input": math.NaN(), "output": 2.0}, "input must be a finite number"},
+		{"flat output +inf", map[string]any{"input": 1.0, "output": math.Inf(1)}, "output must be a finite number"},
+		{"tier cache_write -inf", []any{map[string]any{"threshold": 0, "input": 1.0, "output": 2.0, "cache_write": math.Inf(-1)}}, "cache_write must be a finite number"},
+		{"flat input negative", map[string]any{"input": -1.0, "output": 2.0}, "input must not be negative"},
+		{"tier threshold negative", []any{map[string]any{"threshold": -5, "input": 1.0, "output": 2.0}}, "threshold must not be negative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseModelPricing(tc.pricing)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestLoadAndMergeConfigs_RejectsInvalidYAMLPrices(t *testing.T) {
+	cases := []struct {
+		name    string
+		pricing string
+		want    string
+	}{
+		{"quoted string", `{input: "3", output: 15}`, "input must be a number, got string"},
+		{"present null", `{input: null, output: 15}`, "input must be a number, got null"},
+		{"yaml nan", `{input: .nan, output: 15}`, "input must be a finite number"},
+		{"yaml inf", `{input: 3, output: .inf}`, "output must be a finite number"},
+		{"negative", `{input: 3, output: -15}`, "output must not be negative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cfg.yml")
+			body := "providers:\n  anthropic:\n    enabled: true\n    models:\n      claude-x:\n        pricing: " + tc.pricing + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+			_, err := LoadAndMergeConfigs([]string{path})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "anthropic/claude-x")
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestParsePricing_NonNumericPriceFailsConfigLoad(t *testing.T) {
+	cfg := &YAMLConfig{Providers: map[string]ProviderConfig{
+		"anthropic": {Models: map[string]ModelConfig{
+			"claude-x": {Pricing: map[string]any{"input": 3.0, "output": 15, "cache_read": "0.3", "cache_write": 3.75}},
+		}},
+	}}
+	err := cfg.ParsePricing()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anthropic/claude-x")
+	assert.Contains(t, err.Error(), "cache_read must be a number, got string")
+}
+
+func TestParseModelPricing_AcceptsIntegerAndFloatPrices(t *testing.T) {
+	mp, err := parseModelPricing([]any{
+		map[string]any{"threshold": 200000.0, "input": 2, "output": 12.0, "cache_read": int64(1), "cache_write": 2.5},
+		map[string]any{"threshold": 0, "input": 4.0, "output": 18},
+	})
+	require.NoError(t, err)
+	require.Len(t, mp.Tiers, 2)
+	assert.Equal(t, PricingTier{Threshold: 200000, Input: 2, Output: 12, CacheRead: 1, CacheWrite: 2.5}, mp.Tiers[0])
+	assert.Equal(t, PricingTier{Threshold: 0, Input: 4, Output: 18}, mp.Tiers[1])
 }
 
 func TestBaseConfig_ClaudeEntriesHaveCachePrices(t *testing.T) {
