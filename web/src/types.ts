@@ -326,6 +326,8 @@ export interface CostKeySpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostScopeSpend {
@@ -335,6 +337,8 @@ export interface CostScopeSpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostProviderSpend {
@@ -345,6 +349,8 @@ export interface CostProviderSpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostRecentEvent {
@@ -357,6 +363,8 @@ export interface CostRecentEvent {
   output_spend_usd?: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   model?: string;
 }
 
@@ -370,6 +378,8 @@ export interface CostStats extends StatsWithDailyHistory {
   requests_today?: number;
   input_tokens_today?: number;
   output_tokens_today?: number;
+  cache_read_tokens_today?: number;
+  cache_creation_tokens_today?: number;
   by_key?: CostKeySpend[];
   by_user?: Record<string, CostScopeSpend>;
   by_provider?: CostProviderSpend[];
@@ -505,6 +515,8 @@ export interface ModelStatusResponse {
 export interface UsageScopeCounter {
   requests?: number;
   tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface UsageStats extends StatsWithDailyHistory {
@@ -513,6 +525,8 @@ export interface UsageStats extends StatsWithDailyHistory {
   started_at?: number;
   requests_today?: number;
   tokens_today?: number;
+  cache_read_tokens_today?: number;
+  cache_creation_tokens_today?: number;
   top_models?: PIINameCount[];
   top_providers?: PIINameCount[];
   counters?: Record<string, UsageScopeCounter>;

@@ -23,7 +23,7 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, scopeKind, scopeLabel } from "../lib/format";
+import { cachedInputHint, compact, scopeKind, scopeLabel } from "../lib/format";
 import type { DailyHistoryRow, UsageScopeCounter } from "../types";
 
 function rangeLabel(range: RangeKey): string {
@@ -49,6 +49,8 @@ function rowsForKind(
       label: scopeLabel(scope),
       requests: c.requests ?? 0,
       tokens: c.tokens ?? 0,
+      cache_read_tokens: c.cache_read_tokens ?? 0,
+      cache_creation_tokens: c.cache_creation_tokens ?? 0,
     }))
     .sort((a, b) => b.tokens - a.tokens);
 }
@@ -63,6 +65,8 @@ function redisRows(
     label: scopeLabel(s.scope),
     requests: s.requests,
     tokens: s.tokens,
+    cache_read_tokens: s.cache_read_tokens,
+    cache_creation_tokens: s.cache_creation_tokens,
   }));
 }
 
@@ -89,6 +93,20 @@ export default function UsagePage() {
     stats?.available ? memoryRequests : undefined,
     history,
     "requests_today",
+    hasRedis,
+  );
+  const cacheReadPick = pickToday(
+    stats?.available ? Math.max(stats?.cache_read_tokens_today ?? 0, global?.cache_read_tokens ?? 0) : undefined,
+    history,
+    "cache_read_tokens_today",
+    hasRedis,
+  );
+  const cacheCreationPick = pickToday(
+    stats?.available
+      ? Math.max(stats?.cache_creation_tokens_today ?? 0, global?.cache_creation_tokens ?? 0)
+      : undefined,
+    history,
+    "cache_creation_tokens_today",
     hasRedis,
   );
   const totalTokens = totalTokensPick.value;
@@ -161,7 +179,7 @@ export default function UsagePage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <LiveStat
           title="Requests"
           value={compact(totalRequests)}
@@ -169,6 +187,12 @@ export default function UsagePage() {
           source={totalReqPick.source}
         />
         <LiveStat title="Tokens" value={compact(totalTokens)} hint="UTC day" source={totalTokensPick.source} />
+        <LiveStat
+          title="Cached input"
+          value={compact(cacheReadPick.value + cacheCreationPick.value)}
+          hint={cachedInputHint(cacheReadPick.value, cacheCreationPick.value)}
+          source={cacheReadPick.source}
+        />
         <LiveStat title="Avg tokens / req" value={compact(avgTokens)} source={totalTokensPick.source} />
         <LiveStat
           title="Active models"

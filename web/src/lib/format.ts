@@ -13,6 +13,18 @@ export function compact(n: number | undefined | null): string {
   return compactFormatter.format(n);
 }
 
+/**
+ * Hint for a "cached input" stat. Cache tokens are a subset of input tokens,
+ * so the share is only shown when the input total is known.
+ */
+export function cachedInputHint(cacheRead: number, cacheWrite: number, inputTokens?: number): string {
+  const parts = [`${compact(cacheRead)} read`, `${compact(cacheWrite)} written`];
+  if (inputTokens && inputTokens > 0) {
+    parts.push(`${(((cacheRead + cacheWrite) / inputTokens) * 100).toFixed(1)}% of input`);
+  }
+  return parts.join(" · ");
+}
+
 /** Locale-formats an integer count, tolerating undefined/null/NaN from the API. */
 export function formatCount(n: number | undefined | null): string {
   if (n === undefined || n === null || Number.isNaN(n)) return "0";
