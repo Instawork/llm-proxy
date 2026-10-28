@@ -76,6 +76,129 @@ func TestCostTracker_TrackRequest_Sync(t *testing.T) {
 	assert.InDelta(t, 0.0001, records[0].TotalCost, 0.0001)
 }
 
+func TestCostTracker_TrackRequest_CacheTokens(t *testing.T) {
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+
+	ct.SetPricingForModel("anthropic", "claude-sonnet", &ModelPricing{
+		Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15}},
+	})
+
+	meta := &providers.LLMResponseMetadata{
+		Provider:                 "anthropic",
+		Model:                    "claude-sonnet",
+		InputTokens:              12,
+		OutputTokens:             40,
+		CacheReadInputTokens:     48000,
+		CacheCreationInputTokens: 2500,
+	}
+
+	require.NoError(t, ct.TrackRequest(meta, "user1", "127.0.0.1", "/v1/messages", ""))
+
+	records := mock.Records()
+	require.Len(t, records, 1)
+	assert.Equal(t, 12, records[0].InputTokens)
+	assert.Equal(t, 48000, records[0].CacheReadInputTokens)
+	assert.Equal(t, 2500, records[0].CacheCreationInputTokens)
+}
+
+func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
+	newTracker := func() (*CostTracker, *mockTransport) {
+		ct := NewCostTracker()
+		ct.SetSyncMode()
+		mock := &mockTransport{}
+		ct.AddTransport(mock)
+		for _, p := range []string{"anthropic", "gemini"} {
+			ct.SetPricingForModel(p, "m", &ModelPricing{
+				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
+			})
+		}
+		return ct, mock
+	}
+	meta := func(provider string) *providers.LLMResponseMetadata {
+		return &providers.LLMResponseMetadata{
+			Provider:                 provider,
+			Model:                    "m",
+			InputTokens:              1_000_000,
+			OutputTokens:             1_000_000,
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}
+	}
+
+	t.Run("anthropic prices cache tokens from configured rates", func(t *testing.T) {
+		ct, mock := newTracker()
+		require.NoError(t, ct.TrackRequest(meta("anthropic"), "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+		assert.InDelta(t, 15, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
+	})
+
+	t.Run("providers with inclusive cached counts are not surcharged", func(t *testing.T) {
+		ct, mock := newTracker()
+		require.NoError(t, ct.TrackRequest(meta("gemini"), "u", "127.0.0.1", "/v1/interactions", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3, rec.InputCost, 1e-9)
+		assert.InDelta(t, 18, rec.TotalCost, 1e-9)
+	})
+
+	t.Run("unset cache prices fall back to the input rate", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "nocache", &ModelPricing{
+			Tiers: []PricingTier{{Threshold: 0, Input: 2, Output: 10}},
+		})
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:                 "anthropic",
+			Model:                    "nocache",
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		assert.InDelta(t, 4, mock.Records()[0].InputCost, 1e-9)
+	})
+
+	t.Run("override keeps its own cache prices", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "us.m", &ModelPricing{
+			Tiers: []PricingTier{{Threshold: 0, Input: 3.3, Output: 16.5, CacheRead: 0.33, CacheWrite: 4.125}},
+			Overrides: map[string]PricingOverride{
+				"global.m": {Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75},
+			},
+		})
+		ct.SetPricingForModel("anthropic", "global.m", ct.pricingConfig["anthropic"]["us.m"])
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:                 "anthropic",
+			Model:                    "global.m",
+			InputTokens:              1_000_000,
+			CacheReadInputTokens:     1_000_000,
+			CacheCreationInputTokens: 1_000_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+	})
+
+	t.Run("tier is selected from the full prompt including cache tokens", func(t *testing.T) {
+		ct, mock := newTracker()
+		ct.SetPricingForModel("anthropic", "tiered", &ModelPricing{
+			Tiers: []PricingTier{
+				{Threshold: 100_000, Input: 1, Output: 5, CacheRead: 0.1, CacheWrite: 1.25},
+				{Threshold: 0, Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5},
+			},
+		})
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider:             "anthropic",
+			Model:                "tiered",
+			InputTokens:          1_000,
+			CacheReadInputTokens: 200_000,
+		}, "u", "127.0.0.1", "/v1/messages", ""))
+		rec := mock.Records()[0]
+		assert.InDelta(t, 0.01+0.2, rec.InputCost, 1e-9)
+	})
+}
+
 func TestCostTracker_TrackRequest_Async(t *testing.T) {
 	ct := NewCostTracker()
 	ct.ConfigureAsync(1, 10, 1)
@@ -162,6 +285,60 @@ func TestCostTracker_StatsRecorder(t *testing.T) {
 	assert.Equal(t, "iw:abcdefgh999", stats.calls[0].keyID)
 	assert.Equal(t, "openai", stats.calls[0].provider)
 	assert.InDelta(t, 0.0001, stats.calls[0].spendUSD, 0.0001)
+}
+
+type recordingUsage struct {
+	mu          sync.Mutex
+	inputTokens []int
+}
+
+func (r *recordingUsage) RecordRequest(_, _, _, _ string, inputTokens, _ int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputTokens = append(r.inputTokens, inputTokens)
+}
+
+func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
+	cases := []struct {
+		provider        string
+		wantRollupInput int
+	}{
+		{"anthropic", 12 + 30 + 5},
+		{"bedrock", 12 + 30 + 5},
+		{"bedrock-mantle", 12 + 30 + 5},
+		{"gemini", 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			stats := &recordingStats{}
+			usage := &recordingUsage{}
+			mock := &mockTransport{}
+			ct := NewCostTracker()
+			ct.SetSyncMode()
+			ct.AddTransport(mock)
+			ct.SetStatsRecorder(stats)
+			ct.SetUsageStatsRecorder(usage)
+
+			require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+				Provider:                 tc.provider,
+				Model:                    "m",
+				InputTokens:              12,
+				OutputTokens:             7,
+				CacheReadInputTokens:     30,
+				CacheCreationInputTokens: 5,
+			}, "u", "127.0.0.1", "/v1/messages", ""))
+
+			assert.Equal(t, 12, mock.Records()[0].InputTokens, "cost record keeps the cache-excluded count")
+			stats.mu.Lock()
+			defer stats.mu.Unlock()
+			require.Len(t, stats.calls, 1)
+			assert.Equal(t, tc.wantRollupInput, stats.calls[0].inputTokens)
+			assert.Equal(t, 7, stats.calls[0].outputTokens)
+			usage.mu.Lock()
+			defer usage.mu.Unlock()
+			assert.Equal(t, []int{tc.wantRollupInput}, usage.inputTokens)
+		})
+	}
 }
 
 func TestCalculateCost(t *testing.T) {

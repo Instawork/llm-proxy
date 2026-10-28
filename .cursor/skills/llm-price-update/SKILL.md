@@ -20,6 +20,8 @@ The vendor research (reading pricing, deprecations, and API-reference pages for 
 7. **Always audit endpoint coverage.** A model whose price is right is still billed at $0 if the request path is not in the metered list of `internal/providers/endpoints.go`. Every run diffs the audit's `endpoints` arrays against that registry and checks live traffic for unmetered paths (see "Step 4b"). This is how the Gemini Interactions API ran unbilled for a day: the model was known, the endpoint was not.
 8. **Never remove existing aliases.** An alias that the vendor no longer lists (or never listed) is harmless and may still be pinned by a client, a saved prompt, or an admin-dashboard row; dropping it breaks that caller's pricing lookup for no gain. Aliases only leave `configs/base.yml` when the whole model moves to `retired_models`, and then they move with it.
 
+9. **Every Claude entry carries cache prices.** Models under `anthropic`, `bedrock` and `bedrock-mantle` whose id contains `claude` must set `cache_read` and `cache_write` (per 1M tokens, 5-minute write rate) on every pricing tier. `internal/cost` bills `cache_read_input_tokens` / `cache_creation_input_tokens` from these fields only; a missing field prices those tokens at $0, and cache reads are usually the bulk of Anthropic input. See "Cache pricing" below.
+
 ## Workflow
 
 Copy this checklist at the start of a run:
@@ -49,6 +51,7 @@ rg -n "pricing" configs/
 The pricing struct is defined in [internal/config/config.go](../../../internal/config/config.go) as `ModelPricing` with three shapes:
 - `{input, output}` for flat pricing — ONLY when the vendor publishes a single rate for the model
 - `[{threshold, input, output}, ...]` for prompt-length tiers — REQUIRED whenever the vendor publishes length-based tiers (Gemini Pro ≤200k/>200k, Gemini 1.5 ≤128k/>128k, Anthropic Sonnet 4.x ≤200k/>200k, etc.)
+- `cache_read` / `cache_write` (optional, per-tier or flat) for prompt-cache hits and 5-minute cache writes; required on Claude entries (rule 9)
 - `overrides: {alias: {input, output}}` for per-snapshot price differences (e.g., `gpt-4o-2024-05-13` priced higher than current `gpt-4o`)
 
 Retired models live in the `retired_models:` block (provider → slug → `retired_date`, `replacement`, `aliases`); `LookupRetiredModel` serves them a clear error instead of an unpriced passthrough. Live models that the vendor has scheduled for shutdown carry `deprecated: true` and `replacement:` on the model entry.
@@ -86,6 +89,7 @@ jq '.providers | map_values([.endpoints[] | select(.billable != "no") | {method,
 | `aliases` | `aliases:` — union with the existing list (rule 8: never drop one) |
 | `pricing` with one tier | `pricing: {input, output}` |
 | `pricing` with N tiers | `pricing:` list; audit `up_to_tokens: X` → `threshold: X`, the final `up_to_tokens: null` tier → `threshold: 0` |
+| `pricing[].input` on a Claude model | also derives `cache_read` / `cache_write` on the same tier (see "Cache pricing"); the audit schema has no cache fields |
 | `promo_pricing` | a `#` comment next to `pricing` noting the promo rate and `ends_on`; never the encoded price (rule 5) |
 | `status: deprecated` / `legacy` with `sunset_date` | `deprecated: true` + `replacement: <replaced_by>` on the live entry, comment with the sunset date |
 | `status: shutdown` | move the entry (and its aliases) to `retired_models.<p>` with `retired_date: <sunset_date>` and `replacement: <replaced_by>` |
@@ -105,6 +109,8 @@ For each provider section of `configs/base.yml`, categorize every model:
 | `status: deprecated`, future or unannounced sunset | Keep in config, set `deprecated: true` + `replacement:`, add to deprecations list with `sunset_date` |
 | `status: shutdown` (past sunset) | Move to `retired_models`, add to deprecations list. Google retired `gemini-1.5-*` and `text-embedding-004`/`embedding-001` this way. |
 | In the config but absent from the audit entirely | Open question — the vendor no longer publishes it, but the audit did not confirm a shutdown. Do not remove it. |
+
+A changed Claude `input` price always means re-deriving that entry's `cache_read` and `cache_write`, on every tier; never leave them at the old values.
 
 Reuse the `limits` block of a similar existing model rather than inventing new rate-limit numbers — e.g., a new flagship uses the same limits as the previous flagship.
 
@@ -128,6 +134,25 @@ The audit is research output and has been wrong before (a promo encoded as list 
 4. for a `deprecated` / `shutdown` change, the sunset date and replacement on the deprecations page.
 
 Then prove the resolved prices with a throwaway test in `internal/config/` (delete it afterwards) that calls `GetModelPricing(provider, model, tokens)` for each changed id and alias at 1k and 300k input tokens, and paste the output into the PR's Verification section. Anything that fails re-verification becomes an open question, not a config edit.
+
+### Cache pricing
+
+The audit schema records only standard list prices, so cache prices are derived from the audit's `input` price using the multipliers the vendor publishes under "Prompt caching" at https://platform.claude.com/docs/en/about-claude/pricing. Do not invent a multiplier from memory: open that page during step 4a and confirm the table below still matches.
+
+| Field | Value |
+|---|---|
+| `cache_write` | 1.25 × `input` (5-minute write; 1-hour writes at 2× are not reported separately and are not modelled) |
+| `cache_read` | 0.1 × `input` by default; **0.05 ×** on Claude Opus 5.5 and Sonnet 5.5; **0.025 ×** on Claude Fable 5.1 and Mythos 5.1 |
+
+Rules:
+
+- The multiplier exceptions change with each model generation. If the pricing page shows a different cache-hit price for any model in the changeset, use the page's number and note it in the PR.
+- Apply the multiplier to each tier's own `input` (Haiku 5.5 has separate ≤100k and >100k tiers, each with its own cache prices).
+- Bedrock and Bedrock Mantle Claude entries use the same multipliers applied to their own (regionally marked-up) `input`; `global.` entries are priced from their own `input` too. Confirm against the AWS model card in step 4a if it prints cache prices.
+- Tier selection for these providers counts the whole prompt (`input_tokens` + cache read + cache creation), matching how Anthropic applies the Haiku 5.5 100k threshold.
+- Only `anthropic`, `bedrock` and `bedrock-mantle` are billed this way (`usesAnthropicCacheBilling` in `internal/cost/tracker.go`). Gemini and OpenAI report cached tokens inside their prompt count, so do not add `cache_*` fields for them. If a new provider reports cache tokens separately from input, that is a code change in `tracker.go`, not just config.
+
+`TestBaseConfig_ClaudeEntriesHaveCachePrices` in `internal/config/pricing_cache_test.go` fails if any Claude entry (or tier) under those three providers lacks `cache_read` / `cache_write`; it runs as part of step 8.
 
 ### Step 4b. Endpoint coverage
 
@@ -186,8 +211,8 @@ Always run both commands before committing:
 # 1. Semantic config validation (pricing sanity, duplicate aliases, structural correctness)
 go run ./cmd/config-validator/
 
-# 2. Unit tests (config parsing, tiered pricing logic, alias resolution)
-go test ./internal/config/...
+# 2. Unit tests (config parsing, tiered pricing logic, alias resolution, cache-token costing)
+go test ./internal/config/... ./internal/cost/...
 ```
 
 Also grep for any hardcoded price assertions in tests that touch changed models:
@@ -265,6 +290,19 @@ Tiered pricing (Gemini Pro, Anthropic >200k):
       output: <high-tier-out>
 ```
 
+Claude entry (flat pricing, with cache prices — rule 9):
+
+```yaml
+"<claude-model-id>":
+  pricing:
+    input: <in>
+    output: <out>
+    cache_read: <0.1 × in, or the model's exception>
+    cache_write: <1.25 × in>
+```
+
+For tiered Claude entries (Haiku 5.5), put `cache_read` and `cache_write` inside each tier item.
+
 Per-snapshot override (snapshot priced differently from the alias base):
 
 ```yaml
@@ -282,6 +320,6 @@ Per-snapshot override (snapshot priced differently from the alias base):
 
 At the end of the run, produce three artifacts, and name the audit file they came from (`audits/audit-MM-DD-YYYY.json`, `generated_at`) at the top:
 
-1. **Pricing changeset** — a list of edits grouped by provider, with old vs new prices. Flag each entry as `fix-stale`, `price-change`, `new-model`, `deprecated`, `remove-shutdown`, or `no-op`.
+1. **Pricing changeset** — a list of edits grouped by provider, with old vs new prices (including `cache_read` / `cache_write` for Claude entries). Flag each entry as `fix-stale`, `price-change`, `new-model`, `deprecated`, `remove-shutdown`, or `no-op`.
 2. **Deprecations list** — the YAML block above, projected from the audit. Always include it, even if empty (emit `deprecations: {openai: [], anthropic: [], gemini: [], bedrock: []}`). Entries with `status: shutdown` SHOULD correspond to `remove-shutdown` entries in the changeset.
 3. **Endpoint coverage** — one table with a row per finding from Step 4b: provider, method + path, class today (`metered` / `passthrough` / `unknown`), evidence (vendor docs / `by_unmetered` count / Datadog 14-day count), and action (`new-endpoint` → needs a parser, `new-passthrough` → add to registry, `ok`). Always include it; if nothing is unmetered, say so explicitly with the counters that prove it.

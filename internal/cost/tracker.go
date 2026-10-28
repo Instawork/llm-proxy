@@ -46,15 +46,23 @@ type PricingTier struct {
 	Threshold int     `json:"threshold"` // The token threshold for this tier
 	Input     float64 `json:"input"`     // Cost per 1M input tokens in USD
 	Output    float64 `json:"output"`    // Cost per 1M output tokens in USD
+
+	CacheRead  float64 `json:"cache_read,omitempty"`  // Cost per 1M prompt-cache read tokens in USD
+	CacheWrite float64 `json:"cache_write,omitempty"` // Cost per 1M prompt-cache creation tokens in USD
 }
 
 // ModelPricing represents pricing information for a model (matching config structure)
 type ModelPricing struct {
-	Tiers     []PricingTier `json:"tiers,omitempty"`
-	Overrides map[string]struct {
-		Input  float64 `json:"input"`
-		Output float64 `json:"output"`
-	} `json:"overrides,omitempty"`
+	Tiers     []PricingTier              `json:"tiers,omitempty"`
+	Overrides map[string]PricingOverride `json:"overrides,omitempty"`
+}
+
+// PricingOverride is the per-alias price that replaces a model's tiers.
+type PricingOverride struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
 }
 
 // CostRecord represents a single request with cost information
@@ -77,6 +85,10 @@ type CostRecord struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+
+	// Prompt-cache tokens, reported separately from InputTokens by Anthropic.
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 
 	// Cost calculation
 	InputCost  float64 `json:"input_cost"`  // Cost for input tokens in USD
@@ -489,7 +501,7 @@ func (ct *CostTracker) GetPricingForModel(provider, model string, inputTokens in
 		if modelPricing, exists := providerPricing[model]; exists {
 			// Handle overrides first
 			if override, ok := modelPricing.Overrides[model]; ok {
-				return &PricingTier{Input: override.Input, Output: override.Output}, nil
+				return &PricingTier{Input: override.Input, Output: override.Output, CacheRead: override.CacheRead, CacheWrite: override.CacheWrite}, nil
 			}
 			// Handle tiered pricing
 			if len(modelPricing.Tiers) > 0 {
@@ -609,15 +621,53 @@ func (ct *CostTracker) CalculateCostWithFuzzyMatch(provider, model string, input
 	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
 }
 
+// usesAnthropicCacheBilling reports whether the provider's cache token counts
+// are additive to input_tokens and priced via the tier's cache_read/cache_write.
+// Other providers (e.g. Gemini) report cached tokens inside their prompt count.
+func usesAnthropicCacheBilling(provider string) bool {
+	switch provider {
+	case "anthropic", "bedrock", "bedrock-mantle":
+		return true
+	}
+	return false
+}
+
+// calculateRequestCost prices a request, including prompt-cache tokens for
+// providers that bill them separately. Cache costs are folded into the input cost.
+func (ct *CostTracker) calculateRequestCost(metadata *providers.LLMResponseMetadata) (inputCost, outputCost, totalCost float64, matchedModel string, isEstimate bool, err error) {
+	cacheRead, cacheWrite := 0, 0
+	if usesAnthropicCacheBilling(metadata.Provider) {
+		cacheRead, cacheWrite = metadata.CacheReadInputTokens, metadata.CacheCreationInputTokens
+	}
+
+	promptTokens := metadata.InputTokens + cacheRead + cacheWrite
+	pricing, matchedModel, isEstimate, err := ct.GetPricingForModelWithFuzzyMatch(metadata.Provider, metadata.Model, promptTokens)
+	if err != nil {
+		return 0, 0, 0, "", false, err
+	}
+
+	cacheReadPrice, cacheWritePrice := pricing.CacheRead, pricing.CacheWrite
+	if cacheReadPrice == 0 {
+		cacheReadPrice = pricing.Input
+	}
+	if cacheWritePrice == 0 {
+		cacheWritePrice = pricing.Input
+	}
+	inputCost = float64(metadata.InputTokens)/1_000_000.0*pricing.Input +
+		float64(cacheRead)/1_000_000.0*cacheReadPrice +
+		float64(cacheWrite)/1_000_000.0*cacheWritePrice
+	outputCost = float64(metadata.OutputTokens) / 1_000_000.0 * pricing.Output
+
+	totalCost = roundUpTo4Decimals(inputCost + outputCost)
+	inputCost = roundUpTo4Decimals(inputCost)
+	outputCost = roundUpTo4Decimals(outputCost)
+	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
+}
+
 // TrackRequest processes a request and writes cost information to transports (sync or async based on configuration).
 func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, userID, ipAddress, endpoint, keyID string) error {
 	// Calculate costs with fuzzy matching fallback
-	inputCost, outputCost, totalCost, matchedModel, isEstimate, err := ct.CalculateCostWithFuzzyMatch(
-		metadata.Provider,
-		metadata.Model,
-		metadata.InputTokens,
-		metadata.OutputTokens,
-	)
+	inputCost, outputCost, totalCost, matchedModel, isEstimate, err := ct.calculateRequestCost(metadata)
 	if err != nil {
 		ct.logger.Debug("Could not calculate cost for request", "provider", metadata.Provider, "model", metadata.Model, "error", err)
 		// Continue with zero costs rather than failing
@@ -640,6 +690,10 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 		InputTokens:  metadata.InputTokens,
 		OutputTokens: metadata.OutputTokens,
 		TotalTokens:  metadata.TotalTokens,
+
+		CacheReadInputTokens:     metadata.CacheReadInputTokens,
+		CacheCreationInputTokens: metadata.CacheCreationInputTokens,
+
 		InputCost:    inputCost,
 		OutputCost:   outputCost,
 		TotalCost:    totalCost,
@@ -681,6 +735,13 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			"output_tokens", metadata.OutputTokens)
 	}
 
+	// Admin rollups count cache tokens as input; record.InputTokens stays
+	// cache-excluded because pricing bills cache tokens at their own rates.
+	rollupInputTokens := record.InputTokens
+	if usesAnthropicCacheBilling(record.Provider) {
+		rollupInputTokens += record.CacheReadInputTokens + record.CacheCreationInputTokens
+	}
+
 	ct.mu.RLock()
 	sr := ct.statsRecorder
 	ur := ct.usageRecorder
@@ -694,7 +755,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			record.TotalCost,
 			record.InputCost,
 			record.OutputCost,
-			record.InputTokens,
+			rollupInputTokens,
 			record.OutputTokens,
 		)
 	}
@@ -704,7 +765,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			record.Model,
 			keyID,
 			userID,
-			record.InputTokens,
+			rollupInputTokens,
 			record.OutputTokens,
 		)
 	}

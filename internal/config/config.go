@@ -889,6 +889,9 @@ type ModelConfig struct {
 type Pricing struct {
 	Input  float64 `yaml:"input"`  // Cost per 1M input tokens in USD
 	Output float64 `yaml:"output"` // Cost per 1M output tokens in USD
+
+	CacheRead  float64 `yaml:"cache_read,omitempty"`  // Cost per 1M prompt-cache read tokens in USD
+	CacheWrite float64 `yaml:"cache_write,omitempty"` // Cost per 1M prompt-cache write tokens in USD
 }
 
 // PricingTier represents a pricing tier with a token threshold.
@@ -896,6 +899,11 @@ type PricingTier struct {
 	Threshold int     `yaml:"threshold"` // The token threshold for this tier
 	Input     float64 `yaml:"input"`     // Cost per 1M input tokens in USD
 	Output    float64 `yaml:"output"`    // Cost per 1M output tokens in USD
+
+	// CacheRead and CacheWrite are per-1M-token prices for prompt-cache hits and
+	// 5-minute cache writes, for providers that report them separately from input.
+	CacheRead  float64 `yaml:"cache_read,omitempty"`
+	CacheWrite float64 `yaml:"cache_write,omitempty"`
 }
 
 // ModelPricing represents pricing information for a model, with optional overrides for aliases.
@@ -1721,6 +1729,16 @@ func (c *YAMLConfig) ParsePricing() error {
 	return nil
 }
 
+func pricingNumber(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	}
+	return 0
+}
+
 // parseModelPricing handles the logic of parsing the `interface{}` pricing field.
 func parseModelPricing(pricingData any) (*ModelPricing, error) {
 	mp := &ModelPricing{}
@@ -1747,6 +1765,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 			} else if out, ok := tierMap["output"].(int); ok {
 				tier.Output = float64(out)
 			}
+			tier.CacheRead = pricingNumber(tierMap["cache_read"])
+			tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 			mp.Tiers = append(mp.Tiers, tier)
 		}
 	case map[string]any:
@@ -1775,6 +1795,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 				} else if out, ok := tierMap["output"].(int); ok {
 					tier.Output = float64(out)
 				}
+				tier.CacheRead = pricingNumber(tierMap["cache_read"])
+				tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 				mp.Tiers = append(mp.Tiers, tier)
 			}
 		} else if _, ok := v["input"]; ok {
@@ -1790,6 +1812,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 			} else if out, ok := v["output"].(int); ok {
 				tier.Output = float64(out)
 			}
+			tier.CacheRead = pricingNumber(v["cache_read"])
+			tier.CacheWrite = pricingNumber(v["cache_write"])
 			mp.Tiers = []PricingTier{tier}
 		}
 
@@ -1808,6 +1832,8 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 				} else if out, ok := overrideMap["output"].(int); ok {
 					pricing.Output = float64(out)
 				}
+				pricing.CacheRead = pricingNumber(overrideMap["cache_read"])
+				pricing.CacheWrite = pricingNumber(overrideMap["cache_write"])
 				mp.Overrides[alias] = pricing
 			}
 		}
@@ -1916,7 +1942,7 @@ func (c *YAMLConfig) GetModelPricing(provider, model string, inputTokens int) (*
 
 		for _, tier := range modelPricing.Tiers {
 			if tier.Threshold == 0 || inputTokens <= tier.Threshold {
-				return &Pricing{Input: tier.Input, Output: tier.Output}, nil
+				return &Pricing{Input: tier.Input, Output: tier.Output, CacheRead: tier.CacheRead, CacheWrite: tier.CacheWrite}, nil
 			}
 		}
 	}

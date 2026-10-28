@@ -150,10 +150,22 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 			for i, tier := range mp.Tiers {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] input", i), tier.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] output", i), tier.Output)...)
+				if tier.CacheRead != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] cache_read", i), tier.CacheRead)...)
+				}
+				if tier.CacheWrite != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] cache_write", i), tier.CacheWrite)...)
+				}
 			}
 			for alias, p := range mp.Overrides {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] input", alias), p.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] output", alias), p.Output)...)
+				if p.CacheRead != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_read", alias), p.CacheRead)...)
+				}
+				if p.CacheWrite != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_write", alias), p.CacheWrite)...)
+				}
 			}
 		}
 	}

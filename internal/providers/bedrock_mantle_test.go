@@ -542,8 +542,11 @@ func TestBedrockMantle_ParseResponsesMetadataIncludesCostFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
-	if metadata.Provider != bedrockMantleName || metadata.Model != "openai.gpt-5.4" || metadata.TotalTokens != 16 {
+	if metadata.Provider != bedrockMantleName || metadata.Model != "openai.gpt-5.4" || metadata.TotalTokens != 13 {
 		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.InputTokens != 9 {
+		t.Fatalf("cached tokens must be removed from InputTokens: %+v", metadata)
 	}
 	if metadata.CacheReadInputTokens != 3 || metadata.ThoughtTokens != 2 {
 		t.Fatalf("missing Mantle cost fields: %+v", metadata)
@@ -577,8 +580,11 @@ data: [DONE]
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
-	if metadata.Provider != bedrockMantleName || metadata.Model != "claude-sonnet-4-5" || metadata.TotalTokens != 16 {
+	if metadata.Provider != bedrockMantleName || metadata.Model != "claude-sonnet-4-5" || metadata.TotalTokens != 13 {
 		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+	if metadata.InputTokens != 9 {
+		t.Fatalf("cached tokens must be removed from InputTokens: %+v", metadata)
 	}
 	if metadata.CacheReadInputTokens != 3 || metadata.ThoughtTokens != 2 {
 		t.Fatalf("missing Mantle streaming cost fields: %+v", metadata)
