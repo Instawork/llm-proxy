@@ -735,6 +735,13 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			"output_tokens", metadata.OutputTokens)
 	}
 
+	// Admin rollups count cache tokens as input; record.InputTokens stays
+	// cache-excluded because pricing bills cache tokens at their own rates.
+	rollupInputTokens := record.InputTokens
+	if usesAnthropicCacheBilling(record.Provider) {
+		rollupInputTokens += record.CacheReadInputTokens + record.CacheCreationInputTokens
+	}
+
 	ct.mu.RLock()
 	sr := ct.statsRecorder
 	ur := ct.usageRecorder
@@ -748,7 +755,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			record.TotalCost,
 			record.InputCost,
 			record.OutputCost,
-			record.InputTokens,
+			rollupInputTokens,
 			record.OutputTokens,
 		)
 	}
@@ -758,7 +765,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			record.Model,
 			keyID,
 			userID,
-			record.InputTokens,
+			rollupInputTokens,
 			record.OutputTokens,
 		)
 	}

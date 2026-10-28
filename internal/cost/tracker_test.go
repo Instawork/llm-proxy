@@ -287,6 +287,60 @@ func TestCostTracker_StatsRecorder(t *testing.T) {
 	assert.InDelta(t, 0.0001, stats.calls[0].spendUSD, 0.0001)
 }
 
+type recordingUsage struct {
+	mu          sync.Mutex
+	inputTokens []int
+}
+
+func (r *recordingUsage) RecordRequest(_, _, _, _ string, inputTokens, _ int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inputTokens = append(r.inputTokens, inputTokens)
+}
+
+func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
+	cases := []struct {
+		provider        string
+		wantRollupInput int
+	}{
+		{"anthropic", 12 + 30 + 5},
+		{"bedrock", 12 + 30 + 5},
+		{"bedrock-mantle", 12 + 30 + 5},
+		{"gemini", 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			stats := &recordingStats{}
+			usage := &recordingUsage{}
+			mock := &mockTransport{}
+			ct := NewCostTracker()
+			ct.SetSyncMode()
+			ct.AddTransport(mock)
+			ct.SetStatsRecorder(stats)
+			ct.SetUsageStatsRecorder(usage)
+
+			require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+				Provider:                 tc.provider,
+				Model:                    "m",
+				InputTokens:              12,
+				OutputTokens:             7,
+				CacheReadInputTokens:     30,
+				CacheCreationInputTokens: 5,
+			}, "u", "127.0.0.1", "/v1/messages", ""))
+
+			assert.Equal(t, 12, mock.Records()[0].InputTokens, "cost record keeps the cache-excluded count")
+			stats.mu.Lock()
+			defer stats.mu.Unlock()
+			require.Len(t, stats.calls, 1)
+			assert.Equal(t, tc.wantRollupInput, stats.calls[0].inputTokens)
+			assert.Equal(t, 7, stats.calls[0].outputTokens)
+			usage.mu.Lock()
+			defer usage.mu.Unlock()
+			assert.Equal(t, []int{tc.wantRollupInput}, usage.inputTokens)
+		})
+	}
+}
+
 func TestCalculateCost(t *testing.T) {
 	ct := NewCostTracker()
 	ct.SetPricingForModel("openai", "gpt-4o", &ModelPricing{
