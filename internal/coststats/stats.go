@@ -25,6 +25,9 @@ type keySpend struct {
 	Requests       int64   `json:"requests"`
 	InputTokens    int64   `json:"input_tokens"`
 	OutputTokens   int64   `json:"output_tokens"`
+
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 }
 
 type providerSpend struct {
@@ -35,6 +38,9 @@ type providerSpend struct {
 	Requests       int64   `json:"requests"`
 	InputTokens    int64   `json:"input_tokens"`
 	OutputTokens   int64   `json:"output_tokens"`
+
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 }
 
 type userSpend struct {
@@ -44,6 +50,9 @@ type userSpend struct {
 	Requests       int64   `json:"requests"`
 	InputTokens    int64   `json:"input_tokens"`
 	OutputTokens   int64   `json:"output_tokens"`
+
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 }
 
 type recentEntry struct {
@@ -57,6 +66,9 @@ type recentEntry struct {
 	InputTokens    int     `json:"input_tokens"`
 	OutputTokens   int     `json:"output_tokens"`
 	Model          string  `json:"model,omitempty"`
+
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 }
 
 // Recorder accumulates rolling spend stats in-process.
@@ -71,6 +83,9 @@ type Recorder struct {
 	requestsToday       int64
 	inputTokensToday    int64
 	outputTokensToday   int64
+
+	cacheReadTokensToday     int64
+	cacheCreationTokensToday int64
 
 	byKey      map[string]*keySpend
 	byUser     map[string]*userSpend
@@ -93,6 +108,7 @@ type Recorder struct {
 type costFlushed struct {
 	spendUSD, inputSpendUSD, outputSpendUSD float64
 	requests, inputTokens, outputTokens     int64
+	cacheReadTokens, cacheCreationTokens    int64
 	byProvider                              map[string]providerSpend
 	byKey                                   map[string]keySpend
 	byUser                                  map[string]userSpend
@@ -129,6 +145,8 @@ func (r *Recorder) maybeRollDay(now time.Time) {
 	r.requestsToday = 0
 	r.inputTokensToday = 0
 	r.outputTokensToday = 0
+	r.cacheReadTokensToday = 0
+	r.cacheCreationTokensToday = 0
 	r.byKey = make(map[string]*keySpend)
 	r.byUser = make(map[string]*userSpend)
 	r.byProvider = make(map[string]*providerSpend)
@@ -141,6 +159,17 @@ func (r *Recorder) RecordRequest(
 	provider, keyID, userID, model string,
 	spendUSD, inputSpendUSD, outputSpendUSD float64,
 	inputTokens, outputTokens int,
+) {
+	r.RecordRequestWithCache(provider, keyID, userID, model, spendUSD, inputSpendUSD, outputSpendUSD, inputTokens, outputTokens, 0, 0)
+}
+
+// RecordRequestWithCache is RecordRequest plus prompt-cache token counts.
+// cacheReadTokens and cacheCreationTokens are the cached portion of
+// inputTokens, not additional to it.
+func (r *Recorder) RecordRequestWithCache(
+	provider, keyID, userID, model string,
+	spendUSD, inputSpendUSD, outputSpendUSD float64,
+	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int,
 ) {
 	if r == nil {
 		return
@@ -157,6 +186,8 @@ func (r *Recorder) RecordRequest(
 	r.requestsToday++
 	r.inputTokensToday += int64(inputTokens)
 	r.outputTokensToday += int64(outputTokens)
+	r.cacheReadTokensToday += int64(cacheReadTokens)
+	r.cacheCreationTokensToday += int64(cacheCreationTokens)
 
 	if provider != "" {
 		ps := r.byProvider[provider]
@@ -170,6 +201,8 @@ func (r *Recorder) RecordRequest(
 		ps.Requests++
 		ps.InputTokens += int64(inputTokens)
 		ps.OutputTokens += int64(outputTokens)
+		ps.CacheReadTokens += int64(cacheReadTokens)
+		ps.CacheCreationTokens += int64(cacheCreationTokens)
 	}
 
 	if keyID != "" {
@@ -184,6 +217,8 @@ func (r *Recorder) RecordRequest(
 		ks.Requests++
 		ks.InputTokens += int64(inputTokens)
 		ks.OutputTokens += int64(outputTokens)
+		ks.CacheReadTokens += int64(cacheReadTokens)
+		ks.CacheCreationTokens += int64(cacheCreationTokens)
 	}
 	if userID != "" {
 		scope := costScopeKey("user", userID)
@@ -198,6 +233,8 @@ func (r *Recorder) RecordRequest(
 		us.Requests++
 		us.InputTokens += int64(inputTokens)
 		us.OutputTokens += int64(outputTokens)
+		us.CacheReadTokens += int64(cacheReadTokens)
+		us.CacheCreationTokens += int64(cacheCreationTokens)
 	}
 
 	entry := recentEntry{
@@ -211,6 +248,9 @@ func (r *Recorder) RecordRequest(
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
 		Model:          model,
+
+		CacheReadTokens:     cacheReadTokens,
+		CacheCreationTokens: cacheCreationTokens,
 	}
 	r.recent = append(r.recent, entry)
 	if len(r.recent) > MaxRecentEvents {
@@ -291,6 +331,9 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 			"requests":         float64(r.requestsToday - r.flushed.requests),
 			"input_tokens":     float64(r.inputTokensToday - r.flushed.inputTokens),
 			"output_tokens":    float64(r.outputTokensToday - r.flushed.outputTokens),
+
+			"cache_read_tokens":     float64(r.cacheReadTokensToday - r.flushed.cacheReadTokens),
+			"cache_creation_tokens": float64(r.cacheCreationTokensToday - r.flushed.cacheCreationTokens),
 		},
 		Dimensions: map[string]map[string]float64{
 			"by_provider": {},
@@ -306,6 +349,8 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 		addDim(d.Dimensions["by_provider"], name, "requests", float64(ps.Requests-prev.Requests))
 		addDim(d.Dimensions["by_provider"], name, "input_tokens", float64(ps.InputTokens-prev.InputTokens))
 		addDim(d.Dimensions["by_provider"], name, "output_tokens", float64(ps.OutputTokens-prev.OutputTokens))
+		addDim(d.Dimensions["by_provider"], name, "cache_read_tokens", float64(ps.CacheReadTokens-prev.CacheReadTokens))
+		addDim(d.Dimensions["by_provider"], name, "cache_creation_tokens", float64(ps.CacheCreationTokens-prev.CacheCreationTokens))
 	}
 	for keyID, ks := range r.byKey {
 		prev := r.flushed.byKey[keyID]
@@ -315,6 +360,8 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 		addDim(d.Dimensions["by_key"], keyID, "requests", float64(ks.Requests-prev.Requests))
 		addDim(d.Dimensions["by_key"], keyID, "input_tokens", float64(ks.InputTokens-prev.InputTokens))
 		addDim(d.Dimensions["by_key"], keyID, "output_tokens", float64(ks.OutputTokens-prev.OutputTokens))
+		addDim(d.Dimensions["by_key"], keyID, "cache_read_tokens", float64(ks.CacheReadTokens-prev.CacheReadTokens))
+		addDim(d.Dimensions["by_key"], keyID, "cache_creation_tokens", float64(ks.CacheCreationTokens-prev.CacheCreationTokens))
 	}
 	for scope, us := range r.byUser {
 		prev := r.flushed.byUser[scope]
@@ -324,6 +371,8 @@ func (r *Recorder) costDeltaLocked() adminrollup.Delta {
 		addDim(d.Dimensions["by_user"], scope, "requests", float64(us.Requests-prev.Requests))
 		addDim(d.Dimensions["by_user"], scope, "input_tokens", float64(us.InputTokens-prev.InputTokens))
 		addDim(d.Dimensions["by_user"], scope, "output_tokens", float64(us.OutputTokens-prev.OutputTokens))
+		addDim(d.Dimensions["by_user"], scope, "cache_read_tokens", float64(us.CacheReadTokens-prev.CacheReadTokens))
+		addDim(d.Dimensions["by_user"], scope, "cache_creation_tokens", float64(us.CacheCreationTokens-prev.CacheCreationTokens))
 	}
 	return d
 }
@@ -351,6 +400,8 @@ func (r *Recorder) advanceCostFlushedLocked() {
 	r.flushed.requests = r.requestsToday
 	r.flushed.inputTokens = r.inputTokensToday
 	r.flushed.outputTokens = r.outputTokensToday
+	r.flushed.cacheReadTokens = r.cacheReadTokensToday
+	r.flushed.cacheCreationTokens = r.cacheCreationTokensToday
 	for name, ps := range r.byProvider {
 		r.flushed.byProvider[name] = *ps
 	}
@@ -421,6 +472,7 @@ func (r *Recorder) Snapshot() map[string]any {
 
 	var spendToday, inputSpendToday, outputSpendToday float64
 	var requestsToday, inputTokensToday, outputTokensToday int64
+	var cacheReadTokensToday, cacheCreationTokensToday int64
 	var localByKey []keySpend
 	var localByUser map[string]userSpend
 	var localByProvider []providerSpend
@@ -431,6 +483,8 @@ func (r *Recorder) Snapshot() map[string]any {
 		requestsToday = r.requestsToday
 		inputTokensToday = r.inputTokensToday
 		outputTokensToday = r.outputTokensToday
+		cacheReadTokensToday = r.cacheReadTokensToday
+		cacheCreationTokensToday = r.cacheCreationTokensToday
 		localByKey = spendList(r.byKey)
 		localByUser = userSpendMap(r.byUser)
 		localByProvider = providerList(r.byProvider)
@@ -446,16 +500,22 @@ func (r *Recorder) Snapshot() map[string]any {
 		"requests_today":         requestsToday,
 		"input_tokens_today":     inputTokensToday,
 		"output_tokens_today":    outputTokensToday,
-		"by_key":                 localByKey,
-		"by_user":                localByUser,
-		"by_provider":            localByProvider,
-		"recent":                 recent,
+
+		"cache_read_tokens_today":     cacheReadTokensToday,
+		"cache_creation_tokens_today": cacheCreationTokensToday,
+
+		"by_key":      localByKey,
+		"by_user":     localByUser,
+		"by_provider": localByProvider,
+		"recent":      recent,
 	}
 	r.mu.RUnlock()
 
 	r.MergeToday(adminrollup.MetricCost, today, snap, costRollupCaps)
 	if localActive {
 		mergeLocalCostTotalsIntoSnap(snap, spendToday, inputSpendToday, outputSpendToday, requestsToday, inputTokensToday, outputTokensToday)
+		mergeSnapInt64MaxCost(snap, "cache_read_tokens_today", cacheReadTokensToday)
+		mergeSnapInt64MaxCost(snap, "cache_creation_tokens_today", cacheCreationTokensToday)
 		mergeLocalByKeyIntoSnap(snap, localByKey)
 		mergeLocalByUserIntoSnap(snap, localByUser)
 		mergeLocalByProviderIntoSnap(snap, localByProvider)
@@ -563,6 +623,9 @@ func mergeLocalByKeyIntoSnap(snap map[string]any, local []keySpend) {
 			Requests:       int64(snapFloat(row["requests"])),
 			InputTokens:    int64(snapFloat(row["input_tokens"])),
 			OutputTokens:   int64(snapFloat(row["output_tokens"])),
+
+			CacheReadTokens:     int64(snapFloat(row["cache_read_tokens"])),
+			CacheCreationTokens: int64(snapFloat(row["cache_creation_tokens"])),
 		}
 	}
 	snap["by_key"] = typed
@@ -590,6 +653,9 @@ func mergeLocalByUserIntoSnap(snap map[string]any, local map[string]userSpend) {
 			Requests:       maxInt64(prev.Requests, loc.Requests),
 			InputTokens:    maxInt64(prev.InputTokens, loc.InputTokens),
 			OutputTokens:   maxInt64(prev.OutputTokens, loc.OutputTokens),
+
+			CacheReadTokens:     maxInt64(prev.CacheReadTokens, loc.CacheReadTokens),
+			CacheCreationTokens: maxInt64(prev.CacheCreationTokens, loc.CacheCreationTokens),
 		}
 	}
 	snap["by_user"] = existing
@@ -605,6 +671,9 @@ func userSpendFromScopeMap(m map[string]map[string]float64) map[string]userSpend
 			Requests:       int64(fields["requests"]),
 			InputTokens:    int64(fields["input_tokens"]),
 			OutputTokens:   int64(fields["output_tokens"]),
+
+			CacheReadTokens:     int64(fields["cache_read_tokens"]),
+			CacheCreationTokens: int64(fields["cache_creation_tokens"]),
 		}
 	}
 	return out
@@ -625,6 +694,9 @@ func mergeKeySpendRowMax(existing map[string]any, loc keySpend) map[string]any {
 		"requests":         maxInt64(int64(snapFloat(existing["requests"])), loc.Requests),
 		"input_tokens":     maxInt64(int64(snapFloat(existing["input_tokens"])), loc.InputTokens),
 		"output_tokens":    maxInt64(int64(snapFloat(existing["output_tokens"])), loc.OutputTokens),
+
+		"cache_read_tokens":     maxInt64(int64(snapFloat(existing["cache_read_tokens"])), loc.CacheReadTokens),
+		"cache_creation_tokens": maxInt64(int64(snapFloat(existing["cache_creation_tokens"])), loc.CacheCreationTokens),
 	}
 }
 
@@ -690,6 +762,9 @@ func mergeLocalByProviderIntoSnap(snap map[string]any, local []providerSpend) {
 			Requests:       int64(snapFloat(row["requests"])),
 			InputTokens:    int64(snapFloat(row["input_tokens"])),
 			OutputTokens:   int64(snapFloat(row["output_tokens"])),
+
+			CacheReadTokens:     int64(snapFloat(row["cache_read_tokens"])),
+			CacheCreationTokens: int64(snapFloat(row["cache_creation_tokens"])),
 		}
 	}
 	snap["by_provider"] = typed
@@ -732,6 +807,9 @@ func mergeProviderSpendRowMax(existing map[string]any, loc providerSpend) map[st
 		"requests":         maxInt64(int64(snapFloat(existing["requests"])), loc.Requests),
 		"input_tokens":     maxInt64(int64(snapFloat(existing["input_tokens"])), loc.InputTokens),
 		"output_tokens":    maxInt64(int64(snapFloat(existing["output_tokens"])), loc.OutputTokens),
+
+		"cache_read_tokens":     maxInt64(int64(snapFloat(existing["cache_read_tokens"])), loc.CacheReadTokens),
+		"cache_creation_tokens": maxInt64(int64(snapFloat(existing["cache_creation_tokens"])), loc.CacheCreationTokens),
 	}
 }
 
@@ -744,6 +822,9 @@ func providerSpendToRow(ps providerSpend) map[string]any {
 		"requests":         ps.Requests,
 		"input_tokens":     ps.InputTokens,
 		"output_tokens":    ps.OutputTokens,
+
+		"cache_read_tokens":     ps.CacheReadTokens,
+		"cache_creation_tokens": ps.CacheCreationTokens,
 	}
 }
 
@@ -771,6 +852,9 @@ func keySpendToRow(ks keySpend) map[string]any {
 		"requests":         ks.Requests,
 		"input_tokens":     ks.InputTokens,
 		"output_tokens":    ks.OutputTokens,
+
+		"cache_read_tokens":     ks.CacheReadTokens,
+		"cache_creation_tokens": ks.CacheCreationTokens,
 	}
 }
 

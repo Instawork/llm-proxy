@@ -8,6 +8,8 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecorderKeySpendUSD(t *testing.T) {
@@ -237,5 +239,50 @@ func TestRecorderNilSafe(t *testing.T) {
 	r.RecordRequest("openai", "", "", "", 1, 0.6, 0.4, 1, 1)
 	if got := r.Snapshot()["available"].(bool); got {
 		t.Fatal("nil recorder should report unavailable")
+	}
+}
+
+func TestRecorderTracksCacheTokens(t *testing.T) {
+	mr := miniredis.RunT(t)
+	store, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis:   &config.RedisConfig{Address: mr.Addr(), DB: 7, DBSet: true},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	r := NewRecorder()
+	r.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricCost))
+	r.RecordRequestWithCache("anthropic", "iw:abc", "user-1", "claude-haiku", 0.01, 0.008, 0.002, 1000, 50, 800, 150)
+	r.RecordRequest("openai", "iw:abc", "user-1", "gpt-4o-mini", 0.01, 0.006, 0.004, 100, 50)
+
+	snap := r.Snapshot()
+	assert.Equal(t, int64(800), snap["cache_read_tokens_today"])
+	assert.Equal(t, int64(150), snap["cache_creation_tokens_today"])
+	byKey := snap["by_key"].([]keySpend)
+	require.Len(t, byKey, 1)
+	assert.Equal(t, int64(1100), byKey[0].InputTokens)
+	assert.Equal(t, int64(800), byKey[0].CacheReadTokens)
+	assert.Equal(t, int64(150), byKey[0].CacheCreationTokens)
+	byUser := snap["by_user"].(map[string]userSpend)
+	assert.Equal(t, int64(800), byUser["user:user-1"].CacheReadTokens)
+	recent := snap["recent"].([]recentEntry)
+	assert.Equal(t, 800, recent[1].CacheReadTokens)
+	assert.Zero(t, recent[0].CacheReadTokens)
+
+	r.FlushRollup()
+	fleet := map[string]any{}
+	store.MergeToday(t.Context(), adminrollup.MetricCost, time.Now().UTC().Format("2006-01-02"), fleet, adminrollup.TopNCaps{ByKey: 100, ByUser: 100})
+	assert.Equal(t, int64(800), fleet["cache_read_tokens_today"])
+	assert.Equal(t, int64(150), fleet["cache_creation_tokens_today"])
+	fleetKeys := fleet["by_key"].([]map[string]any)
+	require.Len(t, fleetKeys, 1)
+	assert.InDelta(t, 800, fleetKeys[0]["cache_read_tokens"], 0)
+	assert.InDelta(t, 150, fleetKeys[0]["cache_creation_tokens"], 0)
+	fleetProviders := fleet["by_provider"].([]map[string]any)
+	for _, row := range fleetProviders {
+		if row["name"] == "anthropic" {
+			assert.InDelta(t, 800, row["cache_read_tokens"], 0)
+		}
 	}
 }

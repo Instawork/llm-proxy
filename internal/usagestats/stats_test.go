@@ -188,3 +188,54 @@ func TestRecorderNilSafe(t *testing.T) {
 		t.Fatal("nil recorder should report unavailable")
 	}
 }
+
+func TestRecorderTracksCacheTokens(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	defer mr.Close()
+	store, err := adminrollup.NewStore(adminrollup.Config{
+		Enabled: true,
+		Redis:   &config.RedisConfig{Address: mr.Addr(), DB: 6, DBSet: true},
+	})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	r := NewRecorder()
+	r.BindRollup(store, adminrollup.NewPersister(store, adminrollup.MetricUsage))
+	r.RecordRequestWithCache("anthropic", "claude-haiku", "iw:abc", "user-1", 1000, 50, 800, 150)
+	r.RecordRequest("openai", "gpt-4o-mini", "iw:abc", "user-1", 100, 50)
+
+	snap := r.Snapshot()
+	if got := snap["cache_read_tokens_today"].(int64); got != 800 {
+		t.Fatalf("cache_read_tokens_today = %d want 800", got)
+	}
+	if got := snap["cache_creation_tokens_today"].(int64); got != 150 {
+		t.Fatalf("cache_creation_tokens_today = %d want 150", got)
+	}
+	counters := snap["counters"].(map[string]scopeUsage)
+	if k := counters["key:iw:abc"]; k.Tokens != 1200 || k.CacheReadTokens != 800 || k.CacheCreationTokens != 150 {
+		t.Fatalf("key counter = %+v", k)
+	}
+	if m := counters["model:gpt-4o-mini"]; m.CacheReadTokens != 0 || m.CacheCreationTokens != 0 {
+		t.Fatalf("uncached model counter = %+v", m)
+	}
+
+	r.FlushRollup()
+	fleet := map[string]any{}
+	store.MergeToday(t.Context(), adminrollup.MetricUsage, time.Now().UTC().Format("2006-01-02"), fleet, adminrollup.TopNCaps{ByKey: 100, ByUser: 100})
+	if got := fleet["cache_read_tokens_today"].(int64); got != 800 {
+		t.Fatalf("fleet cache_read_tokens_today = %d want 800", got)
+	}
+	byKey := fleet["by_key"].(map[string]map[string]float64)
+	if row := byKey["key:iw:abc"]; row["cache_read_tokens"] != 800 || row["cache_creation_tokens"] != 150 || row["tokens"] != 1200 {
+		t.Fatalf("fleet by_key row = %+v", row)
+	}
+	byModel := fleet["by_model"].(map[string]map[string]float64)
+	if row := byModel["model:claude-haiku"]; row["cache_read_tokens"] != 800 {
+		t.Fatalf("fleet by_model row = %+v", row)
+	}
+}

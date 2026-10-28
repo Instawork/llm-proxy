@@ -15,6 +15,17 @@ import (
 type scopeUsage struct {
 	Requests int64 `json:"requests"`
 	Tokens   int64 `json:"tokens"`
+
+	// Cached portion of the input tokens counted in Tokens.
+	CacheReadTokens     int64 `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
+}
+
+func (u *scopeUsage) addRequest(tokens, cacheRead, cacheCreation int64) {
+	u.Requests++
+	u.Tokens += tokens
+	u.CacheReadTokens += cacheRead
+	u.CacheCreationTokens += cacheCreation
 }
 
 // Recorder accumulates daily usage by scope (global, model, provider, key, user).
@@ -45,6 +56,9 @@ type usageEvent struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	TotalTokens  int    `json:"total_tokens"`
+
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 }
 
 type usageFlushed struct {
@@ -88,18 +102,24 @@ func scopeKey(kind, name string) string {
 	return fmt.Sprintf("%s:%s", kind, name)
 }
 
-func (r *Recorder) add(scope map[string]*scopeUsage, key string, tokens int64) {
+func (r *Recorder) add(scope map[string]*scopeUsage, key string, tokens, cacheRead, cacheCreation int64) {
 	u := scope[key]
 	if u == nil {
 		u = &scopeUsage{}
 		scope[key] = u
 	}
-	u.Requests++
-	u.Tokens += tokens
+	u.addRequest(tokens, cacheRead, cacheCreation)
 }
 
 // RecordRequest ingests token volume for one LLM request.
 func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTokens, outputTokens int) {
+	r.RecordRequestWithCache(provider, model, keyID, userID, inputTokens, outputTokens, 0, 0)
+}
+
+// RecordRequestWithCache is RecordRequest plus prompt-cache token counts.
+// cacheReadTokens and cacheCreationTokens are the cached portion of
+// inputTokens, not additional to it.
+func (r *Recorder) RecordRequestWithCache(provider, model, keyID, userID string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int) {
 	if r == nil {
 		return
 	}
@@ -107,23 +127,23 @@ func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTok
 	if tokens <= 0 {
 		return
 	}
+	cacheRead, cacheCreation := int64(cacheReadTokens), int64(cacheCreationTokens)
 
 	now := time.Now().UTC()
 	r.mu.Lock()
 	r.maybeRollDay(now)
-	r.global.Requests++
-	r.global.Tokens += tokens
+	r.global.addRequest(tokens, cacheRead, cacheCreation)
 	if model != "" {
-		r.add(r.byModel, scopeKey("model", model), tokens)
+		r.add(r.byModel, scopeKey("model", model), tokens, cacheRead, cacheCreation)
 	}
 	if provider != "" {
-		r.add(r.byProv, scopeKey("provider", provider), tokens)
+		r.add(r.byProv, scopeKey("provider", provider), tokens, cacheRead, cacheCreation)
 	}
 	if keyID != "" {
-		r.add(r.byKey, scopeKey("key", keyID), tokens)
+		r.add(r.byKey, scopeKey("key", keyID), tokens, cacheRead, cacheCreation)
 	}
 	if userID != "" {
-		r.add(r.byUser, scopeKey("user", userID), tokens)
+		r.add(r.byUser, scopeKey("user", userID), tokens, cacheRead, cacheCreation)
 	}
 	entry := usageEvent{
 		Time:         now.Unix(),
@@ -134,6 +154,9 @@ func (r *Recorder) RecordRequest(provider, model, keyID, userID string, inputTok
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		TotalTokens:  inputTokens + outputTokens,
+
+		CacheReadTokens:     cacheReadTokens,
+		CacheCreationTokens: cacheCreationTokens,
 	}
 
 	dayKey := r.dayKey
@@ -151,6 +174,9 @@ func (r *Recorder) usageDeltaLocked() adminrollup.Delta {
 		Totals: map[string]float64{
 			"requests": float64(r.global.Requests - r.flushed.global.Requests),
 			"tokens":   float64(r.global.Tokens - r.flushed.global.Tokens),
+
+			"cache_read_tokens":     float64(r.global.CacheReadTokens - r.flushed.global.CacheReadTokens),
+			"cache_creation_tokens": float64(r.global.CacheCreationTokens - r.flushed.global.CacheCreationTokens),
 		},
 		Dimensions: map[string]map[string]float64{
 			"by_model":    usageScopeDelta(r.byModel, r.flushed.byModel),
@@ -171,6 +197,12 @@ func usageScopeDelta(cur map[string]*scopeUsage, prev map[string]scopeUsage) map
 		}
 		if dt := float64(u.Tokens - p.Tokens); dt != 0 {
 			out[adminrollup.DimMemberField(key, "tokens")] = dt
+		}
+		if dc := float64(u.CacheReadTokens - p.CacheReadTokens); dc != 0 {
+			out[adminrollup.DimMemberField(key, "cache_read_tokens")] = dc
+		}
+		if dc := float64(u.CacheCreationTokens - p.CacheCreationTokens); dc != 0 {
+			out[adminrollup.DimMemberField(key, "cache_creation_tokens")] = dc
 		}
 	}
 	return out
@@ -279,9 +311,13 @@ func (r *Recorder) Snapshot() map[string]any {
 		"started_at":     startedAt.Unix(),
 		"requests_today": global.Requests,
 		"tokens_today":   global.Tokens,
-		"top_models":     topScopes(byModel, 10),
-		"top_providers":  topScopes(byProv, 10),
-		"counters":       counters,
+
+		"cache_read_tokens_today":     global.CacheReadTokens,
+		"cache_creation_tokens_today": global.CacheCreationTokens,
+
+		"top_models":    topScopes(byModel, 10),
+		"top_providers": topScopes(byProv, 10),
+		"counters":      counters,
 	}
 	r.mu.RUnlock()
 
@@ -300,6 +336,8 @@ func mergeLocalUsageIntoSnap(snap map[string]any, global scopeUsage, counters ma
 	}
 	mergeSnapInt64Max(snap, "requests_today", global.Requests)
 	mergeSnapInt64Max(snap, "tokens_today", global.Tokens)
+	mergeSnapInt64Max(snap, "cache_read_tokens_today", global.CacheReadTokens)
+	mergeSnapInt64Max(snap, "cache_creation_tokens_today", global.CacheCreationTokens)
 
 	existing, _ := snap["counters"].(map[string]scopeUsage)
 	snap["counters"] = mergeScopeUsageMaps(existing, counters)
@@ -344,6 +382,8 @@ func mergeScopeUsageMaps(a, b map[string]scopeUsage) map[string]scopeUsage {
 		if v.Tokens > existing.Tokens {
 			existing.Tokens = v.Tokens
 		}
+		existing.CacheReadTokens = max(existing.CacheReadTokens, v.CacheReadTokens)
+		existing.CacheCreationTokens = max(existing.CacheCreationTokens, v.CacheCreationTokens)
 		out[k] = existing
 	}
 	return out

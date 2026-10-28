@@ -15,17 +15,19 @@ import (
 )
 
 // StatsRecorder ingests per-request spend for the admin dashboard rollup.
+// inputTokens includes cache tokens; the cache counts are the cached portion.
 type StatsRecorder interface {
-	RecordRequest(
+	RecordRequestWithCache(
 		provider, keyID, userID, model string,
 		spendUSD, inputSpendUSD, outputSpendUSD float64,
-		inputTokens, outputTokens int,
+		inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int,
 	)
 }
 
 // UsageStatsRecorder ingests token volume for the admin Usage page.
+// inputTokens includes cache tokens; the cache counts are the cached portion.
 type UsageStatsRecorder interface {
-	RecordRequest(provider, model, keyID, userID string, inputTokens, outputTokens int)
+	RecordRequestWithCache(provider, model, keyID, userID string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int)
 }
 
 // roundUpTo4Decimals rounds a float64 value up to the nearest 4th decimal place
@@ -747,7 +749,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 	ur := ct.usageRecorder
 	ct.mu.RUnlock()
 	if sr != nil {
-		sr.RecordRequest(
+		sr.RecordRequestWithCache(
 			record.Provider,
 			keyID,
 			userID,
@@ -757,16 +759,20 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 			record.OutputCost,
 			rollupInputTokens,
 			record.OutputTokens,
+			record.CacheReadInputTokens,
+			record.CacheCreationInputTokens,
 		)
 	}
 	if ur != nil {
-		ur.RecordRequest(
+		ur.RecordRequestWithCache(
 			record.Provider,
 			record.Model,
 			keyID,
 			userID,
 			rollupInputTokens,
 			record.OutputTokens,
+			record.CacheReadInputTokens,
+			record.CacheCreationInputTokens,
 		)
 	}
 
