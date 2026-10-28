@@ -156,12 +156,28 @@ func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
 	cases := []struct {
 		name     string
 		provider string
+		record   *CostRecord
 		want     []string
 	}{
 		{
 			name:     "additive providers include cache tokens",
 			provider: "anthropic",
 			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
+		},
+		{
+			// AWS's documented Converse example: inputTokens 100, outputTokens
+			// 50, totalTokens 150, cacheReadInputTokens 200 means 300 input
+			// tokens and 350 tokens processed. The parser stores AWS's
+			// cache-exclusive counts verbatim, so the metrics must add the
+			// cache tokens exactly once.
+			name:     "bedrock converse totals exclude cache tokens",
+			provider: "bedrock",
+			record: &CostRecord{
+				Provider: "bedrock", Model: "m",
+				InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
+				CacheReadInputTokens: 200,
+			},
+			want: []string{"llm.tokens.input:300|d", "llm.tokens.output:50|d", "llm.tokens.total:350|d"},
 		},
 		{
 			name:     "inclusive providers are reported as-is",
@@ -182,7 +198,7 @@ func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			require.NoError(t, tr.WriteRecord(&CostRecord{
+			rec := &CostRecord{
 				Provider:                 tc.provider,
 				Model:                    "m",
 				InputTokens:              12,
@@ -190,7 +206,11 @@ func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
 				TotalTokens:              52,
 				CacheReadInputTokens:     48000,
 				CacheCreationInputTokens: 2500,
-			}))
+			}
+			if tc.record != nil {
+				rec = tc.record
+			}
+			require.NoError(t, tr.WriteRecord(rec))
 			require.NoError(t, tr.Close())
 
 			require.NoError(t, conn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))

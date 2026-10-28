@@ -1729,14 +1729,46 @@ func (c *YAMLConfig) ParsePricing() error {
 	return nil
 }
 
-func pricingNumber(v any) float64 {
+// pricingNumber reads an optional numeric pricing field. A present value of
+// any non-numeric type (for example a quoted "0.3") is an error rather than a
+// silent zero, since a zero price would bill those tokens for free.
+func pricingNumber(m map[string]any, key string) (float64, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, nil
+	}
 	switch n := v.(type) {
 	case float64:
-		return n
+		return n, nil
 	case int:
-		return float64(n)
+		return float64(n), nil
+	case int64:
+		return float64(n), nil
 	}
-	return 0
+	return 0, fmt.Errorf("%s must be a number, got %T", key, v)
+}
+
+// pricingTierFromMap reads threshold/input/output/cache_read/cache_write.
+func pricingTierFromMap(m map[string]any) (PricingTier, error) {
+	var tier PricingTier
+	threshold, err := pricingNumber(m, "threshold")
+	if err != nil {
+		return tier, err
+	}
+	tier.Threshold = int(threshold)
+	if tier.Input, err = pricingNumber(m, "input"); err != nil {
+		return tier, err
+	}
+	if tier.Output, err = pricingNumber(m, "output"); err != nil {
+		return tier, err
+	}
+	if tier.CacheRead, err = pricingNumber(m, "cache_read"); err != nil {
+		return tier, err
+	}
+	if tier.CacheWrite, err = pricingNumber(m, "cache_write"); err != nil {
+		return tier, err
+	}
+	return tier, nil
 }
 
 // parseModelPricing handles the logic of parsing the `interface{}` pricing field.
@@ -1751,22 +1783,10 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 			if !ok {
 				return nil, fmt.Errorf("invalid pricing tier format")
 			}
-			tier := PricingTier{}
-			if th, ok := tierMap["threshold"].(int); ok {
-				tier.Threshold = th
+			tier, err := pricingTierFromMap(tierMap)
+			if err != nil {
+				return nil, err
 			}
-			if in, ok := tierMap["input"].(float64); ok {
-				tier.Input = in
-			} else if in, ok := tierMap["input"].(int); ok {
-				tier.Input = float64(in)
-			}
-			if out, ok := tierMap["output"].(float64); ok {
-				tier.Output = out
-			} else if out, ok := tierMap["output"].(int); ok {
-				tier.Output = float64(out)
-			}
-			tier.CacheRead = pricingNumber(tierMap["cache_read"])
-			tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 			mp.Tiers = append(mp.Tiers, tier)
 		}
 	case map[string]any:
@@ -1779,62 +1799,37 @@ func parseModelPricing(pricingData any) (*ModelPricing, error) {
 				if !ok {
 					return nil, fmt.Errorf("invalid pricing tier format in tiers array")
 				}
-				tier := PricingTier{}
-				if th, ok := tierMap["threshold"].(int); ok {
-					tier.Threshold = th
-				} else if th, ok := tierMap["threshold"].(float64); ok {
-					tier.Threshold = int(th)
+				tier, err := pricingTierFromMap(tierMap)
+				if err != nil {
+					return nil, err
 				}
-				if in, ok := tierMap["input"].(float64); ok {
-					tier.Input = in
-				} else if in, ok := tierMap["input"].(int); ok {
-					tier.Input = float64(in)
-				}
-				if out, ok := tierMap["output"].(float64); ok {
-					tier.Output = out
-				} else if out, ok := tierMap["output"].(int); ok {
-					tier.Output = float64(out)
-				}
-				tier.CacheRead = pricingNumber(tierMap["cache_read"])
-				tier.CacheWrite = pricingNumber(tierMap["cache_write"])
 				mp.Tiers = append(mp.Tiers, tier)
 			}
 		} else if _, ok := v["input"]; ok {
 			// Simple pricing.
-			tier := PricingTier{Threshold: 0}
-			if in, ok := v["input"].(float64); ok {
-				tier.Input = in
-			} else if in, ok := v["input"].(int); ok {
-				tier.Input = float64(in)
+			tier, err := pricingTierFromMap(v)
+			if err != nil {
+				return nil, err
 			}
-			if out, ok := v["output"].(float64); ok {
-				tier.Output = out
-			} else if out, ok := v["output"].(int); ok {
-				tier.Output = float64(out)
-			}
-			tier.CacheRead = pricingNumber(v["cache_read"])
-			tier.CacheWrite = pricingNumber(v["cache_write"])
+			tier.Threshold = 0
 			mp.Tiers = []PricingTier{tier}
 		}
 
 		if overrides, ok := v["overrides"].(map[string]any); ok {
 			mp.Overrides = make(map[string]Pricing)
 			for alias, overrideData := range overrides {
-				overrideMap := overrideData.(map[string]any)
-				pricing := Pricing{}
-				if in, ok := overrideMap["input"].(float64); ok {
-					pricing.Input = in
-				} else if in, ok := overrideMap["input"].(int); ok {
-					pricing.Input = float64(in)
+				overrideMap, ok := overrideData.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("invalid pricing override format for alias %q", alias)
 				}
-				if out, ok := overrideMap["output"].(float64); ok {
-					pricing.Output = out
-				} else if out, ok := overrideMap["output"].(int); ok {
-					pricing.Output = float64(out)
+				tier, err := pricingTierFromMap(overrideMap)
+				if err != nil {
+					return nil, fmt.Errorf("override %q: %w", alias, err)
 				}
-				pricing.CacheRead = pricingNumber(overrideMap["cache_read"])
-				pricing.CacheWrite = pricingNumber(overrideMap["cache_write"])
-				mp.Overrides[alias] = pricing
+				mp.Overrides[alias] = Pricing{
+					Input: tier.Input, Output: tier.Output,
+					CacheRead: tier.CacheRead, CacheWrite: tier.CacheWrite,
+				}
 			}
 		}
 	default:

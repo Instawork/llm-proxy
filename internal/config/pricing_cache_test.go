@@ -50,6 +50,47 @@ func TestParseModelPricing_CachePrices(t *testing.T) {
 	})
 }
 
+func TestParseModelPricing_RejectsNonNumericPrices(t *testing.T) {
+	cases := map[string]any{
+		"flat cache_read string":  map[string]any{"input": 3.0, "output": 15, "cache_read": "0.3"},
+		"flat input string":       map[string]any{"input": "3", "output": 15},
+		"tier list output bool":   []any{map[string]any{"threshold": 0, "input": 1.0, "output": true}},
+		"tiers map cache_write":   map[string]any{"tiers": []any{map[string]any{"threshold": 0, "input": 1.0, "output": 2.0, "cache_write": "3.75"}}},
+		"tier threshold string":   []any{map[string]any{"threshold": "200000", "input": 1.0, "output": 2.0}},
+		"override cache_read map": map[string]any{"input": 3.0, "output": 15, "overrides": map[string]any{"global.m": map[string]any{"input": 3.0, "output": 15, "cache_read": map[string]any{}}}},
+	}
+	for name, pricing := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseModelPricing(pricing)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be a number")
+		})
+	}
+}
+
+func TestParsePricing_NonNumericPriceFailsConfigLoad(t *testing.T) {
+	cfg := &YAMLConfig{Providers: map[string]ProviderConfig{
+		"anthropic": {Models: map[string]ModelConfig{
+			"claude-x": {Pricing: map[string]any{"input": 3.0, "output": 15, "cache_read": "0.3", "cache_write": 3.75}},
+		}},
+	}}
+	err := cfg.ParsePricing()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anthropic/claude-x")
+	assert.Contains(t, err.Error(), "cache_read must be a number, got string")
+}
+
+func TestParseModelPricing_AcceptsIntegerAndFloatPrices(t *testing.T) {
+	mp, err := parseModelPricing([]any{
+		map[string]any{"threshold": 200000.0, "input": 2, "output": 12.0, "cache_read": int64(1), "cache_write": 2.5},
+		map[string]any{"threshold": 0, "input": 4.0, "output": 18},
+	})
+	require.NoError(t, err)
+	require.Len(t, mp.Tiers, 2)
+	assert.Equal(t, PricingTier{Threshold: 200000, Input: 2, Output: 12, CacheRead: 1, CacheWrite: 2.5}, mp.Tiers[0])
+	assert.Equal(t, PricingTier{Threshold: 0, Input: 4, Output: 18}, mp.Tiers[1])
+}
+
 func TestBaseConfig_ClaudeEntriesHaveCachePrices(t *testing.T) {
 	cfg, err := LoadAndMergeConfigs([]string{"../../configs/base.yml"})
 	require.NoError(t, err)
