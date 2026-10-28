@@ -238,27 +238,31 @@ func TestCostTracker_TrackRequest_Async(t *testing.T) {
 	assert.InDelta(t, 0.0001, records[0].TotalCost, 0.0001)
 }
 
-type recordingStats struct {
-	mu    sync.Mutex
-	calls []struct {
-		provider, keyID, userID, model          string
-		spendUSD, inputSpendUSD, outputSpendUSD float64
-		inputTokens, outputTokens               int
-	}
+type recordedStatsCall struct {
+	provider, keyID, userID, model          string
+	spendUSD, inputSpendUSD, outputSpendUSD float64
+	inputTokens, outputTokens               int
+	cacheReadTokens, cacheCreationTokens    int
 }
 
-func (r *recordingStats) RecordRequest(
+type recordingStats struct {
+	mu    sync.Mutex
+	calls []recordedStatsCall
+}
+
+func (r *recordingStats) RecordRequestWithCache(
 	provider, keyID, userID, model string,
 	spendUSD, inputSpendUSD, outputSpendUSD float64,
-	inputTokens, outputTokens int,
+	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, struct {
-		provider, keyID, userID, model          string
-		spendUSD, inputSpendUSD, outputSpendUSD float64
-		inputTokens, outputTokens               int
-	}{provider, keyID, userID, model, spendUSD, inputSpendUSD, outputSpendUSD, inputTokens, outputTokens})
+	r.calls = append(r.calls, recordedStatsCall{
+		provider, keyID, userID, model,
+		spendUSD, inputSpendUSD, outputSpendUSD,
+		inputTokens, outputTokens,
+		cacheReadTokens, cacheCreationTokens,
+	})
 }
 
 func TestCostTracker_StatsRecorder(t *testing.T) {
@@ -290,12 +294,14 @@ func TestCostTracker_StatsRecorder(t *testing.T) {
 type recordingUsage struct {
 	mu          sync.Mutex
 	inputTokens []int
+	cacheTokens [][2]int
 }
 
-func (r *recordingUsage) RecordRequest(_, _, _, _ string, inputTokens, _ int) {
+func (r *recordingUsage) RecordRequestWithCache(_, _, _, _ string, inputTokens, _, cacheReadTokens, cacheCreationTokens int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.inputTokens = append(r.inputTokens, inputTokens)
+	r.cacheTokens = append(r.cacheTokens, [2]int{cacheReadTokens, cacheCreationTokens})
 }
 
 func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
@@ -334,9 +340,12 @@ func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
 			require.Len(t, stats.calls, 1)
 			assert.Equal(t, tc.wantRollupInput, stats.calls[0].inputTokens)
 			assert.Equal(t, 7, stats.calls[0].outputTokens)
+			assert.Equal(t, 30, stats.calls[0].cacheReadTokens)
+			assert.Equal(t, 5, stats.calls[0].cacheCreationTokens)
 			usage.mu.Lock()
 			defer usage.mu.Unlock()
 			assert.Equal(t, []int{tc.wantRollupInput}, usage.inputTokens)
+			assert.Equal(t, [][2]int{{30, 5}}, usage.cacheTokens)
 		})
 	}
 }

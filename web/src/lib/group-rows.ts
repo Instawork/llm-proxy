@@ -46,6 +46,8 @@ export function aggregateCostKeys(rows: CostKeyAgg[]): CostKeyAgg {
       requests: acc.requests + row.requests,
       input_tokens: acc.input_tokens + row.input_tokens,
       output_tokens: acc.output_tokens + row.output_tokens,
+      cache_read_tokens: (acc.cache_read_tokens ?? 0) + (row.cache_read_tokens ?? 0),
+      cache_creation_tokens: (acc.cache_creation_tokens ?? 0) + (row.cache_creation_tokens ?? 0),
     }),
     {
       key_id: "",
@@ -92,6 +94,8 @@ export function aggregateCostUsers(rows: CostUserAgg[]): CostUserAgg {
       requests: acc.requests + row.requests,
       input_tokens: acc.input_tokens + row.input_tokens,
       output_tokens: acc.output_tokens + row.output_tokens,
+      cache_read_tokens: (acc.cache_read_tokens ?? 0) + (row.cache_read_tokens ?? 0),
+      cache_creation_tokens: (acc.cache_creation_tokens ?? 0) + (row.cache_creation_tokens ?? 0),
     }),
     {
       scope: "",
@@ -167,6 +171,8 @@ export interface UsageRow {
   label: string;
   requests: number;
   tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export function aggregateUsageRows(rows: UsageRow[]): UsageRow {
@@ -176,6 +182,8 @@ export function aggregateUsageRows(rows: UsageRow[]): UsageRow {
       label: "",
       requests: acc.requests + row.requests,
       tokens: acc.tokens + row.tokens,
+      cache_read_tokens: (acc.cache_read_tokens ?? 0) + (row.cache_read_tokens ?? 0),
+      cache_creation_tokens: (acc.cache_creation_tokens ?? 0) + (row.cache_creation_tokens ?? 0),
     }),
     { scope: "", label: "", requests: 0, tokens: 0 },
   );

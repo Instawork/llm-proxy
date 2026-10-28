@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatKeyMonthSpend, formatKeySpendCap } from "./format";
+import { cachedInputHint, formatKeyMonthSpend, formatKeySpendCap } from "./format";
 import type { SharedKeySpend } from "../types";
 
 function spend(monthUsd: number): SharedKeySpend {
@@ -35,5 +35,16 @@ describe("formatKeySpendCap", () => {
 
   it("falls back to the key's own limits", () => {
     expect(formatKeySpendCap({ ...base, daily_cost_limit: 500 })).toBe("$5.00/day");
+  });
+});
+
+describe("cachedInputHint", () => {
+  it("shows read and written cache tokens with their share of input", () => {
+    expect(cachedInputHint(800, 150, 1000)).toBe("800 read · 150 written · 95.0% of input");
+  });
+
+  it("omits the share when the input total is unknown or zero", () => {
+    expect(cachedInputHint(1200, 0)).toBe("1.2K read · 0 written");
+    expect(cachedInputHint(0, 0, 0)).toBe("0 read · 0 written");
   });
 });
