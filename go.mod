@@ -1,6 +1,6 @@
 module github.com/Instawork/llm-proxy
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.6.0
@@ -50,3 +50,10 @@ require (
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/sys v0.0.0-20210510120138-977fb7262007 // indirect
 )
+
+// Go 1.24+ listens with Multipath TCP by default on Linux. CVE-2026-98432
+// (Linux IPv4 TCP use-after-free) has a public remote-root exploit against
+// MPTCP listeners; the proxy gains nothing from MPTCP behind an ALB, so keep
+// listeners on plain TCP. Defense in depth only: the real fix is a patched
+// host kernel. See https://go.dev/issue/82717.
+godebug multipathtcp=0

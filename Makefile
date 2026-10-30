@@ -487,7 +487,7 @@ dev:
 # staticcheck replaces the archived golint as the style/correctness gate.
 # Pinned so a new upstream release cannot start failing builds on main
 # without a deliberate bump; override with STATICCHECK_VERSION if needed.
-STATICCHECK_VERSION?=2026.2.1
+STATICCHECK_VERSION?=2026.2.2
 STATICCHECK=$(shell command -v staticcheck 2>/dev/null || echo "$(GOPATH_BIN)/staticcheck")
 
 .PHONY: install-staticcheck
