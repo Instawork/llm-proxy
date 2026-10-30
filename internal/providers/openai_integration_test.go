@@ -50,11 +50,18 @@ type openaiTestModel struct {
 	temperature float64
 }
 
-// Test models to use in parameterized tests
+// Test models to use in parameterized tests.
+//
+// Model selection notes (October 2026):
+//   - `gpt-4o-mini` shuts down on January 14, 2027, so the live tests moved to
+//     `gpt-4.1-mini`: it is cheap ($0.40/$1.60 per 1M tokens in
+//     configs/base.yml), not on OpenAI's deprecations page, and, unlike the
+//     GPT-5.x reasoning models, still accepts `max_tokens` and a non-default
+//     `temperature`, so the request bodies below need no other changes.
 var openaiTestModels = []openaiTestModel{
 	{
-		name:        "GPT-4o-mini",
-		modelID:     "gpt-4o-mini",
+		name:        "GPT-4.1-mini",
+		modelID:     "gpt-4.1-mini",
 		endpoint:    "chat",
 		maxTokens:   100,
 		testPrompt:  "What is 2+2?",
@@ -120,7 +127,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 	}{
 		{
 			name:  "SimpleQuestion",
-			model: openaiTestModels[0], // GPT-4o-mini
+			model: openaiTestModels[0], // GPT-4.1-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "What is the capital of France?"},
 			},
@@ -130,7 +137,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "WithSystemMessage",
-			model: openaiTestModels[0], // GPT-4o-mini
+			model: openaiTestModels[0], // GPT-4.1-mini
 			messages: []map[string]string{
 				{"role": "system", "content": "You are a helpful assistant that speaks like a pirate."},
 				{"role": "user", "content": "Tell me about the weather."},
@@ -141,7 +148,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "Conversation",
-			model: openaiTestModels[0], // GPT-4o-mini
+			model: openaiTestModels[0], // GPT-4.1-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "Hello, I'm learning Go."},
 				{"role": "assistant", "content": "That's great! Go is an excellent language for building concurrent applications. What would you like to know about Go?"},
@@ -153,7 +160,7 @@ func TestOpenAIIntegration_ChatCompletions_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:  "StreamingWithUsage",
-			model: openaiTestModels[0], // GPT-4o-mini
+			model: openaiTestModels[0], // GPT-4.1-mini
 			messages: []map[string]string{
 				{"role": "user", "content": "Explain concurrency in one sentence."},
 			},
@@ -275,8 +282,8 @@ func TestOpenAIIntegration_Responses_Models(t *testing.T) {
 	// Test models for Responses API
 	responsesTestModels := []openaiTestModel{
 		{
-			name:        "GPT-4o-mini-Responses",
-			modelID:     "gpt-4o-mini",
+			name:        "GPT-4.1-mini-Responses",
+			modelID:     "gpt-4.1-mini",
 			endpoint:    "responses",
 			maxTokens:   100,
 			testPrompt:  "What is 2+2?",
@@ -330,7 +337,7 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 	}{
 		{
 			name:        "SimpleQuestion",
-			model:       "gpt-4o-mini",
+			model:       "gpt-4.1-mini",
 			prompt:      "What is the capital of France?",
 			maxTokens:   50,
 			temperature: 0.0,
@@ -348,7 +355,7 @@ func TestOpenAIIntegration_Responses_AdvancedScenarios(t *testing.T) {
 		},
 		{
 			name:        "StreamingResponse",
-			model:       "gpt-4o-mini",
+			model:       "gpt-4.1-mini",
 			prompt:      "Explain the benefits of renewable energy.",
 			maxTokens:   150,
 			temperature: 0.5,
