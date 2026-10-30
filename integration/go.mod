@@ -1,6 +1,6 @@
 module github.com/Instawork/llm-proxy/integration
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/Instawork/llm-proxy v0.0.0
