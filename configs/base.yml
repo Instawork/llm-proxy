@@ -763,6 +763,26 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+      # GPT-6.1 Terra (released 2026-10-26, audit-11-02-2026): $1/$5 list, half of
+      # gpt-5.6-terra; the card prices prompts >272K input at 2x input / 1.5x
+      # output. The card lists the bare id as its only snapshot.
+      "gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 1.00
+            output: 5.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.00
+            output: 7.50
       "gpt-6-luna":
         enabled: true
         aliases: []
@@ -1801,6 +1821,44 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+      # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): same card
+      # shape as gpt-6.1-sol — us./global. profiles only (no in-Region on
+      # bedrock-runtime), US Geo CRIS at list +10%, Global CRIS at list, >272K
+      # tier at 2x input / 1.5x output.
+      "us.openai.gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 1.10
+            output: 5.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.20
+            output: 8.25
+      "global.openai.gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 1.00
+            output: 5.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.00
+            output: 7.50
       "us.openai.gpt-6-luna":
         enabled: true
         aliases: []
@@ -1957,6 +2015,19 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+      # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): Mantle
+      # in-Region (us-east-1/2, us-west-2) = OpenAI list +10%, >272K tier at
+      # 2x / 1.5x.
+      "openai.gpt-6.1-terra":
+        enabled: true
+        aliases: ["gpt-6.1-terra-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 1.10
+            output: 5.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.20
+            output: 8.25
       # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
       # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
       # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
