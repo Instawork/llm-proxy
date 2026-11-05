@@ -513,6 +513,21 @@ func TestCostLimitMiddleware_ReservationAllowsAndReconciles(t *testing.T) {
 	}
 }
 
+func TestReconcileActualCost_IncludesCacheTokens(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("X-LLM-Input-Tokens", "100")
+	rr.Header().Set("X-LLM-Output-Tokens", "50")
+	rr.Header().Set("X-LLM-Cache-Read-Tokens", "800")
+	rr.Header().Set("X-LLM-Cache-Write-Tokens", "25")
+	rr.Header().Set("X-LLM-Model", "m")
+	sw := &statusCapturingWriter{ResponseWriter: rr, status: http.StatusOK}
+
+	got := reconcileActualCost(rr, sw, "openai", "m", 0, flatEstimator)
+	if want := flatEstimator("openai", "m", 100+800+25, 50); math.Abs(got-want) > 1e-12 {
+		t.Fatalf("reconciled cost = %v, want %v", got, want)
+	}
+}
+
 func TestCostLimitMiddleware_ReservationInactiveFallsBackToRead(t *testing.T) {
 	pm := providers.NewProviderManager()
 	pm.RegisterProvider(&fakeProvider{})

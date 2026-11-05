@@ -111,7 +111,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		ct.SetSyncMode()
 		mock := &mockTransport{}
 		ct.AddTransport(mock)
-		for _, p := range []string{"anthropic", "gemini"} {
+		for _, p := range []string{"anthropic", "gemini", "openai"} {
 			ct.SetPricingForModel(p, "m", &ModelPricing{
 				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
 			})
@@ -129,22 +129,16 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		}
 	}
 
-	t.Run("anthropic prices cache tokens from configured rates", func(t *testing.T) {
-		ct, mock := newTracker()
-		require.NoError(t, ct.TrackRequest(meta("anthropic"), "u", "127.0.0.1", "/v1/messages", ""))
-		rec := mock.Records()[0]
-		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
-		assert.InDelta(t, 15, rec.OutputCost, 1e-9)
-		assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
-	})
-
-	t.Run("providers with inclusive cached counts are not surcharged", func(t *testing.T) {
-		ct, mock := newTracker()
-		require.NoError(t, ct.TrackRequest(meta("gemini"), "u", "127.0.0.1", "/v1/interactions", ""))
-		rec := mock.Records()[0]
-		assert.InDelta(t, 3, rec.InputCost, 1e-9)
-		assert.InDelta(t, 18, rec.TotalCost, 1e-9)
-	})
+	for _, provider := range []string{"anthropic", "gemini", "openai"} {
+		t.Run(provider+" prices cache tokens from configured rates", func(t *testing.T) {
+			ct, mock := newTracker()
+			require.NoError(t, ct.TrackRequest(meta(provider), "u", "127.0.0.1", "/v1/messages", ""))
+			rec := mock.Records()[0]
+			assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+			assert.InDelta(t, 15, rec.OutputCost, 1e-9)
+			assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
+		})
+	}
 
 	t.Run("unset cache prices fall back to the input rate", func(t *testing.T) {
 		ct, mock := newTracker()
@@ -312,7 +306,8 @@ func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
 		{"anthropic", 12 + 30 + 5},
 		{"bedrock", 12 + 30 + 5},
 		{"bedrock-mantle", 12 + 30 + 5},
-		{"gemini", 12},
+		{"gemini", 12 + 30 + 5},
+		{"openai", 12 + 30 + 5},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {

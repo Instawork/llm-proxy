@@ -85,7 +85,7 @@ func interactionMetadata(in *interaction, usage *interactionsUsage, streaming bo
 		md.OutputTokens = usage.TotalOutputTokens
 		md.TotalTokens = usage.TotalTokens
 		md.ThoughtTokens = usage.TotalThoughtTokens
-		md.CacheReadInputTokens = usage.TotalCachedTokens
+		md.splitCachedInput(usage.TotalCachedTokens)
 	}
 	return md
 }

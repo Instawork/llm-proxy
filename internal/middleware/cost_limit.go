@@ -263,12 +263,15 @@ func tryReserveAndServe(
 // (5xx) the request consumed no quota, so the cost is zero. When token counts
 // are unavailable on an otherwise-successful response (e.g. a stream that did
 // not surface usage), the original estimate is retained as a conservative
-// stand-in so the reservation never under-counts.
+// stand-in so the reservation never under-counts. Cache tokens are priced at
+// the input rate, an upper bound until the tracked spend replaces it.
 func reconcileActualCost(w http.ResponseWriter, sw *statusCapturingWriter, provider, estModel string, estimate float64, estimateFn CostEstimator) float64 {
 	if sw.status >= 500 {
 		return 0
 	}
-	inTok := headerToInt(w.Header().Get("X-LLM-Input-Tokens"))
+	inTok := headerToInt(w.Header().Get("X-LLM-Input-Tokens")) +
+		headerToInt(w.Header().Get("X-LLM-Cache-Read-Tokens")) +
+		headerToInt(w.Header().Get("X-LLM-Cache-Write-Tokens"))
 	outTok := headerToInt(w.Header().Get("X-LLM-Output-Tokens"))
 	if inTok <= 0 && outTok <= 0 {
 		return estimate

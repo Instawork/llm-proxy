@@ -270,7 +270,7 @@ func (b *BedrockProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRe
 		}
 		if json.Unmarshal(body, &native) == nil &&
 			(native.Usage.InputTokens > 0 || native.Usage.OutputTokens > 0) {
-			return &LLMResponseMetadata{
+			md := &LLMResponseMetadata{
 				InputTokens:              native.Usage.InputTokens,
 				OutputTokens:             native.Usage.OutputTokens,
 				TotalTokens:              native.Usage.InputTokens + native.Usage.OutputTokens,
@@ -279,14 +279,16 @@ func (b *BedrockProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRe
 				Provider:                 "bedrock",
 				IsStreaming:              false,
 				FinishReason:             native.StopReason,
-			}, nil
+			}
+			md.addCacheToTotal()
+			return md, nil
 		}
 	}
 	total := r.Usage.TotalTokens
 	if total == 0 {
 		total = r.Usage.InputTokens + r.Usage.OutputTokens
 	}
-	return &LLMResponseMetadata{
+	md := &LLMResponseMetadata{
 		InputTokens:              r.Usage.InputTokens,
 		OutputTokens:             r.Usage.OutputTokens,
 		TotalTokens:              total,
@@ -295,7 +297,9 @@ func (b *BedrockProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRe
 		Provider:                 "bedrock",
 		IsStreaming:              false,
 		FinishReason:             r.StopReason,
-	}, nil
+	}
+	md.addCacheToTotal()
+	return md, nil
 }
 
 // parseStreamingResponse decodes the AWS event-stream framing
@@ -395,8 +399,11 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 			}
 		}
 	}
-	if sawUsage && metadata.TotalTokens == 0 {
-		metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
+	if sawUsage {
+		if metadata.TotalTokens == 0 {
+			metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
+		}
+		metadata.addCacheToTotal()
 	}
 
 	if !sawData {
