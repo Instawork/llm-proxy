@@ -1939,8 +1939,8 @@ func costLimitOptions(yamlConfig *config.YAMLConfig) middleware.CostLimitOptions
 		}
 	}
 	if globalCostTracker != nil {
-		opts.Estimate = func(provider, model string, inputTokens, outputTokens int) float64 {
-			_, _, total, err := globalCostTracker.CalculateCost(provider, model, inputTokens, outputTokens)
+		opts.Estimate = func(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64 {
+			_, _, total, err := globalCostTracker.CalculateCostWithCache(provider, model, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens)
 			if err != nil {
 				return 0
 			}

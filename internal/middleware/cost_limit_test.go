@@ -457,9 +457,15 @@ func (f *fakeReserver) totalAdjust() float64 {
 	return sum
 }
 
-func flatEstimator(_, _ string, inputTokens, outputTokens int) float64 {
+func flatEstimator(_, _ string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64 {
 	// 1 micro-dollar per token, deterministic and non-zero.
-	return float64(inputTokens+outputTokens) * 1e-6
+	return float64(inputTokens+cacheReadTokens+cacheWriteTokens+outputTokens) * 1e-6
+}
+
+// cacheAwareEstimator prices cache writes at 1.25x and reads at 0.1x input,
+// like the real tracker does for models with cache_write above input.
+func cacheAwareEstimator(_, _ string, in, read, write, out int) float64 {
+	return (float64(in) + 0.1*float64(read) + 1.25*float64(write) + float64(out)) * 1e-6
 }
 
 func TestCostLimitMiddleware_ReservationBlocksOverCap(t *testing.T) {
@@ -522,9 +528,27 @@ func TestReconcileActualCost_IncludesCacheTokens(t *testing.T) {
 	rr.Header().Set("X-LLM-Model", "m")
 	sw := &statusCapturingWriter{ResponseWriter: rr, status: http.StatusOK}
 
-	got := reconcileActualCost(rr, sw, "openai", "m", 0, flatEstimator)
-	if want := flatEstimator("openai", "m", 100+800+25, 50); math.Abs(got-want) > 1e-12 {
+	got := reconcileActualCost(rr, sw, "openai", "m", 0, cacheAwareEstimator)
+	if want := cacheAwareEstimator("openai", "m", 100, 800, 25, 50); math.Abs(got-want) > 1e-12 {
 		t.Fatalf("reconciled cost = %v, want %v", got, want)
+	}
+	if flat := flatEstimator("openai", "m", 100, 800, 25, 50); got >= flat {
+		// sanity: the read discount must be reflected, not priced at input.
+		t.Fatalf("reconciled cost %v should be below flat input pricing %v", got, flat)
+	}
+}
+
+func TestReconcileActualCost_WriteHeavyUsesWriteRate(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("X-LLM-Input-Tokens", "0")
+	rr.Header().Set("X-LLM-Output-Tokens", "0")
+	rr.Header().Set("X-LLM-Cache-Write-Tokens", "1000000")
+	rr.Header().Set("X-LLM-Model", "m")
+	sw := &statusCapturingWriter{ResponseWriter: rr, status: http.StatusOK}
+
+	got := reconcileActualCost(rr, sw, "openai", "m", 0, cacheAwareEstimator)
+	if want := 1.25; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("write-only reconcile = %v, want %v (must not be priced at input rate)", got, want)
 	}
 }
 

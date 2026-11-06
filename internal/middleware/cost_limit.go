@@ -80,8 +80,10 @@ type KeyMonthlySpendReserver interface {
 }
 
 // CostEstimator returns the USD cost for a (provider, model) call with the
-// given token counts. Typically backed by the cost tracker's pricing tables.
-type CostEstimator func(provider, model string, inputTokens, outputTokens int) float64
+// given token counts. Cache tokens are additive to inputTokens and must be
+// priced at their own rates: cache writes can cost more than plain input.
+// Typically backed by the cost tracker's pricing tables.
+type CostEstimator func(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64
 
 // CostLimitOptions tunes cost-limit enforcement behavior.
 type CostLimitOptions struct {
@@ -193,7 +195,7 @@ func tryReserveAndServe(
 	needMonthly := rec.MonthlyCostLimit > 0
 
 	estInput, model := providers.EstimateRequestTokens(r, opt.Estimation, prov)
-	estimate := opt.Estimate(prov.GetName(), model, estInput, defaultEstimateOutputTokens)
+	estimate := opt.Estimate(prov.GetName(), model, estInput, 0, 0, defaultEstimateOutputTokens)
 	if estimate <= 0 {
 		return false
 	}
@@ -263,24 +265,25 @@ func tryReserveAndServe(
 // (5xx) the request consumed no quota, so the cost is zero. When token counts
 // are unavailable on an otherwise-successful response (e.g. a stream that did
 // not surface usage), the original estimate is retained as a conservative
-// stand-in so the reservation never under-counts. Cache tokens are priced at
-// the input rate, an upper bound until the tracked spend replaces it.
+// stand-in so the reservation never under-counts. Cache tokens go to the
+// estimator separately so reads and writes are priced exactly as the cost
+// tracker will price them (a cache write can exceed the input rate).
 func reconcileActualCost(w http.ResponseWriter, sw *statusCapturingWriter, provider, estModel string, estimate float64, estimateFn CostEstimator) float64 {
 	if sw.status >= 500 {
 		return 0
 	}
-	inTok := headerToInt(w.Header().Get("X-LLM-Input-Tokens")) +
-		headerToInt(w.Header().Get("X-LLM-Cache-Read-Tokens")) +
-		headerToInt(w.Header().Get("X-LLM-Cache-Write-Tokens"))
+	inTok := headerToInt(w.Header().Get("X-LLM-Input-Tokens"))
+	readTok := headerToInt(w.Header().Get("X-LLM-Cache-Read-Tokens"))
+	writeTok := headerToInt(w.Header().Get("X-LLM-Cache-Write-Tokens"))
 	outTok := headerToInt(w.Header().Get("X-LLM-Output-Tokens"))
-	if inTok <= 0 && outTok <= 0 {
+	if inTok+readTok+writeTok <= 0 && outTok <= 0 {
 		return estimate
 	}
 	model := w.Header().Get("X-LLM-Model")
 	if model == "" {
 		model = estModel
 	}
-	return estimateFn(provider, model, inTok, outTok)
+	return estimateFn(provider, model, inTok, readTok, writeTok, outTok)
 }
 
 // enforceReadOnly is the original read-recorded-spend enforcement, used when

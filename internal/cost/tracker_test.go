@@ -361,3 +361,44 @@ func TestCalculateCost(t *testing.T) {
 	_, _, _, err = ct.CalculateCost("openai", "unknown", 100, 50)
 	assert.Error(t, err)
 }
+
+// The cost-limit reservation is reconciled with CalculateCostWithCache, so it
+// must equal what TrackRequest records, including cache writes priced above
+// the input rate (gpt-5.6-sol: input 5.00, cache_write 6.25).
+func TestCalculateCostWithCache_MatchesTrackedCost(t *testing.T) {
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+	ct.SetPricingForModel("openai", "gpt-5.6-sol", &ModelPricing{
+		Tiers: []PricingTier{
+			{Threshold: 272_000, Input: 5, Output: 30, CacheRead: 0.5, CacheWrite: 6.25},
+			{Threshold: 0, Input: 10, Output: 45, CacheRead: 1, CacheWrite: 12.5},
+		},
+	})
+
+	for _, tc := range []struct{ in, read, write, out int }{
+		{0, 0, 200_000, 0},
+		{0, 0, 1_000_000, 0},
+		{100_000, 400_000, 300_000, 5_000},
+		{10_000, 0, 1_000, 500},
+	} {
+		_, _, got, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", tc.in, tc.read, tc.write, tc.out)
+		require.NoError(t, err)
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider: "openai", Model: "gpt-5.6-sol",
+			InputTokens: tc.in, CacheReadInputTokens: tc.read, CacheCreationInputTokens: tc.write, OutputTokens: tc.out,
+		}, "u", "ip", "/e", "k"))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		assert.Equal(t, recs[before].TotalCost, got, "%+v", tc)
+	}
+
+	// Cache-write tokens must bill at the write rate, not the input rate
+	// (200k tokens stays in the short tier: 0.2 * 6.25 = 1.25, not 1.00).
+	_, _, writes, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", 0, 0, 200_000, 0)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.25, writes, 1e-9)
+}

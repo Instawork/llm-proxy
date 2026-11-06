@@ -119,6 +119,9 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			if rateLimitCountsCacheReads(prov.GetName()) {
 				actualInput += headerToInt(w.Header().Get("X-LLM-Cache-Read-Tokens"))
 			}
+			if rateLimitCountsCacheWrites(prov.GetName()) {
+				actualInput += headerToInt(w.Header().Get("X-LLM-Cache-Write-Tokens"))
+			}
 			if actualInput > 0 {
 				delta := actualInput - estTokens
 				if err := limiter.Adjust(reconcileCtx, reservationID, scope, delta, reservedAt, time.Now()); err != nil {
@@ -197,6 +200,17 @@ func fmtInt(v int) string { return strconv.FormatInt(int64(v), 10) }
 func rateLimitCountsCacheReads(provider string) bool {
 	switch provider {
 	case "openai", "gemini", "openrouter":
+		return true
+	}
+	return false
+}
+
+// rateLimitCountsCacheWrites reports whether cache-write tokens count toward
+// the provider's token limits. OpenAI-format usage splits cache writes out of
+// X-LLM-Input-Tokens, but their limits cover the full prompt.
+func rateLimitCountsCacheWrites(provider string) bool {
+	switch provider {
+	case "openai", "openrouter":
 		return true
 	}
 	return false
