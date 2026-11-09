@@ -661,8 +661,9 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         # List price. The 4.00/20.00 (>272K 8.00/30.00) promo running since
-        # 2026-08-21 is guaranteed only "at least through 2026-11-21", so it
-        # is intentionally not encoded here.
+        # 2026-08-21 now ends 2026-11-30 (pricing page: "available until
+        # November 30, 2026"; was "at least through 2026-11-21"), so it is
+        # intentionally not encoded here.
         pricing:
           - threshold: 272_000
             input: 5.00
@@ -824,14 +825,37 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 25.00
             output: 112.50
+      # GPT-6 Cyber (2026-11-05): Daybreak Red access + per-model approval and
+      # IP allowlisting. 1.05M context; the card prints "standard short-context
+      # prices" but neither it nor pricing.md publishes a >272K rate (the Cyber
+      # table shows "-"), so there is no tier to encode -> flat.
+      "gpt-6-cyber":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 20.00
+          output: 100.00
       # GPT-5.5 Cyber (limited preview since 2026-05-07, Trusted Access for
       # Cyber). First seen in the pricing.md "Cyber" table on audit-10-12-2026:
       # "gpt-5.5-cyber | $12.50 | $1.25 | - | $75.00" with "-" in every
       # long-context column; the card /models/gpt-5.5-cyber is 404, so there is
       # no ">272K" sentence to apply -> flat. The help-center Daybreak article
       # names the Responses API model gpt-5.5-cyber-preview (same version).
+      # Deprecated 2026-11-05: shuts down 2027-02-01. The deprecations page
+      # names no replacement id ("the most capable cyber model available to
+      # you"); the Daybreak guide says to switch to gpt-5.6-cyber (or gpt-6-cyber
+      # with approval).
       "gpt-5.5-cyber":
         enabled: true
+        deprecated: true # announced 2026-11-05; vendor shutdown 2027-02-01
+        replacement: "gpt-5.6-cyber"
         aliases: ["gpt-5.5-cyber-preview"]
         limits:
           tokens_per_minute: 450_000
@@ -2306,14 +2330,17 @@ providers:
         pricing:
           input: 0.25
           output: 1.50
-      # Gemini 2.5 series: Google withdrew the 2026-10-16 shutdown date in
-      # Aug 2026 ("No shutdown date announced"; Vertex still lists 2026-10-20).
-      # Served "until further notice" but only to projects that already used
-      # them; new projects get 404.
+      # Gemini 2.5 series: served only to projects that already used them (new
+      # projects get 404). Deprecations page (read 2026-11-09): effective
+      # 2026-12-01 API requests to gemini-2.5-pro auto-route to gemini-3.8-flash
+      # and gemini-2.5-flash to gemini-3.5-flash-lite, billed at the
+      # replacement's rates; gemini-2.5-flash-lite "is not deprecated and
+      # remains available until further notice". The 2.5 rates below stay
+      # encoded until the ids actually route away.
       "gemini-2.5-pro":
         enabled: true
-        deprecated: true # no vendor shutdown date; legacy, existing users only
-        replacement: "gemini-3.1-pro"
+        deprecated: true # vendor shutdown 2026-12-01; auto-routes to gemini-3.8-flash
+        replacement: "gemini-3.8-flash"
         aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
         limits:
           tokens_per_minute: 5_000_000
@@ -2331,8 +2358,8 @@ providers:
             output: 15.00
       "gemini-2.5-flash":
         enabled: true
-        deprecated: true # no vendor shutdown date; legacy, existing users only
-        replacement: "gemini-3.6-flash"
+        deprecated: true # vendor shutdown 2026-12-01; auto-routes to gemini-3.5-flash-lite
+        replacement: "gemini-3.5-flash-lite"
         aliases:
           [
             "gemini-flash-2.5",
@@ -2373,8 +2400,8 @@ providers:
       # gemini-2.5-flash, so it follows that model's lifecycle.
       "gemini-2.5-flash-thinking":
         enabled: true
-        deprecated: true # follows gemini-2.5-flash (no vendor shutdown date)
-        replacement: "gemini-3.6-flash"
+        deprecated: true # follows gemini-2.5-flash (vendor shutdown 2026-12-01)
+        replacement: "gemini-3.5-flash-lite"
         aliases: ["gemini-flash-2.5-thinking"]
         limits:
           tokens_per_minute: 3_000_000
