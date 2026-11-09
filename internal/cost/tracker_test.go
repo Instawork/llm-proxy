@@ -111,7 +111,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		ct.SetSyncMode()
 		mock := &mockTransport{}
 		ct.AddTransport(mock)
-		for _, p := range []string{"anthropic", "gemini"} {
+		for _, p := range []string{"anthropic", "gemini", "openai"} {
 			ct.SetPricingForModel(p, "m", &ModelPricing{
 				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
 			})
@@ -129,22 +129,16 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		}
 	}
 
-	t.Run("anthropic prices cache tokens from configured rates", func(t *testing.T) {
-		ct, mock := newTracker()
-		require.NoError(t, ct.TrackRequest(meta("anthropic"), "u", "127.0.0.1", "/v1/messages", ""))
-		rec := mock.Records()[0]
-		assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
-		assert.InDelta(t, 15, rec.OutputCost, 1e-9)
-		assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
-	})
-
-	t.Run("providers with inclusive cached counts are not surcharged", func(t *testing.T) {
-		ct, mock := newTracker()
-		require.NoError(t, ct.TrackRequest(meta("gemini"), "u", "127.0.0.1", "/v1/interactions", ""))
-		rec := mock.Records()[0]
-		assert.InDelta(t, 3, rec.InputCost, 1e-9)
-		assert.InDelta(t, 18, rec.TotalCost, 1e-9)
-	})
+	for _, provider := range []string{"anthropic", "gemini", "openai"} {
+		t.Run(provider+" prices cache tokens from configured rates", func(t *testing.T) {
+			ct, mock := newTracker()
+			require.NoError(t, ct.TrackRequest(meta(provider), "u", "127.0.0.1", "/v1/messages", ""))
+			rec := mock.Records()[0]
+			assert.InDelta(t, 3+0.3+3.75, rec.InputCost, 1e-9)
+			assert.InDelta(t, 15, rec.OutputCost, 1e-9)
+			assert.InDelta(t, 3+0.3+3.75+15, rec.TotalCost, 1e-9)
+		})
+	}
 
 	t.Run("unset cache prices fall back to the input rate", func(t *testing.T) {
 		ct, mock := newTracker()
@@ -312,7 +306,8 @@ func TestCostTracker_AdminRollupsIncludeCacheTokens(t *testing.T) {
 		{"anthropic", 12 + 30 + 5},
 		{"bedrock", 12 + 30 + 5},
 		{"bedrock-mantle", 12 + 30 + 5},
-		{"gemini", 12},
+		{"gemini", 12 + 30 + 5},
+		{"openai", 12 + 30 + 5},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
@@ -365,4 +360,45 @@ func TestCalculateCost(t *testing.T) {
 	// Test missing model
 	_, _, _, err = ct.CalculateCost("openai", "unknown", 100, 50)
 	assert.Error(t, err)
+}
+
+// The cost-limit reservation is reconciled with CalculateCostWithCache, so it
+// must equal what TrackRequest records, including cache writes priced above
+// the input rate (gpt-5.6-sol: input 5.00, cache_write 6.25).
+func TestCalculateCostWithCache_MatchesTrackedCost(t *testing.T) {
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+	ct.SetPricingForModel("openai", "gpt-5.6-sol", &ModelPricing{
+		Tiers: []PricingTier{
+			{Threshold: 272_000, Input: 5, Output: 30, CacheRead: 0.5, CacheWrite: 6.25},
+			{Threshold: 0, Input: 10, Output: 45, CacheRead: 1, CacheWrite: 12.5},
+		},
+	})
+
+	for _, tc := range []struct{ in, read, write, out int }{
+		{0, 0, 200_000, 0},
+		{0, 0, 1_000_000, 0},
+		{100_000, 400_000, 300_000, 5_000},
+		{10_000, 0, 1_000, 500},
+	} {
+		_, _, got, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", tc.in, tc.read, tc.write, tc.out)
+		require.NoError(t, err)
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(&providers.LLMResponseMetadata{
+			Provider: "openai", Model: "gpt-5.6-sol",
+			InputTokens: tc.in, CacheReadInputTokens: tc.read, CacheCreationInputTokens: tc.write, OutputTokens: tc.out,
+		}, "u", "ip", "/e", "k"))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		assert.Equal(t, recs[before].TotalCost, got, "%+v", tc)
+	}
+
+	// Cache-write tokens must bill at the write rate, not the input rate
+	// (200k tokens stays in the short tier: 0.2 * 6.25 = 1.25, not 1.00).
+	_, _, writes, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", 0, 0, 200_000, 0)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.25, writes, 1e-9)
 }

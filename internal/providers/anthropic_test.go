@@ -176,6 +176,9 @@ func TestAnthropicNonStreamingCacheTokens(t *testing.T) {
 	if metadata.CacheCreationInputTokens != 512 {
 		t.Errorf("Expected 512 cache creation tokens, got %d", metadata.CacheCreationInputTokens)
 	}
+	if metadata.TotalTokens != 12+30+2048+512 {
+		t.Errorf("Expected total to include cache tokens, got %d", metadata.TotalTokens)
+	}
 	if metadata.FinishReason != "end_turn" {
 		t.Errorf("Expected end_turn, got %s", metadata.FinishReason)
 	}

@@ -160,29 +160,33 @@ func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
 		want     []string
 	}{
 		{
-			name:     "additive providers include cache tokens",
+			name:     "anthropic includes cache tokens",
 			provider: "anthropic",
+			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
+		},
+		{
+			name:     "openai includes cache tokens",
+			provider: "openai",
 			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
 		},
 		{
 			// AWS's documented Converse example: inputTokens 100, outputTokens
 			// 50, totalTokens 150, cacheReadInputTokens 200 means 300 input
-			// tokens and 350 tokens processed. The parser stores AWS's
-			// cache-exclusive counts verbatim, so the metrics must add the
-			// cache tokens exactly once.
-			name:     "bedrock converse totals exclude cache tokens",
+			// tokens and 350 tokens processed. The parser folds the cache
+			// tokens into TotalTokens, so the metric must not add them again.
+			name:     "bedrock converse total is not double counted",
 			provider: "bedrock",
 			record: &CostRecord{
 				Provider: "bedrock", Model: "m",
-				InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
+				InputTokens: 100, OutputTokens: 50, TotalTokens: 350,
 				CacheReadInputTokens: 200,
 			},
 			want: []string{"llm.tokens.input:300|d", "llm.tokens.output:50|d", "llm.tokens.total:350|d"},
 		},
 		{
-			name:     "inclusive providers are reported as-is",
+			name:     "gemini includes cache tokens",
 			provider: "gemini",
-			want:     []string{"llm.tokens.input:12|d", "llm.tokens.output:40|d", "llm.tokens.total:52|d"},
+			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
 		},
 	}
 	for _, tc := range cases {
@@ -203,7 +207,7 @@ func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
 				Model:                    "m",
 				InputTokens:              12,
 				OutputTokens:             40,
-				TotalTokens:              52,
+				TotalTokens:              12 + 40 + 48000 + 2500,
 				CacheReadInputTokens:     48000,
 				CacheCreationInputTokens: 2500,
 			}

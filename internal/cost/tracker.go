@@ -88,7 +88,7 @@ type CostRecord struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
-	// Prompt-cache tokens, reported separately from InputTokens by Anthropic.
+	// Prompt-cache tokens, reported separately from InputTokens for every provider.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 
@@ -585,13 +585,21 @@ func (ct *CostTracker) GetPricingForModelWithFuzzyMatch(provider, model string, 
 
 // CalculateCost calculates the cost for a request based on token usage
 func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, outputTokens int) (float64, float64, float64, error) {
-	pricing, err := ct.GetPricingForModel(provider, model, inputTokens)
+	return ct.CalculateCostWithCache(provider, model, inputTokens, 0, 0, outputTokens)
+}
+
+// CalculateCostWithCache is CalculateCost for a request that also carries
+// prompt-cache tokens, which are additive to inputTokens. Cache tokens are
+// priced exactly as calculateRequestCost prices them (per-tier cache_read /
+// cache_write, falling back to the input rate), and the pricing tier is chosen
+// from the whole prompt. Model lookup is exact-match, like CalculateCost.
+func (ct *CostTracker) CalculateCostWithCache(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) (float64, float64, float64, error) {
+	pricing, err := ct.GetPricingForModel(provider, model, inputTokens+cacheReadTokens+cacheWriteTokens)
 	if err != nil {
 		return 0, 0, 0, err
 	}
 
-	// Calculate costs (pricing is per 1M tokens and in dollars)
-	inputCost := (float64(inputTokens) / 1_000_000.0) * pricing.Input
+	inputCost := requestInputCost(pricing, inputTokens, cacheReadTokens, cacheWriteTokens)
 	outputCost := (float64(outputTokens) / 1_000_000.0) * pricing.Output
 	totalCost := inputCost + outputCost
 
@@ -600,6 +608,22 @@ func (ct *CostTracker) CalculateCost(provider, model string, inputTokens, output
 	outputCost = roundUpTo4Decimals(outputCost)
 	totalCost = roundUpTo4Decimals(totalCost)
 	return inputCost, outputCost, totalCost, nil
+}
+
+// requestInputCost prices the prompt side of a request: plain input plus
+// cache reads and writes. An unset (0) cache price falls back to the input
+// rate.
+func requestInputCost(pricing *PricingTier, input, cacheRead, cacheWrite int) float64 {
+	cacheReadPrice, cacheWritePrice := pricing.CacheRead, pricing.CacheWrite
+	if cacheReadPrice == 0 {
+		cacheReadPrice = pricing.Input
+	}
+	if cacheWritePrice == 0 {
+		cacheWritePrice = pricing.Input
+	}
+	return float64(input)/1_000_000.0*pricing.Input +
+		float64(cacheRead)/1_000_000.0*cacheReadPrice +
+		float64(cacheWrite)/1_000_000.0*cacheWritePrice
 }
 
 // CalculateCostWithFuzzyMatch calculates the cost for a request with fuzzy matching fallback
@@ -623,24 +647,11 @@ func (ct *CostTracker) CalculateCostWithFuzzyMatch(provider, model string, input
 	return inputCost, outputCost, totalCost, matchedModel, isEstimate, nil
 }
 
-// usesAnthropicCacheBilling reports whether the provider's cache token counts
-// are additive to input_tokens and priced via the tier's cache_read/cache_write.
-// Other providers (e.g. Gemini) report cached tokens inside their prompt count.
-func usesAnthropicCacheBilling(provider string) bool {
-	switch provider {
-	case "anthropic", "bedrock", "bedrock-mantle":
-		return true
-	}
-	return false
-}
-
-// calculateRequestCost prices a request, including prompt-cache tokens for
-// providers that bill them separately. Cache costs are folded into the input cost.
+// calculateRequestCost prices a request, including prompt-cache tokens, which
+// are additive to InputTokens for every provider. Cache costs are folded into
+// the input cost.
 func (ct *CostTracker) calculateRequestCost(metadata *providers.LLMResponseMetadata) (inputCost, outputCost, totalCost float64, matchedModel string, isEstimate bool, err error) {
-	cacheRead, cacheWrite := 0, 0
-	if usesAnthropicCacheBilling(metadata.Provider) {
-		cacheRead, cacheWrite = metadata.CacheReadInputTokens, metadata.CacheCreationInputTokens
-	}
+	cacheRead, cacheWrite := metadata.CacheReadInputTokens, metadata.CacheCreationInputTokens
 
 	promptTokens := metadata.InputTokens + cacheRead + cacheWrite
 	pricing, matchedModel, isEstimate, err := ct.GetPricingForModelWithFuzzyMatch(metadata.Provider, metadata.Model, promptTokens)
@@ -648,16 +659,7 @@ func (ct *CostTracker) calculateRequestCost(metadata *providers.LLMResponseMetad
 		return 0, 0, 0, "", false, err
 	}
 
-	cacheReadPrice, cacheWritePrice := pricing.CacheRead, pricing.CacheWrite
-	if cacheReadPrice == 0 {
-		cacheReadPrice = pricing.Input
-	}
-	if cacheWritePrice == 0 {
-		cacheWritePrice = pricing.Input
-	}
-	inputCost = float64(metadata.InputTokens)/1_000_000.0*pricing.Input +
-		float64(cacheRead)/1_000_000.0*cacheReadPrice +
-		float64(cacheWrite)/1_000_000.0*cacheWritePrice
+	inputCost = requestInputCost(pricing, metadata.InputTokens, cacheRead, cacheWrite)
 	outputCost = float64(metadata.OutputTokens) / 1_000_000.0 * pricing.Output
 
 	totalCost = roundUpTo4Decimals(inputCost + outputCost)
@@ -739,10 +741,7 @@ func (ct *CostTracker) TrackRequest(metadata *providers.LLMResponseMetadata, use
 
 	// Admin rollups count cache tokens as input; record.InputTokens stays
 	// cache-excluded because pricing bills cache tokens at their own rates.
-	rollupInputTokens := record.InputTokens
-	if usesAnthropicCacheBilling(record.Provider) {
-		rollupInputTokens += record.CacheReadInputTokens + record.CacheCreationInputTokens
-	}
+	rollupInputTokens := record.InputTokens + record.CacheReadInputTokens + record.CacheCreationInputTokens
 
 	ct.mu.RLock()
 	sr := ct.statsRecorder

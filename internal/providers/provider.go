@@ -33,7 +33,7 @@ import (
 //	OutputTokens                Y       Y          Y       Y
 //	TotalTokens                 Y       Y          Y       Y
 //	ThoughtTokens               -       extended*  Y       extended*
-//	CacheReadInputTokens        Y       Y          -       Y (Converse)
+//	CacheReadInputTokens        Y       Y          Y       Y (Converse)
 //	CacheCreationInputTokens    -       Y          -       Y (Converse)
 //	FinishReason                Y       Y          Y       Y
 //	RequestID                   Y       Y          Y       -
@@ -57,7 +57,11 @@ type LLMResponseMetadata struct {
 	ThoughtTokens int `json:"thought_tokens,omitempty"`
 
 	// Prompt-cache token breakdown. See the provider-coverage table on
-	// the type docstring for which providers populate these.
+	// the type docstring for which providers populate these. For every
+	// provider, InputTokens excludes cache tokens and TotalTokens includes
+	// them. Parsers for vendors that count cached tokens inside the prompt
+	// use splitCachedInput; parsers whose vendor total excludes cache
+	// tokens use addCacheToTotal.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 
@@ -73,6 +77,35 @@ type LLMResponseMetadata struct {
 	// TTFBMS is the time from the proxy receiving the request to writing the first
 	// response byte back to the caller (time-to-first-byte, in milliseconds).
 	TTFBMS int64 `json:"ttfb_ms,omitempty"`
+}
+
+// splitCachedInput moves cached prompt tokens out of InputTokens into
+// CacheReadInputTokens, for vendors (OpenAI, Gemini) whose usage counts
+// cached tokens inside the prompt. Their totals already include them.
+func (m *LLMResponseMetadata) splitCachedInput(cached int) {
+	cached = min(cached, m.InputTokens)
+	if cached <= 0 {
+		return
+	}
+	m.InputTokens -= cached
+	m.CacheReadInputTokens = cached
+}
+
+// splitCacheWrites moves cache-write prompt tokens out of InputTokens into
+// CacheCreationInputTokens. Call after splitCachedInput.
+func (m *LLMResponseMetadata) splitCacheWrites(written int) {
+	written = min(written, m.InputTokens)
+	if written <= 0 {
+		return
+	}
+	m.InputTokens -= written
+	m.CacheCreationInputTokens = written
+}
+
+// addCacheToTotal folds cache tokens into TotalTokens, for vendors
+// (Anthropic, Bedrock) whose total, when they report one, excludes them.
+func (m *LLMResponseMetadata) addCacheToTotal() {
+	m.TotalTokens += m.CacheReadInputTokens + m.CacheCreationInputTokens
 }
 
 // Provider defines the interface that all LLM providers must implement

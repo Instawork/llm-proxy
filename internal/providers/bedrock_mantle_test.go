@@ -542,7 +542,7 @@ func TestBedrockMantle_ParseResponsesMetadataIncludesCostFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
-	if metadata.Provider != bedrockMantleName || metadata.Model != "openai.gpt-5.4" || metadata.TotalTokens != 13 {
+	if metadata.Provider != bedrockMantleName || metadata.Model != "openai.gpt-5.4" || metadata.TotalTokens != 16 {
 		t.Fatalf("unexpected metadata: %+v", metadata)
 	}
 	if metadata.InputTokens != 9 {
@@ -580,7 +580,7 @@ data: [DONE]
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
-	if metadata.Provider != bedrockMantleName || metadata.Model != "claude-sonnet-4-5" || metadata.TotalTokens != 13 {
+	if metadata.Provider != bedrockMantleName || metadata.Model != "claude-sonnet-4-5" || metadata.TotalTokens != 16 {
 		t.Fatalf("unexpected metadata: %+v", metadata)
 	}
 	if metadata.InputTokens != 9 {
@@ -603,7 +603,7 @@ func TestBedrockMantle_ParseAnthropicNonStreamingUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata: %v", err)
 	}
-	if metadata.InputTokens != 40 || metadata.OutputTokens != 9 || metadata.TotalTokens != 49 {
+	if metadata.InputTokens != 40 || metadata.OutputTokens != 9 || metadata.TotalTokens != 40+9+1024+256 {
 		t.Fatalf("unexpected usage: %+v", metadata)
 	}
 	if metadata.CacheReadInputTokens != 1024 || metadata.CacheCreationInputTokens != 256 {
@@ -634,7 +634,7 @@ data: {"type":"message_stop"}
 	}
 	// message_delta usage is cumulative per Anthropic's docs, so the final
 	// output count is the last delta's value (15), not message_start + delta.
-	if metadata.InputTokens != 25 || metadata.OutputTokens != 15 || metadata.TotalTokens != 40 {
+	if metadata.InputTokens != 25 || metadata.OutputTokens != 15 || metadata.TotalTokens != 25+15+5+2 {
 		t.Fatalf("unexpected token aggregation: %+v", metadata)
 	}
 	if metadata.CacheReadInputTokens != 5 || metadata.CacheCreationInputTokens != 2 {

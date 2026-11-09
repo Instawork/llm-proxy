@@ -765,29 +765,27 @@ func parseMantleMetadata(body []byte, streaming bool) (*LLMResponseMetadata, err
 	}
 	total := usage.TotalTokens
 	if total == 0 {
-		total = input + output
+		total = input + output + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	}
 	finish := envelope.Status
 	if finish == "" {
 		finish = envelope.StopReason
 	}
-	cacheRead := usage.CacheReadInputTokens
-	if cached := usage.InputTokensDetails.CachedTokens; cached > 0 && cacheRead == 0 {
-		// OpenAI-style usage counts cached tokens inside input_tokens and
-		// total_tokens; the cost tracker treats cache tokens as additive
-		// (Anthropic semantics), so take them out here to avoid billing twice.
-		cacheRead = min(cached, input)
-		input -= cacheRead
-		total = max(total-cacheRead, 0)
-	}
-	return &LLMResponseMetadata{
+	md := &LLMResponseMetadata{
 		Model: envelope.Model, RequestID: envelope.ID, Provider: bedrockMantleName,
 		InputTokens: input, OutputTokens: output, TotalTokens: total,
 		FinishReason: finish, IsStreaming: streaming,
-		CacheReadInputTokens:     cacheRead,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		ThoughtTokens:            usage.OutputTokensDetails.ReasoningTokens,
-	}, nil
+	}
+	if md.CacheReadInputTokens == 0 {
+		md.splitCachedInput(usage.InputTokensDetails.CachedTokens)
+	}
+	if md.CacheCreationInputTokens == 0 {
+		md.splitCacheWrites(usage.InputTokensDetails.CacheWriteTokens)
+	}
+	return md, nil
 }
 
 type mantleUsage struct {
@@ -803,7 +801,8 @@ type mantleUsage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	InputTokensDetails       struct {
-		CachedTokens int `json:"cached_tokens"`
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
