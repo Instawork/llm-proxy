@@ -27,7 +27,10 @@ def _post_multipart(url: str, field: str, filename: str, data: bytes) -> dict:
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", ""),
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
