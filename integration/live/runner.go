@@ -210,7 +210,7 @@ func (r *Runner) runOpenAI(ctx context.Context) []Result {
 	var out []Result
 
 	start := time.Now()
-	pr, err := r.proxy.OpenAIChat(ctx, r.cfg.OpenAIKey, "gpt-4o-mini", 5)
+	pr, err := r.proxy.OpenAIChat(ctx, r.cfg.OpenAIKey, "gpt-4.1-mini", 5)
 	if err != nil {
 		out = append(out, failResult("openai", "passthrough", err.Error()))
 	} else if err := proxyOK(pr); err != nil {
@@ -235,7 +235,7 @@ func (r *Runner) runOpenAI(ctx context.Context) []Result {
 	}
 	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
 
-	pr, err = r.proxy.OpenAIChat(ctx, key.Key, "gpt-4o-mini", 5)
+	pr, err = r.proxy.OpenAIChat(ctx, key.Key, "gpt-4.1-mini", 5)
 	if err != nil {
 		out = append(out, failResult("openai", "iw-key", err.Error()))
 	} else if err := proxyOK(pr); err != nil {
@@ -342,7 +342,7 @@ func (r *Runner) runRateLimit(ctx context.Context) []Result {
 	}
 	defer func() { _ = r.admin.DeleteKey(ctx, key.Key) }()
 
-	first, err := r.proxy.OpenAIChat(ctx, key.Key, "gpt-4o-mini", 1)
+	first, err := r.proxy.OpenAIChat(ctx, key.Key, "gpt-4.1-mini", 1)
 	if err != nil && (first == nil || first.Status != http.StatusTooManyRequests) {
 		return []Result{failResult("ratelimit", "per-key-rpm", "first request: "+err.Error())}
 	}
@@ -353,7 +353,7 @@ func (r *Runner) runRateLimit(ctx context.Context) []Result {
 		return []Result{failResult("ratelimit", "per-key-rpm", "first request: "+err.Error())}
 	}
 
-	second, err := r.proxy.OpenAIChat(ctx, key.Key, "gpt-4o-mini", 1)
+	second, err := r.proxy.OpenAIChat(ctx, key.Key, "gpt-4.1-mini", 1)
 	if second == nil || second.Status != http.StatusTooManyRequests {
 		msg := fmt.Sprintf("expected 429, got %d", 0)
 		if second != nil {
@@ -388,7 +388,7 @@ func (r *Runner) runCost(ctx context.Context) []Result {
 	}
 
 	start := time.Now()
-	pr, err := r.proxy.OpenAIChat(ctx, r.cfg.OpenAIKey, "gpt-4o-mini", 3)
+	pr, err := r.proxy.OpenAIChat(ctx, r.cfg.OpenAIKey, "gpt-4.1-mini", 3)
 	if err != nil {
 		return []Result{failResult("cost", "jsonl-record", err.Error())}
 	}

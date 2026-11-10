@@ -61,7 +61,7 @@ func (p *ProxyClient) lastResponseBody() []byte {
 
 func (p *ProxyClient) OpenAIChat(ctx context.Context, apiKey, model string, maxTokens int) (*ProxyResponse, error) {
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "gpt-4.1-mini"
 	}
 	client := openai.NewClient(
 		openaiopt.WithBaseURL(p.base+"/openai/v1"),
