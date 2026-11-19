@@ -50,6 +50,16 @@ After the response returns, `TokenParsingMiddleware` calls each provider's
 `ParseResponseMetadata` to build an `LLMResponseMetadata` snapshot. Registered
 callbacks feed the cost tracker, usage stats, and (indirectly) admin rollups.
 
+Compressed responses reach the client exactly as the upstream sent them;
+`TokenParsingMiddleware` decodes only its metering copy, by the response
+`Content-Encoding` (gzip, deflate, br), bounded at 16 MiB decoded. To keep
+every negotiated coding decodable, `CreateGenericRewrite` narrows the client's
+`Accept-Encoding` to those codings (order and q-values kept). Bedrock and
+Bedrock Mantle are signed requests and forward it untouched. A response whose
+usage still cannot be read increments `llm.metering.unparseable_response`
+(tags `provider`, `reason`, `encoding`, `streaming`, `status_class`) on the
+cost-tracking Datadog transport and logs one warn line with no body content.
+
 ## Repository layout
 
 | Path | Role |

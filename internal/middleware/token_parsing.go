@@ -3,11 +3,8 @@ package middleware
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -17,9 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/observability"
 	"github.com/Instawork/llm-proxy/internal/providers"
-	"github.com/Instawork/llm-proxy/internal/proxylog"
-	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 // MetadataCallback is a function that can be hooked into the TokenParsingMiddleware
@@ -88,6 +84,22 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 // TokenParsingMiddlewareWithUnmetered is TokenParsingMiddleware that also
 // reports provider requests which produced no token usage to onUnmetered.
 func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderManager, onUnmetered UnmeteredCallback, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
+	return TokenParsingMiddlewareWithOptions(providerManager, TokenParsingOptions{OnUnmetered: onUnmetered}, callbacks...)
+}
+
+// TokenParsingOptions configures TokenParsingMiddlewareWithOptions.
+type TokenParsingOptions struct {
+	// OnUnmetered receives provider requests that produced no token usage.
+	OnUnmetered UnmeteredCallback
+	// Metrics receives the metering.unparseable_response counter. Nil
+	// disables emission.
+	Metrics observability.MetricsSink
+}
+
+// TokenParsingMiddlewareWithOptions is TokenParsingMiddleware with unmetered
+// reporting and a metrics sink for responses whose usage cannot be parsed.
+func TokenParsingMiddlewareWithOptions(providerManager *providers.ProviderManager, opts TokenParsingOptions, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
+	onUnmetered := opts.OnUnmetered
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			provider := GetProviderFromRequest(providerManager, r)
@@ -123,33 +135,34 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 
 			totalElapsed := time.Since(requestStart)
 
-			// BodyReader lends the capture buffer to the parser; providers
-			// that need the whole body borrow it instead of re-copying it
-			// with io.ReadAll, so the stream is held in memory exactly once.
-			bodyReader := providers.NewBodyReader(captureWriter.body.Bytes())
-			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
-			if err != nil {
-				if !isStreaming {
-					proxylog.Proxy("failed to parse response metadata for %s: %v", provider.GetName(), err)
-					if captureWriter.body.Len() > 0 {
-						bodyBytes := captureWriter.body.Bytes()
-						// Both branches route through redact.LogPreview so
-						// raw model output is never persisted unredacted
-						// when pii_redact is enabled. The wording stays
-						// stable for the test fixtures that grep for
-						// "gzip-decompressed" / "Response body preview".
-						if len(bodyBytes) >= 2 && bodyBytes[0] == 0x1f && bodyBytes[1] == 0x8b {
-							if decompressed, e := decompressForPreview(bodyBytes); e == nil {
-								log.Printf("🔍 Response body (gzip-decompressed): %s",
-									redact.LogPreview(context.Background(), string(decompressed), 200))
-							}
-						} else {
-							log.Printf("🔍 Response body preview: %s",
-								redact.LogPreview(context.Background(), string(bodyBytes), 200))
-						}
-					}
-				}
+			contentEncoding := captureWriter.Header().Get("Content-Encoding")
+			unparseable := func(reason string, err error) {
+				reportUnparseableResponse(opts.Metrics, unparseableResponse{
+					provider:        provider.GetName(),
+					reason:          reason,
+					contentEncoding: contentEncoding,
+					streaming:       isStreaming,
+					status:          captureWriter.statusCode(),
+					capturedBytes:   captureWriter.body.Len(),
+					err:             err,
+				})
 				unmetered()
+			}
+
+			// The client already received the upstream bytes as-is; only
+			// this metering copy is decoded.
+			body, reason, err := decodeCapturedBody(captureWriter.body.Bytes(), contentEncoding, isStreaming)
+			if reason != "" {
+				unparseable(reason, err)
+				return
+			}
+
+			// BodyReader lends the buffer to the parser; providers that need
+			// the whole body borrow it instead of re-copying it with
+			// io.ReadAll, so the stream is held in memory exactly once.
+			metadata, err := provider.ParseResponseMetadata(providers.NewBodyReader(body), isStreaming)
+			if err != nil {
+				unparseable(reasonParseError, err)
 				return
 			}
 
@@ -188,7 +201,7 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 			if isStreaming {
 				gzNote := ""
 				if captureWriter.compressed {
-					gzNote = " gz"
+					gzNote = " " + encodingLogNote(contentEncoding)
 				}
 				eventsNote := ""
 				if ec := captureWriter.formatEventCounts(); ec != "-" {
@@ -279,8 +292,8 @@ type responseCapture struct {
 	// SSE event-type histogram. Counts both `event:` lines and `"type":"..."`
 	// occurrences in `data:` payloads. Useful for telling apart "Anthropic is
 	// sending lots of pings/thinking_deltas" vs "Anthropic is silent" during
-	// long inter-chunk gaps. Only populated when the upstream body is plain
-	// text (non-gzipped) — pass --disable-gzip at startup to force uncompressed
+	// long inter-chunk gaps. Only populated when the upstream body has no
+	// Content-Encoding — pass --disable-gzip at startup to force uncompressed
 	// upstream bytes and populate this field reliably.
 	sseLeftover    []byte
 	sseEventCounts map[string]int64
@@ -313,14 +326,10 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 			rc.ttfbMS = now.Sub(rc.requestStart).Milliseconds()
 			log.Printf("⏱  TTFB: %dms", rc.ttfbMS)
 		})
-		// Detect upstream gzip on the first chunk. When --disable-gzip is set,
-		// CreateGenericRewrite strips Accept-Encoding so this should not fire;
-		// without it, gzip is expected and this is just an observational note.
+		// Headers are committed by the first body write, so Content-Encoding
+		// is final here. Compressed chunks skip SSE event sniffing.
 		rc.compressedOnce.Do(func() {
-			if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
-				rc.compressed = true
-				proxylog.Upstream("upstream still sent gzip despite Accept-Encoding strip (passthrough)")
-			}
+			rc.compressed = isEncodedContent(rc.Header().Get("Content-Encoding"))
 		})
 	}
 
@@ -701,28 +710,4 @@ func ExtractIPAddressFromRequest(req *http.Request) string {
 	}
 
 	return req.RemoteAddr
-}
-
-// decompressForPreview safely decompresses gzip data for debug preview purposes
-func decompressForPreview(data []byte) ([]byte, error) {
-	// Check for gzip magic number
-	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
-		return nil, fmt.Errorf("not gzip compressed")
-	}
-
-	// Create a gzip reader
-	reader := bytes.NewReader(data)
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gzipReader.Close()
-
-	// Read the decompressed data
-	decompressed, err := io.ReadAll(gzipReader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decompress data: %w", err)
-	}
-
-	return decompressed, nil
 }

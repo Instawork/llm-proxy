@@ -726,6 +726,18 @@ func initializeIDGateMetrics(yamlConfig *config.YAMLConfig) observability.Metric
 	return observability.NewMetricsSink(yamlConfig.Features.IDGate.Datadog, logger, "id_gate")
 }
 
+// initializeMeteringMetrics reuses the cost-tracking Datadog transport so the
+// unparseable-response counter is emitted wherever llm.cost.* is, including
+// sidecars that have no feature-local datadog blocks.
+func initializeMeteringMetrics(yamlConfig *config.YAMLConfig) observability.MetricsSink {
+	for _, transport := range yamlConfig.GetAllTransports() {
+		if transport.Type == "datadog" && transport.Datadog != nil {
+			return observability.NewMetricsSink(transport.Datadog, logger, "metering")
+		}
+	}
+	return nil
+}
+
 // circuitModelExtractor returns a ModelFromRequestFunc that dispatches to
 // the right provider's request-body parser by URL prefix.  Used by the
 // circuit transport on failure paths to enrich logs and metrics with
@@ -1903,7 +1915,10 @@ func buildRouter(deps *serverDeps) *mux.Router {
 	if globalCostTracker != nil {
 		callbacks = append(callbacks, costTrackingCallback)
 	}
-	r.Use(middleware.TokenParsingMiddlewareWithUnmetered(globalProviderManager, unmeteredCallback, callbacks...))
+	r.Use(middleware.TokenParsingMiddlewareWithOptions(globalProviderManager, middleware.TokenParsingOptions{
+		OnUnmetered: unmeteredCallback,
+		Metrics:     initializeMeteringMetrics(yamlConfig),
+	}, callbacks...))
 	r.Use(middleware.PIIResponseRestoreMiddleware(globalProviderManager))
 	r.Use(middleware.StreamingMiddleware(globalProviderManager))
 

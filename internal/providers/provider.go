@@ -301,9 +301,10 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 // This eliminates code duplication across all providers by handling the common logic:
 //   - Pointing the outbound request at targetURL and pinning the Host header
 //   - Stripping the provider prefix from the path
-//   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
-//     upstream returns uncompressed responses. Useful for debugging SSE streams where
-//     plain-text event data is easier to inspect in logs. By default gzip is allowed.
+//   - Narrowing client-supplied Accept-Encoding to the codings metering can
+//     decode (see NarrowAcceptEncoding), or stripping it entirely when
+//     disableGzip=true so upstream returns uncompressed responses (useful for
+//     debugging SSE streams where plain-text event data is easier to inspect).
 //   - Logging the request with streaming detection
 //
 // Rewrite is used instead of the deprecated Director hook: in Rewrite mode
@@ -330,6 +331,8 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 		// (DisableCompression only suppresses gzip when the client did NOT request it).
 		if disableGzip {
 			req.Header.Del("Accept-Encoding")
+		} else {
+			narrowAcceptEncodingHeader(req.Header)
 		}
 
 		// Log the request, including streaming detection
@@ -339,6 +342,23 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 		} else {
 			log.Printf("Proxying %s request: %s %s", provider.GetName(), req.Method, req.URL.Path)
 		}
+	}
+}
+
+// narrowAcceptEncodingHeader restricts a client's Accept-Encoding to codings
+// the metering path can decode. The client still receives the upstream bytes
+// untouched, so anything left in the header is something it asked for. When
+// nothing usable remains the header is removed and Go's transport negotiates
+// gzip itself and hands back a decoded body.
+func narrowAcceptEncodingHeader(h http.Header) {
+	values := h.Values("Accept-Encoding")
+	if len(values) == 0 {
+		return
+	}
+	if narrowed := NarrowAcceptEncoding(strings.Join(values, ", ")); narrowed != "" {
+		h.Set("Accept-Encoding", narrowed)
+	} else {
+		h.Del("Accept-Encoding")
 	}
 }
 

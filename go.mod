@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/DataDog/datadog-go/v5 v5.6.0
 	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/andybalholm/brotli v1.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13
 	github.com/aws/aws-sdk-go-v2/config v1.29.18

@@ -1184,61 +1184,45 @@ func TestTokenParsingMiddleware_InvokesCallbacks_SkipsNil(t *testing.T) {
 	}
 }
 
-// ─── TokenParsingMiddleware: parse-error preview branches ──────────────
+// ─── TokenParsingMiddleware: parse-error reporting ─────────────────────
 
-// TestTokenParsingMiddleware_ParseErrorWithGzipBody_LogsDecompressedPreview
-// covers the operator-debugging helper: when ParseResponseMetadata errors and
-// the captured body starts with the gzip magic, the middleware decompresses
-// a short preview into the log.
-//
-// Since the audit fix that routed previews through redact.LogPreview, the
-// expectation is that:
-//
-//   - The "gzip-decompressed" log header still fires (so operators still
-//     see that the path was exercised), AND
-//   - The raw body content NEVER appears in the log when no global
-//     Redactor is configured. We assert both halves: header present,
-//     payload absent.
-func TestTokenParsingMiddleware_ParseErrorWithGzipBody_LogsDecompressedPreview(t *testing.T) {
-	gz := mustGzip(t, []byte("hello-from-gzip-preview-payload"))
-	p := &configurableProvider{parseErr: errors.New("boom")}
-
-	logOut, _ := driveTokenParsing(t, p, "/openai/v1/chat/completions",
-		func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(gz)
+// TestTokenParsingMiddleware_ParseError_LogsWarnWithoutBody checks that an
+// unparseable response produces one warn line with the provider, reason and
+// encoding, and never any body content, for both plain and gzip bodies.
+func TestTokenParsingMiddleware_ParseError_LogsWarnWithoutBody(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		body     []byte
+		wantEnc  string
+	}{
+		{"plain", "", []byte("plain-text-error-body"), "encoding=identity"},
+		{"gzip", "gzip", mustGzip(t, []byte("hello-from-gzip-preview-payload")), "encoding=gzip"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &configurableProvider{parseErr: errors.New("boom")}
+			logOut, _ := driveTokenParsing(t, p, "/openai/v1/chat/completions",
+				func(w http.ResponseWriter, r *http.Request) {
+					if tc.encoding != "" {
+						w.Header().Set("Content-Encoding", tc.encoding)
+					}
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(tc.body)
+				})
+			if n := strings.Count(logOut, "response usage unparseable"); n != 1 {
+				t.Fatalf("want exactly one unparseable warn line, got %d: %s", n, logOut)
+			}
+			for _, want := range []string{"WARN", "reason=parse_error", tc.wantEnc} {
+				if !strings.Contains(logOut, want) {
+					t.Errorf("warn line missing %q: %s", want, logOut)
+				}
+			}
+			for _, leak := range []string{"plain-text-error-body", "hello-from-gzip-preview-payload"} {
+				if strings.Contains(logOut, leak) {
+					t.Errorf("body content leaked into log: %s", logOut)
+				}
+			}
 		})
-
-	if !strings.Contains(logOut, "gzip-decompressed") {
-		t.Errorf("expected gzip-decompressed preview log; got %s", logOut)
-	}
-	if strings.Contains(logOut, "hello-from-gzip-preview-payload") {
-		t.Errorf("body content leaked into log without a Redactor configured; got %s", logOut)
-	}
-	if !strings.Contains(logOut, "pii_redact disabled") {
-		t.Errorf("expected length-only summary marker; got %s", logOut)
-	}
-}
-
-// TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview is the
-// non-gzip companion of the test above. Same audit invariant applies: the
-// preview log line fires, but body bytes do not appear when the global
-// Redactor is unset.
-func TestTokenParsingMiddleware_ParseErrorWithPlainBody_LogsRawPreview(t *testing.T) {
-	p := &configurableProvider{parseErr: errors.New("boom")}
-	logOut, _ := driveTokenParsing(t, p, "/openai/v1/chat/completions",
-		func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("plain-text-error-body"))
-		})
-	if !strings.Contains(logOut, "Response body preview") {
-		t.Errorf("expected preview log header; got %s", logOut)
-	}
-	if strings.Contains(logOut, "plain-text-error-body") {
-		t.Errorf("body content leaked into log without a Redactor configured; got %s", logOut)
-	}
-	if !strings.Contains(logOut, "pii_redact disabled") {
-		t.Errorf("expected length-only summary marker; got %s", logOut)
 	}
 }
 

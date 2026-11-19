@@ -3,7 +3,6 @@ package middleware
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"net"
 	"net/http/httptest"
@@ -242,103 +241,36 @@ func TestResponseCapture_Hijack_DelegatesWhenSupported(t *testing.T) {
 	}
 }
 
-// ─── decompressForPreview ────────────────────────────────────────────────
-
-func TestDecompressForPreview(t *testing.T) {
-	t.Run("not_gzip_returns_error", func(t *testing.T) {
-		_, err := decompressForPreview([]byte("plain text payload"))
-		if err == nil {
-			t.Fatal("expected error for non-gzip data")
-		}
-	})
-
-	t.Run("too_short_returns_error", func(t *testing.T) {
-		_, err := decompressForPreview([]byte{0x1f})
-		if err == nil {
-			t.Fatal("expected error for too-short data")
-		}
-	})
-
-	t.Run("valid_gzip_roundtrips", func(t *testing.T) {
-		original := []byte(`{"hello":"world","nested":{"x":1}}`)
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		if _, err := gw.Write(original); err != nil {
-			t.Fatalf("gzip write: %v", err)
-		}
-		if err := gw.Close(); err != nil {
-			t.Fatalf("gzip close: %v", err)
-		}
-		got, err := decompressForPreview(buf.Bytes())
-		if err != nil {
-			t.Fatalf("decompressForPreview: %v", err)
-		}
-		if !bytes.Equal(got, original) {
-			t.Fatalf("roundtrip mismatch: got %q, want %q", got, original)
-		}
-	})
-
-	t.Run("gzip_magic_but_corrupt_returns_error", func(t *testing.T) {
-		// Magic bytes match (0x1f, 0x8b) but the rest is garbage — gzip.NewReader
-		// should fail.
-		_, err := decompressForPreview([]byte{0x1f, 0x8b, 0xff, 0xff, 0xff})
-		if err == nil {
-			t.Fatal("expected error for corrupt gzip data")
-		}
-	})
-
-	t.Run("valid_header_but_truncated_body_returns_error", func(t *testing.T) {
-		// A real gzip header followed by a truncated body drives the
-		// "failed to decompress data" branch (gzip.NewReader succeeds, but
-		// io.ReadAll on the inner reader fails).
-		var buf bytes.Buffer
-		gz := gzip.NewWriter(&buf)
-		if _, err := gz.Write([]byte("payload-that-will-be-truncated")); err != nil {
-			t.Fatalf("gzip.Write: %v", err)
-		}
-		if err := gz.Close(); err != nil {
-			t.Fatalf("gzip.Close: %v", err)
-		}
-		good := buf.Bytes()
-		if len(good) < 18 {
-			t.Skip("gzip output too small to truncate meaningfully")
-		}
-		// Drop the trailing CRC + length so the inner reader can't validate.
-		if _, err := decompressForPreview(good[:len(good)-2]); err == nil {
-			t.Fatal("expected error for truncated gzip body")
-		}
-	})
-}
-
 // ─── responseCapture: first-chunk gzip detection ──────────────────────
 
-// TestResponseCapture_FirstChunkGzip_LogsCompressedWarning ensures the
-// upstream-gzip warning fires the first time we see the gzip magic bytes,
-// since the proxy strips Accept-Encoding by default and unexpected gzip
-// upstream responses break SSE/event sniffing.
-func TestResponseCapture_FirstChunkGzip_LogsCompressedWarning(t *testing.T) {
-	rc := &responseCapture{
-		ResponseWriter: httptest.NewRecorder(),
-		body:           &bytes.Buffer{},
-		isStreaming:    false,
-		requestStart:   time.Now(),
-	}
-	var gzBuf bytes.Buffer
-	gz := gzip.NewWriter(&gzBuf)
-	if _, err := gz.Write([]byte("gzipped-payload")); err != nil {
-		t.Fatalf("gzip.Write: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatalf("gzip.Close: %v", err)
-	}
-
-	logOut := captureLogOutput(func() {
-		_, _ = rc.Write(gzBuf.Bytes())
-	})
-	if !rc.compressed {
-		t.Error("compressed flag must be set on gzip first chunk")
-	}
-	if !strings.Contains(logOut, "[UPSTREAM] upstream still sent gzip") {
-		t.Errorf("expected gzip warning; got: %s", logOut)
+// TestResponseCapture_CompressedFromContentEncoding ensures the compressed
+// flag (which disables SSE sniffing) follows the response Content-Encoding
+// header rather than the body bytes.
+func TestResponseCapture_CompressedFromContentEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		encoding string
+		want     bool
+	}{
+		{"", false},
+		{"identity", false},
+		{"gzip", true},
+		{"br", true},
+		{"zstd", true},
+	} {
+		t.Run("encoding="+tc.encoding, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if tc.encoding != "" {
+				rec.Header().Set("Content-Encoding", tc.encoding)
+			}
+			rc := &responseCapture{
+				ResponseWriter: rec,
+				body:           &bytes.Buffer{},
+				requestStart:   time.Now(),
+			}
+			_, _ = rc.Write([]byte("payload"))
+			if rc.compressed != tc.want {
+				t.Errorf("compressed = %v, want %v", rc.compressed, tc.want)
+			}
+		})
 	}
 }

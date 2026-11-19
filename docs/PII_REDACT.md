@@ -164,7 +164,7 @@ adding the feature; the findings are below.
 | `internal/providers/openai.go` (ParseResponseMetadata)         | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
 | `internal/providers/openai.go` (ParseResponsesAPIMetadata)     | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
 | `internal/providers/anthropic.go` (ParseResponseMetadata)      | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Routed through `redact.LogPreview`                        |
+| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Removed; one warn line with provider/reason/encoding only |
 
 `redact.LogPreview` returns:
 
