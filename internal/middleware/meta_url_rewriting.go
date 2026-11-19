@@ -15,6 +15,13 @@ const (
 	userIDContextKey contextKey = "user_id"
 )
 
+// MetaUserIDFromContext returns the user ID taken from a /meta/{userID}/...
+// URL, or "" when the request did not use a meta path.
+func MetaUserIDFromContext(ctx context.Context) string {
+	userID, _ := ctx.Value(userIDContextKey).(string)
+	return userID
+}
+
 // MetaURLRewritingMiddleware centralizes URL path rewriting for all providers
 // It handles both direct provider paths (/openai/, /anthropic/, /gemini/)
 // and meta paths (/meta/{userID}/openai/, /meta/{userID}/anthropic/, /meta/{userID}/gemini/)

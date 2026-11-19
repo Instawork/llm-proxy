@@ -87,6 +87,22 @@ func WithCallerExtractor(f CallerFromRequestFunc) Option {
 	}
 }
 
+// UserFromRequestFunc returns the per-request user label behind an HTTP
+// request (the {userID} of a /meta/{userID}/... URL), or "" when there is
+// none. It is written to failure log lines only. It is never a metric tag:
+// unlike the caller label it is client-chosen and unbounded.
+type UserFromRequestFunc func(*http.Request) string
+
+// WithUserExtractor installs a user-label extractor so failure log lines
+// carry a `user_id` attribute. Traffic that authenticates with a raw
+// provider key has no proxy key record, so `caller` is empty for it and
+// this is the only attribution those lines get. Pass nil to skip it.
+func WithUserExtractor(f UserFromRequestFunc) Option {
+	return func(t *Transport) {
+		t.userFn = f
+	}
+}
+
 // ActivityRecorder is optional dashboard telemetry for circuit state transitions.
 // Implementations must be safe for concurrent use.
 type ActivityRecorder interface {

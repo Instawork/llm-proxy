@@ -168,6 +168,8 @@ func newBedrockMantleProxy(region string, credentials aws.CredentialsProvider, o
 		stripMantleClientHopHeaders(req)
 		if opt.DisableGzip {
 			req.Header.Del("Accept-Encoding")
+		} else {
+			normalizeUpstreamAcceptEncoding(req.Header)
 		}
 		log.Printf("Proxying Bedrock Mantle request: %s %s", req.Method, req.URL.Path)
 	}

@@ -718,6 +718,20 @@ func initializeCircuitMetrics(yamlConfig *config.YAMLConfig) circuit.MetricsSink
 	return observability.NewMetricsSink(ddCfg, logger, "circuit_breaker")
 }
 
+// initializeUnparsedMetrics builds the sink for llm.requests.unparsed from
+// the cost-tracking Datadog transport, so the counter is emitted wherever
+// cost metrics are (it reports the requests those metrics are missing).
+func initializeUnparsedMetrics(yamlConfig *config.YAMLConfig) observability.MetricsSink {
+	if yamlConfig.Features.CostTracking.Enabled {
+		for _, transport := range yamlConfig.GetAllTransports() {
+			if transport.Type == "datadog" && transport.Datadog != nil {
+				return observability.NewMetricsSink(transport.Datadog, logger, "unparsed_usage")
+			}
+		}
+	}
+	return observability.NoopSink
+}
+
 func initializePIIMetrics(yamlConfig *config.YAMLConfig) observability.MetricsSink {
 	return observability.NewMetricsSink(yamlConfig.Features.PIIRedact.Datadog, logger, "pii_redact")
 }
@@ -803,6 +817,19 @@ func circuitCallerExtractor() circuit.CallerFromRequestFunc {
 			return rec.Description
 		}
 		return ""
+	}
+}
+
+// circuitUserExtractor returns the /meta/{userID} label for circuit failure
+// log lines. Requests that authenticate with a raw provider key carry no
+// proxy key record, so circuitCallerExtractor returns "" for them and this
+// is their only attribution.
+func circuitUserExtractor() circuit.UserFromRequestFunc {
+	return func(req *http.Request) string {
+		if req == nil {
+			return ""
+		}
+		return middleware.MetaUserIDFromContext(req.Context())
 	}
 }
 
@@ -1734,6 +1761,7 @@ func wrapProviderTransports(deps *serverDeps) {
 		opts := []circuit.Option{
 			circuit.WithModelExtractor(modelFn),
 			circuit.WithCallerExtractor(circuitCallerExtractor()),
+			circuit.WithUserExtractor(circuitUserExtractor()),
 			circuit.WithMetrics(circuitMetrics),
 		}
 		if globalCircuitStatsRecorder != nil {
@@ -1903,7 +1931,10 @@ func buildRouter(deps *serverDeps) *mux.Router {
 	if globalCostTracker != nil {
 		callbacks = append(callbacks, costTrackingCallback)
 	}
-	r.Use(middleware.TokenParsingMiddlewareWithUnmetered(globalProviderManager, unmeteredCallback, callbacks...))
+	r.Use(middleware.TokenParsingMiddlewareWithHooks(globalProviderManager, middleware.TokenParsingHooks{
+		OnUnmetered: unmeteredCallback,
+		OnUnparsed:  middleware.NewUnparsedMetricsCallback(initializeUnparsedMetrics(yamlConfig)),
+	}, callbacks...))
 	r.Use(middleware.PIIResponseRestoreMiddleware(globalProviderManager))
 	r.Use(middleware.StreamingMiddleware(globalProviderManager))
 

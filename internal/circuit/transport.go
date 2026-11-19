@@ -72,6 +72,7 @@ type Transport struct {
 	metrics  MetricsSink
 	modelFn  ModelFromRequestFunc
 	callerFn CallerFromRequestFunc
+	userFn   UserFromRequestFunc
 	activity ActivityRecorder
 
 	// maxTimeoutBudget is the ceiling a caller's X-LLM-Proxy-Timeout-Ms
@@ -130,6 +131,10 @@ const maxErrorStringLength = 256
 // specific Redis hash.  It always equals provider + ":" + model when both
 // are set; we precompute it once instead of inferring it at log time.
 //
+// UserID is the /meta/{userID} label of the request. It is a log attribute
+// only and stays out of metricTags: it is client-chosen, so its cardinality
+// is unbounded.
+//
 // UpstreamError carries a compact parse of the upstream JSON error body
 // (e.g. Gemini status=UNAVAILABLE, OpenAI code=insufficient_quota).
 // Populated before the response body is drained; omitted from metric tags
@@ -139,6 +144,7 @@ type failureContext struct {
 	Model         string
 	CBKey         string
 	Caller        string
+	UserID        string
 	Path          string
 	Method        string
 	StatusCode    int
@@ -179,6 +185,9 @@ func (t *Transport) newFailureContext(req *http.Request, resp *http.Response, er
 		// from the request context only — no body access — so it is safe on
 		// synthetic fast-fail paths that run before cacheBody.
 		fc.Caller = t.callerFn(req)
+	}
+	if t.userFn != nil && req != nil {
+		fc.UserID = t.userFn(req)
 	}
 	fc.CBKey = composeKey(fc.Provider, fc.Model)
 	return fc
@@ -283,6 +292,9 @@ func (fc failureContext) attrs() []any {
 		"status_code", fc.StatusCode,
 		"failure_kind", string(fc.Kind),
 		"error", fc.ErrorString,
+	}
+	if fc.UserID != "" {
+		attrs = append(attrs, "user_id", fc.UserID)
 	}
 	if fc.UpstreamError != "" {
 		attrs = append(attrs, "upstream_error", fc.UpstreamError)

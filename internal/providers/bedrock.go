@@ -115,8 +115,14 @@ func NewBedrockProxy(opts ...ProxyOptions) *BedrockProxy {
 		// reconstructs and every request fails with
 		// InvalidSignatureException. Only strip when the client did not
 		// sign it.
-		if opt.DisableGzip && !sigV4HeaderSigned(req.Header.Get("Authorization"), "accept-encoding") {
-			req.Header.Del("Accept-Encoding")
+		// The same guard covers narrowing br/zstd to gzip, which the
+		// metering path needs to read usage out of the response.
+		if !sigV4HeaderSigned(req.Header.Get("Authorization"), "accept-encoding") {
+			if opt.DisableGzip {
+				req.Header.Del("Accept-Encoding")
+			} else {
+				normalizeUpstreamAcceptEncoding(req.Header)
+			}
 		}
 		isStreaming := bedrockProxy.IsStreamingRequest(req)
 		if isStreaming {

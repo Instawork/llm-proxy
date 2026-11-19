@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1356,5 +1357,114 @@ func TestTokenParsingMiddleware_UnmeteredCallback(t *testing.T) {
 				t.Fatalf("status = %d, want %d", gotStatus, tc.wantStatus)
 			}
 		})
+	}
+}
+
+// ─── TokenParsingMiddleware: unparsed successful responses ──────────────
+
+type recordingSink struct {
+	names []string
+	tags  [][]string
+}
+
+func (s *recordingSink) Incr(name string, tags []string, _ float64) error {
+	s.names = append(s.names, name)
+	s.tags = append(s.tags, append([]string(nil), tags...))
+	return nil
+}
+
+func (s *recordingSink) Distribution(string, float64, []string, float64) error { return nil }
+
+// driveUnparsed runs one request whose response the provider cannot parse and
+// returns the recorded counter calls plus the captured slog output.
+func driveUnparsed(t *testing.T, p *configurableProvider, status int, contentEncoding string) (*recordingSink, string) {
+	t.Helper()
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(p)
+	sink := &recordingSink{}
+	chain := MetaURLRewritingMiddleware(pm)(TokenParsingMiddlewareWithHooks(pm, TokenParsingHooks{
+		OnUnparsed: NewUnparsedMetricsCallback(sink),
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentEncoding != "" {
+			w.Header().Set("Content-Encoding", contentEncoding)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte{0x83, 0x12, 0x00, 0xf8})
+	})))
+	req := httptest.NewRequest("POST", "/meta/payment-agent/openai/v1/chat/completions", bytes.NewReader([]byte("{}")))
+	var slogOut string
+	_ = captureLogOutput(func() {
+		slogOut = captureSlogOutput(func() { chain.ServeHTTP(httptest.NewRecorder(), req) })
+	})
+	return sink, slogOut
+}
+
+func TestTokenParsingMiddleware_UnparsedSuccessIsCountedAndLogged(t *testing.T) {
+	sink, slogOut := driveUnparsed(t, &configurableProvider{parseErr: errors.New("invalid character")}, http.StatusOK, "br")
+
+	if len(sink.names) != 1 || sink.names[0] != UnparsedMetricName {
+		t.Fatalf("want one %s increment, got %v", UnparsedMetricName, sink.names)
+	}
+	want := []string{"provider:openai", "model:unknown", "streaming:false", "content_encoding:br"}
+	if !slices.Equal(sink.tags[0], want) {
+		t.Fatalf("tags = %v, want %v", sink.tags[0], want)
+	}
+	for _, fragment := range []string{
+		"level=WARN", "usage not recorded", "content_encoding=br", "user_id=payment-agent",
+	} {
+		if !strings.Contains(slogOut, fragment) {
+			t.Errorf("log missing %q; got %s", fragment, slogOut)
+		}
+	}
+}
+
+func TestTokenParsingMiddleware_UnparsedNeighbours(t *testing.T) {
+	metered := &providers.LLMResponseMetadata{Provider: "openai", Model: "gpt-4o", TotalTokens: 12}
+	cases := map[string]struct {
+		provider  *configurableProvider
+		status    int
+		wantCount int
+		wantLevel string
+	}{
+		// An error body is expected to be unparseable; only the provider's
+		// successes are billed.
+		"upstream error is not counted":  {&configurableProvider{parseErr: errors.New("boom")}, http.StatusTooManyRequests, 0, ""},
+		"parsed response is not counted": {&configurableProvider{metadata: metered}, http.StatusOK, 0, ""},
+		"usage-less stream is counted quietly": {
+			&configurableProvider{streaming: true, parseErr: errors.New("no usage information found")},
+			http.StatusOK, 1, "level=DEBUG",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sink, slogOut := driveUnparsed(t, tc.provider, tc.status, "")
+			if len(sink.names) != tc.wantCount {
+				t.Fatalf("increments = %d, want %d", len(sink.names), tc.wantCount)
+			}
+			if tc.wantCount == 0 {
+				if strings.Contains(slogOut, "usage not recorded") {
+					t.Fatalf("unexpected unparsed log: %s", slogOut)
+				}
+				return
+			}
+			if !strings.Contains(slogOut, tc.wantLevel+" ") || strings.Contains(slogOut, "level=WARN") {
+				t.Fatalf("want the unparsed log at %s only; got %s", tc.wantLevel, slogOut)
+			}
+			if !slices.Contains(sink.tags[0], "streaming:true") || !slices.Contains(sink.tags[0], "content_encoding:none") {
+				t.Fatalf("tags = %v", sink.tags[0])
+			}
+		})
+	}
+}
+
+func TestContentEncodingLabel_IsBounded(t *testing.T) {
+	cases := map[string]string{
+		"": "none", "identity": "identity", "GZIP": "gzip", "x-gzip": "gzip",
+		" br ": "br", "zstd": "zstd", "deflate": "deflate", "gzip, br": "other", "x-made-up-9f3a": "other",
+	}
+	for in, want := range cases {
+		if got := contentEncodingLabel(in); got != want {
+			t.Errorf("contentEncodingLabel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

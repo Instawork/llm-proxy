@@ -31,6 +31,51 @@ type MetadataCallback func(r *http.Request, metadata *providers.LLMResponseMetad
 // never reach the cost tracker.
 type UnmeteredCallback func(r *http.Request, status int)
 
+// UnparsedResponse describes a successful response on a metered endpoint whose
+// usage could not be parsed. The provider billed it; the cost tracker never
+// saw it.
+type UnparsedResponse struct {
+	Provider  string
+	Model     string
+	Streaming bool
+	// ContentEncoding is the response's Content-Encoding reduced to a fixed
+	// vocabulary (see contentEncodingLabel), so it is safe as a metric tag.
+	ContentEncoding string
+	Status          int
+	Err             error
+}
+
+// UnparsedCallback receives every UnparsedResponse. It runs in addition to
+// the UnmeteredCallback for the same request.
+type UnparsedCallback func(r *http.Request, info UnparsedResponse)
+
+// TokenParsingHooks are the optional observers of requests that never reach
+// the metadata callbacks.
+type TokenParsingHooks struct {
+	OnUnmetered UnmeteredCallback
+	OnUnparsed  UnparsedCallback
+}
+
+// contentEncodingLabel maps a Content-Encoding header to a bounded label.
+func contentEncodingLabel(header string) string {
+	switch strings.ToLower(strings.TrimSpace(header)) {
+	case "":
+		return "none"
+	case "identity":
+		return "identity"
+	case "gzip", "x-gzip":
+		return "gzip"
+	case "br":
+		return "br"
+	case "zstd":
+		return "zstd"
+	case "deflate":
+		return "deflate"
+	default:
+		return "other"
+	}
+}
+
 // GetProviderFromRequest determines which provider to use based on the
 // request path. Recognized prefixes:
 //   - /meta/<userID>/<provider>/...   meta-routing for user-scoped requests
@@ -88,6 +133,13 @@ func TokenParsingMiddleware(providerManager *providers.ProviderManager, callback
 // TokenParsingMiddlewareWithUnmetered is TokenParsingMiddleware that also
 // reports provider requests which produced no token usage to onUnmetered.
 func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderManager, onUnmetered UnmeteredCallback, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
+	return TokenParsingMiddlewareWithHooks(providerManager, TokenParsingHooks{OnUnmetered: onUnmetered}, callbacks...)
+}
+
+// TokenParsingMiddlewareWithHooks is TokenParsingMiddleware with observers
+// for the requests it could not meter.
+func TokenParsingMiddlewareWithHooks(providerManager *providers.ProviderManager, hooks TokenParsingHooks, callbacks ...MetadataCallback) func(http.Handler) http.Handler {
+	onUnmetered := hooks.OnUnmetered
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			provider := GetProviderFromRequest(providerManager, r)
@@ -129,6 +181,38 @@ func TokenParsingMiddlewareWithUnmetered(providerManager *providers.ProviderMana
 			bodyReader := providers.NewBodyReader(captureWriter.body.Bytes())
 			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
 			if err != nil {
+				if status := captureWriter.statusCode(); status >= 200 && status < 300 {
+					model, _ := providers.RequestModelAndMessages(provider, r)
+					info := UnparsedResponse{
+						Provider:        provider.GetName(),
+						Model:           model,
+						Streaming:       isStreaming,
+						ContentEncoding: contentEncodingLabel(captureWriter.Header().Get("Content-Encoding")),
+						Status:          status,
+						Err:             err,
+					}
+					userID := MetaUserIDFromContext(r.Context())
+					// Streams end without usage for ordinary reasons (client
+					// hung up, OpenAI stream without include_usage), so only
+					// the non-streaming case is loud; the hook sees both.
+					level := slog.LevelWarn
+					if isStreaming {
+						level = slog.LevelDebug
+					}
+					slog.Log(r.Context(), level, proxylog.ProxyMsg("usage not recorded: successful response could not be parsed"),
+						"provider", info.Provider,
+						"model", info.Model,
+						"streaming", info.Streaming,
+						"content_encoding", info.ContentEncoding,
+						"status_code", info.Status,
+						"user_id", userID,
+						"response_bytes", captureWriter.body.Len(),
+						"error", err.Error(),
+					)
+					if hooks.OnUnparsed != nil {
+						hooks.OnUnparsed(r, info)
+					}
+				}
 				if !isStreaming {
 					proxylog.Proxy("failed to parse response metadata for %s: %v", provider.GetName(), err)
 					if captureWriter.body.Len() > 0 {

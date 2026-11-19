@@ -826,3 +826,72 @@ func tagSet(tags []string) map[string]struct{} {
 	}
 	return out
 }
+
+// Raw-provider-key traffic has no proxy key record, so `caller` is empty;
+// the /meta user label is the only way to attribute its failures.
+func TestTerminalFailureLog_CarriesUserIDButMetricDoesNot(t *testing.T) {
+	buf := &bytes.Buffer{}
+	metrics := &fakeMetrics{}
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return makeResp(503), nil
+	})
+	cfg := Config{Enabled: true, Mode: ModeLog}.Defaults()
+	tr := NewTransport(
+		inner, NewMemoryStore(cfg), cfg, "openai", captureLogs(buf),
+		WithMetrics(metrics),
+		WithUserExtractor(func(*http.Request) string { return "Payment System Identifier" }),
+	)
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gpt-4o"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	entry := findLogLine(t, buf, "terminal_failure_observed")
+	if entry == nil {
+		t.Fatalf("expected a terminal_failure_observed log line, got: %s", buf.String())
+	}
+	if got, _ := entry["user_id"].(string); got != "Payment System Identifier" {
+		t.Fatalf("log attr user_id: got %q (entry=%v)", got, entry)
+	}
+	if got, _ := entry["caller"].(string); got != "" {
+		t.Fatalf("caller must stay empty without a proxy key record, got %q", got)
+	}
+
+	calls := metrics.findByName("circuit.terminal_failure")
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 circuit.terminal_failure metric, got %d", len(calls))
+	}
+	for _, tag := range calls[0].Tags {
+		if strings.HasPrefix(tag, "user_id:") || strings.Contains(tag, "Payment System Identifier") {
+			t.Fatalf("user label must not become a metric tag (unbounded cardinality): %v", calls[0].Tags)
+		}
+	}
+	if _, ok := tagSet(calls[0].Tags)["caller:unknown"]; !ok {
+		t.Fatalf("caller tag must be unchanged, got %v", calls[0].Tags)
+	}
+}
+
+func TestTerminalFailureLog_OmitsUserIDWhenAbsent(t *testing.T) {
+	buf := &bytes.Buffer{}
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return makeResp(503), nil
+	})
+	cfg := Config{Enabled: true, Mode: ModeLog}.Defaults()
+	tr := NewTransport(inner, NewMemoryStore(cfg), cfg, "openai", captureLogs(buf))
+
+	resp, err := tr.RoundTrip(dummyOpenAIRequest("gpt-4o"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	entry := findLogLine(t, buf, "terminal_failure_observed")
+	if entry == nil {
+		t.Fatalf("expected a terminal_failure_observed log line, got: %s", buf.String())
+	}
+	if _, present := entry["user_id"]; present {
+		t.Fatalf("user_id must be absent when no extractor is wired (entry=%v)", entry)
+	}
+}
