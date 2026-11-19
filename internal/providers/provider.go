@@ -303,7 +303,9 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 //   - Stripping the provider prefix from the path
 //   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
 //     upstream returns uncompressed responses. Useful for debugging SSE streams where
-//     plain-text event data is easier to inspect in logs. By default gzip is allowed.
+//     plain-text event data is easier to inspect in logs. By default the
+//     client's Accept-Encoding is narrowed to gzip/identity (see
+//     gzipOnlyAcceptEncoding).
 //   - Logging the request with streaming detection
 //
 // Rewrite is used instead of the deprecated Director hook: in Rewrite mode
@@ -330,6 +332,12 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 		// (DisableCompression only suppresses gzip when the client did NOT request it).
 		if disableGzip {
 			req.Header.Del("Accept-Encoding")
+		} else if ae := req.Header.Values("Accept-Encoding"); len(ae) > 0 {
+			if narrowed := gzipOnlyAcceptEncoding(strings.Join(ae, ", ")); narrowed != "" {
+				req.Header.Set("Accept-Encoding", narrowed)
+			} else {
+				req.Header.Del("Accept-Encoding")
+			}
 		}
 
 		// Log the request, including streaming detection
@@ -340,6 +348,24 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 			log.Printf("Proxying %s request: %s %s", provider.GetName(), req.Method, req.URL.Path)
 		}
 	}
+}
+
+// gzipOnlyAcceptEncoding keeps only the Accept-Encoding elements the metering
+// parsers can read (gzip, x-gzip, identity), verbatim and in order, so
+// upstreams never answer with br, zstd or deflate. Returns "" when nothing is
+// left; the caller then drops the header and Go's transport negotiates gzip
+// and decodes it itself.
+func gzipOnlyAcceptEncoding(acceptEncoding string) string {
+	kept := make([]string, 0, 2)
+	for part := range strings.SplitSeq(acceptEncoding, ",") {
+		element := strings.TrimSpace(part)
+		coding, _, _ := strings.Cut(element, ";")
+		switch strings.ToLower(strings.TrimSpace(coding)) {
+		case "gzip", "x-gzip", "identity":
+			kept = append(kept, element)
+		}
+	}
+	return strings.Join(kept, ", ")
 }
 
 // proxyMaxIdleConns is the idle keep-alive pool size per provider transport.
