@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/DataDog/datadog-go/v5 v5.6.0
 	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/andybalholm/brotli v1.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13
 	github.com/aws/aws-sdk-go-v2/config v1.29.18
@@ -18,6 +19,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/sessions v1.4.0
 	github.com/hbollon/go-edlib v1.6.0
+	github.com/klauspost/compress v1.20.4
 	github.com/redis/go-redis/v9 v9.13.0
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/oauth2 v0.28.0

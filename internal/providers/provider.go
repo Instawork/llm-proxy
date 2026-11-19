@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -304,9 +303,7 @@ func (pm *ProviderManager) IsValidProvider(name string) bool {
 //   - Stripping the provider prefix from the path
 //   - Optionally stripping client-supplied Accept-Encoding (when disableGzip=true) so
 //     upstream returns uncompressed responses. Useful for debugging SSE streams where
-//     plain-text event data is easier to inspect in logs. By default gzip is allowed,
-//     and any other client-requested encoding is narrowed to gzip (see
-//     normalizeUpstreamAcceptEncoding).
+//     plain-text event data is easier to inspect in logs. By default gzip is allowed.
 //   - Logging the request with streaming detection
 //
 // Rewrite is used instead of the deprecated Director hook: in Rewrite mode
@@ -333,8 +330,6 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 		// (DisableCompression only suppresses gzip when the client did NOT request it).
 		if disableGzip {
 			req.Header.Del("Accept-Encoding")
-		} else {
-			normalizeUpstreamAcceptEncoding(req.Header)
 		}
 
 		// Log the request, including streaming detection
@@ -345,60 +340,6 @@ func CreateGenericRewrite(provider Provider, targetURL *url.URL, disableGzip boo
 			log.Printf("Proxying %s request: %s %s", provider.GetName(), req.Method, req.URL.Path)
 		}
 	}
-}
-
-// normalizeUpstreamAcceptEncoding narrows a client-supplied Accept-Encoding to
-// gzip, the only encoding the metering path can decode
-// (DecompressResponseIfNeeded sniffs the gzip magic and nothing else). A
-// client that advertises br or zstd (httpx does when those packages are
-// installed) otherwise gets a body the proxy cannot parse, and the request
-// is dropped from cost tracking while still being billed upstream.
-//
-// A client that does not accept gzip has the header removed instead: Go's
-// transport then negotiates gzip itself and hands back identity bytes, which
-// every client accepts. An absent header is left alone for the same reason.
-func normalizeUpstreamAcceptEncoding(h http.Header) {
-	values := h.Values("Accept-Encoding")
-	if len(values) == 0 {
-		return
-	}
-	if acceptsGzip(values) {
-		h.Set("Accept-Encoding", "gzip")
-		return
-	}
-	h.Del("Accept-Encoding")
-}
-
-// acceptsGzip reports whether an Accept-Encoding header lists gzip (or a
-// wildcard) with a non-zero quality value.
-func acceptsGzip(values []string) bool {
-	for _, value := range values {
-		for _, entry := range strings.Split(value, ",") {
-			coding, params, _ := strings.Cut(entry, ";")
-			switch strings.ToLower(strings.TrimSpace(coding)) {
-			case "gzip", "x-gzip", "*":
-			default:
-				continue
-			}
-			if !zeroQuality(params) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// zeroQuality reports whether a header parameter list carries q=0.
-func zeroQuality(params string) bool {
-	for _, param := range strings.Split(params, ";") {
-		name, value, ok := strings.Cut(param, "=")
-		if !ok || strings.ToLower(strings.TrimSpace(name)) != "q" {
-			continue
-		}
-		q, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		return err == nil && q == 0
-	}
-	return false
 }
 
 // proxyMaxIdleConns is the idle keep-alive pool size per provider transport.

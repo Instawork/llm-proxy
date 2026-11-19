@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/andybalholm/brotli"
 	"github.com/gorilla/mux"
+	"github.com/klauspost/compress/zstd"
 )
 
 // configurableProvider is a fully-mockable Provider whose ParseResponseMetadata
@@ -1466,5 +1469,96 @@ func TestContentEncodingLabel_IsBounded(t *testing.T) {
 		if got := contentEncodingLabel(in); got != want {
 			t.Errorf("contentEncodingLabel(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func compressForTest(t *testing.T, coding string, plain []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	switch coding {
+	case "br":
+		w := brotli.NewWriter(&buf)
+		_, _ = w.Write(plain)
+		_ = w.Close()
+	case "zstd":
+		w, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write(plain)
+		_ = w.Close()
+	case "gzip":
+		w := gzip.NewWriter(&buf)
+		_, _ = w.Write(plain)
+		_ = w.Close()
+	case "deflate":
+		w := zlib.NewWriter(&buf)
+		_, _ = w.Write(plain)
+		_ = w.Close()
+	default:
+		t.Fatalf("unknown coding %q", coding)
+	}
+	return buf.Bytes()
+}
+
+const anthropicReplyForTest = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-5-5",` +
+	`"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":11,"output_tokens":7}}`
+
+func TestTokenParsingMiddleware_MetersEveryClientChosenEncoding(t *testing.T) {
+	for _, coding := range []string{"br", "zstd", "gzip", "deflate"} {
+		t.Run(coding, func(t *testing.T) {
+			pm := providers.NewProviderManager()
+			pm.RegisterProvider(providers.NewAnthropicProxy())
+			var got *providers.LLMResponseMetadata
+			chain := MetaURLRewritingMiddleware(pm)(TokenParsingMiddleware(pm, func(_ *http.Request, m *providers.LLMResponseMetadata) {
+				got = m
+			})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Encoding", coding)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(compressForTest(t, coding, []byte(anthropicReplyForTest)))
+			})))
+			req := httptest.NewRequest("POST", "/meta/payment-agent/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":"claude-haiku-5-5"}`)))
+			req.Header.Set("Accept-Encoding", coding)
+			rec := httptest.NewRecorder()
+			chain.ServeHTTP(rec, req)
+
+			if got == nil || got.InputTokens != 11 || got.OutputTokens != 7 {
+				t.Fatalf("usage not recorded for %s: %+v", coding, got)
+			}
+			if rec.Header().Get("Content-Encoding") != coding {
+				t.Fatalf("client response must keep its encoding, got %q", rec.Header().Get("Content-Encoding"))
+			}
+		})
+	}
+}
+
+func TestTokenParsingMiddleware_UnsupportedEncodingIsWarnedNotSilent(t *testing.T) {
+	sink, slogOut := driveUnparsed(t, &configurableProvider{}, http.StatusOK, "compress")
+
+	if len(sink.names) != 1 || !slices.Contains(sink.tags[0], "content_encoding:other") {
+		t.Fatalf("want one unparsed increment tagged other, got %v %v", sink.names, sink.tags)
+	}
+	for _, fragment := range []string{"level=WARN", "usage not recorded", "unsupported content-encoding"} {
+		if !strings.Contains(slogOut, fragment) {
+			t.Errorf("log missing %q; got %s", fragment, slogOut)
+		}
+	}
+}
+
+func TestDecodeResponseBody(t *testing.T) {
+	plain := []byte(`{"ok":true}`)
+	chained := compressForTest(t, "br", compressForTest(t, "gzip", plain))
+	if got, err := decodeResponseBody("gzip, br", chained); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("chained decode = %q, %v", got, err)
+	}
+	if got, err := decodeResponseBody("identity", plain); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("identity decode = %q, %v", got, err)
+	}
+	truncated := compressForTest(t, "gzip", bytes.Repeat([]byte("data: x\n"), 5000))
+	if got, err := decodeResponseBody("gzip", truncated[:len(truncated)/2]); err == nil || len(got) == 0 {
+		t.Fatalf("a cut-off stream should return its decoded prefix with an error, got %d bytes, %v", len(got), err)
+	}
+	if _, err := decodeResponseBody("br", []byte{0x83, 0x12, 0x00, 0xf8}); err == nil {
+		t.Fatal("corrupt brotli must error")
 	}
 }

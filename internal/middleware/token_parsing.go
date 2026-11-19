@@ -178,8 +178,27 @@ func TokenParsingMiddlewareWithHooks(providerManager *providers.ProviderManager,
 			// BodyReader lends the capture buffer to the parser; providers
 			// that need the whole body borrow it instead of re-copying it
 			// with io.ReadAll, so the stream is held in memory exactly once.
-			bodyReader := providers.NewBodyReader(captureWriter.body.Bytes())
-			metadata, err := provider.ParseResponseMetadata(bodyReader, isStreaming)
+			parseBody := captureWriter.body.Bytes()
+			var decodeErr error
+			if encoding := captureWriter.Header().Get("Content-Encoding"); encoding != "" {
+				plain, derr := decodeResponseBody(encoding, parseBody)
+				switch {
+				case derr == nil:
+					parseBody = plain
+				case isStreaming && len(plain) > 0:
+					// A stream cut off mid-frame still carries the usage events decoded so far.
+					parseBody = plain
+				default:
+					decodeErr = derr
+				}
+			}
+			var metadata *providers.LLMResponseMetadata
+			var err error
+			if decodeErr != nil {
+				err = fmt.Errorf("decoding %s response: %w", contentEncodingLabel(captureWriter.Header().Get("Content-Encoding")), decodeErr)
+			} else {
+				metadata, err = provider.ParseResponseMetadata(providers.NewBodyReader(parseBody), isStreaming)
+			}
 			if err != nil {
 				if status := captureWriter.statusCode(); status >= 200 && status < 300 {
 					model, _ := providers.RequestModelAndMessages(provider, r)
