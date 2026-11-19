@@ -12,7 +12,7 @@ commands:
     steps:
       - checkout
       - go/install:
-          version: "1.27.3"
+          version: "1.27.4"
           cache-key: 'go-mod-{{ .Environment.CACHE_VERSION }}-{{ checksum "go.mod" }}'
       - run:
           name: Download dependencies
@@ -80,6 +80,9 @@ jobs:
       - run:
           name: Guard against raw body/chunk dumps in logs
           command: make lint-pii-logs
+      - run:
+          name: Scan for known vulnerabilities
+          command: make vuln
 
   unit-tests:
     docker:
@@ -115,7 +118,7 @@ jobs:
     steps:
       - checkout
       - go/install:
-          version: "1.27.3"
+          version: "1.27.4"
           cache-key: 'go-mod-{{ .Environment.CACHE_VERSION }}-{{ checksum "go.mod" }}'
       - run:
           name: Download dependencies

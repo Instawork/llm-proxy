@@ -589,6 +589,16 @@ lint-pii-logs:
 	fi; \
 	echo "$(GREEN)✓ No raw body/chunk log dumps found$(NC)"
 
+# Known-vulnerability scan of reachable code and the Go stdlib. Pinned so a new
+# govulncheck release cannot change CI behaviour; findings come from the live
+# vuln DB, so this can fail on an unchanged tree when a new advisory lands.
+GOVULNCHECK_VERSION ?= v1.10.0
+.PHONY: vuln
+vuln:
+	@echo "$(BLUE)Running govulncheck...$(NC)"
+	@go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	@echo "$(GREEN)✓ No known vulnerabilities$(NC)"
+
 # Run all code quality checks
 .PHONY: check
 check: fmt-check vet lint lint-pii-logs
@@ -596,7 +606,7 @@ check: fmt-check vet lint lint-pii-logs
 
 # Mirror CircleCI lint + unit-tests jobs (the default pre-push gate).
 .PHONY: ci
-ci: fmt-check vet lint lint-pii-logs validate-config test
+ci: fmt-check vet lint lint-pii-logs vuln validate-config test
 	@echo "$(GREEN)✓ CI checks passed$(NC)"
 
 # Apply formatters then run ci.
