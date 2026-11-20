@@ -176,6 +176,53 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.tables[tableName][storageKey] = item
 		_, _ = w.Write([]byte(`{}`))
+	case "TransactWriteItems":
+		// Only Put items are modelled. All puts apply, or none do and the
+		// response carries one cancellation reason per item, like DynamoDB.
+		transactItems, _ := input["TransactItems"].([]any)
+		type pendingPut struct {
+			table, key string
+			item       map[string]any
+		}
+		puts := make([]pendingPut, 0, len(transactItems))
+		reasons := make([]map[string]string, 0, len(transactItems))
+		failed := false
+		for _, raw := range transactItems {
+			entry, _ := raw.(map[string]any)
+			put, ok := entry["Put"].(map[string]any)
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"__type":"unsupported_op:TransactWriteItems(non-Put)"}`))
+				return
+			}
+			tableName, _ := put["TableName"].(string)
+			item, _ := put["Item"].(map[string]any)
+			storageKey := storageKeyFromAttrs(item)
+			conditionExpr, _ := put["ConditionExpression"].(string)
+			code := "None"
+			if strings.Contains(conditionExpr, "attribute_not_exists") && f.tables[tableName][storageKey] != nil {
+				code = "ConditionalCheckFailed"
+				failed = true
+			}
+			reasons = append(reasons, map[string]string{"Code": code})
+			puts = append(puts, pendingPut{table: tableName, key: storageKey, item: item})
+		}
+		if failed {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"__type":              "com.amazonaws.dynamodb.v20120810#TransactionCanceledException",
+				"message":             "Transaction cancelled",
+				"CancellationReasons": reasons,
+			})
+			return
+		}
+		for _, p := range puts {
+			if f.tables[p.table] == nil {
+				f.tables[p.table] = make(map[string]any)
+			}
+			f.tables[p.table][p.key] = p.item
+		}
+		_, _ = w.Write([]byte(`{}`))
 	case "GetItem":
 		tableName, _ := input["TableName"].(string)
 		key, _ := input["Key"].(map[string]any)

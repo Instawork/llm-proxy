@@ -3,6 +3,7 @@ package apikeys
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -473,4 +474,42 @@ func TestCreateKeyRequestLogOmitsRequesterEmail(t *testing.T) {
 	assert.Contains(t, out, "source=init")
 	assert.NotContains(t, out, "secret.person")
 	assert.NotContains(t, out, "nightly batch job")
+}
+
+func TestCreateKeyRequestRejectsAmbiguousSource(t *testing.T) {
+	store := testKeyRequestStore(t)
+
+	for _, source := range []string{"a:b", "has space", strings.Repeat("a", 33)} {
+		_, err := store.CreateKeyRequest(context.Background(), CreateKeyRequestInput{
+			RequesterEmail:   "viewer@example.com",
+			Provider:         "openai",
+			Name:             "bad-source",
+			Description:      "bad source",
+			Source:           source,
+			ExternalTicketID: "c",
+		})
+		assert.Error(t, err, source)
+	}
+}
+
+func TestCreateKeyRequestFailedTransactionLeavesNoLocks(t *testing.T) {
+	store, fake := newFakeStore(t)
+	ctx := context.Background()
+
+	fake.FailOnce("TransactWriteItems", errors.New("InternalServerError"))
+	_, err := store.CreateKeyRequest(ctx, CreateKeyRequestInput{
+		RequesterEmail:   "viewer@example.com",
+		Provider:         "openai",
+		Name:             "will-fail",
+		Description:      "will fail",
+		Source:           "init",
+		ExternalTicketID: "IH-50",
+	})
+	require.Error(t, err)
+
+	_, err = store.GetKeyRequestByExternalTicket(ctx, "init", "IH-50")
+	assert.ErrorIs(t, err, ErrKeyRequestNotFound, "no ticket reservation survives a failed create")
+
+	retried := createIntegrationKeyRequest(t, store, "viewer@example.com", "IH-50")
+	assert.Equal(t, KeyRequestStatusPending, retried.Status)
 }

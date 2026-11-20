@@ -95,7 +95,9 @@ export default function KeyRequestsTable({
         header: "Description",
         cell: ({ row }) => (
           <div className="flex max-w-xs flex-col gap-1">
-            <span className="truncate">{row.original.description}</span>
+            <span className="whitespace-pre-wrap break-words">
+              {row.original.description}
+            </span>
             {row.original.justification ? (
               <details className="text-xs">
                 <summary className="cursor-pointer text-base-content/70">

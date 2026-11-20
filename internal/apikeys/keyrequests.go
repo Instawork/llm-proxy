@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -147,24 +148,6 @@ func keyRequestPendingLockPK(requesterEmail, provider string) string {
 	return "keyreq-pending:" + normalizeOwnerEmail(requesterEmail) + ":" + normalizeProvider(provider)
 }
 
-func (s *Store) acquireKeyRequestPendingLock(ctx context.Context, requesterEmail, provider string) error {
-	lockPK := keyRequestPendingLockPK(requesterEmail, provider)
-	_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(s.tableName),
-		Item: map[string]types.AttributeValue{
-			"pk": &types.AttributeValueMemberS{Value: lockPK},
-		},
-		ConditionExpression: aws.String("attribute_not_exists(pk)"),
-	})
-	if err != nil {
-		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
-			return ErrPendingKeyRequestExists
-		}
-		return fmt.Errorf("failed to acquire key request lock: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) releaseKeyRequestPendingLock(ctx context.Context, requesterEmail, provider string) {
 	_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.tableName),
@@ -174,6 +157,10 @@ func (s *Store) releaseKeyRequestPendingLock(ctx context.Context, requesterEmail
 	})
 }
 
+// validKeyRequestSource matches integration caller ids. Because a source can
+// never contain ":", keyRequestTicketLockPK is unambiguous.
+var validKeyRequestSource = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
 // keyRequestTicketLockPK maps an integration ticket to the request it opened.
 // The "keyreq-ext:" prefix does not match "keyreq:" or the key-list scan
 // prefixes, so these items never appear as requests or keys.
@@ -181,38 +168,25 @@ func keyRequestTicketLockPK(source, ticketID string) string {
 	return "keyreq-ext:" + strings.ToLower(strings.TrimSpace(source)) + ":" + strings.ToLower(strings.TrimSpace(ticketID))
 }
 
-func (s *Store) acquireKeyRequestTicketLock(ctx context.Context, source, ticketID, requestID string) error {
-	_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(s.tableName),
-		Item: map[string]types.AttributeValue{
-			"pk":         &types.AttributeValueMemberS{Value: keyRequestTicketLockPK(source, ticketID)},
-			"request_id": &types.AttributeValueMemberS{Value: requestID},
-		},
+func putIfAbsent(table string, item map[string]types.AttributeValue) types.TransactWriteItem {
+	return types.TransactWriteItem{Put: &types.Put{
+		TableName:           aws.String(table),
+		Item:                item,
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
-	})
-	if err != nil {
-		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
-			return ErrKeyRequestTicketExists
-		}
-		return fmt.Errorf("failed to acquire key request ticket lock: %w", err)
-	}
-	return nil
+	}}
 }
 
-func (s *Store) releaseKeyRequestTicketLock(ctx context.Context, source, ticketID string) {
-	_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(s.tableName),
-		Key: map[string]types.AttributeValue{
-			"pk": &types.AttributeValueMemberS{Value: keyRequestTicketLockPK(source, ticketID)},
-		},
-	})
+func cancellationFailed(reasons []types.CancellationReason, i int) bool {
+	return i >= 0 && i < len(reasons) && aws.ToString(reasons[i].Code) == "ConditionalCheckFailed"
 }
 
 // CreateKeyRequest stores a pending org key request.
 //
-// When in.Source is set, the (source, ticket) pair is reserved first. If that
-// ticket already opened a request, CreateKeyRequest returns the existing
-// request together with ErrKeyRequestTicketExists so callers can replay it.
+// The request item, the per-requester pending lock, and (when in.Source is
+// set) the (source, ticket) reservation are written in one transaction, so a
+// ticket never points at a request that does not exist. If the ticket already
+// opened a request, CreateKeyRequest returns that request together with
+// ErrKeyRequestTicketExists so callers can replay it.
 func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) (*KeyRequest, error) {
 	in.RequesterEmail = strings.TrimSpace(strings.ToLower(in.RequesterEmail))
 	in.Provider = strings.TrimSpace(strings.ToLower(in.Provider))
@@ -228,40 +202,18 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 	if in.Name == "" {
 		return nil, fmt.Errorf("name must contain at least one letter or number")
 	}
-	if in.Source != "" && in.ExternalTicketID == "" {
-		return nil, fmt.Errorf("external_ticket_id is required for integration requests")
+	if in.Source != "" {
+		if !validKeyRequestSource.MatchString(in.Source) {
+			return nil, fmt.Errorf("source must match %s", validKeyRequestSource)
+		}
+		if in.ExternalTicketID == "" {
+			return nil, fmt.Errorf("external_ticket_id is required for integration requests")
+		}
 	}
 
 	id, err := newUUIDv4()
 	if err != nil {
 		return nil, err
-	}
-
-	if in.Source != "" {
-		if err := s.acquireKeyRequestTicketLock(ctx, in.Source, in.ExternalTicketID, id); err != nil {
-			if !errors.Is(err, ErrKeyRequestTicketExists) {
-				return nil, err
-			}
-			existing, getErr := s.GetKeyRequestByExternalTicket(ctx, in.Source, in.ExternalTicketID)
-			if getErr != nil {
-				return nil, getErr
-			}
-			return existing, ErrKeyRequestTicketExists
-		}
-	}
-	releaseTicket := func() {
-		if in.Source != "" {
-			s.releaseKeyRequestTicketLock(ctx, in.Source, in.ExternalTicketID)
-		}
-	}
-
-	if err := s.acquireKeyRequestPendingLock(ctx, in.RequesterEmail, in.Provider); err != nil {
-		releaseTicket()
-		return nil, err
-	}
-	releaseLocks := func() {
-		s.releaseKeyRequestPendingLock(ctx, in.RequesterEmail, in.Provider)
-		releaseTicket()
 	}
 
 	actorType, actor := KeyRequestActorUser, in.RequesterEmail
@@ -294,17 +246,38 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 
 	av, err := attributevalue.MarshalMap(req)
 	if err != nil {
-		releaseLocks()
 		return nil, fmt.Errorf("failed to marshal key request: %w", err)
 	}
 
-	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(s.tableName),
-		Item:                av,
-		ConditionExpression: aws.String("attribute_not_exists(pk)"),
-	})
-	if err != nil {
-		releaseLocks()
+	items := []types.TransactWriteItem{
+		putIfAbsent(s.tableName, av),
+		putIfAbsent(s.tableName, map[string]types.AttributeValue{
+			"pk": stringAV(keyRequestPendingLockPK(in.RequesterEmail, in.Provider)),
+		}),
+	}
+	const pendingLockIdx = 1
+	ticketIdx := -1
+	if in.Source != "" {
+		ticketIdx = len(items)
+		items = append(items, putIfAbsent(s.tableName, map[string]types.AttributeValue{
+			"pk":         stringAV(keyRequestTicketLockPK(in.Source, in.ExternalTicketID)),
+			"request_id": stringAV(id),
+		}))
+	}
+
+	if _, err := s.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		if canceled, ok := errors.AsType[*types.TransactionCanceledException](err); ok {
+			switch {
+			case cancellationFailed(canceled.CancellationReasons, ticketIdx):
+				existing, getErr := s.GetKeyRequestByExternalTicket(ctx, in.Source, in.ExternalTicketID)
+				if getErr != nil {
+					return nil, getErr
+				}
+				return existing, ErrKeyRequestTicketExists
+			case cancellationFailed(canceled.CancellationReasons, pendingLockIdx):
+				return nil, ErrPendingKeyRequestExists
+			}
+		}
 		return nil, fmt.Errorf("failed to create key request: %w", err)
 	}
 
@@ -324,6 +297,7 @@ func (s *Store) GetKeyRequestByExternalTicket(ctx context.Context, source, ticke
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: keyRequestTicketLockPK(source, ticketID)},
 		},
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key request ticket: %w", err)
@@ -394,7 +368,9 @@ func (s *Store) listKeyRequests(ctx context.Context, filterExpr string, values m
 	return requests, nil
 }
 
-// GetKeyRequest loads a key request by ID.
+// GetKeyRequest loads a key request by ID. The read is strongly consistent
+// because callers use it right after a write (ticket replay, mapping a failed
+// conditional update to the right error).
 func (s *Store) GetKeyRequest(ctx context.Context, id string) (*KeyRequest, error) {
 	id = strings.TrimPrefix(id, KeyRequestPrefix)
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -402,6 +378,7 @@ func (s *Store) GetKeyRequest(ctx context.Context, id string) (*KeyRequest, erro
 		Key: map[string]types.AttributeValue{
 			"pk": &types.AttributeValueMemberS{Value: KeyRequestPrefix + id},
 		},
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key request: %w", err)
