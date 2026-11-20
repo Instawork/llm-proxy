@@ -123,7 +123,9 @@ var globalCostTracker *cost.CostTracker
 var globalCostStatsRecorder *coststats.Recorder
 
 // Agent spend limit resolver; nil unless features.agent_spend_limits is
-// enabled and the cost stats recorder exists.
+// enabled and the cost stats recorder exists. The middleware reads it and
+// the admin integration routes invalidate it after a write, so both must
+// share this one instance.
 var globalAgentLimitResolver *apikeys.AgentLimitResolver
 
 // Global API key store instance
@@ -134,9 +136,6 @@ var (
 	globalAdminUserStoreError  error
 	globalKeyProvisioner       *provision.Manager
 	globalNotifier             *notify.Notifier
-	// globalAgentLimitResolver caches AGENTLIMIT overrides. Nil unless
-	// agent_spend_limits is enabled and the key store is available.
-	globalAgentLimitResolver *apikeys.AgentLimitResolver
 )
 
 // Global rate limiter instance
@@ -1610,9 +1609,6 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 			"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to run without key validation (dev only)")
 		os.Exit(1)
 	}
-	if s, ok := globalAPIKeyStore.(*apikeys.Store); ok && s != nil && yamlConfig.Features.AgentSpendLimits.Enabled {
-		globalAgentLimitResolver = apikeys.NewAgentLimitResolver(s, yamlConfig.Features.AgentSpendLimits)
-	}
 	globalAdminUserStore = initializeAdminUserStore(yamlConfig, env)
 	globalNotifier = initNotifier(yamlConfig, env)
 	initAgentSpendLimits(yamlConfig)
@@ -2201,11 +2197,16 @@ func registerAdminRoutes(r *mux.Router, deps *serverDeps) {
 	// Override the PII-off bypass allowlist from config (falls back to the
 	// built-in default when unset) so roster changes don't need a deploy.
 	apikeys.SetPIIOffNonBedrockBypassAdmins(yamlConfig.Features.AdminDashboard.PIIOffBypassAdmins)
+	admin.RegisterRoutes(r, adminDeps(yamlConfig))
+	logger.Info("Admin dashboard: ENABLED")
+}
+
+func adminDeps(yamlConfig *config.YAMLConfig) admin.Deps {
 	var keyStore *apikeys.Store
 	if s, ok := globalAPIKeyStore.(*apikeys.Store); ok {
 		keyStore = s
 	}
-	admin.RegisterRoutes(r, admin.Deps{
+	return admin.Deps{
 		Logger:             logger,
 		YAMLConfig:         yamlConfig,
 		APIKeyStore:        keyStore,
@@ -2226,8 +2227,7 @@ func registerAdminRoutes(r *mux.Router, deps *serverDeps) {
 		AdminRollupStore:   globalAdminRollupStore,
 		AgentLimitResolver: globalAgentLimitResolver,
 		Notifier:           globalNotifier,
-	})
-	logger.Info("Admin dashboard: ENABLED")
+	}
 }
 
 // registerProviderRoutes mounts every provider's direct and /meta/{userID}/
