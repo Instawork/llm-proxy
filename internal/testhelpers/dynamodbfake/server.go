@@ -238,7 +238,13 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 		key, _ := input["Key"].(map[string]any)
 		storageKey := storageKeyFromAttrs(key)
 		conditionExpr, _ := input["ConditionExpression"].(string)
-		if strings.Contains(conditionExpr, "attribute_exists") && f.tables[tableName][storageKey] == nil {
+		existing, _ := f.tables[tableName][storageKey].(map[string]any)
+		if strings.Contains(conditionExpr, "attribute_exists") && existing == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
+			return
+		}
+		if existing != nil && !evaluateUpdateCondition(conditionExpr, existing, input) {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException"}`))
 			return

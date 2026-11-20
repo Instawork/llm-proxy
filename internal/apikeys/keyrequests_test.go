@@ -513,3 +513,59 @@ func TestCreateKeyRequestFailedTransactionLeavesNoLocks(t *testing.T) {
 	retried := createIntegrationKeyRequest(t, store, "viewer@example.com", "IH-50")
 	assert.Equal(t, KeyRequestStatusPending, retried.Status)
 }
+
+func TestFailedPendingLockReleaseHealsOnNextCreate(t *testing.T) {
+	transitions := map[string]func(t *testing.T, store *Store, id string){
+		"cancel": func(t *testing.T, store *Store, id string) {
+			_, err := store.CancelKeyRequest(context.Background(), id, "init")
+			require.NoError(t, err)
+		},
+		"reject": func(t *testing.T, store *Store, id string) {
+			_, err := store.RejectKeyRequest(context.Background(), id, "admin@example.com", "no")
+			require.NoError(t, err)
+		},
+		"approve": func(t *testing.T, store *Store, id string) {
+			_, err := store.BeginKeyRequestApproval(context.Background(), id, "admin@example.com")
+			require.NoError(t, err)
+			_, err = store.CompleteKeyRequestApproval(context.Background(), id, "sk-test-key", "admin@example.com")
+			require.NoError(t, err)
+		},
+	}
+	for name, transition := range transitions {
+		t.Run(name, func(t *testing.T) {
+			store, fake := newFakeStore(t)
+			first := createIntegrationKeyRequest(t, store, "viewer@example.com", "IH-60")
+
+			fake.FailOnce("DeleteItem", errors.New("InternalServerError"))
+			transition(t, store, first.ID())
+
+			second := createIntegrationKeyRequest(t, store, "viewer@example.com", "IH-61")
+			assert.NotEqual(t, first.ID(), second.ID())
+
+			// The new lock belongs to the new request and still blocks a third.
+			_, err := store.CreateKeyRequest(context.Background(), CreateKeyRequestInput{
+				RequesterEmail:   "viewer@example.com",
+				Provider:         "openai",
+				Name:             "third",
+				Description:      "third",
+				Source:           "init",
+				ExternalTicketID: "IH-62",
+			})
+			assert.ErrorIs(t, err, ErrPendingKeyRequestExists)
+		})
+	}
+}
+
+func TestLegacyPendingLockWithoutRequestIDStillBlocks(t *testing.T) {
+	store, fake := newFakeStore(t)
+	lockPK := keyRequestPendingLockPK("viewer@example.com", "openai")
+	fake.InjectItem("test-keys", lockPK, map[string]any{"pk": map[string]any{"S": lockPK}})
+
+	_, err := store.CreateKeyRequest(context.Background(), CreateKeyRequestInput{
+		RequesterEmail: "viewer@example.com",
+		Provider:       "openai",
+		Name:           "blocked",
+		Description:    "blocked",
+	})
+	assert.ErrorIs(t, err, ErrPendingKeyRequestExists)
+}

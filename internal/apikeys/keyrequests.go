@@ -148,13 +148,69 @@ func keyRequestPendingLockPK(requesterEmail, provider string) string {
 	return "keyreq-pending:" + normalizeOwnerEmail(requesterEmail) + ":" + normalizeProvider(provider)
 }
 
-func (s *Store) releaseKeyRequestPendingLock(ctx context.Context, requesterEmail, provider string) {
-	_, _ = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+// releaseKeyRequestPendingLock deletes the pending lock after req leaves the
+// pending/approving states. A failed delete is not fatal: the lock names its
+// request, so the next CreateKeyRequest for the pair clears it as stale.
+func (s *Store) releaseKeyRequestPendingLock(ctx context.Context, req *KeyRequest) {
+	_, err := s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{
-			"pk": &types.AttributeValueMemberS{Value: keyRequestPendingLockPK(requesterEmail, provider)},
+			"pk": stringAV(keyRequestPendingLockPK(req.RequesterEmail, req.Provider)),
 		},
 	})
+	if err != nil {
+		s.logger.Warn("Failed to release key request pending lock; the next request will clear it",
+			"id", req.ID(), "error", err)
+	}
+}
+
+// clearStalePendingLock deletes the pending lock for a requester and provider
+// when the request it names is no longer pending or approving, and reports
+// whether it did. Locks written before locks named their request are left
+// alone because they cannot be checked.
+func (s *Store) clearStalePendingLock(ctx context.Context, requesterEmail, provider string) (bool, error) {
+	lockPK := keyRequestPendingLockPK(requesterEmail, provider)
+	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(s.tableName),
+		Key:            map[string]types.AttributeValue{"pk": stringAV(lockPK)},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to read key request lock: %w", err)
+	}
+	ref, ok := result.Item["request_id"].(*types.AttributeValueMemberS)
+	if !ok || ref.Value == "" {
+		return false, nil
+	}
+	held, err := s.GetKeyRequest(ctx, ref.Value)
+	switch {
+	case err == nil && (held.Status == KeyRequestStatusPending || held.Status == KeyRequestStatusApproving):
+		return false, nil
+	case err != nil && !errors.Is(err, ErrKeyRequestNotFound):
+		return false, err
+	}
+	_, err = s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:                 aws.String(s.tableName),
+		Key:                       map[string]types.AttributeValue{"pk": stringAV(lockPK)},
+		ConditionExpression:       aws.String("request_id = :rid"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":rid": stringAV(ref.Value)},
+	})
+	if err != nil {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
+			// Another create replaced the lock; let the caller retry against it.
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to clear stale key request lock: %w", err)
+	}
+	s.logger.Info("Cleared stale key request pending lock", "id", ref.Value, "status", statusOrMissing(held))
+	return true, nil
+}
+
+func statusOrMissing(req *KeyRequest) string {
+	if req == nil {
+		return "missing"
+	}
+	return req.Status
 }
 
 // validKeyRequestSource matches integration caller ids. Because a source can
@@ -252,7 +308,8 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 	items := []types.TransactWriteItem{
 		putIfAbsent(s.tableName, av),
 		putIfAbsent(s.tableName, map[string]types.AttributeValue{
-			"pk": stringAV(keyRequestPendingLockPK(in.RequesterEmail, in.Provider)),
+			"pk":         stringAV(keyRequestPendingLockPK(in.RequesterEmail, in.Provider)),
+			"request_id": stringAV(id),
 		}),
 	}
 	const pendingLockIdx = 1
@@ -265,7 +322,11 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 		}))
 	}
 
-	if _, err := s.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+	for attempt := 0; ; attempt++ {
+		_, err := s.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+		if err == nil {
+			break
+		}
 		if canceled, ok := errors.AsType[*types.TransactionCanceledException](err); ok {
 			switch {
 			case cancellationFailed(canceled.CancellationReasons, ticketIdx):
@@ -275,6 +336,15 @@ func (s *Store) CreateKeyRequest(ctx context.Context, in CreateKeyRequestInput) 
 				}
 				return existing, ErrKeyRequestTicketExists
 			case cancellationFailed(canceled.CancellationReasons, pendingLockIdx):
+				if attempt == 0 {
+					cleared, clearErr := s.clearStalePendingLock(ctx, in.RequesterEmail, in.Provider)
+					if clearErr != nil {
+						return nil, clearErr
+					}
+					if cleared {
+						continue
+					}
+				}
 				return nil, ErrPendingKeyRequestExists
 			}
 		}
@@ -527,7 +597,7 @@ func (s *Store) CompleteKeyRequestApproval(ctx context.Context, id, createdKey, 
 		return nil, fmt.Errorf("failed to complete key request approval: %w", err)
 	}
 
-	s.releaseKeyRequestPendingLock(ctx, req.RequesterEmail, req.Provider)
+	s.releaseKeyRequestPendingLock(ctx, req)
 	return req, nil
 }
 
@@ -577,7 +647,7 @@ func (s *Store) RejectKeyRequest(ctx context.Context, id, reviewedBy, reason str
 		return nil, fmt.Errorf("failed to reject key request: %w", err)
 	}
 
-	s.releaseKeyRequestPendingLock(ctx, req.RequesterEmail, req.Provider)
+	s.releaseKeyRequestPendingLock(ctx, req)
 	return req, nil
 }
 
@@ -616,7 +686,7 @@ func (s *Store) CancelKeyRequest(ctx context.Context, id, source string) (*KeyRe
 		return nil, fmt.Errorf("failed to cancel key request: %w", err)
 	}
 
-	s.releaseKeyRequestPendingLock(ctx, req.RequesterEmail, req.Provider)
+	s.releaseKeyRequestPendingLock(ctx, req)
 	return req, nil
 }
 
