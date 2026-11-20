@@ -258,6 +258,9 @@ features:
       provider: "sendgrid"
       from_address: "llm-proxy@instawork.com"
       from_name: "LLM Proxy"
+  # Defaults come from base.yml. Sidecars inherit this block.
+  agent_spend_limits:
+    enabled: false
 
 # =============================================================================
 # PROVIDER OVERRIDES

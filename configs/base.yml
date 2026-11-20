@@ -176,6 +176,23 @@ features:
       from_address: ""
       from_name: "LLM Proxy"
   # ---------------------------------------------------------------------------
+  # Agent spend limits — calendar-month (UTC) cap per agent user label.
+  # Labels starting with user_prefix are governed; per-label overrides
+  # (soft, hard, exempt) are AGENTLIMIT#<label> items in the api_key_management
+  # table, and these values apply where an override is absent. Requires
+  # api_key_management. Keep this block out of sidecar.yml: the config
+  # validator merges each overlay with base.yml only.
+  # ---------------------------------------------------------------------------
+  agent_spend_limits:
+    enabled: false
+    mode: observe # observe | enforce
+    user_prefix: "finch-agent-"
+    default_soft_monthly_cents: 10000 # $100: soft-limit email only
+    default_hard_monthly_cents: 20000 # $200: blocks in enforce mode
+    max_hard_monthly_cents: 500000 # $5,000: ceiling for any override
+    limit_cache_ttl_seconds: 60 # caches AGENTLIMIT hits and misses
+    fail_closed_on_read_error: false # fail open when Redis/DynamoDB is unreadable
+  # ---------------------------------------------------------------------------
   # Row history (gzipped JSONL archive — independent of Redis rollups)
   # ---------------------------------------------------------------------------
   # Off by default. When enabled, raw per-request events are buffered and
