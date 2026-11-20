@@ -132,7 +132,7 @@ func decodeAgentSpend(t *testing.T, rec *httptest.ResponseRecorder) IntegrationA
 
 func thisMonth() string { return time.Now().UTC().Format("2006-01") }
 
-func TestIntegrationAgentLimits_ScopesAndAuth(t *testing.T) {
+func TestAgentLimitsRoute_ScopesAndAuth(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil, config.IntegrationScopeAgentLimitsRead)
 	get := agentLimitsPathRoot + testAgentLabel
 	put := map[string]any{"soft_monthly_cents": 5000, "updated_by": testFinchEditor}
@@ -154,7 +154,7 @@ func TestIntegrationAgentLimits_ScopesAndAuth(t *testing.T) {
 	assert.ErrorIs(t, err, apikeys.ErrAgentLimitNotFound, "a forbidden PUT stores nothing")
 }
 
-func TestIntegrationAgentLimits_DisabledCallerIsRejected(t *testing.T) {
+func TestAgentLimitsRoute_DisabledCallerIsRejected(t *testing.T) {
 	finchToken, finchHash, err := integrationtoken.New("finch")
 	require.NoError(t, err)
 	t.Setenv(testFinchHashEnv, finchHash)
@@ -165,7 +165,7 @@ func TestIntegrationAgentLimits_DisabledCallerIsRejected(t *testing.T) {
 	assert.Contains(t, f.logs.String(), "caller=finch")
 }
 
-func TestIntegrationAgentLimits_GetDefaults(t *testing.T) {
+func TestAgentLimitsRoute_GetDefaults(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	f.seedSpend(t, thisMonth(), testAgentLabel, 12.341)
 
@@ -188,7 +188,7 @@ func TestIntegrationAgentLimits_GetDefaults(t *testing.T) {
 	assert.Nil(t, raw["override"], "override is null when no item exists")
 }
 
-func TestIntegrationAgentLimits_PutPatchesAndClears(t *testing.T) {
+func TestAgentLimitsRoute_PutPatchesAndClears(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 
 	resp := decodeAgentLimit(t, f.putRaw(t, testAgentLabel, `{"soft_monthly_cents":5000,"hard_monthly_cents":30000,"exempt":true,"updated_by":"Finch.Editor@Example.com"}`))
@@ -228,7 +228,7 @@ func TestIntegrationAgentLimits_PutPatchesAndClears(t *testing.T) {
 	assert.Nil(t, raw.Override["soft_monthly_cents"])
 }
 
-func TestIntegrationAgentLimits_PutBounds(t *testing.T) {
+func TestAgentLimitsRoute_PutBounds(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	require.Equal(t, http.StatusOK, f.putRaw(t, testAgentLabel, `{"hard_monthly_cents":30000,"updated_by":"a@example.com"}`).Code)
 
@@ -274,7 +274,7 @@ func TestIntegrationAgentLimits_PutBounds(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, f.do(f.finchToken, http.MethodGet, agentLimitsPathRoot+"agent-123", nil).Code, "GET checks the prefix too")
 }
 
-func TestIntegrationAgentLimits_ModeAndState(t *testing.T) {
+func TestAgentLimitsRoute_ModeAndState(t *testing.T) {
 	f := newAgentLimitsFixture(t, func(c *config.AgentSpendLimitsConfig) { c.Mode = config.AgentSpendModeEnforce })
 	month := thisMonth()
 
@@ -294,7 +294,7 @@ func TestIntegrationAgentLimits_ModeAndState(t *testing.T) {
 	assert.Equal(t, "enforce", decodeAgentSpend(t, f.do(f.finchToken, http.MethodGet, agentSpendPath+"?month="+month+"&min_state=ok", nil)).Mode)
 }
 
-func TestIntegrationAgentLimits_PutInvalidatesResolver(t *testing.T) {
+func TestAgentLimitsRoute_PutInvalidatesResolver(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 
 	before, err := f.resolver.Resolve(t.Context(), testAgentLabel)
@@ -311,7 +311,7 @@ func TestIntegrationAgentLimits_PutInvalidatesResolver(t *testing.T) {
 // The PUT must invalidate the same resolver the middleware reads, so a
 // lowered limit blocks the very next call in this process instead of after
 // limit_cache_ttl_seconds.
-func TestIntegrationAgentLimits_PutSeenByMiddlewareNextLookup(t *testing.T) {
+func TestAgentLimitsRoute_PutSeenByMiddlewareNextLookup(t *testing.T) {
 	f := newAgentLimitsFixture(t, func(c *config.AgentSpendLimitsConfig) { c.Mode = config.AgentSpendModeEnforce })
 	f.seedSpend(t, thisMonth(), testAgentLabel, 150)
 
@@ -340,7 +340,7 @@ func TestIntegrationAgentLimits_PutSeenByMiddlewareNextLookup(t *testing.T) {
 	assert.Equal(t, http.StatusOK, call(), "and the exemption")
 }
 
-func TestIntegrationAgentSpend_ListsPrefixedLabelsAtOrAboveMinState(t *testing.T) {
+func TestAgentSpendRoute_ListsPrefixedLabelsAtOrAboveMinState(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	month := thisMonth()
 	f.seedSpend(t, month, "finch-agent-1", 5)
@@ -389,7 +389,7 @@ func TestIntegrationAgentSpend_ListsPrefixedLabelsAtOrAboveMinState(t *testing.T
 	}
 }
 
-func TestIntegrationAgentLimits_FeatureDisabled(t *testing.T) {
+func TestAgentLimitsRoute_FeatureDisabled(t *testing.T) {
 	f := newAgentLimitsFixture(t, func(c *config.AgentSpendLimitsConfig) { c.Enabled = false })
 	for _, rec := range []*httptest.ResponseRecorder{
 		f.do(f.finchToken, http.MethodGet, agentLimitsPathRoot+testAgentLabel, nil),
@@ -401,14 +401,14 @@ func TestIntegrationAgentLimits_FeatureDisabled(t *testing.T) {
 	}
 }
 
-func TestIntegrationAgentLimits_SpendStoreDown(t *testing.T) {
+func TestAgentLimitsRoute_SpendStoreDown(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	f.redis.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, f.do(f.finchToken, http.MethodGet, agentLimitsPathRoot+testAgentLabel, nil).Code)
 	assert.Equal(t, http.StatusServiceUnavailable, f.do(f.finchToken, http.MethodGet, agentSpendPath, nil).Code)
 }
 
-func TestIntegrationAgentLimits_SpendStoreUnbound(t *testing.T) {
+func TestAgentLimitsRoute_SpendStoreUnbound(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	f.h.deps.AdminRollupStore = nil
 	r := mux.NewRouter()
@@ -421,7 +421,7 @@ func TestIntegrationAgentLimits_SpendStoreUnbound(t *testing.T) {
 
 // Agent-limit logs must never carry the bearer token, its hash, or the
 // editor email Finch sends as updated_by.
-func TestIntegrationAgentLimits_LogsOmitTokensAndEmails(t *testing.T) {
+func TestAgentLimitsRoute_LogsOmitTokensAndEmails(t *testing.T) {
 	f := newAgentLimitsFixture(t, nil)
 	f.seedSpend(t, thisMonth(), testAgentLabel, 150)
 

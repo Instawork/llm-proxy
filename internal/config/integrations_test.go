@@ -51,7 +51,7 @@ func TestValidateIntegrationsConfig(t *testing.T) {
 	}
 }
 
-func TestIntegrationsPerEnvironment(t *testing.T) {
+func TestCallersPerEnvironment(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)
 	load := func(env string) IntegrationsConfig {
