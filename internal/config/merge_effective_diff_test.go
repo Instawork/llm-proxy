@@ -138,6 +138,7 @@ func TestRealEnvConfigs_MergeEffectiveDiff(t *testing.T) {
 	}{
 		{"dev", "dev", []string{"dev.yml"}},
 		{"staging", "staging", []string{"staging.yml"}},
+		{"staging+sidecar", "staging", []string{"staging.yml", "sidecar.yml"}},
 		{"production", "production", []string{"production.yml"}},
 		{"production+sidecar", "production", []string{"production.yml", "sidecar.yml"}},
 		{"fuzz", "fuzz", []string{"fuzz.yml"}},

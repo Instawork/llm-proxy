@@ -23,6 +23,20 @@ features.pii_redact.timeout_ms: 0 -> 3000
 features.redact_api.fail_mode: "" -> closed
 features.upstream.response_header_timeout_seconds: 0 -> 300
 
+## staging+sidecar
+features.admin_dashboard.allowed_domain: "" -> example.com
+features.admin_dashboard.editor_limits.max_daily_cost_limit_cents: 0 -> 10000
+features.admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents: 0 -> 2000
+features.id_gate.fail_mode: "" -> open
+features.id_gate.score_threshold: 0 -> 0.4
+features.id_gate.timeout_ms: 0 -> 30000
+features.pii_redact.fail_mode: "" -> open
+features.pii_redact.language: "" -> en
+features.pii_redact.score_threshold: 0 -> 0.5
+features.pii_redact.timeout_ms: 0 -> 3000
+features.redact_api.fail_mode: "" -> closed
+features.upstream.response_header_timeout_seconds: 0 -> 300
+
 ## production
 features.admin_dashboard.editor_limits.max_daily_cost_limit_cents: 0 -> 10000
 features.admin_dashboard.viewer_limits.personal_monthly_cost_limit_cents: 0 -> 2000

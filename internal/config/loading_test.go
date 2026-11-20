@@ -461,6 +461,30 @@ func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
 		"standalone production must reject BYO provider keys")
 }
 
+// TestRealEnvConfigs_DeployedCombinationsLoad covers every ENVIRONMENT and
+// LLM_PROXY_CONFIG_PROFILE pair the ECS task definitions set: the central
+// service, the production and demo Finch sidecars, and the staging2 Finch
+// sidecars.
+func TestRealEnvConfigs_DeployedCombinationsLoad(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	for _, tc := range []struct{ env, profile string }{
+		{"production", ""},
+		{"production", "sidecar"},
+		{"staging", "sidecar"},
+	} {
+		t.Setenv("ENVIRONMENT", tc.env)
+		t.Setenv("LLM_PROXY_CONFIG_PROFILE", tc.profile)
+		_, err := LoadEnvironmentConfig()
+		require.NoError(t, err, "ENVIRONMENT=%s LLM_PROXY_CONFIG_PROFILE=%s", tc.env, tc.profile)
+	}
+}
+
 func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)
