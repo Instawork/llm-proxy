@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -352,33 +353,111 @@ func evaluateUpdateCondition(conditionExpr string, item map[string]any, input ma
 	if conditionExpr == "" {
 		return true
 	}
+	// OR expressions (e.g. "attribute_not_exists(pk) OR lease_expires_at <
+	// :now") are not modelled and always pass.
+	if strings.Contains(conditionExpr, " OR ") {
+		return true
+	}
 	exprNames, _ := input["ExpressionAttributeNames"].(map[string]any)
 	exprValues, _ := input["ExpressionAttributeValues"].(map[string]any)
 
-	// A bare attribute_not_exists(field) fails when the stored item already
-	// carries that attribute (write-once fields such as first_request_at).
-	// Compound expressions (e.g. "... OR lease_expires_at < :now") are not
-	// modelled and keep passing, as before.
-	if rest, ok := strings.CutPrefix(conditionExpr, "attribute_not_exists("); ok && strings.HasSuffix(rest, ")") && !strings.Contains(rest, " ") {
-		field := resolveAttrName(exprNames, strings.TrimSuffix(rest, ")"))
-		if _, present := item[field]; present {
+	// Each AND term is one of attribute_exists(f), attribute_not_exists(f),
+	// or "f = :v". Other comparators are not modelled and pass.
+	for term := range strings.SplitSeq(conditionExpr, " AND ") {
+		term = strings.TrimSpace(term)
+		if inner, ok := callArg(term, "attribute_not_exists"); ok {
+			if _, present := item[resolveAttrName(exprNames, inner)]; present {
+				return false
+			}
+			continue
+		}
+		if inner, ok := callArg(term, "attribute_exists"); ok {
+			if _, present := item[resolveAttrName(exprNames, inner)]; !present {
+				return false
+			}
+			continue
+		}
+		lhs, rhs, ok := strings.Cut(term, " = ")
+		if !ok {
+			continue
+		}
+		want, ok := exprValues[strings.TrimSpace(rhs)]
+		if !ok {
+			continue
+		}
+		if !reflect.DeepEqual(item[resolveAttrName(exprNames, lhs)], want) {
 			return false
 		}
 	}
+	return true
+}
 
-	if strings.Contains(conditionExpr, "#status = :") {
-		statusField := resolveAttrName(exprNames, "#status")
-		actual := ExtractDDBString(item, statusField)
-		for valKey := range exprValues {
-			if strings.Contains(conditionExpr, "= "+valKey) {
-				expected := extractAttrValueString(exprValues, valKey)
-				if actual != expected {
-					return false
-				}
+// callArg returns the argument of a single-argument call such as
+// "attribute_exists(pk)".
+func callArg(term, fn string) (string, bool) {
+	rest, ok := strings.CutPrefix(term, fn+"(")
+	if !ok || !strings.HasSuffix(rest, ")") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimSuffix(rest, ")")), true
+}
+
+// splitTopLevel splits s on commas that are not inside parentheses.
+func splitTopLevel(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(s[start:i]))
+				start = i + 1
 			}
 		}
 	}
-	return true
+	return append(parts, strings.TrimSpace(s[start:]))
+}
+
+// evalUpdateOperand resolves a SET right-hand side: a value placeholder, an
+// attribute path, or list_append / if_not_exists over those.
+func evalUpdateOperand(item, exprNames, exprValues map[string]any, expr string) (any, bool) {
+	expr = strings.TrimSpace(expr)
+	if strings.HasPrefix(expr, ":") {
+		v, ok := exprValues[expr]
+		return v, ok
+	}
+	if inner, ok := strings.CutPrefix(expr, "if_not_exists("); ok && strings.HasSuffix(inner, ")") {
+		args := splitTopLevel(strings.TrimSuffix(inner, ")"))
+		if len(args) != 2 {
+			return nil, false
+		}
+		if v, present := item[resolveAttrName(exprNames, args[0])]; present {
+			return v, true
+		}
+		return evalUpdateOperand(item, exprNames, exprValues, args[1])
+	}
+	if inner, ok := strings.CutPrefix(expr, "list_append("); ok && strings.HasSuffix(inner, ")") {
+		args := splitTopLevel(strings.TrimSuffix(inner, ")"))
+		if len(args) != 2 {
+			return nil, false
+		}
+		a, okA := evalUpdateOperand(item, exprNames, exprValues, args[0])
+		b, okB := evalUpdateOperand(item, exprNames, exprValues, args[1])
+		if !okA || !okB {
+			return nil, false
+		}
+		avA, _ := a.(map[string]any)
+		avB, _ := b.(map[string]any)
+		listA, _ := avA["L"].([]any)
+		listB, _ := avB["L"].([]any)
+		return map[string]any{"L": append(slices.Clone(listA), listB...)}, true
+	}
+	v, ok := item[resolveAttrName(exprNames, expr)]
+	return v, ok
 }
 
 func applyUpdateExpression(item map[string]any, input map[string]any) {
@@ -396,13 +475,13 @@ func applyUpdateExpression(item map[string]any, input map[string]any) {
 				delete(item, resolveAttrName(exprNames, strings.TrimSpace(field)))
 			}
 		case "SET":
-			for assignment := range strings.SplitSeq(clause.body, ",") {
-				parts := strings.SplitN(strings.TrimSpace(assignment), "=", 2)
-				if len(parts) != 2 {
+			for _, assignment := range splitTopLevel(clause.body) {
+				lhs, rhs, ok := strings.Cut(assignment, "=")
+				if !ok {
 					continue
 				}
-				field := resolveAttrName(exprNames, strings.TrimSpace(parts[0]))
-				if val, ok := exprValues[strings.TrimSpace(parts[1])].(map[string]any); ok {
+				field := resolveAttrName(exprNames, strings.TrimSpace(lhs))
+				if val, ok := evalUpdateOperand(item, exprNames, exprValues, rhs); ok {
 					item[field] = val
 				}
 			}

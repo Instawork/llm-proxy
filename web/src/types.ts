@@ -41,7 +41,12 @@ export interface UpdateAdminUserRoleRequest {
   role: AdminRole;
 }
 
-export type KeyRequestStatus = "pending" | "approved" | "rejected";
+export type KeyRequestStatus =
+  | "pending"
+  | "approving"
+  | "approved"
+  | "rejected"
+  | "cancelled";
 
 export interface KeyRequestRecord {
   id: string;
@@ -57,6 +62,12 @@ export interface KeyRequestRecord {
   reviewed_at?: string;
   created_key?: string;
   rejection_reason?: string;
+  /** Empty for dashboard requests, else the integration caller id (e.g. "init"). */
+  source?: string;
+  external_ticket_id?: string;
+  external_ticket_url?: string;
+  justification?: string;
+  monthly_cost_limit?: number;
 }
 
 export interface CreateKeyRequestBody {
