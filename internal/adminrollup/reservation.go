@@ -25,8 +25,9 @@ import (
 // cleaned up by the same day-rollover archive path.
 
 const (
-	reservedDim      = "reserved"
-	monthReservedDim = "month_reserved"
+	reservedDim          = "reserved"
+	monthReservedDim     = "month_reserved"
+	monthReservedUserDim = "month_reserved_user"
 )
 
 // reserveUnderLimitScript atomically reserves estimate for a key IFF the
@@ -208,4 +209,38 @@ func (s *Store) AddKeyMonthlyReservation(ctx context.Context, metric, month, key
 		return nil
 	}
 	return s.be.addReserved(ctx, monthReservedKey(metric, month), keyID, deltaUSD, monthTTL)
+}
+
+// ReserveUserMonthlySpend atomically reserves an estimated cost for a user
+// label against its monthly cap, checking the label's recorded spend in the
+// month by_user hash plus its outstanding month_reserved_user reservation.
+// limitCents must be > 0.
+func (s *Store) ReserveUserMonthlySpend(ctx context.Context, metric, month, userID string, estimateUSD float64, limitCents int64) (bool, error) {
+	if s == nil || s.be == nil || userID == "" {
+		return true, nil
+	}
+	return s.be.reserveUnderLimit(
+		ctx,
+		monthUserKey(metric, month), dimMemberField(userID, "spend_usd"),
+		monthReservedUserKey(metric, month), userID,
+		estimateUSD, limitCents, monthTTL,
+	)
+}
+
+// AddUserMonthlyReservation adjusts a user label's outstanding monthly
+// reservation by delta (negative to release). The stored value is floored at 0.
+func (s *Store) AddUserMonthlyReservation(ctx context.Context, metric, month, userID string, deltaUSD float64) error {
+	if s == nil || s.be == nil || userID == "" {
+		return nil
+	}
+	return s.be.addReserved(ctx, monthReservedUserKey(metric, month), userID, deltaUSD, monthTTL)
+}
+
+// ReservedUserMonthlySpendUSD reads a user label's outstanding monthly
+// reservation total.
+func (s *Store) ReservedUserMonthlySpendUSD(ctx context.Context, metric, month, userID string) (float64, error) {
+	if s == nil || s.be == nil || userID == "" {
+		return 0, nil
+	}
+	return s.be.hget(ctx, monthReservedUserKey(metric, month), userID)
 }

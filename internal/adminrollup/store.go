@@ -190,6 +190,14 @@ func monthReservedKey(metric, month string) string {
 	return fmt.Sprintf("%s%s:month:%s:%s", keyPrefix, metric, month, monthReservedDim)
 }
 
+func monthUserKey(metric, month string) string {
+	return fmt.Sprintf("%s%s:month:%s:by_user", keyPrefix, metric, month)
+}
+
+func monthReservedUserKey(metric, month string) string {
+	return fmt.Sprintf("%s%s:month:%s:%s", keyPrefix, metric, month, monthReservedUserDim)
+}
+
 func hourlyKey(metric, day string, hour int) string {
 	return fmt.Sprintf("%s%s:hourly:%s:%02d", keyPrefix, metric, day, hour)
 }
@@ -402,6 +410,36 @@ func (s *Store) ApplyMonthlyKeySpend(ctx context.Context, metric, month, keyID s
 		return nil
 	}
 	return s.be.hincrbyfloat(ctx, monthKey(metric, month), dimMemberField(keyID, "spend_usd"), spendUSD, monthTTL)
+}
+
+// UserMonthlySpendUSD reads the fleet-wide monthly spend (USD) recorded for a
+// single user label in the given metric/month's by_user hash.
+func (s *Store) UserMonthlySpendUSD(ctx context.Context, metric, month, userID string) (float64, error) {
+	if s == nil || s.be == nil || userID == "" {
+		return 0, nil
+	}
+	return s.be.hget(ctx, monthUserKey(metric, month), dimMemberField(userID, "spend_usd"))
+}
+
+// UserMonthlySpendAll returns every user label's recorded monthly spend (USD)
+// for the given metric/month in one HGETALL. Reservations are not included.
+func (s *Store) UserMonthlySpendAll(ctx context.Context, metric, month string) (map[string]float64, error) {
+	if s == nil || s.be == nil {
+		return nil, nil
+	}
+	h, err := s.be.hgetall(ctx, monthUserKey(metric, month))
+	if err != nil {
+		return nil, err
+	}
+	return flattenCostByKey(h), nil
+}
+
+// ApplyMonthlyUserSpend atomically folds spendUSD into the monthly per-user hash.
+func (s *Store) ApplyMonthlyUserSpend(ctx context.Context, metric, month, userID string, spendUSD float64) error {
+	if s == nil || s.be == nil || userID == "" || spendUSD == 0 {
+		return nil
+	}
+	return s.be.hincrbyfloat(ctx, monthUserKey(metric, month), dimMemberField(userID, "spend_usd"), spendUSD, monthTTL)
 }
 
 func (s *Store) loadHash(ctx context.Context, key string) (map[string]float64, error) {
