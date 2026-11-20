@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +104,11 @@ type Recorder struct {
 	// (a Redis HINCRBYFLOAT per key) off the request goroutine; see
 	// SetBackgroundRunner. Guarded by mu like the rest of the recorder.
 	background func(job func(ctx context.Context))
+
+	// monthlyUserPrefix selects which user labels get a per-request write
+	// into the monthly per-user spend hash; see SetMonthlyUserPrefix. Empty
+	// (the default) writes nothing. Guarded by mu.
+	monthlyUserPrefix string
 }
 
 type costFlushed struct {
@@ -260,6 +266,7 @@ func (r *Recorder) RecordRequestWithCache(
 	dayKey := r.dayKey
 	delta := r.costDeltaLocked()
 	r.advanceCostFlushedLocked()
+	userGoverned := governsMonthlyUser(r.monthlyUserPrefix, userID)
 	r.mu.Unlock()
 
 	// Emit outside the lock: when the history buffer trips its size
@@ -268,32 +275,75 @@ func (r *Recorder) RecordRequestWithCache(
 	r.EmitHistory(entry)
 	r.QueueDelta(dayKey, delta)
 
-	// Monthly key spend is a synchronous Redis write per key touched; hand
-	// it to the background runner when one is wired so the request
-	// goroutine is not held on it. The month is pinned here so a job that
+	// Monthly key and governed-user spend are synchronous Redis writes;
+	// hand them to the background runner when one is wired so the request
+	// goroutine is not held on them. The month is pinned here so a job that
 	// runs across midnight on the 1st still lands in the right bucket.
 	// Cost-limit reservations linger for a grace period after the
 	// response, which already covers the delay before the write lands.
 	// Skipped entirely when no rollup store is bound: the write would be a
 	// no-op, and queueing it would still take a turn on the shared worker
-	// pool ahead of real cost records.
-	if len(delta.Dimensions["by_key"]) > 0 && r.RollupBound() {
+	// pool ahead of real cost records. The user write goes per request
+	// rather than through the debounced daily delta, which never flushes
+	// while an instance sees a request at least every debounce interval.
+	writeKeys := len(delta.Dimensions["by_key"]) > 0
+	writeUser := userGoverned && spendUSD != 0
+	if (writeKeys || writeUser) && r.RollupBound() {
 		month := now.Format("2006-01")
+		var userSpendUSD float64
+		if writeUser {
+			userSpendUSD = spendUSD
+		}
+		job := func(ctx context.Context) {
+			r.applyMonthlySpend(ctx, month, delta, userID, userSpendUSD)
+		}
 		r.mu.RLock()
 		run := r.background
 		r.mu.RUnlock()
 		if run != nil {
-			run(func(ctx context.Context) { r.applyMonthlyKeySpendFromDelta(ctx, month, delta) })
+			run(job)
 		} else {
-			r.applyMonthlyKeySpendFromDelta(context.Background(), month, delta)
+			job(context.Background())
 		}
 	}
 }
 
+// SetMonthlyUserPrefix sets the user-label prefix whose spend is written per
+// request into the fleet-wide monthly per-user hash. Empty disables the
+// write. Call once at startup before traffic.
+func (r *Recorder) SetMonthlyUserPrefix(prefix string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.monthlyUserPrefix = prefix
+	r.mu.Unlock()
+}
+
+// GovernsMonthlyUser reports whether userID's spend is written to the
+// monthly per-user hash under the configured prefix.
+func (r *Recorder) GovernsMonthlyUser(userID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return governsMonthlyUser(r.monthlyUserPrefix, userID)
+}
+
+// governsMonthlyUser rejects labels containing '|' because the hash field is
+// "<label>|spend_usd" and UserMonthlySpendAll splits on the first '|'.
+func governsMonthlyUser(prefix, userID string) bool {
+	return prefix != "" &&
+		len(userID) > len(prefix) &&
+		strings.HasPrefix(userID, prefix) &&
+		!strings.Contains(userID, "|")
+}
+
 // SetBackgroundRunner installs the executor used for backend writes that are
-// not needed to answer the request (currently the monthly key spend
-// counter). Intended to be the cost tracker's worker pool; nil restores the
-// inline behaviour. Call once at startup before traffic.
+// not needed to answer the request (currently the monthly key and governed
+// user spend counters). Intended to be the cost tracker's worker pool; nil
+// restores the inline behaviour. Call once at startup before traffic.
 func (r *Recorder) SetBackgroundRunner(run func(job func(ctx context.Context))) {
 	if r == nil {
 		return
@@ -301,6 +351,16 @@ func (r *Recorder) SetBackgroundRunner(run func(job func(ctx context.Context))) 
 	r.mu.Lock()
 	r.background = run
 	r.mu.Unlock()
+}
+
+func (r *Recorder) applyMonthlySpend(ctx context.Context, month string, delta adminrollup.Delta, userID string, userSpendUSD float64) {
+	r.applyMonthlyKeySpendFromDelta(ctx, month, delta)
+	if userSpendUSD == 0 {
+		return
+	}
+	if err := r.ApplyFleetMonthlyUserSpend(ctx, adminrollup.MetricCost, month, userID, userSpendUSD); err != nil {
+		proxylog.Proxy("coststats: apply monthly user spend failed spend_usd=%f error=%v", userSpendUSD, err)
+	}
 }
 
 func (r *Recorder) applyMonthlyKeySpendFromDelta(ctx context.Context, month string, delta adminrollup.Delta) {
@@ -1013,4 +1073,53 @@ func (r *Recorder) KeyMonthlySpendUSDDetailed(ctx context.Context, keyID string)
 		return fleet, false
 	}
 	return 0, false
+}
+
+// UserMonthlySpendUSDDetailed returns the fleet-wide spend recorded for
+// userID in month (YYYY-MM, UTC). degraded is true only when a rollup store
+// is bound but the read failed; the spend is then 0 because there is no
+// in-process monthly per-user view to fall back to.
+func (r *Recorder) UserMonthlySpendUSDDetailed(ctx context.Context, month, userID string) (spendUSD float64, degraded bool) {
+	if r == nil || userID == "" {
+		return 0, false
+	}
+	fleet, bound, err := r.FleetUserMonthlySpendUSD(ctx, adminrollup.MetricCost, month, userID)
+	if bound && err != nil {
+		return 0, true
+	}
+	return fleet, false
+}
+
+// ReserveUserMonthlySpend atomically reserves estimateUSD for userID against
+// its monthly cap in month (YYYY-MM, UTC) across the fleet. Callers pass the
+// month explicitly so the reconcile and release land in the same bucket as
+// the reservation when a request straddles a month boundary.
+//
+// Return contract, as ReserveKeyMonthlySpend, plus the store error:
+//   - reservationActive=false, err=nil: no rollup store is bound.
+//   - reservationActive=false, err!=nil: the store errored; nothing was
+//     reserved and allowed is meaningless.
+//   - reservationActive=true: allowed reports reserved (true, the caller
+//     MUST later reconcile or release via AdjustUserMonthlyReservation) or
+//     blocked (false, nothing to release).
+func (r *Recorder) ReserveUserMonthlySpend(ctx context.Context, month, userID string, estimateUSD float64, limitCents int64) (allowed, reservationActive bool, err error) {
+	if r == nil || userID == "" || limitCents <= 0 {
+		return true, false, nil
+	}
+	allowed, bound, err := r.ReserveFleetUserMonthlySpend(ctx, adminrollup.MetricCost, month, userID, estimateUSD, limitCents)
+	if !bound || err != nil {
+		return true, false, err
+	}
+	return allowed, true, nil
+}
+
+// AdjustUserMonthlyReservation changes userID's outstanding monthly fleet
+// reservation in month by deltaUSD (negative to release). No-op when no
+// rollup store is bound. The error is returned rather than logged so callers
+// can keep the user label out of log lines.
+func (r *Recorder) AdjustUserMonthlyReservation(ctx context.Context, month, userID string, deltaUSD float64) error {
+	if r == nil || userID == "" || deltaUSD == 0 {
+		return nil
+	}
+	return r.AdjustFleetUserMonthlyReservation(ctx, adminrollup.MetricCost, month, userID, deltaUSD)
 }

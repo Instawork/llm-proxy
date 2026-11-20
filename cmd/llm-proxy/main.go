@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,6 +121,10 @@ var globalCostTracker *cost.CostTracker
 // Global in-process cost spend rollup for the admin dashboard. Populated when
 // cost tracking is enabled; surfaced via /admin/api/cost stats.
 var globalCostStatsRecorder *coststats.Recorder
+
+// Agent spend limit resolver; nil unless features.agent_spend_limits is
+// enabled and the cost stats recorder exists.
+var globalAgentLimitResolver *apikeys.AgentLimitResolver
 
 // Global API key store instance
 var (
@@ -1604,6 +1609,7 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 	}
 	globalAdminUserStore = initializeAdminUserStore(yamlConfig, env)
 	globalNotifier = initNotifier(yamlConfig, env)
+	initAgentSpendLimits(yamlConfig)
 
 	provRT := provision.RuntimeFromYAML(yamlConfig.Features.APIKeyManagement.Provisioning)
 	keyProvisioner, provErr := provision.NewManagerFromRuntime(provRT, logger)
@@ -1655,6 +1661,71 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 	initAdminRollups(yamlConfig)
 	initHistory(yamlConfig)
 	return deps
+}
+
+// initAgentSpendLimits builds the AGENTLIMIT resolver and turns on the
+// monthly per-user counter for the governed prefix. Without a key store the
+// resolver fails every lookup, so each governed call fails open and is
+// counted as limit_lookup_error rather than silently going unenforced.
+func initAgentSpendLimits(yamlConfig *config.YAMLConfig) {
+	cfg := yamlConfig.Features.AgentSpendLimits
+	if !cfg.Enabled {
+		return
+	}
+	if globalCostStatsRecorder == nil {
+		logProxyWarn("Agent spend limits: enabled but cost tracking is off; middleware NOT installed")
+		return
+	}
+	var getter apikeys.AgentLimitGetter = unavailableAgentLimits{}
+	if store, ok := globalAPIKeyStore.(*apikeys.Store); ok {
+		getter = store
+	} else {
+		logProxyWarn("Agent spend limits: API key store unavailable; every governed call will fail open")
+	}
+	globalAgentLimitResolver = apikeys.NewAgentLimitResolver(getter, cfg)
+	globalCostStatsRecorder.SetMonthlyUserPrefix(cfg.UserPrefix)
+	logger.Info("Agent spend limits: ENABLED",
+		"mode", cfg.Mode,
+		"user_prefix", cfg.UserPrefix,
+		"default_soft_monthly_cents", cfg.DefaultSoftMonthlyCents,
+		"default_hard_monthly_cents", cfg.DefaultHardMonthlyCents)
+}
+
+var errAgentLimitStoreUnavailable = errors.New("agent limit store unavailable")
+
+type unavailableAgentLimits struct{}
+
+func (unavailableAgentLimits) GetAgentLimit(context.Context, string) (*apikeys.AgentLimit, error) {
+	return nil, errAgentLimitStoreUnavailable
+}
+
+// agentSpendLimitOptions wires the agent spend middleware to the shared
+// monthly counter, the resolver, the cost tracker's pricing, and the first
+// Datadog cost transport, so its metrics carry the same env, service, and
+// team tags as llm.cost.*.
+func agentSpendLimitOptions(yamlConfig *config.YAMLConfig) middleware.AgentSpendLimitOptions {
+	opts := middleware.AgentSpendLimitOptions{
+		Config:   yamlConfig.Features.AgentSpendLimits,
+		Spend:    globalCostStatsRecorder,
+		Estimate: costEstimator(),
+		Metrics:  observability.NewMetricsSink(costTrackingDatadogConfig(yamlConfig), logger, "agent_spend"),
+	}
+	if globalAgentLimitResolver != nil {
+		opts.Limits = globalAgentLimitResolver
+	}
+	if opts.Estimate != nil {
+		opts.Estimation = providers.NewYAMLConfigEstimationAdapter(yamlConfig.Features.RateLimiting.Estimation)
+	}
+	return opts
+}
+
+func costTrackingDatadogConfig(yamlConfig *config.YAMLConfig) *config.DatadogTransportConfig {
+	for _, t := range yamlConfig.Features.CostTracking.Transports {
+		if t.Type == "datadog" && t.Datadog != nil {
+			return t.Datadog
+		}
+	}
+	return nil
 }
 
 func initRateLimiter(yamlConfig *config.YAMLConfig) {
@@ -1859,6 +1930,9 @@ func buildRouter(deps *serverDeps) *mux.Router {
 	if globalCostStatsRecorder != nil && yamlConfig.Features.CostTracking.Enabled {
 		r.Use(middleware.CostLimitMiddleware(globalProviderManager, globalCostStatsRecorder, costLimitOptions(yamlConfig)))
 	}
+	if globalAgentLimitResolver != nil {
+		r.Use(middleware.AgentSpendLimitMiddleware(globalProviderManager, agentSpendLimitOptions(yamlConfig)))
+	}
 
 	installIDGateMiddleware(r, deps)
 	installPIIRedactMiddleware(r, deps)
@@ -1939,16 +2013,25 @@ func costLimitOptions(yamlConfig *config.YAMLConfig) middleware.CostLimitOptions
 		}
 	}
 	if globalCostTracker != nil {
-		opts.Estimate = func(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64 {
-			_, _, total, err := globalCostTracker.CalculateCostWithCache(provider, model, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens)
-			if err != nil {
-				return 0
-			}
-			return total
-		}
+		opts.Estimate = costEstimator()
 		opts.Estimation = providers.NewYAMLConfigEstimationAdapter(yamlConfig.Features.RateLimiting.Estimation)
 	}
 	return opts
+}
+
+// costEstimator prices a call with the cost tracker's tables, or returns nil
+// when cost tracking is off. Unpriced models price at 0.
+func costEstimator() middleware.CostEstimator {
+	if globalCostTracker == nil {
+		return nil
+	}
+	return func(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64 {
+		_, _, total, err := globalCostTracker.CalculateCostWithCache(provider, model, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens)
+		if err != nil {
+			return 0
+		}
+		return total
+	}
 }
 
 func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
