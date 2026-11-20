@@ -64,7 +64,7 @@ func agentSpendCostTable(t *testing.T) *cost.DynamoDBTransport {
 	return tp
 }
 
-const testMapping = `id,slug,label-as-sent
+const testMapping = `id,slug,label_as_sent
 12,support-bot,Support%20Bot
 12,support-bot,Old%20Support
 3,helper,Helper
@@ -141,7 +141,7 @@ func TestAgentSpendSeed_NewMappingRowAfterFirstRun(t *testing.T) {
 	costs := agentSpendCostTable(t)
 	rollup, _ := agentSpendRollup(t)
 
-	first, err := parseAgentMapping(strings.NewReader("id,slug,label-as-sent\n12,support-bot,Support%20Bot\n"))
+	first, err := parseAgentMapping(strings.NewReader("id,slug,label_as_sent\n12,support-bot,Support%20Bot\n"))
 	require.NoError(t, err)
 	_, err = executeAgentSpendSeed(ctx, &bytes.Buffer{}, costs, rollup, first, seedOpts(false))
 	require.NoError(t, err)
@@ -152,6 +152,45 @@ func TestAgentSpendSeed_NewMappingRowAfterFirstRun(t *testing.T) {
 	_, err = executeAgentSpendSeed(ctx, &bytes.Buffer{}, costs, rollup, second, seedOpts(false))
 	require.NoError(t, err)
 	assert.InDelta(t, 4.00, userSpend(t, rollup, "finch-agent-12"), 1e-9, "only the new label is added")
+}
+
+// The Finch export writes two rows for an agent whose stored name has
+// surrounding whitespace (the raw name and the stripped name), and replaces
+// "/" with "_" before quoting.
+func TestAgentSpendSeed_FinchExportWhitespaceAndSlashRows(t *testing.T) {
+	ctx := context.Background()
+	fake := dynamodbfake.New(t)
+	dynamodbfake.UseFakeDynamo(t, fake.URL())
+	costs, err := cost.NewDynamoDBTransport(cost.DynamoDBTransportConfig{TableName: "cost", Region: "us-west-2"})
+	require.NoError(t, err)
+	nov := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	for i, r := range []struct {
+		user string
+		usd  float64
+	}{
+		{" Sales/Ops Bot ", 99},
+		{" Sales_Ops Bot ", 1.25},
+		{"Sales_Ops Bot", 2.00},
+	} {
+		require.NoError(t, costs.WriteRecord(&cost.CostRecord{
+			RequestID: string(rune('a' + i)), UserID: r.user, Provider: "anthropic", Model: "m", Timestamp: nov, TotalCost: r.usd,
+		}))
+	}
+	rollup, _ := agentSpendRollup(t)
+	mappings, err := parseAgentMapping(strings.NewReader("id,slug,label_as_sent\n" +
+		"41,sales-ops-bot,%20Sales_Ops%20Bot%20\n" +
+		"41,sales-ops-bot,Sales_Ops%20Bot\n"))
+	require.NoError(t, err)
+	require.Len(t, mappings, 2)
+
+	var out bytes.Buffer
+	res, err := executeAgentSpendSeed(ctx, &out, costs, rollup, mappings, seedOpts(false))
+	require.NoError(t, err)
+	assert.Zero(t, res.Failed)
+	assert.InDelta(t, 3.25, userSpend(t, rollup, "finch-agent-41"), 1e-9, "both rows land on the one ID")
+	assert.Contains(t, out.String(), `finch-agent-41 <- " Sales_Ops Bot ", Sales_Ops Bot`)
+	assert.NotContains(t, out.String(), "AMBIGUOUS")
+	assert.Contains(t, out.String(), "seeded $3.25")
 }
 
 func TestAgentSpendSeed_RedisDownReportsFailures(t *testing.T) {
@@ -211,8 +250,15 @@ func TestParseAgentMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []agentMapping{{"7", "a", "x,y"}, {"8", "b", "z"}}, got)
 
+	for _, header := range []string{"id,slug,label_as_sent", "id,slug,label-as-sent"} {
+		got, err := parseAgentMapping(strings.NewReader(header + "\n1,a,b\n"))
+		require.NoError(t, err, header)
+		assert.Equal(t, []agentMapping{{"1", "a", "b"}}, got, header)
+	}
+
 	bad := map[string]string{
 		"header":       "id,name,label\n1,a,b\n",
+		"header space": "id,slug,label as sent\n1,a,b\n",
 		"no rows":      "id,slug,label-as-sent\n",
 		"non-numeric":  "id,slug,label-as-sent\nabc,a,b\n",
 		"zero":         "id,slug,label-as-sent\n0,a,b\n",

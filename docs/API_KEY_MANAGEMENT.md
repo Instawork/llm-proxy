@@ -218,7 +218,7 @@ Only personal keys whose `monthly_cost_limit` equals `--from` (default 1000 cent
 
 ### Seed and report monthly agent spend
 
-`agent-spend seed` copies a month's spend recorded under old agent display names into the monthly per-user counter under `finch-agent-{id}`. It reads the DynamoDB cost table through `UserProviderIndex` and writes to the `admin_dashboard.rollups` Redis. The mapping CSV comes from the Finch export and has the header `id,slug,label-as-sent`. `label-as-sent` is the URL-encoded label Finch put in `/meta/<label>/`. The CLI decodes it, because the proxy records the decoded label.
+`agent-spend seed` copies a month's spend recorded under old agent display names into the monthly per-user counter under `finch-agent-{id}`. It reads the DynamoDB cost table through `UserProviderIndex` and writes to the `admin_dashboard.rollups` Redis. The mapping CSV comes from the Finch export (`finch custom-agents export-spend-labels -o finch-agents.csv`) and has the header `id,slug,label_as_sent` (`label-as-sent` is also accepted). `label_as_sent` is the URL-encoded label Finch put in `/meta/<label>/`. The CLI decodes it, because the proxy records the decoded label.
 
 ```bash
 go run ./cmd/llm-proxy-keys agent-spend seed -env=production -month 2026-11 -mapping finch-agents.csv -dry-run
@@ -227,7 +227,7 @@ go run ./cmd/llm-proxy-keys agent-spend report -env=production -month 2026-11 [-
 ```
 
 - Each old label is seeded at most once per month. A Redis marker is claimed before the write and released if the write fails, so a second run reports `already seeded, skipped` and writes nothing. A later run with new mapping rows seeds only the new labels.
-- Several old labels mapping to one ID are each added to that ID and listed under `MERGED`.
+- Several old labels mapping to one ID are each added to that ID and listed under `MERGED`. The Finch export writes two rows for an agent whose name has surrounding whitespace (raw and stripped), and both are added. Labels with surrounding whitespace are printed in quotes.
 - An old label that maps to more than one ID (agents sharing a display name) is never written. It is listed under `AMBIGUOUS` with its candidates and unattributed spend. Agents whose every label is ambiguous are listed under `UNSEEDED AGENTS`.
 - A label that already starts with the prefix is rejected, because its spend is already counted live.
 - `report` lists each `finch-agent-*` label's recorded month-to-date spend (in-flight reservations excluded), highest first, flagged `OVER SOFT` or `OVER HARD` at or above each threshold.

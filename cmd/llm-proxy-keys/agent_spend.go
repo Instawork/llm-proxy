@@ -32,7 +32,7 @@ const (
 )
 
 // agentMappingHeader is the header row of the Finch export.
-var agentMappingHeader = []string{"id", "slug", "label-as-sent"}
+var agentMappingHeader = []string{"id", "slug", "label_as_sent"}
 
 // costSummer sums a user label's cost rows; *cost.DynamoDBTransport implements it.
 type costSummer interface {
@@ -116,7 +116,7 @@ func runAgentSpendCommand(args []string) {
 	environment := fs.String("env", "dev", "Environment (dev, staging, production)")
 	month := fs.String("month", "", "UTC calendar month, YYYY-MM (required)")
 	prefix := fs.String("prefix", defaultAgentSpendPrefix, "Governed agent label prefix")
-	mappingPath := fs.String("mapping", "", "seed: Finch export CSV with columns id,slug,label-as-sent")
+	mappingPath := fs.String("mapping", "", "seed: Finch export CSV with columns id,slug,label_as_sent")
 	dryRun := fs.Bool("dry-run", false, "seed: print what would be written without writing")
 	softCents := fs.Int64("soft-cents", defaultAgentSoftLimitCents, "report: soft threshold in cents")
 	hardCents := fs.Int64("hard-cents", defaultAgentHardLimitCents, "report: hard threshold in cents")
@@ -258,9 +258,10 @@ func isGovernedAgentLabel(prefix, label string) bool {
 	return len(label) > len(prefix) && strings.HasPrefix(label, prefix) && !strings.Contains(label, "|")
 }
 
-// parseAgentMapping reads the Finch export: a header row "id,slug,label-as-sent"
-// then one row per (agent, label). Exact duplicate rows are dropped; an ID with
-// two different slugs is rejected as an inconsistent export.
+// parseAgentMapping reads the Finch export: a header row "id,slug,label_as_sent"
+// ("label-as-sent" is also accepted) then one row per (agent, label). Exact
+// duplicate rows are dropped; an ID with two different slugs is rejected as an
+// inconsistent export.
 func parseAgentMapping(r io.Reader) ([]agentMapping, error) {
 	cr := csv.NewReader(r)
 	cr.FieldsPerRecord = len(agentMappingHeader)
@@ -270,7 +271,7 @@ func parseAgentMapping(r io.Reader) ([]agentMapping, error) {
 	}
 	for i, want := range agentMappingHeader {
 		got := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(header[i], "\ufeff")))
-		if got != want {
+		if strings.ReplaceAll(got, "-", "_") != want {
 			return nil, fmt.Errorf("mapping: header must be %q, got %q", strings.Join(agentMappingHeader, ","), strings.Join(header, ","))
 		}
 	}
@@ -297,7 +298,7 @@ func parseAgentMapping(r io.Reader) ([]agentMapping, error) {
 			return nil, fmt.Errorf("mapping line %d: id must be a positive integer, got %q", line, m.ID)
 		}
 		if m.LabelAsSent == "" {
-			return nil, fmt.Errorf("mapping line %d: label-as-sent is empty", line)
+			return nil, fmt.Errorf("mapping line %d: label_as_sent is empty", line)
 		}
 		if prev, ok := slugByID[m.ID]; ok && prev != m.Slug {
 			return nil, fmt.Errorf("mapping line %d: id %s has two slugs (%q and %q)", line, m.ID, prev, m.Slug)
@@ -316,7 +317,7 @@ func parseAgentMapping(r io.Reader) ([]agentMapping, error) {
 }
 
 // buildSeedSources groups mapping rows by the label the proxy recorded. The
-// proxy takes the label from the decoded request path, so label-as-sent is
+// proxy takes the label from the decoded request path, so label_as_sent is
 // URL-unescaped first; two sent forms that decode alike are one source.
 // Labels already under the governed prefix are rejected: their spend is
 // counted live and seeding them would double it.
@@ -329,7 +330,7 @@ func buildSeedSources(mappings []agentMapping, prefix string) ([]seedSource, err
 	for _, m := range mappings {
 		label, err := url.PathUnescape(m.LabelAsSent)
 		if err != nil {
-			return nil, fmt.Errorf("mapping: label-as-sent %q is not valid URL encoding: %w", m.LabelAsSent, err)
+			return nil, fmt.Errorf("mapping: label_as_sent %q is not valid URL encoding: %w", m.LabelAsSent, err)
 		}
 		if strings.HasPrefix(label, prefix) {
 			return nil, fmt.Errorf("mapping: label %q already has the governed prefix %q", label, prefix)
@@ -460,7 +461,7 @@ func printSeedResult(w io.Writer, res seedResult, opts seedOptions, sources []se
 			nAmbiguous++
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n", r.Source.Label, opts.Prefix+r.Source.IDs[0], r.Total.Rows, formatUSD(r.Total.TotalUSD), r.result())
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n", displayLabel(r.Source.Label), opts.Prefix+r.Source.IDs[0], r.Total.Rows, formatUSD(r.Total.TotalUSD), r.result())
 		switch r.Outcome {
 		case seedWritten:
 			seeded += r.Total.TotalUSD
@@ -482,7 +483,7 @@ func printSeedResult(w io.Writer, res seedResult, opts seedOptions, sources []se
 			if !r.Source.ambiguous() {
 				continue
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", r.Source.Label, r.Source.candidates(opts.Prefix), r.Total.Rows, formatUSD(r.Total.TotalUSD))
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", displayLabel(r.Source.Label), r.Source.candidates(opts.Prefix), r.Total.Rows, formatUSD(r.Total.TotalUSD))
 		}
 		_ = tw.Flush()
 	}
@@ -520,7 +521,7 @@ func seedGroupings(sources []seedSource, prefix string) (merged, unseeded []stri
 			allIDs[id] = true
 		}
 		if !src.ambiguous() {
-			labelsByID[src.IDs[0]] = append(labelsByID[src.IDs[0]], src.Label)
+			labelsByID[src.IDs[0]] = append(labelsByID[src.IDs[0]], displayLabel(src.Label))
 		}
 	}
 	ids := make([]string, 0, len(allIDs))
@@ -588,6 +589,16 @@ func executeAgentSpendReport(ctx context.Context, w io.Writer, rollup *adminroll
 	return nil
 }
 
+// displayLabel quotes labels with surrounding whitespace, which Finch exports
+// as a separate row from the stripped name and which would otherwise print
+// identically.
+func displayLabel(label string) string {
+	if label != strings.TrimSpace(label) {
+		return strconv.Quote(label)
+	}
+	return label
+}
+
 func formatUSD(v float64) string {
 	return fmt.Sprintf("$%.2f", v)
 }
@@ -596,5 +607,5 @@ func printAgentSpendUsage() {
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  %s agent-spend seed   -month YYYY-MM -mapping finch-agents.csv [-dry-run] [-prefix finch-agent-] [-env=dev]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s agent-spend report -month YYYY-MM [-soft-cents 10000] [-hard-cents 20000] [-prefix finch-agent-] [-env=dev]\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "\nThe mapping CSV has the header id,slug,label-as-sent.\n")
+	fmt.Fprintf(os.Stderr, "\nThe mapping CSV has the header id,slug,label_as_sent.\n")
 }
