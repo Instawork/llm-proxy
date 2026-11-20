@@ -27,7 +27,7 @@ func requireProdAcknowledgement() error {
 	}
 
 	return fmt.Errorf(
-		"production bump requires LLM_PROXY_ALLOW_PROD=1 (current AWS account: %s)",
+		"production writes require LLM_PROXY_ALLOW_PROD=1 (current AWS account: %s)",
 		accountID,
 	)
 }
