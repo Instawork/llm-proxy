@@ -95,6 +95,18 @@ func diffConfigs(t *testing.T, before, after *YAMLConfig) []string {
 	return lines
 }
 
+func TestRealEnvConfigs_StagingRejectsBYOKeys(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	t.Setenv("ENVIRONMENT", "staging")
+	cfg, err := LoadAndMergeConfigs([]string{
+		filepath.Join(configsDir, "base.yml"),
+		filepath.Join(configsDir, "staging.yml"),
+	})
+	require.NoError(t, err)
+	require.False(t, cfg.Features.BYOKeys.Enabled)
+}
+
 func TestRealEnvConfigs_EditorDailyCapFromBase(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)
