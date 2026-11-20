@@ -68,7 +68,6 @@ func TestCallersPerEnvironment(t *testing.T) {
 	for _, env := range []string{"production", "staging"} {
 		t.Run(env, func(t *testing.T) {
 			ic := load(env)
-			assert.False(t, ic.Enabled, "integrations stay off until Init is confirmed")
 			assert.Equal(t, 60, ic.RequestsPerMinute, "inherited from base.yml")
 			assert.Equal(t, int64(10000), ic.MaxDailyCostLimitCents)
 			assert.Equal(t, int64(100000), ic.MaxMonthlyCostLimitCents)
@@ -76,18 +75,24 @@ func TestCallersPerEnvironment(t *testing.T) {
 			require.NotEmpty(t, ic.Callers)
 			assert.Equal(t, "init", ic.Callers[0].ID)
 			assert.Equal(t, "LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256", ic.Callers[0].TokenSHA256Env)
-			assert.False(t, ic.Callers[0].Disabled)
 		})
 	}
 
-	assert.Len(t, load("staging").Callers, 1, "finch is production-only")
-	prod := load("production").Callers
+	staging := load("staging")
+	assert.False(t, staging.Enabled, "staging integrations stay off until Init is confirmed")
+	assert.False(t, staging.Callers[0].Disabled)
+	assert.Len(t, staging.Callers, 1, "finch is production-only")
+
+	prodCfg := load("production")
+	assert.True(t, prodCfg.Enabled, "on in production for finch")
+	prod := prodCfg.Callers
 	require.Len(t, prod, 2)
+	assert.True(t, prod[0].Disabled, "init stays off until Init is confirmed")
 	finch := prod[1]
 	assert.Equal(t, "finch", finch.ID)
 	assert.Equal(t, "LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256", finch.TokenSHA256Env)
 	assert.ElementsMatch(t, []string{IntegrationScopeAgentLimitsRead, IntegrationScopeAgentLimitsWrite, IntegrationScopeAgentSpendRead}, finch.Scopes)
-	assert.True(t, finch.Disabled, "finch stays off until its token hash is deployed")
+	assert.False(t, finch.Disabled)
 
 	dev := load("dev")
 	assert.True(t, dev.Enabled)
