@@ -57,19 +57,24 @@ type UpdateUserRoleRequest struct {
 
 // KeyRequestResponse is a user-submitted request for an org-wide service key.
 type KeyRequestResponse struct {
-	ID              string     `json:"id"`
-	RequesterEmail  string     `json:"requester_email"`
-	Provider        string     `json:"provider"`
-	Name            string     `json:"name"`
-	Description     string     `json:"description"`
-	DailyCostLimit  int64      `json:"daily_cost_limit,omitempty"`
-	Status          string     `json:"status"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	ReviewedBy      string     `json:"reviewed_by,omitempty"`
-	ReviewedAt      *time.Time `json:"reviewed_at,omitempty"`
-	CreatedKey      string     `json:"created_key,omitempty"`
-	RejectionReason string     `json:"rejection_reason,omitempty"`
+	ID             string     `json:"id"`
+	RequesterEmail string     `json:"requester_email"`
+	Provider       string     `json:"provider"`
+	Name           string     `json:"name"`
+	Description    string     `json:"description"`
+	DailyCostLimit int64      `json:"daily_cost_limit,omitempty"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ReviewedBy     string     `json:"reviewed_by,omitempty"`
+	ReviewedAt     *time.Time `json:"reviewed_at,omitempty"`
+	// CreatedKeyID is the masked dashboard id of the approved key. The key
+	// itself is only ever returned once, by POST /key-requests/{id}/claim.
+	CreatedKeyID    string `json:"created_key_id,omitempty"`
+	RejectionReason string `json:"rejection_reason,omitempty"`
+	// Claimable is true while the requester can still reveal the key once.
+	Claimable bool       `json:"claimable"`
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
 	// Source is empty for dashboard requests, else the integration caller id.
 	Source            string `json:"source,omitempty"`
 	ExternalTicketID  string `json:"external_ticket_id,omitempty"`
@@ -109,14 +114,31 @@ func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 		UpdatedAt:         req.UpdatedAt,
 		ReviewedBy:        req.ReviewedBy,
 		ReviewedAt:        req.ReviewedAt,
-		CreatedKey:        req.CreatedKey,
+		CreatedKeyID:      apikeys.MaskKeyID(req.CreatedKey),
 		RejectionReason:   req.RejectionReason,
+		Claimable:         keyRequestClaimable(req),
+		ClaimedAt:         req.ClaimedAt,
 		Source:            req.Source,
 		ExternalTicketID:  req.ExternalTicketID,
 		ExternalTicketURL: req.ExternalTicketURL,
 		Justification:     req.Justification,
 		MonthlyCostLimit:  req.MonthlyCostLimit,
 	}
+}
+
+// keyRequestClaimable reports whether an approved request's key has not been
+// revealed yet. Requests approved before claims existed have no claimed_at,
+// so their requester can claim them once too.
+func keyRequestClaimable(req *apikeys.KeyRequest) bool {
+	return req.Status == apikeys.KeyRequestStatusApproved && req.CreatedKey != "" && req.ClaimedAt == nil
+}
+
+// ClaimKeyResponse is the one-time reveal of an approved request's key.
+type ClaimKeyResponse struct {
+	Key         string `json:"key"`
+	MaskedKeyID string `json:"masked_key_id"`
+	Provider    string `json:"provider"`
+	BaseURL     string `json:"base_url,omitempty"`
 }
 
 // KeyResponse is a safe JSON view of an API key record.

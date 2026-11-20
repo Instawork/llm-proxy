@@ -12,6 +12,7 @@ import type {
   CostResponse,
   CreateAdminUserRequest,
   CreateAPIKeyRequest,
+  ClaimKeyResponse,
   CreateKeyRequestBody,
   HealthResponse,
   KeyRequestRecord,
@@ -422,6 +423,38 @@ export function useCreateKeyRequest() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
       qc.invalidateQueries({ queryKey: queryKeys.keyRequests() });
+    },
+  });
+}
+
+/**
+ * Reveals an approved request's key once. gcTime 0 drops the mutation (and
+ * the key in its result) from the cache as soon as the dialog unmounts.
+ */
+export function useClaimKeyRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (id: string) =>
+      apiFetch<ClaimKeyResponse>(`/admin/api/key-requests/${encodeURIComponent(id)}/claim`, {
+        method: "POST",
+      }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
+    },
+  });
+}
+
+export function useResetKeyRequestClaim() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<KeyRequestRecord>(`/admin/api/key-requests/${encodeURIComponent(id)}/claim`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keyRequests() });
+      qc.invalidateQueries({ queryKey: queryKeys.myKeyRequests });
     },
   });
 }

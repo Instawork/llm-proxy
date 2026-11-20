@@ -19,6 +19,7 @@ export type Permission =
   | "create_key_request"
   | "review_key_request"
   | "list_my_key_requests"
+  | "claim_key_request"
   | "update_key_description"
   | "update_key_policy"
   | "delete_own_key"
@@ -63,6 +64,7 @@ const VIEWER_PLUS: Permission[] = [
   "key_stats",
   "create_key_request",
   "list_my_key_requests",
+  "claim_key_request",
   "update_key_description",
   "delete_own_key",
   "view_shared_org_keys",

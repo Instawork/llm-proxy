@@ -5,7 +5,8 @@ import { RequestKeyTabIcon } from "../ui/key-tab-icons";
 import { ProviderBadge, ProviderSelect } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { dailyCostLimitFormDollars } from "../../lib/format";
-import { keyDetailPath } from "../../lib/key-routes";
+import { keyDetailPathForMaskedId } from "../../lib/key-routes";
+import { claimKeyPath } from "../../lib/key-request-claim";
 import { keyRequestStatusBadgeClass } from "../../lib/key-request-meta";
 import { KEY_REQUEST_NAME_MAX, slugifyKeyName } from "../../lib/key-request-name";
 import { useCreateKeyRequest, useMe, useMyKeyRequests } from "../../hooks/queries";
@@ -254,9 +255,17 @@ export default function RequestKeyModal({ open, onClose }: RequestKeyModalProps)
                       </td>
                       <td className="whitespace-nowrap">{formatTime(req.created_at)}</td>
                       <td>
-                        {req.created_key ? (
+                        {req.claimable ? (
                           <Link
-                            to={keyDetailPath(req.created_key)}
+                            to={claimKeyPath(req.id)}
+                            className="btn btn-primary btn-xs"
+                            onClick={onClose}
+                          >
+                            Claim key
+                          </Link>
+                        ) : req.created_key_id ? (
+                          <Link
+                            to={keyDetailPathForMaskedId(req.created_key_id)}
                             className="link link-primary text-xs"
                             onClick={onClose}
                           >

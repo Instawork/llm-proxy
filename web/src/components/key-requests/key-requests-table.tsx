@@ -4,7 +4,8 @@ import { Link } from "react-router-dom";
 
 import DataTable from "../ui/data-table";
 import { ProviderBadge } from "../ui/page-header";
-import { keyDetailPath } from "../../lib/key-routes";
+import { keyDetailPathForMaskedId } from "../../lib/key-routes";
+import { canResetClaim } from "../../lib/key-request-claim";
 import {
   formatRequestLimit,
   keyRequestSourceLabel,
@@ -54,6 +55,7 @@ interface KeyRequestsTableProps {
   busyId?: string | null;
   onApprove: (request: KeyRequestRecord) => void;
   onReject: (request: KeyRequestRecord) => void;
+  onResetClaim: (request: KeyRequestRecord) => void;
 }
 
 export default function KeyRequestsTable({
@@ -61,6 +63,7 @@ export default function KeyRequestsTable({
   busyId,
   onApprove,
   onReject,
+  onResetClaim,
 }: KeyRequestsTableProps) {
   const columns = useMemo<ColumnDef<KeyRequestRecord, unknown>[]>(
     () => [
@@ -136,17 +139,22 @@ export default function KeyRequestsTable({
         cell: ({ getValue }) => formatTime(getValue<string>()),
       },
       {
-        id: "created_key",
-        accessorKey: "created_key",
+        id: "created_key_id",
+        accessorKey: "created_key_id",
         header: "Key",
         cell: ({ row }) =>
-          row.original.created_key ? (
-            <Link
-              to={keyDetailPath(row.original.created_key!)}
-              className="link link-primary"
-            >
-              View
-            </Link>
+          row.original.created_key_id ? (
+            <div className="flex flex-col items-start gap-1">
+              <Link
+                to={keyDetailPathForMaskedId(row.original.created_key_id)}
+                className="link link-primary"
+              >
+                View
+              </Link>
+              <span className="text-xs text-base-content/60">
+                {row.original.claimable ? "Not claimed yet" : "Claimed"}
+              </span>
+            </div>
           ) : row.original.rejection_reason ? (
             <span className="text-sm text-error">{row.original.rejection_reason}</span>
           ) : (
@@ -158,8 +166,23 @@ export default function KeyRequestsTable({
         header: "",
         cell: ({ row }) => {
           const req = row.original;
-          if (req.status !== "pending") return null;
           const busy = busyId === req.id;
+          if (canResetClaim(req)) {
+            return (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={busy}
+                  title="Let the requester reveal the key one more time"
+                  onClick={() => onResetClaim(req)}
+                >
+                  Reset claim
+                </button>
+              </div>
+            );
+          }
+          if (req.status !== "pending") return null;
           return (
             <div className="flex justify-end gap-2">
               <button
@@ -184,7 +207,7 @@ export default function KeyRequestsTable({
         },
       },
     ],
-    [busyId, onApprove, onReject],
+    [busyId, onApprove, onReject, onResetClaim],
   );
 
   return (

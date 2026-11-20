@@ -60,8 +60,12 @@ export interface KeyRequestRecord {
   updated_at: string;
   reviewed_by?: string;
   reviewed_at?: string;
-  created_key?: string;
+  /** Masked dashboard id of the approved key; the key itself is only returned by the claim. */
+  created_key_id?: string;
   rejection_reason?: string;
+  /** True while the requester can still reveal the key once. */
+  claimable: boolean;
+  claimed_at?: string;
   /** Empty for dashboard requests, else the integration caller id (e.g. "init"). */
   source?: string;
   external_ticket_id?: string;
@@ -75,6 +79,14 @@ export interface CreateKeyRequestBody {
   name: string;
   description: string;
   daily_cost_limit?: number;
+}
+
+/** One-time reveal of an approved key request's key. Never cache or persist it. */
+export interface ClaimKeyResponse {
+  key: string;
+  masked_key_id: string;
+  provider: Provider;
+  base_url?: string;
 }
 
 export interface ReviewKeyRequestBody {

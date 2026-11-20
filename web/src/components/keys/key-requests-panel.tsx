@@ -4,7 +4,11 @@ import KeyRequestsTable from "../key-requests/key-requests-table";
 import { ErrorAlert, LoadingBlock, ProviderLabel } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { APIClientError } from "../../client";
-import { useKeyRequests, useReviewKeyRequest } from "../../hooks/queries";
+import {
+  useKeyRequests,
+  useResetKeyRequestClaim,
+  useReviewKeyRequest,
+} from "../../hooks/queries";
 import type { KeyRequestRecord } from "../../types";
 
 type StatusFilter = "pending" | "all";
@@ -13,6 +17,7 @@ export default function KeyRequestsPanel() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
   const requestsQuery = useKeyRequests(statusFilter === "pending" ? "pending" : undefined);
   const reviewRequest = useReviewKeyRequest();
+  const resetClaim = useResetKeyRequestClaim();
   const toast = useToast();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<KeyRequestRecord | null>(null);
@@ -33,6 +38,18 @@ export default function KeyRequestsPanel() {
       toast.push("Key request approved and key created", "success");
     } catch (err) {
       toast.push(err instanceof Error ? err.message : "Failed to approve request", "error");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onResetClaim = async (request: KeyRequestRecord) => {
+    setBusyId(request.id);
+    try {
+      await resetClaim.mutateAsync(request.id);
+      toast.push("Claim reset. The requester can reveal the key once more.", "success");
+    } catch (err) {
+      toast.push(err instanceof Error ? err.message : "Failed to reset claim", "error");
     } finally {
       setBusyId(null);
     }
@@ -98,6 +115,7 @@ export default function KeyRequestsPanel() {
           busyId={busyId}
           onApprove={onApprove}
           onReject={setRejectTarget}
+          onResetClaim={onResetClaim}
         />
       )}
 
