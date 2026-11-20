@@ -96,6 +96,42 @@ type ReviewKeyRequestBody struct {
 	MonthlyCostLimit *int64 `json:"monthly_cost_limit,omitempty"`
 }
 
+// IntegrationCreateKeyRequestBody files a key request on behalf of
+// RequesterEmail. The caller's token, never the body, decides the source.
+type IntegrationCreateKeyRequestBody struct {
+	RequesterEmail    string `json:"requester_email"`
+	Provider          string `json:"provider"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	Justification     string `json:"justification,omitempty"`
+	DailyCostLimit    int64  `json:"daily_cost_limit,omitempty"`
+	MonthlyCostLimit  int64  `json:"monthly_cost_limit,omitempty"`
+	ExternalTicketID  string `json:"external_ticket_id"`
+	ExternalTicketURL string `json:"external_ticket_url,omitempty"`
+}
+
+// IntegrationKeyRequestResponse is returned by the integration create (201
+// new, 200 replay), status, and cancel routes. It never carries the created
+// key, requester or reviewer email, or justification text.
+type IntegrationKeyRequestResponse struct {
+	ID               string     `json:"id"`
+	Status           string     `json:"status"`
+	Provider         string     `json:"provider"`
+	Name             string     `json:"name"`
+	DailyCostLimit   int64      `json:"daily_cost_limit,omitempty"`
+	MonthlyCostLimit int64      `json:"monthly_cost_limit,omitempty"`
+	ExternalTicketID string     `json:"external_ticket_id,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ReviewedAt       *time.Time `json:"reviewed_at,omitempty"`
+	RejectionReason  string     `json:"rejection_reason,omitempty"`
+	ReviewURL        string     `json:"review_url"`
+	// ClaimURL is set once the request is approved; the requester opens it
+	// with their own SSO session to reveal the key once.
+	ClaimURL  string     `json:"claim_url,omitempty"`
+	Claimed   bool       `json:"claimed"`
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+}
+
 func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 	return KeyRequestResponse{
 		ID:                req.ID(),

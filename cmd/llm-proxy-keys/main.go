@@ -33,6 +33,10 @@ func main() {
 		runPersonalCommand(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "integration-token" {
+		runIntegrationTokenCommand(os.Args[2:])
+		return
+	}
 
 	// Command-line flags
 	var (
@@ -69,6 +73,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  viewers add:     viewers add -key sk-iw-xxx -email a@x.com,b@x.com\n")
 		fmt.Fprintf(os.Stderr, "  viewers list:    viewers list -key sk-iw-xxx\n")
 		fmt.Fprintf(os.Stderr, "  viewers remove:  viewers remove -key sk-iw-xxx -email a@x.com\n\n")
+		fmt.Fprintf(os.Stderr, "Integration commands:\n")
+		fmt.Fprintf(os.Stderr, "  token new:       integration-token new -caller init\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}

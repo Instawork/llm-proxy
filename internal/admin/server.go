@@ -3,6 +3,7 @@ package admin
 import (
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/Instawork/llm-proxy/internal/admin/permissions"
 	"github.com/Instawork/llm-proxy/internal/adminusers"
@@ -64,6 +65,19 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	authRouter.HandleFunc("/logout", auth.handleLogout).Methods(http.MethodPost, http.MethodOptions)
 	if adminCfg.DevBypassLogin {
 		authRouter.HandleFunc("/dev-login", auth.handleDevLogin).Methods(http.MethodPost, http.MethodOptions)
+	}
+
+	// Integration routes authenticate by bearer token, not session, so they
+	// are mounted ahead of every /api subrouter: requireSession and CORS
+	// never run for them. While disabled they are not mounted at all.
+	if ic := adminCfg.Integrations; ic.Enabled {
+		h.integrations = newIntegrationAuth(ic, os.Getenv, logger)
+		integ := adminRouter.PathPrefix("/api/integrations").Subrouter()
+		integ.Use(h.integrations.requireCaller)
+		integ.Handle("/key-requests", h.integrations.scope(config.IntegrationScopeKeyRequestsCreate, h.handleIntegrationCreateKeyRequest)).Methods(http.MethodPost)
+		integ.Handle("/key-requests/{id}", h.integrations.scope(config.IntegrationScopeKeyRequestsRead, h.handleIntegrationGetKeyRequest)).Methods(http.MethodGet)
+		integ.Handle("/key-requests/{id}/cancel", h.integrations.scope(config.IntegrationScopeKeyRequestsCancel, h.handleIntegrationCancelKeyRequest)).Methods(http.MethodPost)
+		logger.Info("Admin integrations API enabled", "callers", len(h.integrations.callers))
 	}
 
 	publicAPI := adminRouter.PathPrefix("/api").Subrouter()

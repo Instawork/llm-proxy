@@ -27,6 +27,14 @@ features:
       dynamodb:
         table_name: "llm-proxy-admin-users-staging"
         region: "us-west-2"
+    # Same shape as production, for a dry run before production is enabled.
+    integrations:
+      enabled: false
+      ticket_url_hosts: "${LLM_PROXY_INTEGRATION_TICKET_URL_HOSTS}"
+      callers:
+        - id: init
+          token_sha256_env: LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256
+          scopes: [key_requests:create, key_requests:read, key_requests:cancel]
   # Circuit breaker: enforce mode (matching production).
   circuit_breaker:
     enabled: true

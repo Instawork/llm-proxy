@@ -10,11 +10,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Instawork/llm-proxy/internal/integrationtoken"
 )
 
 // DefaultResponseHeaderTimeoutSeconds is how long the proxy waits for the
@@ -374,6 +377,50 @@ type AdminDashboardConfig struct {
 	EditorLimits EditorLimitsConfig `yaml:"editor_limits"`
 	// ViewerLimits caps viewer personal-key permissions.
 	ViewerLimits ViewerLimitsConfig `yaml:"viewer_limits"`
+	// Integrations enables the token-authenticated /admin/api/integrations
+	// API that external callers use to file key requests for a requester.
+	Integrations IntegrationsConfig `yaml:"integrations"`
+}
+
+// Integration caller scopes, one per /admin/api/integrations route.
+const (
+	IntegrationScopeKeyRequestsCreate = "key_requests:create"
+	IntegrationScopeKeyRequestsRead   = "key_requests:read"
+	IntegrationScopeKeyRequestsCancel = "key_requests:cancel"
+)
+
+// IntegrationsConfig configures the integrations API. When Enabled is false
+// its routes are not mounted at all.
+//
+// Every field but Enabled is omitempty: overlays are merged by marshalling
+// the overlay struct, so a zero value without omitempty would erase the
+// base.yml default. Enabled deliberately has no omitempty, so an overlay
+// that doesn't mention integrations keeps them off.
+type IntegrationsConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// RequestsPerMinute is each caller's token-bucket rate (default 60).
+	RequestsPerMinute int `yaml:"requests_per_minute,omitempty"`
+	// MaxDailyCostLimitCents and MaxMonthlyCostLimitCents cap the limits on
+	// integration-filed requests, both when filed and when approved. Zero
+	// means no integration-specific cap.
+	MaxDailyCostLimitCents   int64 `yaml:"max_daily_cost_limit_cents,omitempty"`
+	MaxMonthlyCostLimitCents int64 `yaml:"max_monthly_cost_limit_cents,omitempty"`
+	// TicketURLHosts is a comma-separated list of hosts allowed in
+	// external_ticket_url. ${VAR} references are expanded at startup. When
+	// empty, requests that carry a ticket URL are rejected.
+	TicketURLHosts string              `yaml:"ticket_url_hosts,omitempty"`
+	Callers        []IntegrationCaller `yaml:"callers,omitempty"`
+}
+
+// IntegrationCaller is one external system allowed to call the
+// integrations API with its own token and scopes.
+type IntegrationCaller struct {
+	// ID matches ^[a-z0-9-]{1,32}$ and becomes KeyRequest.Source.
+	ID string `yaml:"id"`
+	// TokenSHA256Env names the env var holding the hex SHA-256 of the
+	// caller's token (comma-separate two digests to rotate without a gap).
+	TokenSHA256Env string   `yaml:"token_sha256_env"`
+	Scopes         []string `yaml:"scopes"`
 }
 
 // AdminUsersConfig configures the admin user DynamoDB store.
@@ -1525,6 +1572,48 @@ func (c *YAMLConfig) validateAdminDashboardConfig() error {
 	if ad.DevBypassLogin {
 		if env := os.Getenv("ENVIRONMENT"); !isLocalEnvironment(env) {
 			return fmt.Errorf("dev_bypass_login is only allowed in local environments (got ENVIRONMENT=%q)", env)
+		}
+	}
+	if err := validateIntegrationsConfig(ad.Integrations); err != nil {
+		return fmt.Errorf("integrations: %w", err)
+	}
+	return nil
+}
+
+var envVarNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// validateIntegrationsConfig checks callers even while disabled, so a typo
+// fails CI before the flag is flipped. It does not require the token hash
+// env vars to be set: the config validator runs in CI without secrets, and
+// at runtime a caller whose env var is missing is skipped.
+func validateIntegrationsConfig(ic IntegrationsConfig) error {
+	if ic.RequestsPerMinute < 0 {
+		return fmt.Errorf("requests_per_minute cannot be negative")
+	}
+	if ic.MaxDailyCostLimitCents < 0 || ic.MaxMonthlyCostLimitCents < 0 {
+		return fmt.Errorf("max cost limits cannot be negative")
+	}
+	known := map[string]bool{
+		IntegrationScopeKeyRequestsCreate: true,
+		IntegrationScopeKeyRequestsRead:   true,
+		IntegrationScopeKeyRequestsCancel: true,
+	}
+	seen := map[string]bool{}
+	for i, c := range ic.Callers {
+		if !integrationtoken.ValidCallerID(c.ID) {
+			return fmt.Errorf("callers[%d]: id %q must match ^[a-z0-9-]{1,32}$", i, c.ID)
+		}
+		if seen[c.ID] {
+			return fmt.Errorf("callers[%d]: duplicate id %q", i, c.ID)
+		}
+		seen[c.ID] = true
+		if !envVarNamePattern.MatchString(c.TokenSHA256Env) {
+			return fmt.Errorf("callers[%d] (%s): token_sha256_env must name an env var (got %q)", i, c.ID, c.TokenSHA256Env)
+		}
+		for _, s := range c.Scopes {
+			if !known[s] {
+				return fmt.Errorf("callers[%d] (%s): unknown scope %q", i, c.ID, s)
+			}
 		}
 	}
 	return nil

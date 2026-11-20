@@ -240,6 +240,16 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
+    # Off until Init's outbound HTTP calls are confirmed. The token hash and
+    # the vendor ticket host are injected at deploy time, so neither ships in
+    # the repo.
+    integrations:
+      enabled: false
+      ticket_url_hosts: "${LLM_PROXY_INTEGRATION_TICKET_URL_HOSTS}"
+      callers:
+        - id: init
+          token_sha256_env: LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256
+          scopes: [key_requests:create, key_requests:read, key_requests:cancel]
   history:
     backend: s3
     role: global

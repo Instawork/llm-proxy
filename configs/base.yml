@@ -165,6 +165,18 @@ features:
       max_daily_cost_limit_cents: 10000
     viewer_limits:
       personal_monthly_cost_limit_cents: 2000
+    # Token-authenticated /admin/api/integrations API for external callers
+    # (e.g. Init) filing key requests on a requester's behalf. Routes are not
+    # mounted while disabled. Each caller's token_sha256_env names an env var
+    # holding the hex sha256 of its token; mint one with
+    # `llm-proxy-keys integration-token new -caller <id>`.
+    integrations:
+      enabled: false
+      requests_per_minute: 60
+      max_daily_cost_limit_cents: 10000
+      max_monthly_cost_limit_cents: 100000
+      ticket_url_hosts: ""
+      callers: []
   # ---------------------------------------------------------------------------
   # Notifications — spend limits, key requests, key-request approvals.
   # email.provider selects the backend: "sendgrid", "ses", or "log" (dev/test).
