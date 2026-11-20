@@ -132,6 +132,68 @@ type IntegrationKeyRequestResponse struct {
 	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
 }
 
+// IntegrationPutAgentLimitBody patches an agent's override. An omitted field
+// is unchanged and null clears it back to the default. UpdatedBy is the
+// editing Finch user's email: stored, never logged.
+type IntegrationPutAgentLimitBody struct {
+	SoftMonthlyCents OptionalInt64 `json:"soft_monthly_cents"`
+	HardMonthlyCents OptionalInt64 `json:"hard_monthly_cents"`
+	Exempt           OptionalBool  `json:"exempt"`
+	UpdatedBy        string        `json:"updated_by"`
+}
+
+// IntegrationAgentLimitResponse is returned by GET and PUT
+// /admin/api/integrations/agent-limits/{label}. SpendCents, SoftCents,
+// HardCents, and Exempt are the effective values for Month.
+type IntegrationAgentLimitResponse struct {
+	Label      string                         `json:"label"`
+	Month      string                         `json:"month"`
+	Mode       string                         `json:"mode"`
+	SpendCents int64                          `json:"spend_cents"`
+	SoftCents  int64                          `json:"soft_cents"`
+	HardCents  int64                          `json:"hard_cents"`
+	Exempt     bool                           `json:"exempt"`
+	State      string                         `json:"state"`
+	Override   *IntegrationAgentLimitOverride `json:"override"`
+	Defaults   IntegrationAgentLimitDefaults  `json:"defaults"`
+}
+
+// IntegrationAgentLimitOverride is the stored AGENTLIMIT item. Every field
+// is serialized, as null when unset.
+type IntegrationAgentLimitOverride struct {
+	SoftMonthlyCents *int64     `json:"soft_monthly_cents"`
+	HardMonthlyCents *int64     `json:"hard_monthly_cents"`
+	Exempt           *bool      `json:"exempt"`
+	UpdatedBy        *string    `json:"updated_by"`
+	UpdatedAt        *time.Time `json:"updated_at"`
+}
+
+// IntegrationAgentLimitDefaults are the agent_spend_limits config values.
+type IntegrationAgentLimitDefaults struct {
+	SoftMonthlyCents    int64 `json:"soft_monthly_cents"`
+	HardMonthlyCents    int64 `json:"hard_monthly_cents"`
+	MaxHardMonthlyCents int64 `json:"max_hard_monthly_cents"`
+}
+
+// IntegrationAgentSpendResponse is returned by GET
+// /admin/api/integrations/agent-spend.
+type IntegrationAgentSpendResponse struct {
+	Month  string                       `json:"month"`
+	Mode   string                       `json:"mode"`
+	Agents []IntegrationAgentSpendEntry `json:"agents"`
+}
+
+// IntegrationAgentSpendEntry is one governed label's month-to-date spend
+// against its effective limits.
+type IntegrationAgentSpendEntry struct {
+	Label      string `json:"label"`
+	SpendCents int64  `json:"spend_cents"`
+	SoftCents  int64  `json:"soft_cents"`
+	HardCents  int64  `json:"hard_cents"`
+	Exempt     bool   `json:"exempt"`
+	State      string `json:"state"`
+}
+
 func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 	return KeyRequestResponse{
 		ID:                req.ID(),
@@ -249,6 +311,27 @@ func (o *OptionalBool) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	o.Value = &b
+	return nil
+}
+
+// OptionalInt64 distinguishes omitted, null (clear), and explicit int values.
+type OptionalInt64 struct {
+	Defined bool
+	Value   *int64
+}
+
+// UnmarshalJSON implements tri-state int decoding for PUT payloads.
+func (o *OptionalInt64) UnmarshalJSON(data []byte) error {
+	o.Defined = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var v int64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	o.Value = &v
 	return nil
 }
 

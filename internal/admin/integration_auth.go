@@ -32,8 +32,8 @@ type integrationAuth struct {
 type integrationCallerKey struct{}
 
 // newIntegrationAuth loads each caller's token hash from the env var named
-// in config. A caller whose env var is unset or malformed is skipped with a
-// warning that names only the caller id.
+// in config. A disabled caller, or one whose env var is unset or malformed,
+// is skipped with a log line that names only the caller id.
 func newIntegrationAuth(cfg config.IntegrationsConfig, getenv func(string) string, logger *slog.Logger) *integrationAuth {
 	rpm := cfg.RequestsPerMinute
 	if rpm <= 0 {
@@ -44,6 +44,10 @@ func newIntegrationAuth(cfg config.IntegrationsConfig, getenv func(string) strin
 		logger:  logger,
 	}
 	for _, c := range cfg.Callers {
+		if c.Disabled {
+			logger.Info("admin: integration caller disabled in config", "caller", c.ID)
+			continue
+		}
 		hashes, err := integrationtoken.ParseHashes(getenv(c.TokenSHA256Env))
 		if err != nil {
 			logger.Warn("admin: integration caller skipped: token hash env var unset or invalid", "caller", c.ID)

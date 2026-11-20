@@ -157,7 +157,7 @@ features:
           scopes: [key_requests:create, key_requests:read, key_requests:cancel]
 ```
 
-A caller whose `token_sha256_env` variable is unset or malformed is skipped with a warning; the other callers keep working.
+A caller whose `token_sha256_env` variable is unset or malformed is skipped with a warning; the other callers keep working. A caller with `disabled: true` is skipped too, so a caller can ship in config before its token hash is deployed while other callers are live.
 
 ### Tokens
 
@@ -209,6 +209,94 @@ The create body:
 The response carries `id`, `status` (`pending`, `approved`, `rejected`, `cancelled`), `provider`, `name`, the limits, `external_ticket_id`, `created_at`, `reviewed_at`, `rejection_reason`, `review_url` (the dashboard link for admins), `claimed`/`claimed_at`, and, once approved, `claim_url` for the requester to open. It never contains the key, any email address, or the justification.
 
 The admin notification email for a new request includes the ticket ID and the source (`Requested via: init`) and links to `<public_base_url>/admin/keys?tab=requests&request_id=<id>`.
+
+## Agent spend limits from integrations
+
+Finch reads and sets the monthly spend limit of each Finch agent, and polls which agents are over their soft or hard limit, through three more integration routes. The limits themselves are `features.agent_spend_limits` defaults plus per-agent `AGENTLIMIT#<label>` overrides in this table. Who may change a limit is Finch's decision; the proxy checks only the bounds.
+
+The routes use the same tokens and auth as key requests. They exist only where the admin dashboard is served, which is the central service: sidecars turn the dashboard off. They answer `503` with `{"error":"agent spend limits are disabled"}` until `features.agent_spend_limits.enabled` is true, and `503` when the spend counter in the rollup Redis can't be read.
+
+Production carries a `finch` caller that stays off until its token hash is deployed:
+
+```yaml
+features:
+  admin_dashboard:
+    integrations:
+      callers:
+        - id: finch
+          token_sha256_env: LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256
+          scopes: [agent_limits:read, agent_limits:write, agent_spend:read]
+          disabled: true   # remove once the hash is deployed
+```
+
+To turn it on, mint a token with `go run ./cmd/llm-proxy-keys integration-token new -caller finch`, put its SHA-256 in `LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256` on the central service, give the token to Finch, and set `integrations.enabled: true` and remove `disabled: true`.
+
+| Route | Scope | Result |
+| --- | --- | --- |
+| `GET /admin/api/integrations/agent-limits/{label}` | `agent_limits:read` | `200` the agent's limits and this month's spend |
+| `PUT /admin/api/integrations/agent-limits/{label}` | `agent_limits:write` | `200` the same shape after the update, `400` out of bounds |
+| `GET /admin/api/integrations/agent-spend?month=YYYY-MM&min_state=ok\|soft\|hard` | `agent_spend:read` | `200` every agent with spend that month at or above `min_state` |
+
+`{label}` must start with `user_prefix` (`finch-agent-`), have something after it, and contain no `/`, `|`, `#`, or whitespace; otherwise the route returns `400`.
+
+The GET and PUT response:
+
+```json
+{
+  "label": "finch-agent-123",
+  "month": "2026-11",
+  "mode": "observe",
+  "spend_cents": 12345,
+  "soft_cents": 10000,
+  "hard_cents": 20000,
+  "exempt": false,
+  "state": "soft",
+  "override": {
+    "soft_monthly_cents": null,
+    "hard_monthly_cents": null,
+    "exempt": null,
+    "updated_by": null,
+    "updated_at": null
+  },
+  "defaults": {
+    "soft_monthly_cents": 10000,
+    "hard_monthly_cents": 20000,
+    "max_hard_monthly_cents": 500000
+  }
+}
+```
+
+- `mode` is `agent_spend_limits.mode` (`observe` or `enforce`). Finch sends the hard-limit email only in `enforce`.
+- `soft_cents`, `hard_cents`, and `exempt` are the effective values: the override where set, otherwise the default. `override` is the stored item, or `null` when there is none.
+- `spend_cents` is the metered spend for the current UTC month from the monthly per-user counter, rounded up to the cent as the enforcement check rounds it. In-flight reservations are not included.
+- `state` is `hard` when `spend_cents >= hard_cents`, else `soft` when `spend_cents >= soft_cents`, else `ok`. A limit of `0` is reached at once. `exempt` does not change `state`.
+
+The PUT body:
+
+```json
+{"soft_monthly_cents": 5000, "hard_monthly_cents": null, "exempt": true, "updated_by": "editor@example.com"}
+```
+
+- An omitted key leaves the stored value unchanged, and `null` clears it back to the default.
+- The effective result must satisfy `0 <= soft <= hard <= max_hard_monthly_cents`. A change that breaks this, for example lowering only the hard limit below the stored soft limit, returns `400` and stores nothing.
+- `updated_by` is required and must be one email address. It is stored lowercased with `updated_at` and returned in `override`, but never logged. Unknown keys return `400`, and the body is capped at 4 KiB.
+- A successful PUT drops the label from this process's limit cache, the same cache `AgentSpendLimitMiddleware` reads, so the next call on this process uses the new limit. Other proxy processes, including sidecars, pick the change up within `limit_cache_ttl_seconds`.
+
+The list response:
+
+```json
+{
+  "month": "2026-11",
+  "mode": "observe",
+  "agents": [
+    {"label": "finch-agent-123", "spend_cents": 12345, "soft_cents": 10000, "hard_cents": 20000, "exempt": false, "state": "soft"}
+  ]
+}
+```
+
+- `month` defaults to the current UTC month and `min_state` to `ok`. The monthly counter keeps about 35 days, so older months come back empty.
+- Only labels with the prefix that have recorded spend in `month` are listed, sorted by label. An agent with no spend that month is absent. Limits are today's effective limits, even for a past month.
+- It reads the monthly counter in one `HGETALL` and every override in one table scan.
 
 ## Using the Key Management Tool
 

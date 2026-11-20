@@ -51,7 +51,7 @@ func TestValidateIntegrationsConfig(t *testing.T) {
 	}
 }
 
-func TestIntegrationsPerEnvironment(t *testing.T) {
+func TestCallersPerEnvironment(t *testing.T) {
 	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
 	require.NoError(t, err)
 	load := func(env string) IntegrationsConfig {
@@ -73,11 +73,21 @@ func TestIntegrationsPerEnvironment(t *testing.T) {
 			assert.Equal(t, int64(10000), ic.MaxDailyCostLimitCents)
 			assert.Equal(t, int64(100000), ic.MaxMonthlyCostLimitCents)
 			assert.Equal(t, "${LLM_PROXY_INTEGRATION_TICKET_URL_HOSTS}", ic.TicketURLHosts)
-			require.Len(t, ic.Callers, 1)
+			require.NotEmpty(t, ic.Callers)
 			assert.Equal(t, "init", ic.Callers[0].ID)
 			assert.Equal(t, "LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256", ic.Callers[0].TokenSHA256Env)
+			assert.False(t, ic.Callers[0].Disabled)
 		})
 	}
+
+	assert.Len(t, load("staging").Callers, 1, "finch is production-only")
+	prod := load("production").Callers
+	require.Len(t, prod, 2)
+	finch := prod[1]
+	assert.Equal(t, "finch", finch.ID)
+	assert.Equal(t, "LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256", finch.TokenSHA256Env)
+	assert.ElementsMatch(t, []string{IntegrationScopeAgentLimitsRead, IntegrationScopeAgentLimitsWrite, IntegrationScopeAgentSpendRead}, finch.Scopes)
+	assert.True(t, finch.Disabled, "finch stays off until its token hash is deployed")
 
 	dev := load("dev")
 	assert.True(t, dev.Enabled)

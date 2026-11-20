@@ -270,6 +270,11 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 		itemMap := map[string]any{}
 		if exists {
 			itemMap, _ = item.(map[string]any)
+		} else {
+			// Real DynamoDB writes the key attributes on an upsert.
+			for k, v := range key {
+				itemMap[k] = v
+			}
 		}
 		if !evaluateUpdateCondition(conditionExpr, itemMap, input) {
 			w.WriteHeader(http.StatusBadRequest)

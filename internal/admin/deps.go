@@ -15,13 +15,17 @@ import (
 
 // Deps bundles dependencies for the admin dashboard API.
 type Deps struct {
-	Logger             *slog.Logger
-	YAMLConfig         *config.YAMLConfig
-	APIKeyStore        *apikeys.Store
-	APIKeyStoreError   error
-	UserStore          *adminusers.Store
-	UserStoreError     error
-	AdminRollupStore   *adminrollup.Store
+	Logger           *slog.Logger
+	YAMLConfig       *config.YAMLConfig
+	APIKeyStore      *apikeys.Store
+	APIKeyStoreError error
+	UserStore        *adminusers.Store
+	UserStoreError   error
+	AdminRollupStore *adminrollup.Store
+	// AgentLimitResolver is the process's cached AGENTLIMIT reader; the
+	// integration routes invalidate it after a write. Nil when agent spend
+	// limits are disabled.
+	AgentLimitResolver *apikeys.AgentLimitResolver
 	RateLimiter        ratelimit.RateLimiter
 	HealthFunc         http.HandlerFunc
 	CostSummary        func() map[string]any

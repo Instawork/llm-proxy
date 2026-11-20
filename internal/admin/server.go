@@ -77,6 +77,9 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 		integ.Handle("/key-requests", h.integrations.scope(config.IntegrationScopeKeyRequestsCreate, h.handleIntegrationCreateKeyRequest)).Methods(http.MethodPost)
 		integ.Handle("/key-requests/{id}", h.integrations.scope(config.IntegrationScopeKeyRequestsRead, h.handleIntegrationGetKeyRequest)).Methods(http.MethodGet)
 		integ.Handle("/key-requests/{id}/cancel", h.integrations.scope(config.IntegrationScopeKeyRequestsCancel, h.handleIntegrationCancelKeyRequest)).Methods(http.MethodPost)
+		integ.Handle("/agent-limits/{label}", h.integrations.scope(config.IntegrationScopeAgentLimitsRead, h.handleIntegrationGetAgentLimit)).Methods(http.MethodGet)
+		integ.Handle("/agent-limits/{label}", h.integrations.scope(config.IntegrationScopeAgentLimitsWrite, h.handleIntegrationPutAgentLimit)).Methods(http.MethodPut)
+		integ.Handle("/agent-spend", h.integrations.scope(config.IntegrationScopeAgentSpendRead, h.handleIntegrationListAgentSpend)).Methods(http.MethodGet)
 		logger.Info("Admin integrations API enabled", "callers", len(h.integrations.callers))
 	}
 
