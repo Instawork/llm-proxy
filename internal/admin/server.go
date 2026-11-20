@@ -119,6 +119,8 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/key-requests", roleHandler(auth, permissions.MinRole(permissions.ListKeyRequests), h.handleListKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/key-requests/mine", roleHandler(auth, permissions.MinRole(permissions.ListMyKeyRequests), h.handleListMyKeyRequests)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/key-requests/{id}", roleHandler(auth, permissions.MinRole(permissions.ReviewKeyRequest), h.handleReviewKeyRequest)).Methods(http.MethodPatch, http.MethodOptions)
+	api.Handle("/key-requests/{id}/claim", roleHandler(auth, permissions.MinRole(permissions.ClaimKeyRequest), h.handleClaimKeyRequest)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/key-requests/{id}/claim", roleHandler(auth, permissions.MinRole(permissions.ReviewKeyRequest), h.handleResetKeyRequestClaim)).Methods(http.MethodDelete, http.MethodOptions)
 
 	mountPprof(adminRouter, auth)
 	mountSPA(adminRouter)

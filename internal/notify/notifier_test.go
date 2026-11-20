@@ -131,9 +131,11 @@ func TestNotifier_KeyRequestApproved_UsesRedactedKey(t *testing.T) {
 
 	key := &apikeys.APIKey{PK: "sk-iw-" + "abcdefghijklmnopqrstuvwxyz0123456789"}
 	n.KeyRequestApproved(context.Background(), apikeys.KeyRequest{
+		PK:             apikeys.KeyRequestPrefix + "req-123",
 		RequesterEmail: "requester@example.com",
 		Provider:       "anthropic",
 		Description:    "widget bot",
+		CreatedKey:     key.PK,
 	}, key)
 	sender.waitForSend(t)
 
@@ -142,7 +144,10 @@ func TestNotifier_KeyRequestApproved_UsesRedactedKey(t *testing.T) {
 	assert.Equal(t, KindKeyRequestApproved, msgs[0].Kind)
 	assert.Equal(t, []string{"requester@example.com"}, msgs[0].To)
 	assert.NotContains(t, msgs[0].Body, key.PK)
+	assert.NotContains(t, msgs[0].Title, key.PK)
 	assert.Contains(t, msgs[0].Body, apikeys.RedactKey(key.PK))
+	assert.Contains(t, msgs[0].Body, "Claim it once at https://llm.example.com/admin/keys?claim=req-123")
+	assert.Contains(t, msgs[0].Body, "shown only once")
 }
 
 func TestNotifier_SpendLimitReached_PrefersOwnerThenRequester(t *testing.T) {

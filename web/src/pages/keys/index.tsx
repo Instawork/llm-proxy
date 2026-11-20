@@ -14,6 +14,7 @@ import PiiOffConfirmDialog, {
 import ByoKeysPanel from "../../components/byo/byo-keys-panel";
 import KeysTable from "../../components/keys/keys-table";
 import RequestKeyModal from "../../components/keys/request-key-modal";
+import ClaimKeyDialog from "../../components/key-requests/claim-key-dialog";
 import {
   DeployIcon,
   KeyRequestsTabIcon,
@@ -128,6 +129,7 @@ export default function KeysPage() {
   const pendingRequestCount = canReviewKeyRequests ? pendingRequests.length : 0;
   const [requestKeyModalOpen, setRequestKeyModalOpen] = useState(false);
   const handledRequestDeepLink = useRef(false);
+  const [claimRequestId, setClaimRequestId] = useState<string | null>(null);
 
   const setTab = (next: KeysTab) => {
     if (next === "keys") {
@@ -149,6 +151,15 @@ export default function KeysPage() {
     next.delete("tab");
     setSearchParams(next, { replace: true });
   }, [canRequestServiceKey, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const claimId = searchParams.get("claim");
+    if (!claimId) return;
+    setClaimRequestId(claimId);
+    const next = new URLSearchParams(searchParams);
+    next.delete("claim");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const provisionedKeysOnly = permissions.requiresProvisionedKeysOnly(me?.role);
   const canDeleteKeys = permissions.canDeleteKeys(me?.role);
   const viewerMonthlyCents =
@@ -759,6 +770,14 @@ export default function KeysPage() {
         open={requestKeyModalOpen}
         onClose={() => setRequestKeyModalOpen(false)}
       />
+
+      {claimRequestId ? (
+        <ClaimKeyDialog
+          key={claimRequestId}
+          requestId={claimRequestId}
+          onClose={() => setClaimRequestId(null)}
+        />
+      ) : null}
 
       {tab === "keys" ? (
         <>

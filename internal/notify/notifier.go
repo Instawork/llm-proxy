@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -125,7 +126,8 @@ func (n *Notifier) KeyRequested(ctx context.Context, req apikeys.KeyRequest) {
 }
 
 // KeyRequestApproved notifies the requester that their key request was
-// approved and their key is ready.
+// approved and links to the one-time claim. The body never carries the full
+// key; the requester reveals it once in the dashboard.
 func (n *Notifier) KeyRequestApproved(ctx context.Context, req apikeys.KeyRequest, key *apikeys.APIKey) {
 	if n == nil {
 		return
@@ -142,7 +144,8 @@ func (n *Notifier) KeyRequestApproved(ctx context.Context, req apikeys.KeyReques
 		fmt.Fprintf(&body, "Key: %s\n", apikeys.RedactKey(key.PK))
 	}
 	if n.dashboardURL != "" {
-		fmt.Fprintf(&body, "\nRetrieve it at %s/keys\n", n.dashboardURL)
+		fmt.Fprintf(&body, "\nClaim it once at %s/admin/keys?claim=%s\n", strings.TrimRight(n.dashboardURL, "/"), url.QueryEscape(req.ID()))
+		fmt.Fprintf(&body, "The key is shown only once, so store it somewhere safe when you claim it.\n")
 	}
 
 	n.send(Notification{

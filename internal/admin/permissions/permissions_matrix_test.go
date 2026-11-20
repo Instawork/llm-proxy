@@ -37,6 +37,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleViewer, ManageUsers, false},
 		{adminusers.RoleViewer, ManageBYO, false},
 		{adminusers.RoleViewer, ReviewKeyRequest, false},
+		{adminusers.RoleViewer, ClaimKeyRequest, true},
 		{adminusers.RoleViewer, BulkGeneratePersonalKeys, true},
 		{adminusers.RoleViewer, BulkGenerateOrgKeys, false},
 
@@ -53,6 +54,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleEditor, ManageUsers, false},
 		{adminusers.RoleEditor, ManageBYO, false},
 		{adminusers.RoleEditor, ReviewKeyRequest, false},
+		{adminusers.RoleEditor, ClaimKeyRequest, true},
 		{adminusers.RoleEditor, BulkGeneratePersonalKeys, false},
 		{adminusers.RoleEditor, BulkGenerateOrgKeys, true},
 		{adminusers.RoleEditor, CreateKeyRequest, true},
@@ -65,6 +67,7 @@ func TestCanPermissionMatrix(t *testing.T) {
 		{adminusers.RoleAdmin, ManageKeyViewers, true},
 		{adminusers.RoleAdmin, ManageBYO, true},
 		{adminusers.RoleAdmin, ReviewKeyRequest, true},
+		{adminusers.RoleAdmin, ClaimKeyRequest, true},
 		{adminusers.RoleAdmin, ListKeyRequests, true},
 		{adminusers.RoleAdmin, BulkGeneratePersonalKeys, true},
 		{adminusers.RoleAdmin, BulkGenerateOrgKeys, false},
@@ -93,6 +96,7 @@ func TestMinRoleRouteMatrix(t *testing.T) {
 		{ManageBYO, adminusers.RoleAdmin},
 		{ListKeyRequests, adminusers.RoleAdmin},
 		{ReviewKeyRequest, adminusers.RoleAdmin},
+		{ClaimKeyRequest, adminusers.RoleViewer},
 	}
 
 	for _, tc := range cases {
@@ -209,7 +213,7 @@ func TestAllRoutePermissionsHaveMinRole(t *testing.T) {
 	routePermissions := []Permission{
 		ViewMonitoring, ViewConfig, ListKeys, CreateKey, GetKey, UpdateKey, DeleteKey,
 		ShareKey, Provisioning, KeyStats, SpendOverview, ManageUsers, ManageBYO, ListKeyRequests,
-		CreateKeyRequest, ReviewKeyRequest, ListMyKeyRequests, ManageKeyViewers,
+		CreateKeyRequest, ReviewKeyRequest, ListMyKeyRequests, ClaimKeyRequest, ManageKeyViewers,
 	}
 	for _, p := range routePermissions {
 		_, ok := minRole[p]

@@ -240,9 +240,9 @@ func TestHandleApproveKeyRequest(t *testing.T) {
 	var approved KeyRequestResponse
 	require.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &approved))
 	assert.Equal(t, apikeys.KeyRequestStatusApproved, approved.Status)
-	assert.NotEmpty(t, approved.CreatedKey)
+	assert.Equal(t, apikeys.MaskKeyID(storedCreatedKey(t, h, approved.ID)), approved.CreatedKeyID)
 
-	key, err := h.deps.APIKeyStore.GetKey(patchReq.Context(), approved.CreatedKey)
+	key, err := h.deps.APIKeyStore.GetKey(patchReq.Context(), storedCreatedKey(t, h, approved.ID))
 	require.NoError(t, err)
 	assert.Equal(t, "approved-service", key.Description)
 }
@@ -300,7 +300,7 @@ func TestHandleApproveKeyRequest_NotifiesRequesterAndPersistsEmail(t *testing.T)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, []string{"viewer@example.com"}, msgs[1].To)
 
-	key, err := h.deps.APIKeyStore.GetKey(patchReq.Context(), approved.CreatedKey)
+	key, err := h.deps.APIKeyStore.GetKey(patchReq.Context(), storedCreatedKey(t, h, approved.ID))
 	require.NoError(t, err)
 	assert.Equal(t, "viewer@example.com", key.RequesterEmail)
 }
@@ -482,7 +482,7 @@ func TestHandleApproveKeyRequest_LimitOverridesAndTags(t *testing.T) {
 	var approved KeyRequestResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &approved))
 
-	key, err := h.deps.APIKeyStore.GetKey(t.Context(), approved.CreatedKey)
+	key, err := h.deps.APIKeyStore.GetKey(t.Context(), storedCreatedKey(t, h, approved.ID))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2500), key.DailyCostLimit)
 	assert.Equal(t, int64(40000), key.MonthlyCostLimit)
@@ -500,7 +500,7 @@ func TestHandleApproveKeyRequest_IntegrationRequestLimitsAndTags(t *testing.T) {
 	var approved KeyRequestResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &approved))
 
-	key, err := h.deps.APIKeyStore.GetKey(t.Context(), approved.CreatedKey)
+	key, err := h.deps.APIKeyStore.GetKey(t.Context(), storedCreatedKey(t, h, approved.ID))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500), key.DailyCostLimit)
 	assert.Equal(t, int64(50000), key.MonthlyCostLimit)
@@ -632,7 +632,7 @@ func TestKeyRequestFlow_LogsOmitKeysAndEmails(t *testing.T) {
 	sender.waitForSend(t)
 	var approved KeyRequestResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &approved))
-	require.NotEmpty(t, approved.CreatedKey)
+	require.NotEmpty(t, storedCreatedKey(t, h, approved.ID))
 
 	integration := createStoreIntegrationKeyRequest(t, h, "requester.person@example.com", "IH-103")
 	failComplete = true
@@ -642,7 +642,7 @@ func TestKeyRequestFlow_LogsOmitKeysAndEmails(t *testing.T) {
 	out := logs.String()
 	require.Contains(t, out, "Created key request")
 	require.Contains(t, out, "complete key request approval failed")
-	assert.NotContains(t, out, approved.CreatedKey)
+	assert.NotContains(t, out, storedCreatedKey(t, h, approved.ID))
 	assert.NotRegexp(t, regexp.MustCompile(`sk-iw-[0-9a-f]{9,}`), out, "full proxy keys must be redacted")
 	assert.NotContains(t, out, "sk-upstream-secret")
 	assert.NotContains(t, out, "viewer@example.com")
@@ -667,4 +667,14 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// storedCreatedKey reads the approved key from storage; API responses only
+// carry its masked id.
+func storedCreatedKey(t *testing.T, h *handler, id string) string {
+	t.Helper()
+	req, err := h.deps.APIKeyStore.GetKeyRequest(t.Context(), id)
+	require.NoError(t, err)
+	require.NotEmpty(t, req.CreatedKey)
+	return req.CreatedKey
 }

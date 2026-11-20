@@ -30,6 +30,9 @@ const canMatrix: CanCase[] = [
   { role: "viewer", permission: "view_shared_org_keys", want: true },
   { role: "viewer", permission: "manage_key_viewers", want: false },
   { role: "admin", permission: "create_key_request", want: false },
+  { role: "viewer", permission: "claim_key_request", want: true },
+  { role: "editor", permission: "claim_key_request", want: true },
+  { role: "admin", permission: "claim_key_request", want: true },
 
   { role: "editor", permission: "view_monitoring", want: true },
   { role: "editor", permission: "view_config", want: true },

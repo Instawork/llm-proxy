@@ -29,7 +29,10 @@ const (
 	CreateKeyRequest  Permission = "create_key_request"
 	ReviewKeyRequest  Permission = "review_key_request"
 	ListMyKeyRequests Permission = "list_my_key_requests"
-	ManageKeyViewers  Permission = "manage_key_viewers"
+	// ClaimKeyRequest reveals an approved request's key once. Any signed-in
+	// role may reach the route; the handler only lets the requester claim.
+	ClaimKeyRequest  Permission = "claim_key_request"
+	ManageKeyViewers Permission = "manage_key_viewers"
 
 	ViewSharedOrgKeys        Permission = "view_shared_org_keys"
 	UpdateKeyDescription     Permission = "update_key_description"
@@ -61,6 +64,7 @@ var minRole = map[Permission]adminusers.Role{
 	CreateKeyRequest:  adminusers.RoleViewer,
 	ReviewKeyRequest:  adminusers.RoleAdmin,
 	ListMyKeyRequests: adminusers.RoleViewer,
+	ClaimKeyRequest:   adminusers.RoleViewer,
 	ManageKeyViewers:  adminusers.RoleEditor,
 }
 
@@ -87,7 +91,7 @@ func Can(role adminusers.Role, p Permission) bool {
 	case CreateKeyRequest:
 		return role == adminusers.RoleViewer || role == adminusers.RoleEditor
 	case ListKeys, CreateKey, GetKey, UpdateKey, ShareKey, Provisioning, KeyStats,
-		SpendOverview, ListMyKeyRequests, UpdateKeyDescription, DeleteOwnKey, ViewSharedOrgKeys:
+		SpendOverview, ListMyKeyRequests, ClaimKeyRequest, UpdateKeyDescription, DeleteOwnKey, ViewSharedOrgKeys:
 		return role.AtLeast(adminusers.RoleViewer)
 	default:
 		return false
