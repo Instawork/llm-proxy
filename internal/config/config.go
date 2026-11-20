@@ -91,6 +91,58 @@ type FeaturesConfig struct {
 	ClientGzip       ClientGzipConfig       `yaml:"client_gzip"`
 	Upstream         UpstreamConfig         `yaml:"upstream"`
 	Notifications    NotificationsConfig    `yaml:"notifications"`
+	AgentSpendLimits AgentSpendLimitsConfig `yaml:"agent_spend_limits"`
+}
+
+const (
+	// AgentSpendModeObserve records would-block decisions but never blocks.
+	AgentSpendModeObserve = "observe"
+	// AgentSpendModeEnforce blocks governed calls at the hard limit.
+	AgentSpendModeEnforce = "enforce"
+)
+
+// DefaultAgentLimitCacheTTLSeconds applies when limit_cache_ttl_seconds is 0.
+const DefaultAgentLimitCacheTTLSeconds = 60
+
+// AgentSpendLimitsConfig caps calendar-month (UTC) spend per agent user
+// label, e.g. "finch-agent-123". Per-label overrides live in the API-key
+// table as AGENTLIMIT# items; these values are the defaults when an item or
+// one of its attributes is absent.
+type AgentSpendLimitsConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Mode is AgentSpendModeObserve or AgentSpendModeEnforce.
+	Mode string `yaml:"mode"`
+	// UserPrefix selects the governed labels. Labels without it pass.
+	UserPrefix              string `yaml:"user_prefix"`
+	DefaultSoftMonthlyCents int64  `yaml:"default_soft_monthly_cents"`
+	DefaultHardMonthlyCents int64  `yaml:"default_hard_monthly_cents"`
+	// MaxHardMonthlyCents bounds both the default and any override.
+	MaxHardMonthlyCents int64 `yaml:"max_hard_monthly_cents"`
+	// LimitCacheTTLSeconds is how long a sidecar caches an AGENTLIMIT read,
+	// hits and misses alike. Zero uses DefaultAgentLimitCacheTTLSeconds.
+	LimitCacheTTLSeconds int `yaml:"limit_cache_ttl_seconds"`
+	// FailClosedOnReadError blocks governed calls when spend or limits
+	// cannot be read. False fails open.
+	FailClosedOnReadError bool `yaml:"fail_closed_on_read_error"`
+}
+
+// LimitCacheTTL returns the AGENTLIMIT cache TTL.
+func (c AgentSpendLimitsConfig) LimitCacheTTL() time.Duration {
+	sec := c.LimitCacheTTLSeconds
+	if sec <= 0 {
+		sec = DefaultAgentLimitCacheTTLSeconds
+	}
+	return time.Duration(sec) * time.Second
+}
+
+// Enforcing reports whether hard-limit decisions are returned to callers.
+func (c AgentSpendLimitsConfig) Enforcing() bool {
+	return c.Enabled && c.Mode == AgentSpendModeEnforce
+}
+
+// Governs reports whether label is subject to agent spend limits.
+func (c AgentSpendLimitsConfig) Governs(label string) bool {
+	return c.UserPrefix != "" && len(label) > len(c.UserPrefix) && strings.HasPrefix(label, c.UserPrefix)
 }
 
 // NotificationsConfig controls transactional alerts (spend limits, key
@@ -1201,6 +1253,51 @@ func (c *YAMLConfig) Validate() error {
 		return err
 	}
 
+	if c.Features.AgentSpendLimits.Enabled {
+		if err := c.validateAgentSpendLimitsConfig(); err != nil {
+			return fmt.Errorf("invalid agent_spend_limits configuration: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validateAgentSpendLimitsConfig enforces 0 <= soft <= hard <= max and a
+// prefix that is safe inside a /meta/<label>/ path segment and a
+// "<label>|spend_usd" Redis hash field.
+func (c *YAMLConfig) validateAgentSpendLimitsConfig() error {
+	a := c.Features.AgentSpendLimits
+	switch a.Mode {
+	case AgentSpendModeObserve, AgentSpendModeEnforce:
+	default:
+		return fmt.Errorf("mode must be %s or %s (got %q)", AgentSpendModeObserve, AgentSpendModeEnforce, a.Mode)
+	}
+	if a.UserPrefix == "" {
+		return fmt.Errorf("user_prefix is required")
+	}
+	if strings.ContainsAny(a.UserPrefix, "/|# \t\r\n") {
+		return fmt.Errorf("user_prefix must not contain '/', '|', '#', or whitespace (got %q)", a.UserPrefix)
+	}
+	if a.DefaultSoftMonthlyCents < 0 {
+		return fmt.Errorf("default_soft_monthly_cents cannot be negative")
+	}
+	if a.DefaultHardMonthlyCents < a.DefaultSoftMonthlyCents {
+		return fmt.Errorf("default_hard_monthly_cents (%d) must be at least default_soft_monthly_cents (%d)",
+			a.DefaultHardMonthlyCents, a.DefaultSoftMonthlyCents)
+	}
+	if a.MaxHardMonthlyCents <= 0 {
+		return fmt.Errorf("max_hard_monthly_cents must be positive")
+	}
+	if a.DefaultHardMonthlyCents > a.MaxHardMonthlyCents {
+		return fmt.Errorf("default_hard_monthly_cents (%d) cannot exceed max_hard_monthly_cents (%d)",
+			a.DefaultHardMonthlyCents, a.MaxHardMonthlyCents)
+	}
+	if a.LimitCacheTTLSeconds < 0 {
+		return fmt.Errorf("limit_cache_ttl_seconds cannot be negative")
+	}
+	if !c.Features.APIKeyManagement.Enabled {
+		return fmt.Errorf("api_key_management must be enabled: agent limit overrides live in its table")
+	}
 	return nil
 }
 
