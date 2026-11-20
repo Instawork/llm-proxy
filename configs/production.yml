@@ -240,23 +240,23 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
-    # Off until Init's outbound HTTP calls are confirmed. The token hash and
-    # the vendor ticket host are injected at deploy time, so neither ships in
-    # the repo.
+    # The token hashes and the vendor ticket host are injected at deploy
+    # time, so none of them ship in the repo. Routes mount only with the
+    # admin dashboard, so sidecars never serve them.
     integrations:
-      enabled: false
+      enabled: true
       ticket_url_hosts: "${LLM_PROXY_INTEGRATION_TICKET_URL_HOSTS}"
       callers:
+        # Off until Init's outbound HTTP calls are confirmed.
         - id: init
           token_sha256_env: LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256
           scopes: [key_requests:create, key_requests:read, key_requests:cancel]
+          disabled: true
         # Finch reads and sets agent spend limits. The routes also need
-        # agent_spend_limits.enabled; remove `disabled` once the token hash
-        # is deployed.
+        # agent_spend_limits.enabled.
         - id: finch
           token_sha256_env: LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256
           scopes: [agent_limits:read, agent_limits:write, agent_spend:read]
-          disabled: true
   history:
     backend: s3
     role: global
@@ -275,9 +275,12 @@ features:
       provider: "sendgrid"
       from_address: "llm-proxy@instawork.com"
       from_name: "LLM Proxy"
-  # Defaults come from base.yml. Sidecars inherit this block.
+  # Defaults come from base.yml. Sidecars inherit this block. Observe logs
+  # and counts would-blocks without returning 402; enforce needs a separate
+  # go-ahead.
   agent_spend_limits:
-    enabled: false
+    enabled: true
+    mode: observe
 
 # =============================================================================
 # PROVIDER OVERRIDES

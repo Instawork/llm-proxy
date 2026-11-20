@@ -108,12 +108,13 @@ func TestRealEnvConfigs_AgentSpendLimitsDefaults(t *testing.T) {
 		name    string
 		env     string
 		overlay []string
+		enabled bool
 	}{
-		{"dev", "dev", []string{"dev.yml"}},
-		{"staging", "staging", []string{"staging.yml"}},
-		{"staging+sidecar", "staging", []string{"staging.yml", "sidecar.yml"}},
-		{"production", "production", []string{"production.yml"}},
-		{"production+sidecar", "production", []string{"production.yml", "sidecar.yml"}},
+		{"dev", "dev", []string{"dev.yml"}, false},
+		{"staging", "staging", []string{"staging.yml"}, false},
+		{"staging+sidecar", "staging", []string{"staging.yml", "sidecar.yml"}, false},
+		{"production", "production", []string{"production.yml"}, true},
+		{"production+sidecar", "production", []string{"production.yml", "sidecar.yml"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,7 +127,7 @@ func TestRealEnvConfigs_AgentSpendLimitsDefaults(t *testing.T) {
 			require.NoError(t, err)
 
 			a := cfg.Features.AgentSpendLimits
-			assert.False(t, a.Enabled)
+			assert.Equal(t, tc.enabled, a.Enabled)
 			assert.Equal(t, AgentSpendModeObserve, a.Mode)
 			assert.Equal(t, "finch-agent-", a.UserPrefix)
 			assert.Equal(t, int64(10000), a.DefaultSoftMonthlyCents)

@@ -21,15 +21,35 @@ const mergeDiffGolden = "testdata/merge_effective_config_diff.txt"
 // overlay into YAMLConfig and re-marshaled it, so every non-omitempty field the
 // overlay omitted overrode base with its zero value. It exists only so
 // TestRealEnvConfigs_MergeEffectiveDiff can show what the raw-YAML merge changed.
+// It skips Validate: an overlay that enables a feature relying on base.yml
+// defaults is invalid under the legacy merge, which is the bug it reproduces.
 func legacyStructMerge(t *testing.T, base *YAMLConfig, overlayPath string) *YAMLConfig {
 	t.Helper()
 	data, err := os.ReadFile(overlayPath)
 	require.NoError(t, err)
 	var overlay YAMLConfig
 	require.NoError(t, yaml.Unmarshal(data, &overlay))
-	merged, err := mergeConfigMap(base, toMap(t, &overlay))
+	return mergeUnvalidated(t, base, toMap(t, &overlay))
+}
+
+// legacyRawMerge is the raw-YAML merge the sidecar profile already used,
+// without Validate for the same reason as legacyStructMerge.
+func legacyRawMerge(t *testing.T, base *YAMLConfig, overlayPath string) *YAMLConfig {
+	t.Helper()
+	data, err := os.ReadFile(overlayPath)
 	require.NoError(t, err)
-	return merged
+	var overlay map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &overlay))
+	return mergeUnvalidated(t, base, overlay)
+}
+
+func mergeUnvalidated(t *testing.T, base *YAMLConfig, overlay map[string]any) *YAMLConfig {
+	t.Helper()
+	b, err := yaml.Marshal(deepMerge(toMap(t, base), overlay))
+	require.NoError(t, err)
+	var merged YAMLConfig
+	require.NoError(t, yaml.Unmarshal(b, &merged))
+	return &merged
 }
 
 func toMap(t *testing.T, cfg *YAMLConfig) map[string]any {
@@ -162,8 +182,7 @@ func TestRealEnvConfigs_MergeEffectiveDiff(t *testing.T) {
 		// was already merged as raw YAML.
 		before = legacyStructMerge(t, before, paths[1])
 		for _, p := range paths[2:] {
-			before, err = mergeConfigFromYAMLFile(before, p)
-			require.NoError(t, err)
+			before = legacyRawMerge(t, before, p)
 		}
 
 		fmt.Fprintf(&report, "## %s\n", tc.name)

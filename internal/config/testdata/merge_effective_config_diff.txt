@@ -62,7 +62,6 @@ features.agent_spend_limits.default_hard_monthly_cents: 0 -> 20000
 features.agent_spend_limits.default_soft_monthly_cents: 0 -> 10000
 features.agent_spend_limits.limit_cache_ttl_seconds: 0 -> 60
 features.agent_spend_limits.max_hard_monthly_cents: 0 -> 500000
-features.agent_spend_limits.mode: "" -> observe
 features.agent_spend_limits.user_prefix: "" -> finch-agent-
 features.pii_redact.language: "" -> en
 features.pii_redact.score_threshold: 0 -> 0.5
@@ -75,7 +74,6 @@ features.agent_spend_limits.default_hard_monthly_cents: 0 -> 20000
 features.agent_spend_limits.default_soft_monthly_cents: 0 -> 10000
 features.agent_spend_limits.limit_cache_ttl_seconds: 0 -> 60
 features.agent_spend_limits.max_hard_monthly_cents: 0 -> 500000
-features.agent_spend_limits.mode: "" -> observe
 features.agent_spend_limits.user_prefix: "" -> finch-agent-
 features.pii_redact.language: "" -> en
 features.pii_redact.score_threshold: 0 -> 0.5
