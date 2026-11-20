@@ -57,6 +57,21 @@ func TestInitAgentSpendLimits_SetsRecorderPrefix(t *testing.T) {
 	require.ErrorIs(t, err, errAgentLimitStoreUnavailable)
 }
 
+// The admin integration PUT invalidates the resolver it is given, so it
+// must be the very instance the middleware reads.
+func TestInitAgentSpendLimits_AdminAndMiddlewareShareResolver(t *testing.T) {
+	withAgentSpendGlobals(t)
+	globalCostStatsRecorder = coststats.NewRecorder()
+	yc := agentSpendYAML(true)
+	initAgentSpendLimits(yc)
+	require.NotNil(t, globalAgentLimitResolver)
+
+	limits, ok := agentSpendLimitOptions(yc).Limits.(*apikeys.AgentLimitResolver)
+	require.True(t, ok)
+	assert.Same(t, globalAgentLimitResolver, limits)
+	assert.Same(t, globalAgentLimitResolver, adminDeps(yc).AgentLimitResolver)
+}
+
 func TestInitAgentSpendLimits_NeedsCostTracking(t *testing.T) {
 	withAgentSpendGlobals(t)
 	globalCostStatsRecorder = nil

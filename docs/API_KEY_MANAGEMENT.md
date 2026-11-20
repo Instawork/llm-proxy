@@ -280,7 +280,7 @@ The PUT body:
 - An omitted key leaves the stored value unchanged, and `null` clears it back to the default.
 - The effective result must satisfy `0 <= soft <= hard <= max_hard_monthly_cents`. A change that breaks this, for example lowering only the hard limit below the stored soft limit, returns `400` and stores nothing.
 - `updated_by` is required and must be one email address. It is stored lowercased with `updated_at` and returned in `override`, but never logged. Unknown keys return `400`, and the body is capped at 4 KiB.
-- A successful PUT drops the label from this process's limit cache. Other proxy processes pick the change up within `limit_cache_ttl_seconds`.
+- A successful PUT drops the label from this process's limit cache, the same cache `AgentSpendLimitMiddleware` reads, so the next call on this process uses the new limit. Other proxy processes, including sidecars, pick the change up within `limit_cache_ttl_seconds`.
 
 The list response:
 

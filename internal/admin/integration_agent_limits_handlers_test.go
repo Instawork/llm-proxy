@@ -17,7 +17,10 @@ import (
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/coststats"
 	"github.com/Instawork/llm-proxy/internal/integrationtoken"
+	"github.com/Instawork/llm-proxy/internal/middleware"
+	"github.com/Instawork/llm-proxy/internal/providers"
 )
 
 const (
@@ -303,6 +306,38 @@ func TestIntegrationAgentLimits_PutInvalidatesResolver(t *testing.T) {
 	after, err := f.resolver.Resolve(t.Context(), testAgentLabel)
 	require.NoError(t, err)
 	assert.Equal(t, int64(15000), after.HardMonthlyCents, "the write dropped the cached miss")
+}
+
+// The PUT must invalidate the same resolver the middleware reads, so a
+// lowered limit blocks the very next call in this process instead of after
+// limit_cache_ttl_seconds.
+func TestIntegrationAgentLimits_PutSeenByMiddlewareNextLookup(t *testing.T) {
+	f := newAgentLimitsFixture(t, func(c *config.AgentSpendLimitsConfig) { c.Mode = config.AgentSpendModeEnforce })
+	f.seedSpend(t, thisMonth(), testAgentLabel, 150)
+
+	spend := coststats.NewRecorder()
+	spend.BindRollup(f.rollup, adminrollup.NewPersister(f.rollup, adminrollup.MetricCost))
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(providers.NewOpenAIProxy())
+	proxied := middleware.AgentSpendLimitMiddleware(pm, middleware.AgentSpendLimitOptions{
+		Config: f.h.deps.YAMLConfig.Features.AgentSpendLimits,
+		Limits: f.h.deps.AgentLimitResolver,
+		Spend:  spend,
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	call := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","messages":[]}`))
+		req.Header.Set("X-User-ID", testAgentLabel)
+		rec := httptest.NewRecorder()
+		proxied.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	require.Equal(t, http.StatusOK, call(), "$150 is under the $200 default, now cached")
+	require.Equal(t, http.StatusOK, f.putRaw(t, testAgentLabel, `{"hard_monthly_cents":12000,"updated_by":"a@example.com"}`).Code)
+	assert.Equal(t, http.StatusPaymentRequired, call(), "the next lookup sees the lowered limit")
+
+	require.Equal(t, http.StatusOK, f.putRaw(t, testAgentLabel, `{"exempt":true,"updated_by":"a@example.com"}`).Code)
+	assert.Equal(t, http.StatusOK, call(), "and the exemption")
 }
 
 func TestIntegrationAgentSpend_ListsPrefixedLabelsAtOrAboveMinState(t *testing.T) {
