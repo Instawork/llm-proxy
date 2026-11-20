@@ -160,6 +160,13 @@ func (h *handler) validateKeyRequestDailyCostLimit(cents int64) error {
 	return nil
 }
 
+func validateKeyRequestMonthlyCostLimit(cents int64) error {
+	if cents < 0 {
+		return fmt.Errorf("monthly_cost_limit cannot be negative (got %d); use 0 for no monthly limit", cents)
+	}
+	return nil
+}
+
 func (h *handler) validateEditorCostLimit(r *http.Request, cents int64) error {
 	// A negative limit is invalid input for ALL roles: the enforcement
 	// middleware treats <= 0 as "unlimited", so persisting a negative value

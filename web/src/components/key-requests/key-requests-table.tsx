@@ -5,6 +5,12 @@ import { Link } from "react-router-dom";
 import DataTable from "../ui/data-table";
 import { ProviderBadge } from "../ui/page-header";
 import { keyDetailPath } from "../../lib/key-routes";
+import {
+  formatRequestLimit,
+  keyRequestSourceLabel,
+  keyRequestStatusBadgeClass,
+  safeTicketUrl,
+} from "../../lib/key-request-meta";
 import type { KeyRequestRecord } from "../../types";
 
 function formatTime(value?: string): string {
@@ -15,13 +21,32 @@ function formatTime(value?: string): string {
 }
 
 function StatusBadge({ status }: { status: KeyRequestRecord["status"] }) {
-  const cls =
-    status === "pending"
-      ? "badge badge-warning"
-      : status === "approved"
-        ? "badge badge-success"
-        : "badge badge-error";
-  return <span className={cls}>{status}</span>;
+  return <span className={keyRequestStatusBadgeClass(status)}>{status}</span>;
+}
+
+function SourceCell({ request }: { request: KeyRequestRecord }) {
+  const ticketUrl = safeTicketUrl(request.external_ticket_url);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <span className="badge badge-outline badge-sm">
+        {keyRequestSourceLabel(request.source)}
+      </span>
+      {request.external_ticket_id ? (
+        ticketUrl ? (
+          <a
+            href={ticketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="link link-primary font-mono text-xs"
+          >
+            {request.external_ticket_id}
+          </a>
+        ) : (
+          <span className="font-mono text-xs">{request.external_ticket_id}</span>
+        )
+      ) : null}
+    </div>
+  );
 }
 
 interface KeyRequestsTableProps {
@@ -45,6 +70,12 @@ export default function KeyRequestsTable({
         header: "Requester",
       },
       {
+        id: "source",
+        accessorKey: "source",
+        header: "Source",
+        cell: ({ row }) => <SourceCell request={row.original} />,
+      },
+      {
         id: "provider",
         accessorKey: "provider",
         header: "Provider",
@@ -62,18 +93,35 @@ export default function KeyRequestsTable({
         id: "description",
         accessorKey: "description",
         header: "Description",
-        cell: ({ getValue }) => (
-          <span className="max-w-xs truncate">{getValue<string>()}</span>
+        cell: ({ row }) => (
+          <div className="flex max-w-xs flex-col gap-1">
+            <span className="whitespace-pre-wrap break-words">
+              {row.original.description}
+            </span>
+            {row.original.justification ? (
+              <details className="text-xs">
+                <summary className="cursor-pointer text-base-content/70">
+                  Justification
+                </summary>
+                <p className="whitespace-pre-wrap break-words pt-1">
+                  {row.original.justification}
+                </p>
+              </details>
+            ) : null}
+          </div>
         ),
       },
       {
         id: "daily_cost_limit",
         accessorKey: "daily_cost_limit",
         header: "Daily limit",
-        cell: ({ getValue }) => {
-          const cents = getValue<number>();
-          return cents ? `$${(cents / 100).toFixed(2)}` : "—";
-        },
+        cell: ({ getValue }) => formatRequestLimit(getValue<number>()),
+      },
+      {
+        id: "monthly_cost_limit",
+        accessorKey: "monthly_cost_limit",
+        header: "Monthly limit",
+        cell: ({ getValue }) => formatRequestLimit(getValue<number>()),
       },
       {
         id: "status",
