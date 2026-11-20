@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,6 +286,18 @@ func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+			if strings.Contains(keyCondExpr, "gsi2pk = :pk") &&
+				ExtractDDBString(item, "gsi2pk") != extractAttrValueString(attrValues, ":pk") {
+				continue
+			}
+			if strings.Contains(filterExpr, "#ts >= :start AND #ts < :end") {
+				ts, ok := extractDDBNumber(item, "timestamp")
+				start, _ := extractDDBNumber(attrValues, ":start")
+				end, _ := extractDDBNumber(attrValues, ":end")
+				if !ok || ts < start || ts >= end {
+					continue
+				}
+			}
 			if filterExpr != "" && strings.Contains(filterExpr, "share_api_key") {
 				item, _ := it.(map[string]any)
 				wantKey := extractAttrValueString(attrValues, ":key")
@@ -311,6 +324,20 @@ func ExtractDDBString(m map[string]any, k string) string {
 		}
 	}
 	return ""
+}
+
+// extractDDBNumber reads a top-level attribute encoded as `{"N": "123"}`.
+func extractDDBNumber(m map[string]any, k string) (float64, bool) {
+	v, ok := m[k].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	s, ok := v["N"].(string)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	return n, err == nil
 }
 
 func storageKeyFromAttrs(m map[string]any) string {

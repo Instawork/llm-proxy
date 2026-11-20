@@ -33,6 +33,10 @@ func main() {
 		runPersonalCommand(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "agent-spend" {
+		runAgentSpendCommand(os.Args[2:])
+		return
+	}
 
 	// Command-line flags
 	var (
@@ -65,6 +69,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  pool add:        pool add --provider anthropic --key sk-ant-api03-...\n")
 		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n")
 		fmt.Fprintf(os.Stderr, "  personal bump:   personal bump-limit -env=production [--apply]\n\n")
+		fmt.Fprintf(os.Stderr, "Agent spend commands (monthly per-agent counter):\n")
+		fmt.Fprintf(os.Stderr, "  agent-spend seed:   agent-spend seed -month 2026-11 -mapping finch-agents.csv [-dry-run]\n")
+		fmt.Fprintf(os.Stderr, "  agent-spend report: agent-spend report -month 2026-11 [-soft-cents 10000] [-hard-cents 20000]\n\n")
 		fmt.Fprintf(os.Stderr, "Viewer commands (read-only access to one org key):\n")
 		fmt.Fprintf(os.Stderr, "  viewers add:     viewers add -key sk-iw-xxx -email a@x.com,b@x.com\n")
 		fmt.Fprintf(os.Stderr, "  viewers list:    viewers list -key sk-iw-xxx\n")

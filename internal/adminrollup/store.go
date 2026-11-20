@@ -381,7 +381,33 @@ func (s *Store) TryMarkOnce(ctx context.Context, name string, ttl time.Duration)
 	if s == nil {
 		return true, nil
 	}
-	return s.be.trySetNX(ctx, keyPrefix+"once:"+name, "1", ttl)
+	return s.be.trySetNX(ctx, onceKey(name), "1", ttl)
+}
+
+// IsMarked reports whether name is currently claimed by TryMarkOnce, without
+// claiming it.
+func (s *Store) IsMarked(ctx context.Context, name string) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	vals, err := s.be.mget(ctx, []string{onceKey(name)})
+	if err != nil {
+		return false, err
+	}
+	return len(vals) == 1 && vals[0] != nil, nil
+}
+
+// ReleaseMark drops a TryMarkOnce claim so the next TryMarkOnce for name
+// succeeds again. Callers use it to undo a claim whose guarded write failed.
+func (s *Store) ReleaseMark(ctx context.Context, name string) error {
+	if s == nil {
+		return nil
+	}
+	return s.be.del(ctx, onceKey(name))
+}
+
+func onceKey(name string) string {
+	return keyPrefix + "once:" + name
 }
 
 // KeySpendUSD reads the fleet-wide spend (USD) recorded for a single masked

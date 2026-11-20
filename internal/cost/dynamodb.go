@@ -287,6 +287,61 @@ func (dt *DynamoDBTransport) WriteRecord(record *CostRecord) error {
 	return nil
 }
 
+// userProviderIndex is the GSI keyed by gsi2pk="USER#<label>".
+const userProviderIndex = "UserProviderIndex"
+
+// UserCostTotal is the summed total_cost of one user label's cost rows.
+type UserCostTotal struct {
+	Rows     int
+	TotalUSD float64
+}
+
+// SumUserCost sums total_cost over userID's rows with start <= timestamp < end,
+// reading through UserProviderIndex. The index sort key leads with the
+// provider, so the time range is a filter over the label's whole partition
+// rather than a key condition; every provider is included.
+func (dt *DynamoDBTransport) SumUserCost(ctx context.Context, userID string, start, end time.Time) (UserCostTotal, error) {
+	var total UserCostTotal
+	if userID == "" {
+		return total, fmt.Errorf("user label is required")
+	}
+	if !start.Before(end) {
+		return total, fmt.Errorf("start must be before end")
+	}
+	paginator := dynamodb.NewQueryPaginator(dt.client, &dynamodb.QueryInput{
+		TableName:              aws.String(dt.tableName),
+		IndexName:              aws.String(userProviderIndex),
+		KeyConditionExpression: aws.String("gsi2pk = :pk"),
+		FilterExpression:       aws.String("#ts >= :start AND #ts < :end"),
+		ProjectionExpression:   aws.String("#ts, total_cost"),
+		ExpressionAttributeNames: map[string]string{
+			"#ts": "timestamp",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":    &types.AttributeValueMemberS{Value: "USER#" + userID},
+			":start": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", start.Unix())},
+			":end":   &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", end.Unix())},
+		},
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return UserCostTotal{}, fmt.Errorf("query %s: %w", userProviderIndex, err)
+		}
+		var rows []struct {
+			TotalCost float64 `dynamodbav:"total_cost"`
+		}
+		if err := attributevalue.UnmarshalListOfMaps(page.Items, &rows); err != nil {
+			return UserCostTotal{}, fmt.Errorf("unmarshal cost rows: %w", err)
+		}
+		for _, row := range rows {
+			total.Rows++
+			total.TotalUSD += row.TotalCost
+		}
+	}
+	return total, nil
+}
+
 // toDynamoDBRecord converts a CostRecord to DynamoDBCostRecord
 func (dt *DynamoDBTransport) toDynamoDBRecord(record *CostRecord) *DynamoDBCostRecord {
 	// Convert to UTC before formatting: the "Z" in the layout is a literal,
