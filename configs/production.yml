@@ -250,6 +250,13 @@ features:
         - id: init
           token_sha256_env: LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256
           scopes: [key_requests:create, key_requests:read, key_requests:cancel]
+        # Finch reads and sets agent spend limits. The routes also need
+        # agent_spend_limits.enabled; remove `disabled` once the token hash
+        # is deployed.
+        - id: finch
+          token_sha256_env: LLM_PROXY_INTEGRATION_FINCH_TOKEN_SHA256
+          scopes: [agent_limits:read, agent_limits:write, agent_spend:read]
+          disabled: true
   history:
     backend: s3
     role: global

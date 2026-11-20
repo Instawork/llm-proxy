@@ -134,6 +134,9 @@ var (
 	globalAdminUserStoreError  error
 	globalKeyProvisioner       *provision.Manager
 	globalNotifier             *notify.Notifier
+	// globalAgentLimitResolver caches AGENTLIMIT overrides. Nil unless
+	// agent_spend_limits is enabled and the key store is available.
+	globalAgentLimitResolver *apikeys.AgentLimitResolver
 )
 
 // Global rate limiter instance
@@ -1607,6 +1610,9 @@ func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip 
 			"hint", "set LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 to run without key validation (dev only)")
 		os.Exit(1)
 	}
+	if s, ok := globalAPIKeyStore.(*apikeys.Store); ok && s != nil && yamlConfig.Features.AgentSpendLimits.Enabled {
+		globalAgentLimitResolver = apikeys.NewAgentLimitResolver(s, yamlConfig.Features.AgentSpendLimits)
+	}
 	globalAdminUserStore = initializeAdminUserStore(yamlConfig, env)
 	globalNotifier = initNotifier(yamlConfig, env)
 	initAgentSpendLimits(yamlConfig)
@@ -2218,6 +2224,7 @@ func registerAdminRoutes(r *mux.Router, deps *serverDeps) {
 		UnmeteredSummary:   unmeteredSummaryFunc(),
 		KeyProvisioner:     globalKeyProvisioner,
 		AdminRollupStore:   globalAdminRollupStore,
+		AgentLimitResolver: globalAgentLimitResolver,
 		Notifier:           globalNotifier,
 	})
 	logger.Info("Admin dashboard: ENABLED")

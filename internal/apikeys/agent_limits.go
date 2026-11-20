@@ -226,6 +226,37 @@ func (s *Store) DeleteAgentLimit(ctx context.Context, label string) error {
 	return nil
 }
 
+// ListAgentLimits returns every stored override, keyed by label, in one
+// paginated scan so a caller listing many agents avoids a read per label.
+func (s *Store) ListAgentLimits(ctx context.Context) (map[string]*AgentLimit, error) {
+	in := &dynamodb.ScanInput{
+		TableName:        aws.String(s.tableName),
+		FilterExpression: aws.String("begins_with(pk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pfx": &types.AttributeValueMemberS{Value: AgentLimitPrefix},
+		},
+	}
+	out := make(map[string]*AgentLimit)
+	for {
+		res, err := s.client.Scan(ctx, in)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan agent limits: %w", err)
+		}
+		for _, item := range res.Items {
+			var rec AgentLimit
+			if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
+				s.logger.Warn("Failed to unmarshal agent limit", "error", err)
+				continue
+			}
+			out[rec.Label()] = &rec
+		}
+		if len(res.LastEvaluatedKey) == 0 {
+			return out, nil
+		}
+		in.ExclusiveStartKey = res.LastEvaluatedKey
+	}
+}
+
 // EffectiveAgentLimits is a label's override merged over the defaults.
 type EffectiveAgentLimits struct {
 	Label            string

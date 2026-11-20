@@ -439,6 +439,9 @@ const (
 	IntegrationScopeKeyRequestsCreate = "key_requests:create"
 	IntegrationScopeKeyRequestsRead   = "key_requests:read"
 	IntegrationScopeKeyRequestsCancel = "key_requests:cancel"
+	IntegrationScopeAgentLimitsRead   = "agent_limits:read"
+	IntegrationScopeAgentLimitsWrite  = "agent_limits:write"
+	IntegrationScopeAgentSpendRead    = "agent_spend:read"
 )
 
 // IntegrationsConfig configures the integrations API. When Enabled is false
@@ -473,6 +476,9 @@ type IntegrationCaller struct {
 	// caller's token (comma-separate two digests to rotate without a gap).
 	TokenSHA256Env string   `yaml:"token_sha256_env"`
 	Scopes         []string `yaml:"scopes"`
+	// Disabled keeps a configured caller from authenticating, so one caller
+	// can ship ahead of its token while others on the same API are live.
+	Disabled bool `yaml:"disabled,omitempty"`
 }
 
 // AdminUsersConfig configures the admin user DynamoDB store.
@@ -1616,6 +1622,9 @@ func validateIntegrationsConfig(ic IntegrationsConfig) error {
 		IntegrationScopeKeyRequestsCreate: true,
 		IntegrationScopeKeyRequestsRead:   true,
 		IntegrationScopeKeyRequestsCancel: true,
+		IntegrationScopeAgentLimitsRead:   true,
+		IntegrationScopeAgentLimitsWrite:  true,
+		IntegrationScopeAgentSpendRead:    true,
 	}
 	seen := map[string]bool{}
 	for i, c := range ic.Callers {

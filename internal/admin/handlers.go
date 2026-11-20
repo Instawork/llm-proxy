@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/admin/permissions"
@@ -37,6 +38,8 @@ type handler struct {
 	issuance *middleware.TokenBucketLimiter
 	// integrations is nil unless admin_dashboard.integrations is enabled.
 	integrations *integrationAuth
+	// agentLimitWriteMu serializes agent-limit PUTs in this process.
+	agentLimitWriteMu sync.Mutex
 }
 
 func newHandler(deps Deps, auth *authenticator) *handler {
