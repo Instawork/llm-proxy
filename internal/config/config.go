@@ -977,6 +977,10 @@ func LoadEnvironmentConfig() (*YAMLConfig, error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to stat environment configuration for %s: %w", env, err)
+	} else if !isLocalEnvironment(env) {
+		// base.yml alone is not a safe deployed config (it enables BYO keys,
+		// for one), so an unknown or misspelled ENVIRONMENT must not start.
+		return nil, fmt.Errorf("environment configuration for %q not found at %s", env, envConfigPath)
 	}
 
 	profile := os.Getenv("LLM_PROXY_CONFIG_PROFILE")
@@ -1097,9 +1101,6 @@ func LoadAndMergeConfigs(filePaths []string) (*YAMLConfig, error) {
 	// Merge additional configs in order
 	mergedConfig := baseConfig
 	for i := 1; i < len(filePaths); i++ {
-		if _, err := os.Stat(filePaths[i]); os.IsNotExist(err) {
-			continue
-		}
 		mergedConfig, err = mergeConfigFromYAMLFile(mergedConfig, filePaths[i])
 		if err != nil {
 			return nil, fmt.Errorf("failed to merge config from %s: %w", filePaths[i], err)
