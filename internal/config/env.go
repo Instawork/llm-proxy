@@ -48,6 +48,8 @@ type RuntimeEnv struct {
 	// PresidioAnalyzerURL / OCRSidecarURL override the YAML sidecar URLs.
 	PresidioAnalyzerURL string
 	OCRSidecarURL       string
+	// OCRSidecarToken authenticates requests to the OCR sidecar.
+	OCRSidecarToken string
 }
 
 // LoadRuntimeEnv reads RuntimeEnv from the process environment.
@@ -67,6 +69,7 @@ func LoadRuntimeEnv() RuntimeEnv {
 		AdminPublicBaseURL:  os.Getenv("ADMIN_PUBLIC_BASE_URL"),
 		PresidioAnalyzerURL: os.Getenv("PRESIDIO_ANALYZER_URL"),
 		OCRSidecarURL:       os.Getenv("OCR_SIDECAR_URL"),
+		OCRSidecarToken:     os.Getenv("OCR_SIDECAR_TOKEN"),
 	}
 }
 
