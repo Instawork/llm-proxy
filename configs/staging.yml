@@ -6,6 +6,9 @@
 enabled: true
 
 features:
+  # Staging has always rejected raw provider keys; base.yml enables them.
+  byo_keys:
+    enabled: false
   cost_tracking:
     enabled: true
     # Staging: Test both DynamoDB and Datadog transports

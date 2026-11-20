@@ -28,6 +28,7 @@ S3 (row history), Presidio (PII) — are all driven by layered YAML under
  MetaURLRewriting              APIKeyValidation / CostLimit              PIIRedact
  /meta/{user}/openai/…  →      iw-* → DynamoDB → real key               Presidio sidecar
  /openai/…                     daily/monthly spend caps                  (optional wire mode)
+                               AgentSpendLimit: monthly cap per label
      │                                     │                                     │
      └─────────────────────────────────────┼─────────────────────────────────────┘
                                            ▼
@@ -164,14 +165,17 @@ runs first on the way in; response wrappers run on the way out in reverse.
 1. **MetaURLRewriting** — `/meta/{userID}/{provider}/…` → `/{provider}/…`
 2. **APIKeyValidation** — resolve `iw-*` keys; stash `apikeys.APIKey` on context
 3. **CostLimit** — per-key daily/monthly spend caps with optional reservation
-4. **PIIRedact** — Presidio scrub (global and/or per-key override)
-5. **TestMode** — integration-test circuit hooks (triple-gated; not for prod)
-6. **Logging** — structured request logging
-7. **RateLimit** — RPM/TPM/RPD/TPD with token estimate + post-response reconcile
-8. **CORS** — browser compatibility
-9. **TokenParsing** — capture response, parse usage, fire cost callbacks
-10. **PIIResponseRestore** — restore MASK-tier placeholders in responses
-11. **Streaming** — flush SSE chunks; stop on client disconnect
+4. **AgentSpendLimit** — monthly cap per agent user label (`features.agent_spend_limits`),
+   whatever the credential; label only from `/meta/` or `X-User-ID`; observe or
+   enforce mode; fails open with `llm.agent_spend.enforcement_degraded`
+5. **PIIRedact** — Presidio scrub (global and/or per-key override)
+6. **TestMode** — integration-test circuit hooks (triple-gated; not for prod)
+7. **Logging** — structured request logging
+8. **RateLimit** — RPM/TPM/RPD/TPD with token estimate + post-response reconcile
+9. **CORS** — browser compatibility
+10. **TokenParsing** — capture response, parse usage, fire cost callbacks
+11. **PIIResponseRestore** — restore MASK-tier placeholders in responses
+12. **Streaming** — flush SSE chunks; stop on client disconnect
 
 ## API keys
 
