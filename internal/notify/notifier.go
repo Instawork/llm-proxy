@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +48,9 @@ type Notifier struct {
 	localOnce sync.Map // string -> struct{}, in-process dedupe ahead of `once`
 }
 
-// NewNotifier builds a Notifier. admins, once, and dashboardURL may be left
+// NewNotifier builds a Notifier. dashboardURL is the proxy's public origin
+// (admin_dashboard.public_base_url), not the dashboard path: links append
+// /admin themselves. admins, once, and dashboardURL may be left
 // zero-valued: admin lookups are then skipped, dedupe is process-local only,
 // and dashboard links are omitted from notification bodies.
 func NewNotifier(sender Sender, admins AdminLister, once OnceMarker, dashboardURL string, logger *slog.Logger) *Notifier {
@@ -112,8 +115,17 @@ func (n *Notifier) KeyRequested(ctx context.Context, req apikeys.KeyRequest) {
 	if req.DailyCostLimit > 0 {
 		fmt.Fprintf(&body, "Requested daily limit: $%.2f\n", float64(req.DailyCostLimit)/100)
 	}
+	if req.MonthlyCostLimit > 0 {
+		fmt.Fprintf(&body, "Requested monthly limit: $%.2f\n", float64(req.MonthlyCostLimit)/100)
+	}
+	if req.Source != "" {
+		fmt.Fprintf(&body, "Requested via: %s\n", req.Source)
+	}
+	if req.ExternalTicketID != "" {
+		fmt.Fprintf(&body, "Ticket: %s\n", req.ExternalTicketID)
+	}
 	if n.dashboardURL != "" {
-		fmt.Fprintf(&body, "\nReview it at %s/keys\n", n.dashboardURL)
+		fmt.Fprintf(&body, "\nReview it at %s/admin/keys?tab=requests&request_id=%s\n", n.dashboardURL, url.QueryEscape(req.ID()))
 	}
 
 	n.send(Notification{
@@ -190,7 +202,7 @@ func (n *Notifier) SpendLimitReached(ctx context.Context, rec *apikeys.APIKey, w
 		apikeys.RedactKey(rec.PK), window, float64(limitCents)/100, float64(spendCents)/100,
 	)
 	if n.dashboardURL != "" {
-		body += fmt.Sprintf("\nView usage at %s/keys\n", n.dashboardURL)
+		body += fmt.Sprintf("\nView usage at %s/admin/keys\n", n.dashboardURL)
 	}
 
 	n.send(Notification{

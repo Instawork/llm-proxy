@@ -134,6 +134,82 @@ features:
 
 Only one ECS task performs cleanup at a time: the sweeper acquires a lease via a conditional put on a fixed DynamoDB record (`lease:key-expiry-sweep`) before scanning for expired keys, so running multiple proxy instances does not cause duplicate revoke calls or delete races.
 
+## Key requests from integrations
+
+A ticketing system (for example Init, which handles `#it-helpdesk`) can file an org-key request on a user's behalf, poll its status, and cancel it. An admin still reviews it in the dashboard, and the requester still reveals the key themselves with their own SSO session. The integration never sees the key.
+
+### Configuration
+
+Integrations are configured under `features.admin_dashboard.integrations`. They are off in `base.yml` and every deployed environment; `dev.yml` enables a `dev` caller. When `enabled` is false the routes are not mounted, so they return `404`.
+
+```yaml
+features:
+  admin_dashboard:
+    integrations:
+      enabled: true
+      requests_per_minute: 60             # per caller token bucket (burst = this value)
+      max_daily_cost_limit_cents: 10000   # cap on integration-filed requests, at filing and at approval
+      max_monthly_cost_limit_cents: 100000
+      ticket_url_hosts: "${LLM_PROXY_INTEGRATION_TICKET_URL_HOSTS}"  # comma-separated, exact host match
+      callers:
+        - id: init                        # becomes the request's source
+          token_sha256_env: LLM_PROXY_INTEGRATION_INIT_TOKEN_SHA256
+          scopes: [key_requests:create, key_requests:read, key_requests:cancel]
+```
+
+A caller whose `token_sha256_env` variable is unset or malformed is skipped with a warning; the other callers keep working.
+
+### Tokens
+
+Tokens look like `llmpi_<caller>_<random>`. Mint one with the key tool (it needs no AWS access or config):
+
+```bash
+go run ./cmd/llm-proxy-keys integration-token new -caller init
+```
+
+It prints the token once and its SHA-256. Give the token to the integration through a secrets manager and put only the SHA-256 in the proxy's `token_sha256_env` variable. The proxy compares the SHA-256 of each presented token against every configured hash in constant time and never logs the token or the hash.
+
+To rotate, set the variable to `<new-sha256>,<old-sha256>`, switch the integration to the new token, then remove the old hash.
+
+### Endpoints
+
+All requests send `Authorization: Bearer llmpi_...`. Session cookies are not accepted here, and the bearer token is not accepted on any session route.
+
+| Route | Scope | Result |
+| --- | --- | --- |
+| `POST /admin/api/integrations/key-requests` | `key_requests:create` | `201` new request, `200` the existing request for the same `external_ticket_id`, `409` the requester already has a pending request for that provider |
+| `GET /admin/api/integrations/key-requests/{id}` | `key_requests:read` | `200` status |
+| `POST /admin/api/integrations/key-requests/{id}/cancel` | `key_requests:cancel` | `200` cancelled, `409` no longer pending |
+
+A missing or unknown token returns `401`, a missing scope `403`, and an exhausted rate limit `429` with `Retry-After`. A request filed by another caller, or from the dashboard, returns `404`.
+
+The create body:
+
+```json
+{
+  "requester_email": "person@example.com",
+  "provider": "openai",
+  "name": "widget-bot",
+  "description": "Key for the widget bot",
+  "justification": "optional, up to 2000 characters, shown only to admins",
+  "daily_cost_limit": 1500,
+  "monthly_cost_limit": 50000,
+  "external_ticket_id": "INIT-1234",
+  "external_ticket_url": "https://app.init.inc/tickets/INIT-1234"
+}
+```
+
+- `requester_email` must be in the allowed domain, and `provider` must support auto-provisioning.
+- `description` is required (up to 500 characters). `name` must contain a letter or number.
+- `external_ticket_id` is required and must match `^[A-Za-z0-9._:-]{1,64}$`. Retrying with the same ticket ID is safe: it returns `200` with the original request and does not email admins again.
+- `external_ticket_url` is optional. It must be `https` on one of the `ticket_url_hosts`; if none are configured, any URL is rejected.
+- A daily limit of `0` uses the key-request default, clamped to `max_daily_cost_limit_cents`. A monthly limit of `0` uses `max_monthly_cost_limit_cents`. Limits above the integration maxima (or the editor daily maximum) are rejected. When an admin approves an integration request, the same maxima apply to any override, and the monthly cap can't be removed.
+- The body is capped at 16 KiB.
+
+The response carries `id`, `status` (`pending`, `approved`, `rejected`, `cancelled`), `provider`, `name`, the limits, `external_ticket_id`, `created_at`, `reviewed_at`, `rejection_reason`, `review_url` (the dashboard link for admins), `claimed`/`claimed_at`, and, once approved, `claim_url` for the requester to open. It never contains the key, any email address, or the justification.
+
+The admin notification email for a new request includes the ticket ID and the source (`Requested via: init`) and links to `<public_base_url>/admin/keys?tab=requests&request_id=<id>`.
+
 ## Using the Key Management Tool
 
 ### Building the Tool

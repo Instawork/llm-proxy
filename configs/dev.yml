@@ -68,6 +68,14 @@ features:
         db: 6
       retention_days: 90
       history_days: 30
+    # The dev caller is skipped until LLM_PROXY_INTEGRATION_DEV_TOKEN_SHA256
+    # is set (see docs/API_KEY_MANAGEMENT.md, "Key requests and integrations").
+    integrations:
+      enabled: true
+      callers:
+        - id: dev
+          token_sha256_env: LLM_PROXY_INTEGRATION_DEV_TOKEN_SHA256
+          scopes: [key_requests:create, key_requests:read, key_requests:cancel]
   pii_redact:
     enabled: true
     # docker-compose sets PRESIDIO_ANALYZER_URL=http://presidio:3000; this

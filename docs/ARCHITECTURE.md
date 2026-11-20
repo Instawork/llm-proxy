@@ -260,6 +260,13 @@ When `features.admin_dashboard.enabled`:
 - **API** — `/admin/api/*` for keys, usage, cost, PII, rate limits, circuit activity
 - **Key access** — per-key read-only `viewer_emails` (plus the implicit requester); see
   [API_KEY_MANAGEMENT.md](API_KEY_MANAGEMENT.md#service-key-viewers)
+- **Integrations API** — `/admin/api/integrations/*` lets a ticketing system
+  (Init) file and track key requests with an `llmpi_` bearer token. Its
+  subrouter is mounted ahead of the public and session `/api` subrouters, so
+  session auth and CORS never run for it and a bearer token never opens a
+  session route. It is not mounted at all unless
+  `admin_dashboard.integrations.enabled`; see
+  [API_KEY_MANAGEMENT.md](API_KEY_MANAGEMENT.md#key-requests-from-integrations)
 - **SPA** — React app in `web/`; production build embedded via `-tags embed_ui`
 - **Rollups** — `adminrollup.Store` persists daily aggregates to Redis
 - **RBAC** — `adminusers.Store` in DynamoDB (viewer / editor / admin roles)

@@ -35,6 +35,8 @@ type handler struct {
 	deps     *Deps
 	auth     *authenticator
 	issuance *middleware.TokenBucketLimiter
+	// integrations is nil unless admin_dashboard.integrations is enabled.
+	integrations *integrationAuth
 }
 
 func newHandler(deps Deps, auth *authenticator) *handler {

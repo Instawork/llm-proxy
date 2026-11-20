@@ -107,6 +107,52 @@ func TestNotifier_KeyRequested_OnlyAdmins(t *testing.T) {
 	assert.Contains(t, msgs[0].Body, "openai")
 }
 
+func TestNotifier_KeyRequested_IntegrationTicket(t *testing.T) {
+	t.Parallel()
+
+	sender := newFakeSender()
+	admins := &fakeAdminLister{users: []adminusers.User{{Email: "admin@example.com", Role: adminusers.RoleAdmin}}}
+	n := NewNotifier(sender, admins, nil, "https://llm.example.com/", testLogger())
+
+	n.KeyRequested(context.Background(), apikeys.KeyRequest{
+		PK:               apikeys.KeyRequestPrefix + "req-123",
+		RequesterEmail:   "requester@example.com",
+		Provider:         "openai",
+		Description:      "for widget bot",
+		MonthlyCostLimit: 50000,
+		Source:           "init",
+		ExternalTicketID: "INIT-42",
+		Justification:    "confidential justification text",
+	})
+	sender.waitForSend(t)
+
+	msgs := sender.messages()
+	require.Len(t, msgs, 1)
+	body := msgs[0].Body
+	assert.Contains(t, body, "Requested via: init\n")
+	assert.Contains(t, body, "Ticket: INIT-42\n")
+	assert.Contains(t, body, "Requested monthly limit: $500.00\n")
+	// The SPA is served only under /admin; the configured URL is the origin.
+	assert.Contains(t, body, "Review it at https://llm.example.com/admin/keys?tab=requests&request_id=req-123\n")
+	assert.NotContains(t, body, "confidential justification text")
+}
+
+func TestNotifier_KeyRequested_DashboardRequestHasNoTicketLines(t *testing.T) {
+	t.Parallel()
+
+	sender := newFakeSender()
+	admins := &fakeAdminLister{users: []adminusers.User{{Email: "admin@example.com", Role: adminusers.RoleAdmin}}}
+	n := NewNotifier(sender, admins, nil, "", testLogger())
+
+	n.KeyRequested(context.Background(), apikeys.KeyRequest{RequesterEmail: "requester@example.com", Provider: "openai", Description: "x"})
+	sender.waitForSend(t)
+
+	msgs := sender.messages()
+	require.Len(t, msgs, 1)
+	assert.NotContains(t, msgs[0].Body, "Requested via")
+	assert.NotContains(t, msgs[0].Body, "Ticket:")
+}
+
 func TestNotifier_KeyRequested_NoAdmins_DoesNotSend(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +189,19 @@ func TestNotifier_KeyRequestApproved_UsesRedactedKey(t *testing.T) {
 	assert.Equal(t, []string{"requester@example.com"}, msgs[0].To)
 	assert.NotContains(t, msgs[0].Body, key.PK)
 	assert.Contains(t, msgs[0].Body, apikeys.RedactKey(key.PK))
+}
+
+func TestNotifier_SpendLimitReached_LinksToAdminKeys(t *testing.T) {
+	t.Parallel()
+
+	sender := newFakeSender()
+	n := NewNotifier(sender, nil, newFakeOnceMarker(), "https://llm.example.com", testLogger())
+
+	n.SpendLimitReached(context.Background(), &apikeys.APIKey{PK: "sk-iw-link00000000000000000000000000000", OwnerEmail: "owner@example.com"}, "daily", 1000, 1000)
+	sender.waitForSend(t)
+	msgs := sender.messages()
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Body, "View usage at https://llm.example.com/admin/keys\n")
 }
 
 func TestNotifier_SpendLimitReached_PrefersOwnerThenRequester(t *testing.T) {

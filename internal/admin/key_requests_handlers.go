@@ -270,7 +270,8 @@ func (h *handler) handleRejectKeyRequest(w http.ResponseWriter, r *http.Request,
 // keyRequestApprovalLimits returns the cost limits an approval provisions:
 // the requested ones, unless the reviewer overrides them in the review body.
 // A daily limit of 0 means the key-request default; a monthly limit of 0
-// means no monthly cap.
+// means no monthly cap, except on integration-filed requests when an
+// integration monthly maximum is configured.
 func (h *handler) keyRequestApprovalLimits(req *apikeys.KeyRequest, body ReviewKeyRequestBody) (daily, monthly int64, err error) {
 	daily = req.DailyCostLimit
 	if body.DailyCostLimit != nil {
@@ -281,6 +282,9 @@ func (h *handler) keyRequestApprovalLimits(req *apikeys.KeyRequest, body ReviewK
 	}
 	if daily <= 0 {
 		daily = h.keyRequestDefaultDailyCostCents()
+		if req.Source != "" {
+			daily = h.integrationDefaultDailyCostCents()
+		}
 	}
 	if err := h.validateKeyRequestDailyCostLimit(daily); err != nil {
 		return 0, 0, err
@@ -292,6 +296,11 @@ func (h *handler) keyRequestApprovalLimits(req *apikeys.KeyRequest, body ReviewK
 	}
 	if err := validateKeyRequestMonthlyCostLimit(monthly); err != nil {
 		return 0, 0, err
+	}
+	if req.Source != "" {
+		if err := h.validateIntegrationCostLimits(daily, monthly); err != nil {
+			return 0, 0, err
+		}
 	}
 	return daily, monthly, nil
 }
