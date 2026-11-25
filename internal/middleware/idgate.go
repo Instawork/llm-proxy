@@ -73,6 +73,11 @@ type idGateInflightCall struct {
 // time.Sleep. Always nil in production.
 var idGateTestOnInflightWait func()
 
+// idGateTestBeforeScan is an unexported test hook invoked right before a worker
+// goroutine enters scanCache.do for an image, allowing deterministic ordering
+// tests without real-time sleeps. Always nil in production.
+var idGateTestBeforeScan func(imageIndex int)
+
 type idGateScanCache struct {
 	mu         sync.Mutex
 	ttl        time.Duration
@@ -143,15 +148,34 @@ type idGateScanOutcome struct {
 	err           error
 }
 
-// do returns a cached verdict if present, joins an identical in-flight scan,
-// or runs fn as the leader for digest. Errors are never cached, and verdicts
-// produced under transient decode-admission refusal (cacheable=false) are not
-// stored in the cross-request cache. If a leader fails because its own request
-// context or admission wait expired while a follower is still alive, the
-// follower retries rather than inheriting the leader's context failure.
+func waitForIDGateInflight(ctx context.Context, existing *idGateInflightCall) (idGateVerdict, string, bool, error, bool) {
+	if hook := idGateTestOnInflightWait; hook != nil {
+		hook()
+	}
+	select {
+	case <-existing.done:
+		if existing.err != nil && existing.leaderCtxDone && ctx.Err() == nil {
+			return idGateVerdict{}, "", false, nil, true
+		}
+		if existing.err == nil && !existing.cacheable && ctx.Err() == nil {
+			return idGateVerdict{}, "", false, nil, true
+		}
+		return existing.verdict, existing.stage, existing.err == nil, existing.err, false
+	case <-ctx.Done():
+		return idGateVerdict{}, "ocr", false, ctx.Err(), false
+	}
+}
+
+// do returns a cached verdict if present, joins an identical admitted
+// in-flight scan without holding per-request admission, or acquires admission
+// via acquire before publishing an in-flight entry and running fn as the
+// leader. Errors are never cached, and verdicts produced under transient
+// decode-admission refusal (cacheable=false) are neither stored in the cache
+// nor shared with live followers.
 func (c *idGateScanCache) do(
 	ctx context.Context,
 	digest [32]byte,
+	acquire func() (release func(), err error),
 	fn func() idGateScanOutcome,
 ) (idGateVerdict, string, bool, error) {
 	for {
@@ -168,28 +192,57 @@ func (c *idGateScanCache) do(
 		}
 		if existing, ok := c.inflight[digest]; ok {
 			c.mu.Unlock()
-			if hook := idGateTestOnInflightWait; hook != nil {
-				hook()
+			if v, st, hit, err, retry := waitForIDGateInflight(ctx, existing); !retry {
+				return v, st, hit, err
 			}
-			select {
-			case <-existing.done:
-				if existing.err != nil && existing.leaderCtxDone && ctx.Err() == nil {
-					continue
-				}
-				if existing.err == nil && !existing.cacheable && ctx.Err() == nil {
-					continue
-				}
-				return existing.verdict, existing.stage, existing.err == nil, existing.err
-			case <-ctx.Done():
-				return idGateVerdict{}, "ocr", false, ctx.Err()
+			continue
+		}
+		c.mu.Unlock()
+
+		var release func()
+		if acquire != nil {
+			var err error
+			release, err = acquire()
+			if err != nil {
+				return idGateVerdict{}, "ocr", false, err
 			}
+		}
+
+		c.mu.Lock()
+		if c.ttl > 0 {
+			if entry, ok := c.entries[digest]; ok {
+				if time.Now().After(entry.expires) {
+					delete(c.entries, digest)
+				} else {
+					c.mu.Unlock()
+					if release != nil {
+						release()
+					}
+					return entry.verdict, "", true, nil
+				}
+			}
+		}
+		if existing, ok := c.inflight[digest]; ok {
+			c.mu.Unlock()
+			if release != nil {
+				release()
+			}
+			if v, st, hit, err, retry := waitForIDGateInflight(ctx, existing); !retry {
+				return v, st, hit, err
+			}
+			continue
 		}
 
 		call := &idGateInflightCall{done: make(chan struct{})}
 		c.inflight[digest] = call
 		c.mu.Unlock()
 
-		out := fn()
+		out := func() idGateScanOutcome {
+			if release != nil {
+				defer release()
+			}
+			return fn()
+		}()
 		leaderCtxDone := out.err != nil && (out.leaderCtxDone || ctx.Err() != nil || errors.Is(out.err, context.Canceled))
 
 		c.mu.Lock()
@@ -396,21 +449,24 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					go func(u uniqueImage) {
 						defer wg.Done()
 
-						// Acquire reqSem only inside fn() (on the leader path
-						// that actually runs OCR) so coalesced followers waiting
-						// on another request's scan never hold a per-request
-						// slot and starve distinct images in this request.
-						verdict, stage, hit, scanErr := scanCache.do(waitCtx, u.digest, func() idGateScanOutcome {
+						if hook := idGateTestBeforeScan; hook != nil {
+							hook(u.firstIndex)
+						}
+
+						// Acquire reqSem inside scanCache.do's admission step:
+						// queued workers do not publish an in-flight entry
+						// before acquiring reqSem, and followers joining an
+						// already-admitted scan never hold reqSem.
+						acquireReqSem := func() (func(), error) {
 							select {
 							case reqSem <- struct{}{}:
-								defer func() { <-reqSem }()
+								return func() { <-reqSem }, nil
 							case <-queueCtx.Done():
-								return idGateScanOutcome{
-									stage:         "ocr",
-									leaderCtxDone: true,
-									err:           fmt.Errorf("id_gate: request concurrency wait timed out: %w", queueCtx.Err()),
-								}
+								return nil, fmt.Errorf("id_gate: request concurrency wait timed out: %w", queueCtx.Err())
 							}
+						}
+
+						verdict, stage, hit, scanErr := scanCache.do(waitCtx, u.digest, acquireReqSem, func() idGateScanOutcome {
 							if globalSem != nil {
 								select {
 								case globalSem <- struct{}{}:

@@ -144,8 +144,7 @@ func (c *Client) doExtractOnce(ctx context.Context, payload []byte, contentType 
 
 func isRetryableOCRStatus(code int) bool {
 	return code == http.StatusBadGateway ||
-		code == http.StatusServiceUnavailable ||
-		code == http.StatusGatewayTimeout
+		code == http.StatusServiceUnavailable
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

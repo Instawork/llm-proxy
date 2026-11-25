@@ -139,33 +139,47 @@ func isProgressiveJPEG(raw []byte) bool {
 }
 
 // isInterlacedPNG checks the PNG IHDR interlace method byte (offset 28).
-// Valid PNG files always place the 13-byte IHDR chunk immediately after the
-// 8-byte PNG signature.
+// Valid standard PNGs place the 13-byte IHDR chunk immediately after the 8-byte
+// signature; if IHDR cannot be confirmed at that position, conservatively treat
+// the PNG as interlaced so decode admission does not underestimate memory.
 func isInterlacedPNG(raw []byte) bool {
 	if len(raw) < 29 || string(raw[12:16]) != "IHDR" {
-		return false
+		return true
 	}
 	return raw[28] != 0
 }
 
 // estimatedDecodeBytes estimates peak decoded memory (source image, decoder
-// working buffers such as Adam7 PNG interlace passes, CMYK JPEG conversion
-// planes, and progressive JPEG int32 DCT coefficient blocks, plus resized RGBA
-// output).
+// working buffers such as PNG filter rows, Adam7 PNG interlace passes,
+// sequential RGB/CMYK JPEG conversion planes, and progressive JPEG int32 DCT
+// coefficient blocks, plus resized RGBA output).
 func estimatedDecodeBytes(raw []byte, format string, cfg image.Config, dstW, dstH int) int64 {
 	pixels := int64(cfg.Width) * int64(cfg.Height)
 	bpp := decodedBytesPerPixel(format, cfg.ColorModel)
 	srcBytes := pixels * bpp
-	if format == "png" && isInterlacedPNG(raw) {
-		// Go's image/png holds the full output image and the current Adam7 pass
-		// simultaneously; the final pass allocates up to half the image pixels.
-		srcBytes += ((pixels + 1) / 2) * bpp
+	if format == "png" {
+		// Go's image/png holds two filter scanline buffers (cr, pr) of length
+		// width*bpp+1 alongside the decoded image.
+		srcBytes += 2 * (int64(cfg.Width)*bpp + 1)
+		if isInterlacedPNG(raw) {
+			// Go's image/png holds the full output image and the current Adam7 pass
+			// simultaneously; the final pass allocates up to half the image pixels.
+			srcBytes += ((pixels + 1) / 2) * bpp
+		}
 	}
 	if format == "jpeg" {
-		if cfg.ColorModel == color.CMYKModel {
-			// Go's image/jpeg decodes four separate planes (YCbCr + black) and
-			// holds them live while allocating the interleaved *image.CMYK.
-			srcBytes += pixels * 4
+		blocksX := ((int64(cfg.Width) + 15) / 16) * 2
+		blocksY := ((int64(cfg.Height) + 15) / 16) * 2
+		paddedPixels := (blocksX * 8) * (blocksY * 8)
+		switch cfg.ColorModel {
+		case color.CMYKModel:
+			// Go's image/jpeg decodes four separate MCU-padded planes and holds
+			// them live while allocating the interleaved *image.CMYK.
+			srcBytes += paddedPixels * 4
+		case color.RGBAModel:
+			// Go's image/jpeg decodes three separate MCU-padded planes and
+			// holds them live while allocating the interleaved *image.RGBA.
+			srcBytes += paddedPixels * 3
 		}
 		if isProgressiveJPEG(raw) {
 			// Go's image/jpeg decoder holds progCoeffs ([maxComponents][]block,
@@ -177,8 +191,6 @@ func estimatedDecodeBytes(raw []byte, format string, cfg image.Config, dstW, dst
 			case color.CMYKModel:
 				nComp = 4
 			}
-			blocksX := ((int64(cfg.Width) + 15) / 16) * 2
-			blocksY := ((int64(cfg.Height) + 15) / 16) * 2
 			srcBytes += nComp * blocksX * blocksY * 256
 		}
 	}

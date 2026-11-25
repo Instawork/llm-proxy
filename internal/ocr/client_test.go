@@ -115,7 +115,7 @@ func TestClientExtractTextRetriesTransient503ThenSucceeds(t *testing.T) {
 }
 
 func TestClientExtractTextDoesNotRetryNonTransientErrors(t *testing.T) {
-	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError} {
+	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError, http.StatusGatewayTimeout} {
 		var attempts int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			attempts++

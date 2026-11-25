@@ -806,6 +806,41 @@ func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T
 	}
 }
 
+type coalesceTestHarness struct {
+	leaderStarted  chan struct{}
+	releaseLeader  chan struct{}
+	releaseOnce    sync.Once
+	followerJoined chan struct{}
+	wg             sync.WaitGroup
+}
+
+func newCoalesceTestHarness(buf int) *coalesceTestHarness {
+	h := &coalesceTestHarness{
+		leaderStarted:  make(chan struct{}),
+		releaseLeader:  make(chan struct{}),
+		followerJoined: make(chan struct{}, buf),
+	}
+	idGateTestOnInflightWait = func() { h.followerJoined <- struct{}{} }
+	return h
+}
+
+func (h *coalesceTestHarness) release() {
+	h.releaseOnce.Do(func() { close(h.releaseLeader) })
+}
+
+func (h *coalesceTestHarness) cleanup() {
+	h.release()
+	h.wg.Wait()
+}
+
+func (h *coalesceTestHarness) run(fn func()) {
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		fn()
+	}()
+}
+
 func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t *testing.T) {
 	prevHook := idGateTestOnInflightWait
 	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
@@ -827,18 +862,8 @@ func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t 
 	t.Cleanup(releaseBudget)
 
 	synctest.Test(t, func(t *testing.T) {
-		leaderStarted := make(chan struct{})
-		releaseLeader := make(chan struct{})
-		var releaseOnce sync.Once
-		release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
-		followerJoined := make(chan struct{}, 1)
-		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
-
-		var wg sync.WaitGroup
-		defer func() {
-			release()
-			wg.Wait()
-		}()
+		h := newCoalesceTestHarness(1)
+		defer h.cleanup()
 
 		var mu sync.Mutex
 		var seenBodies [][]byte
@@ -849,8 +874,8 @@ func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t 
 				seenBodies = append(seenBodies, append([]byte(nil), img...))
 				mu.Unlock()
 				if n == 1 {
-					close(leaderStarted)
-					<-releaseLeader
+					close(h.leaderStarted)
+					<-h.releaseLeader
 				}
 				return "plain text", nil
 			},
@@ -866,28 +891,20 @@ func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t 
 
 		leaderRec := httptest.NewRecorder()
 		followerRec := httptest.NewRecorder()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			mw.ServeHTTP(leaderRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
-		}()
+		h.run(func() { mw.ServeHTTP(leaderRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)) })
 
 		synctest.Wait()
 		select {
-		case <-leaderStarted:
+		case <-h.leaderStarted:
 		default:
 			t.Fatal("leader did not start OCR")
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			mw.ServeHTTP(followerRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
-		}()
+		h.run(func() { mw.ServeHTTP(followerRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)) })
 
 		synctest.Wait()
 		select {
-		case <-followerJoined:
+		case <-h.followerJoined:
 		default:
 			t.Fatal("follower did not join in-flight scan")
 		}
@@ -895,8 +912,8 @@ func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t 
 		// Capacity recovers before the leader finishes; follower must run its
 		// own admission/downscale instead of reusing the non-cacheable verdict.
 		releaseBudget()
-		release()
-		wg.Wait()
+		h.release()
+		h.wg.Wait()
 
 		if leaderRec.Code != http.StatusOK || followerRec.Code != http.StatusOK {
 			t.Fatalf("statuses = (%d, %d), want (200, 200)", leaderRec.Code, followerRec.Code)
@@ -918,29 +935,38 @@ func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t 
 }
 
 func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
-	prevHook := idGateTestOnInflightWait
-	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+	prevWaitHook := idGateTestOnInflightWait
+	prevBeforeHook := idGateTestBeforeScan
+	t.Cleanup(func() {
+		idGateTestOnInflightWait = prevWaitHook
+		idGateTestBeforeScan = prevBeforeHook
+	})
 
 	synctest.Test(t, func(t *testing.T) {
-		sharedStarted := make(chan struct{})
-		releaseShared := make(chan struct{})
-		var releaseOnce sync.Once
-		release := func() { releaseOnce.Do(func() { close(releaseShared) }) }
-		followerJoined := make(chan struct{}, 1)
-		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+		h := newCoalesceTestHarness(1)
+		allowDistinct := make(chan struct{})
+		var allowOnce sync.Once
+		unblockDistinct := func() { allowOnce.Do(func() { close(allowDistinct) }) }
 		distinctScanned := make(chan struct{})
-
-		var wg sync.WaitGroup
 		defer func() {
-			release()
-			wg.Wait()
+			unblockDistinct()
+			h.cleanup()
 		}()
+
+		// Hold request B's distinct-img (index 1) before admission until
+		// shared-img (index 0) has deterministically joined the in-flight scan,
+		// so the old reqSem-before-coalesce order would reliably deadlock here.
+		idGateTestBeforeScan = func(imageIndex int) {
+			if imageIndex == 1 {
+				<-allowDistinct
+			}
+		}
 
 		ocrClient := &funcOCR{
 			fn: func(_ context.Context, img []byte, _ string) (string, error) {
 				if string(img) == "shared-img" {
-					close(sharedStarted)
-					<-releaseShared
+					close(h.leaderStarted)
+					<-h.releaseLeader
 					return "clean", nil
 				}
 				close(distinctScanned)
@@ -948,9 +974,6 @@ func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
 			},
 		}
 
-		// ImageConcurrency=1: request B has [shared-img, distinct-img]. While
-		// shared-img is coalesced behind request A, distinct-img must NOT be
-		// blocked from acquiring reqSem and scanning immediately.
 		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
 			FailClosed:       true,
 			ImageConcurrency: 1,
@@ -970,6 +993,107 @@ func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
 
 		recA := httptest.NewRecorder()
 		recB := httptest.NewRecorder()
+		h.run(func() { mw.ServeHTTP(recA, newReq(t, http.MethodPost, "/openai/v1/chat/completions", bodyA)) })
+
+		synctest.Wait()
+		select {
+		case <-h.leaderStarted:
+		default:
+			t.Fatal("request A did not start scanning shared-img")
+		}
+
+		h.run(func() { mw.ServeHTTP(recB, newReq(t, http.MethodPost, "/openai/v1/chat/completions", bodyB)) })
+
+		synctest.Wait()
+		select {
+		case <-h.followerJoined:
+		default:
+			t.Fatal("request B shared-img did not join in-flight scan")
+		}
+
+		// Now release distinct-img while shared-img is still coalesced and
+		// request A has NOT been released; distinct-img must reach OCR now.
+		unblockDistinct()
+		synctest.Wait()
+		select {
+		case <-distinctScanned:
+		default:
+			t.Fatal("request B distinct-img was blocked by coalesced follower holding reqSem")
+		}
+
+		h.release()
+		h.wg.Wait()
+		if recA.Code != http.StatusOK || recB.Code != http.StatusOK {
+			t.Fatalf("statuses = (%d, %d), want (200, 200)", recA.Code, recB.Code)
+		}
+	})
+}
+
+func TestIDGateMiddleware_QueuedLeaderDoesNotBlockUnblockedRequest(t *testing.T) {
+	prevBeforeHook := idGateTestBeforeScan
+	t.Cleanup(func() { idGateTestBeforeScan = prevBeforeHook })
+
+	synctest.Test(t, func(t *testing.T) {
+		firstStarted := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+		allowQueuedX := make(chan struct{})
+		var allowOnce sync.Once
+		unblockQueuedX := func() { allowOnce.Do(func() { close(allowQueuedX) }) }
+		xScanned := make(chan struct{})
+
+		var wg sync.WaitGroup
+		defer func() {
+			unblockQueuedX()
+			release()
+			wg.Wait()
+		}()
+
+		// Ensure request A's first image (index 0) acquires reqSem before A's
+		// second image X (index 1) attempts admission and queues on reqSem.
+		idGateTestBeforeScan = func(imageIndex int) {
+			if imageIndex == 1 {
+				<-allowQueuedX
+			}
+		}
+
+		ocrClient := &funcOCR{
+			fn: func(_ context.Context, img []byte, _ string) (string, error) {
+				if string(img) == "slow-first-img" {
+					close(firstStarted)
+					<-releaseFirst
+					return "clean", nil
+				}
+				close(xScanned)
+				return "clean", nil
+			},
+		}
+
+		// ImageConcurrency=1, MaxInFlight=2: A has [slow-first-img, x-img] so
+		// A's x-img is queued on A's reqSem while a global slot is free.
+		// Request B arrives with only x-img and must scan x-img immediately
+		// rather than blocking behind A's unadmitted queued worker.
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+			FailClosed:       true,
+			ImageConcurrency: 1,
+			MaxInFlight:      2,
+			ScanTimeout:      time.Second,
+			CacheTTL:         time.Minute,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		firstB64 := base64.StdEncoding.EncodeToString([]byte("slow-first-img"))
+		xB64 := base64.StdEncoding.EncodeToString([]byte("x-img"))
+		bodyA := fmt.Sprintf(
+			`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}}]}]}`,
+			firstB64, xB64,
+		)
+		bodyB := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + xB64 + `"}}]}]}`
+
+		recA := httptest.NewRecorder()
+		recB := httptest.NewRecorder()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -978,11 +1102,17 @@ func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
 
 		synctest.Wait()
 		select {
-		case <-sharedStarted:
+		case <-firstStarted:
 		default:
-			t.Fatal("request A did not start scanning shared-img")
+			t.Fatal("request A did not start scanning slow-first-img")
 		}
 
+		// Let A's x-img enter admission and block waiting on A's reqSem.
+		unblockQueuedX()
+		synctest.Wait()
+
+		// Request B arrives with x-img and a free reqSem + globalSem slot; it
+		// must scan x-img and finish while A's slow-first-img is still held.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -991,20 +1121,18 @@ func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
 
 		synctest.Wait()
 		select {
-		case <-followerJoined:
+		case <-xScanned:
 		default:
-			t.Fatal("request B shared-img did not join in-flight scan")
+			t.Fatal("request B was blocked by request A's unadmitted queued worker")
 		}
-		select {
-		case <-distinctScanned:
-		default:
-			t.Fatal("request B distinct-img was blocked by coalesced follower holding reqSem")
+		if recB.Code != http.StatusOK {
+			t.Fatalf("request B status = %d, want 200 before request A finishes", recB.Code)
 		}
 
 		release()
 		wg.Wait()
-		if recA.Code != http.StatusOK || recB.Code != http.StatusOK {
-			t.Fatalf("statuses = (%d, %d), want (200, 200)", recA.Code, recB.Code)
+		if recA.Code != http.StatusOK {
+			t.Fatalf("request A status = %d, want 200", recA.Code)
 		}
 	})
 }

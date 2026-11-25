@@ -255,23 +255,73 @@ func TestDownscaleImageForOCR_DecodedMemoryEstimates(t *testing.T) {
 		t.Fatalf("2000x2000 sequential CMYK estimate = %d, want <= %d", est, maxSingleDecodeBytes)
 	}
 
+	// Sequential 3200x3200 RGB JPEG (color.RGBAModel) retains 3 MCU-padded
+	// planes alongside the RGBA buffer (~71.7 MB > 64 MiB), while 2000x2000 fits.
+	largeRGBJPEGCfg := image.Config{Width: 3200, Height: 3200, ColorModel: color.RGBAModel}
+	if est := estimatedDecodeBytes(baseline, "jpeg", largeRGBJPEGCfg, 1600, 1600); est <= maxSingleDecodeBytes {
+		t.Fatalf("3200x3200 sequential RGB JPEG estimate = %d, want > %d", est, maxSingleDecodeBytes)
+	}
+	medRGBJPEGCfg := image.Config{Width: 2000, Height: 2000, ColorModel: color.RGBAModel}
+	if est := estimatedDecodeBytes(baseline, "jpeg", medRGBJPEGCfg, 1600, 1600); est > maxSingleDecodeBytes {
+		t.Fatalf("2000x2000 sequential RGB JPEG estimate = %d, want <= %d", est, maxSingleDecodeBytes)
+	}
+
+	// Valid, decodable 16x16 Adam7 interlaced RGBA PNG so image.DecodeConfig,
+	// image.Decode, and isInterlacedPNG are verified on one real stream.
+	validAdam7PNG := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
+		0x08, 0x06, 0x00, 0x00, 0x01, 0x68, 0xf4, 0xcf, 0xf7,
+		0x00, 0x00, 0x00, 0x1e, 0x49, 0x44, 0x41, 0x54,
+		0x78, 0x9c, 0x63, 0x90, 0xab, 0xb8, 0xf4, 0x1f,
+		0x84, 0x19, 0x88, 0x60, 0xd0, 0x57, 0x60, 0x54,
+		0xc1, 0xe0, 0x55, 0x30, 0x6a, 0xc0, 0x88, 0x30,
+		0x00, 0x00, 0x82, 0x01, 0x67, 0x1f, 0xdd, 0x22, 0xc8, 0x21,
+		0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+	adam7Cfg, adam7Fmt, err := image.DecodeConfig(bytes.NewReader(validAdam7PNG))
+	if err != nil {
+		t.Fatalf("DecodeConfig on valid Adam7 PNG: %v", err)
+	}
+	if adam7Fmt != "png" || adam7Cfg.Width != 16 || adam7Cfg.Height != 16 {
+		t.Fatalf("Adam7 PNG config = (%q, %dx%d), want (png, 16x16)", adam7Fmt, adam7Cfg.Width, adam7Cfg.Height)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(validAdam7PNG)); err != nil {
+		t.Fatalf("Decode on valid Adam7 PNG: %v", err)
+	}
+	if !isInterlacedPNG(validAdam7PNG) {
+		t.Fatal("expected valid Adam7 PNG to be detected as interlaced")
+	}
+	// Verify downscaleImageForOCRWithBudget works end-to-end on the valid Adam7 fixture.
+	adam7Out, adam7Refused := downscaleImageForOCRWithBudget(validAdam7PNG, 8, &decodeMemoryBudget{limit: 1_000_000})
+	if adam7Refused || bytes.Equal(adam7Out, validAdam7PNG) {
+		t.Fatal("expected valid Adam7 PNG to downscale cleanly when within budget")
+	}
+	// Non-standard PNG layout without IHDR at offset 12 conservatively treats as interlaced.
+	if !isInterlacedPNG([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00tEXt0000000000000000")) {
+		t.Fatal("expected missing IHDR at offset 12 to conservatively return interlaced=true")
+	}
+
 	// Non-interlaced vs Adam7 interlaced 3000x2400 16-bit RGBA PNG: non-interlaced
 	// fits within 64 MiB, while Adam7 adds the overlapping final pass (~82 MiB).
 	nonInterlacedPNG := makeSyntheticPNG(t, 16, 16)
-	interlacedPNG := append([]byte(nil), nonInterlacedPNG...)
-	interlacedPNG[28] = 1
 	if isInterlacedPNG(nonInterlacedPNG) {
 		t.Fatal("expected stdlib PNG to be non-interlaced")
-	}
-	if !isInterlacedPNG(interlacedPNG) {
-		t.Fatal("expected IHDR interlace=1 PNG to be detected as interlaced")
 	}
 	rgba16Cfg := image.Config{Width: 3000, Height: 2400, ColorModel: color.RGBA64Model}
 	if est := estimatedDecodeBytes(nonInterlacedPNG, "png", rgba16Cfg, 1600, 1280); est > maxSingleDecodeBytes {
 		t.Fatalf("3000x2400 non-interlaced RGBA64 estimate = %d, want <= %d", est, maxSingleDecodeBytes)
 	}
-	if est := estimatedDecodeBytes(interlacedPNG, "png", rgba16Cfg, 1600, 1280); est <= maxSingleDecodeBytes {
+	if est := estimatedDecodeBytes(validAdam7PNG, "png", rgba16Cfg, 1600, 1280); est <= maxSingleDecodeBytes {
 		t.Fatalf("3000x2400 Adam7 RGBA64 estimate = %d, want > %d", est, maxSingleDecodeBytes)
+	}
+
+	// Extreme-width 4,000,000x1 non-interlaced RGBA64 PNG allocates two filter
+	// scanlines (64 MB) on top of the 32 MB image (~96 MB > 64 MiB).
+	widePNGCfg := image.Config{Width: 4_000_000, Height: 1, ColorModel: color.RGBA64Model}
+	if est := estimatedDecodeBytes(nonInterlacedPNG, "png", widePNGCfg, 1600, 1); est <= maxSingleDecodeBytes {
+		t.Fatalf("4,000,000x1 RGBA64 PNG estimate = %d, want > %d (must include 2 filter rows)", est, maxSingleDecodeBytes)
 	}
 }
 
