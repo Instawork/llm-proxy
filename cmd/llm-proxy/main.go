@@ -1969,21 +1969,29 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 		scoreThreshold = 0.4
 	}
 	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, ocrTimeout), deps.redactor, middleware.IDGateConfig{
-		FailClosed:       idGateCfg.FailMode == "closed",
-		MaxBodyBytes:     idGateCfg.MaxBodyBytes,
-		MaxImageBytes:    idGateCfg.MaxImageBytes,
-		ScoreThreshold:   scoreThreshold,
-		EntityTypes:      idGateCfg.EntityTypes,
-		ImageConcurrency: idGateCfg.ImageConcurrency,
-		Logger:           logger,
-		Metrics:          initializeIDGateMetrics(deps.yamlConfig),
-		Recorder:         globalIDGateRecorder,
+		FailClosed:        idGateCfg.FailMode == "closed",
+		MaxBodyBytes:      idGateCfg.MaxBodyBytes,
+		MaxImageBytes:     idGateCfg.MaxImageBytes,
+		ScoreThreshold:    scoreThreshold,
+		EntityTypes:       idGateCfg.EntityTypes,
+		ImageConcurrency:  idGateCfg.ImageConcurrency,
+		MaxInFlight:       idGateCfg.MaxInFlight,
+		ScanTimeout:       ocrTimeout,
+		MaxImageDimension: idGateCfg.MaxImageDimension,
+		CacheTTL:          time.Duration(idGateCfg.CacheTTLSeconds) * time.Second,
+		CacheMaxEntries:   idGateCfg.CacheMaxEntries,
+		Logger:            logger,
+		Metrics:           initializeIDGateMetrics(deps.yamlConfig),
+		Recorder:          globalIDGateRecorder,
 	}))
 	logger.Info(
 		"🪪  Government ID gate middleware installed",
 		"ocr_sidecar_url", ocrURL,
 		"fail_mode", idGateCfg.FailMode,
 		"score_threshold", scoreThreshold,
+		"timeout_ms", ocrTimeout.Milliseconds(),
+		"image_concurrency", idGateCfg.ImageConcurrency,
+		"max_in_flight", idGateCfg.MaxInFlight,
 	)
 }
 

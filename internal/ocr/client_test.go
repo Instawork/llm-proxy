@@ -50,8 +50,108 @@ func TestClientExtractTextErrorStatus(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, time.Second)
+	client.retryBaseDelay = 5 * time.Millisecond
 	_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestClientTransportConfigured(t *testing.T) {
+	client := New("http://ocr.local", 5*time.Second)
+	tr, ok := client.client.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("expected dedicated *http.Transport, got %T", client.client.Transport)
+	}
+	if tr.MaxIdleConnsPerHost < 32 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want >= 32", tr.MaxIdleConnsPerHost)
+	}
+	if tr.MaxIdleConns < 64 {
+		t.Fatalf("MaxIdleConns = %d, want >= 64", tr.MaxIdleConns)
+	}
+}
+
+func TestClientExtractTextRetriesTransient503ThenSucceeds(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("image")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = file.Close()
+
+		if attempts <= 2 {
+			http.Error(w, "OCR busy; try later", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "RECOVERED"})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, 2*time.Second)
+	client.retryBaseDelay = 5 * time.Millisecond
+
+	text, err := client.ExtractText(context.Background(), []byte("fake-image"), "image-0.bin")
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
+	if text != "RECOVERED" {
+		t.Fatalf("text = %q, want RECOVERED", text)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestClientExtractTextDoesNotRetryNonTransientErrors(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError} {
+		var attempts int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts++
+			http.Error(w, "fatal", status)
+		}))
+
+		client := New(srv.URL, 2*time.Second)
+		client.retryBaseDelay = 5 * time.Millisecond
+
+		_, err := client.ExtractText(context.Background(), []byte("fake-image"), "image-0.bin")
+		srv.Close()
+		if err == nil {
+			t.Fatalf("status %d: expected error", status)
+		}
+		if attempts != 1 {
+			t.Fatalf("status %d: attempts = %d, want 1 (no retry)", status, attempts)
+		}
+	}
+}
+
+func TestClientExtractTextRespectsTimeout(t *testing.T) {
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-done:
+		case <-r.Context().Done():
+		}
+	}))
+	defer func() {
+		close(done)
+		srv.Close()
+	}()
+
+	client := New(srv.URL, 60*time.Millisecond)
+	start := time.Now()
+	_, err := client.ExtractText(context.Background(), []byte("fake-image"), "image-0.bin")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %v, expected prompt cancellation", elapsed)
 	}
 }

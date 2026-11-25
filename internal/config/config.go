@@ -301,6 +301,26 @@ type IDGateConfig struct {
 	// reduce multi-image gate latency when the OCR fleet has spare capacity.
 	ImageConcurrency int `yaml:"image_concurrency,omitempty"`
 
+	// MaxInFlight caps concurrent OCR+analyze operations across ALL requests
+	// handled by this proxy instance. 0 leaves cross-request concurrency
+	// unbounded. Set near the OCR fleet's comfortable concurrency sweet spot so
+	// burst traffic queues inside Go (where expired contexts abort before
+	// sending work) instead of overloading the OCR sidecar with zombie calls.
+	MaxInFlight int `yaml:"max_in_flight,omitempty"`
+
+	// MaxImageDimension downscales JPEG/PNG images whose longest edge exceeds
+	// this many pixels before sending them to OCR (never mutating the upstream
+	// LLM request body). 0 -> middleware default of 1600.
+	MaxImageDimension int `yaml:"max_image_dimension,omitempty"`
+
+	// CacheTTLSeconds caches content-addressed (SHA-256) scan verdicts
+	// (clear/blocked only, never errors or raw bytes/text) across turns and
+	// repeated uploads. 0 -> middleware default of 300s.
+	CacheTTLSeconds int `yaml:"cache_ttl_seconds,omitempty"`
+
+	// CacheMaxEntries bounds the in-memory scan verdict cache. 0 -> 1024.
+	CacheMaxEntries int `yaml:"cache_max_entries,omitempty"`
+
 	// Datadog configures the dogstatsd sink for ID gate metrics (llm.id_gate.*).
 	Datadog *DatadogTransportConfig `yaml:"datadog,omitempty"`
 }
@@ -1467,6 +1487,21 @@ func (c *YAMLConfig) validateIDGateConfig() error {
 	}
 	if g.TimeoutMs < 0 {
 		return fmt.Errorf("timeout_ms cannot be negative")
+	}
+	if g.ImageConcurrency < 0 {
+		return fmt.Errorf("image_concurrency cannot be negative")
+	}
+	if g.MaxInFlight < 0 {
+		return fmt.Errorf("max_in_flight cannot be negative")
+	}
+	if g.MaxImageDimension < 0 {
+		return fmt.Errorf("max_image_dimension cannot be negative")
+	}
+	if g.CacheTTLSeconds < 0 {
+		return fmt.Errorf("cache_ttl_seconds cannot be negative")
+	}
+	if g.CacheMaxEntries < 0 {
+		return fmt.Errorf("cache_max_entries cannot be negative")
 	}
 	return nil
 }

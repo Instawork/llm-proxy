@@ -207,10 +207,18 @@ features:
     ocr_sidecar_url: "http://ocr-sidecar:8000"
     fail_mode: "open"
     score_threshold: 0.4
-    # Tight enough to shed load fast (OCR p95 ~0.6 s + sidecar queue), loose
-    # enough to ride out a brief burst before failing open.
-    timeout_ms: 5000
+    # Must exceed sidecar queue timeout (5 s) + inference (~0.6-3 s) + burst
+    # queueing (Fargate 8-vCPU conc=8 p95 ~5.5 s, conc=16 p99 ~10 s) so Go does
+    # not abandon in-flight OCR inferences and collapse goodput under load.
+    timeout_ms: 15000
     image_concurrency: 4
+    # Bound proxy-to-OCR concurrency near the sidecar sweet spot so excess
+    # burst traffic queues in Go (where expired contexts abort cleanly) instead
+    # of piling up zombie inferences on ocr-gate.
+    max_in_flight: 8
+    max_image_dimension: 1600
+    cache_ttl_seconds: 300
+    cache_max_entries: 1024
     datadog:
       host: "localhost"
       port: "8125"
