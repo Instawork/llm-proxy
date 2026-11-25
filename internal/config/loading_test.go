@@ -120,11 +120,53 @@ providers:
     enabled: true
 `)
 
+	writeYAML(t, configDir, "production.yml", `
+features:
+  byo_keys:
+    enabled: false
+`)
+
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "missing-profile")
 	_, err = LoadEnvironmentConfig()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "missing-profile")
+}
+
+func TestLoadEnvironmentConfig_MissingDeployedOverlayErrors(t *testing.T) {
+	tmpRoot := t.TempDir()
+	cwd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(tmpRoot))
+
+	configDir := filepath.Join(tmpRoot, "configs")
+	writeYAML(t, configDir, "base.yml", `
+enabled: true
+features:
+  byo_keys:
+    enabled: true
+providers:
+  openai:
+    enabled: true
+`)
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "")
+	for _, env := range []string{"production", "prod", "staging"} {
+		t.Setenv("ENVIRONMENT", env)
+		_, err := LoadEnvironmentConfig()
+		require.Error(t, err, env)
+		assert.Contains(t, err.Error(), "not found", env)
+	}
+}
+
+func TestLoadAndMergeConfigs_MissingOverlayErrors(t *testing.T) {
+	dir := t.TempDir()
+	base := writeYAML(t, dir, "base.yml", `enabled: true
+providers:
+  openai:
+    enabled: true
+`)
+	_, err := LoadAndMergeConfigs([]string{base, filepath.Join(dir, "prodution.yml")})
+	assert.Error(t, err)
 }
 
 func TestLoadEnvironmentConfig_DefaultEnvIsDev(t *testing.T) {
@@ -417,6 +459,30 @@ func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
 		"standalone production must expose POST /redact")
 	assert.False(t, cfg.Features.BYOKeys.Enabled,
 		"standalone production must reject BYO provider keys")
+}
+
+// TestRealEnvConfigs_DeployedCombinationsLoad covers every ENVIRONMENT and
+// LLM_PROXY_CONFIG_PROFILE pair the ECS task definitions set: the central
+// service, the production and demo Finch sidecars, and the staging2 Finch
+// sidecars.
+func TestRealEnvConfigs_DeployedCombinationsLoad(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	for _, tc := range []struct{ env, profile string }{
+		{"production", ""},
+		{"production", "sidecar"},
+		{"staging", "sidecar"},
+	} {
+		t.Setenv("ENVIRONMENT", tc.env)
+		t.Setenv("LLM_PROXY_CONFIG_PROFILE", tc.profile)
+		_, err := LoadEnvironmentConfig()
+		require.NoError(t, err, "ENVIRONMENT=%s LLM_PROXY_CONFIG_PROFILE=%s", tc.env, tc.profile)
+	}
 }
 
 func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
