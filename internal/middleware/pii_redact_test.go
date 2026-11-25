@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -722,5 +723,49 @@ func TestPIIRedactMiddleware_ScalesAnalyzeTimeoutWithBodySize(t *testing.T) {
 
 	if r.timeout != 16*time.Second {
 		t.Fatalf("analyze timeout = %v, want 16s for 434339-byte body", r.timeout)
+	}
+}
+
+func TestPIIRedactMiddleware_DebugLoggingDoesNotCallGlobalPresidioOrLeakBody(t *testing.T) {
+	var globalCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		globalCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	globalRedactor, err := redact.New(redact.Config{AnalyzerURL: srv.URL})
+	if err != nil {
+		t.Fatalf("redact.New: %v", err)
+	}
+	redact.SetGlobal(globalRedactor)
+	t.Cleanup(func() { redact.SetGlobal(nil) })
+
+	var logBuf bytes.Buffer
+	debugLogger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	const secret = "SECRET_PROMPT_SSN_222-33-4444"
+	cap := &captureHandler{}
+	r := &fakeRedactor{}
+	mw := PIIRedactMiddleware(r, PIIRedactConfig{
+		GlobalEnabled:    true,
+		WirePlaceholders: true,
+		Logger:           debugLogger,
+	})(cap)
+
+	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"` + secret + `"}]}`
+	req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := globalCalls.Load(); got != 0 {
+		t.Fatalf("debug wire logging triggered %d global Presidio calls, want 0", got)
+	}
+	if strings.Contains(logBuf.String(), secret) {
+		t.Fatalf("raw request body leaked into debug logs: %s", logBuf.String())
 	}
 }

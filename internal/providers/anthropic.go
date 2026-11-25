@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/proxylog"
-	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
 
@@ -261,11 +259,9 @@ func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMet
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Operator debug preview, routed through redact.LogPreview so the
-	// raw model output is never persisted to logs in plaintext when
-	// pii_redact is enabled. See internal/redact/log_helper.go.
-	log.Printf("🔍 Debug: Response body preview: %s",
-		redact.LogPreview(context.Background(), string(bodyBytes), 100))
+	// Log byte length only — never log raw response bodies or invoke
+	// Presidio synchronously on the hot response-parsing path.
+	log.Printf("🔍 Debug: Anthropic response body (%d bytes)", len(bodyBytes))
 
 	// Anthropic's OpenAI-compatibility endpoint (/v1/chat/completions)
 	// returns OpenAI-shaped JSON ("choices" + usage.prompt_tokens). Parsing

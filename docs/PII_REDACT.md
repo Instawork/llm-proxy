@@ -161,10 +161,10 @@ adding the feature; the findings are below.
 
 | Location                                                       | Was                                  | Now                                                       |
 | -------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| `internal/providers/openai.go` (ParseResponseMetadata)         | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/providers/openai.go` (ParseResponsesAPIMetadata)     | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/providers/anthropic.go` (ParseResponseMetadata)      | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Routed through `redact.LogPreview`                        |
+| `internal/providers/openai.go` (ParseResponseMetadata)         | Logged 100 raw bytes of every response | Logs byte length only (no Presidio call on hot path)     |
+| `internal/providers/openai.go` (ParseResponsesAPIMetadata)     | Logged 100 raw bytes / `%+v` chunks  | Logs event type and byte length only (no Presidio call)   |
+| `internal/providers/anthropic.go` (ParseResponseMetadata)      | Logged 100 raw bytes of every response | Logs byte length only (no Presidio call on hot path)     |
+| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Routed through `redact.LogPreview` (error path only) |
 
 `redact.LogPreview` returns:
 

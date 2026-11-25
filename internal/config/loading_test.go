@@ -459,3 +459,31 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 	assert.Equal(t, ProviderAuthTaskSigV4, cfg.Providers["bedrock-mantle"].Auth,
 		"sidecar profile must set bedrock-mantle.auth=task_sigv4")
 }
+
+func TestRealEnvConfigs_ProductionPIIRedactLargePayloadHeadroom(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	if _, err := os.Stat(configsDir); err != nil {
+		t.Skipf("configs dir not found (%s) — skipping", configsDir)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "")
+	cfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+
+	pii := cfg.Features.PIIRedact
+	assert.True(t, pii.Enabled)
+	assert.Equal(t, "closed", pii.FailMode)
+	assert.GreaterOrEqual(t, pii.TimeoutMsPer100KB, 6000,
+		"production per-100KiB budget must exceed measured ~3.5-4.5s/100KiB Presidio throughput")
+	assert.Equal(t, 32768, pii.AnalyzeChunkChars,
+		"production should chunk large fields at 32 KiB for lower tail latency and finer cache granularity")
+}

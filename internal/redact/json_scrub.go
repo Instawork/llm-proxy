@@ -34,6 +34,13 @@ func (r *Redactor) scrubJSON(ctx context.Context, text string, reg *Registry, fo
 	var tasks []jsonScrubTask
 	collectJSONScrubTasks(root, nil, &tasks, adapter)
 
+	if len(tasks) > 0 {
+		overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, overallTimeout)
+		defer cancel()
+	}
+
 	ctx = r.prefetchAnalyzeCache(ctx, tasks)
 
 	acc := Result{EntityCounts: map[string]int{}}

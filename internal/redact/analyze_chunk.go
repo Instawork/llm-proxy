@@ -25,98 +25,130 @@ const analyzeChunkOverlapChars = 200
 // wall-clock time by parallelism instead of by the field's total size. See
 // the August 2026 fail_mode "closed" 503 incident on large tool-result
 // bodies.
-func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, error) {
+func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, bool, error) {
 	if r.cfg.ChunkChars <= 0 {
-		return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+		spans, err := r.analyzeLeaf(ctx, text)
+		return spans, false, err
 	}
 
 	runes := []rune(text)
 	if len(runes) <= r.cfg.ChunkChars {
-		return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+		spans, err := r.analyzeLeaf(ctx, text)
+		return spans, false, err
 	}
 
 	chunks := chunkRunes(runes, r.cfg.ChunkChars, analyzeChunkOverlapChars)
 	if len(chunks) <= 1 {
-		return r.analyze(ctx, text, nil, r.cfg.ScoreThreshold)
+		spans, err := r.analyzeLeaf(ctx, text)
+		return spans, false, err
 	}
 
 	// AnalyzeTimeoutFromContext holds the deadline the middleware computed
 	// for this whole request (scaled by total body size). Binding it to an
-	// absolute deadline once, here, means every chunk's analyze() call —
-	// which independently calls AnalyzeTimeoutFromContext again — shares
-	// that one deadline instead of each restarting a fresh full-length
-	// timeout from its own start time. Without this, N sequential waves of
-	// chunks could take up to N times the intended budget.
+	// absolute deadline once, here, means every chunk's analyzeLeaf() call —
+	// which independently reads AnalyzeTimeoutFromContext — shares that one
+	// deadline instead of each restarting a fresh full-length timeout from
+	// its own start time. Without this, N sequential waves of chunks could
+	// take up to N times the intended budget.
 	overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
 	limit := r.analyzeConcurrency()
 	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
 	defer cancel()
 
-	// A fixed pool of workers pulls chunk indexes off jobs, capping goroutine
-	// count at AnalyzeConcurrency. A goroutine-per-chunk design would let a
-	// pathologically small analyze_chunk_chars (e.g. 1) turn a multi-MB field
-	// into millions of goroutines blocked on a semaphore, exhausting memory
-	// before the shared deadline even expires.
-	workers := min(limit, len(chunks))
-
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
 	perChunkSpans := make([][]Span, len(chunks))
 
-	wg.Add(workers)
-	for w := 0; w < workers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				spans, err := r.analyze(ctx, chunks[i].text, nil, r.cfg.ScoreThreshold)
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						cancel()
-					}
-					mu.Unlock()
-					continue
-				}
-				offset := chunks[i].offset
-				rebased := make([]Span, len(spans))
-				for j, s := range spans {
-					s.Start += offset
-					s.End += offset
-					rebased[j] = s
-				}
-				perChunkSpans[i] = rebased
+	// Batch-prefetch per-chunk cache entries so retries or growing-prefix
+	// payloads skip chunks that already succeeded in an earlier wave/attempt.
+	var missing []int
+	if r.analyzeCache != nil {
+		chunkTexts := make([]string, len(chunks))
+		for i := range chunks {
+			chunkTexts[i] = chunks[i].text
+		}
+		hits := r.analyzeCache.GetMulti(ctx, chunkTexts)
+		for i := range chunks {
+			if cached, ok := hits[chunks[i].text]; ok {
+				perChunkSpans[i] = rebaseSpans(cached, chunks[i].offset)
+			} else {
+				missing = append(missing, i)
 			}
-		}()
-	}
-
-feed:
-	for i := range chunks {
-		select {
-		case jobs <- i:
-		case <-ctx.Done():
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			mu.Unlock()
-			break feed
+		}
+	} else {
+		missing = make([]int, len(chunks))
+		for i := range chunks {
+			missing[i] = i
 		}
 	}
-	close(jobs)
 
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	if len(missing) > 0 {
+		// A fixed pool of workers pulls chunk indexes off jobs, capping
+		// goroutine count at AnalyzeConcurrency.
+		workers := min(limit, len(missing))
+
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var firstErr error
+
+		wg.Add(workers)
+		for w := 0; w < workers; w++ {
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					spans, err := r.analyzeLeaf(ctx, chunks[i].text)
+					if err != nil {
+						mu.Lock()
+						if firstErr == nil {
+							firstErr = err
+							cancel()
+						}
+						mu.Unlock()
+						continue
+					}
+					perChunkSpans[i] = rebaseSpans(spans, chunks[i].offset)
+				}
+			}()
+		}
+
+	feed:
+		for _, idx := range missing {
+			select {
+			case jobs <- idx:
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				break feed
+			}
+		}
+		close(jobs)
+
+		wg.Wait()
+		if firstErr != nil {
+			return nil, true, firstErr
+		}
 	}
 
 	var merged []Span
 	for _, spans := range perChunkSpans {
 		merged = append(merged, spans...)
 	}
-	return dedupeOverlapSpans(merged), nil
+	return dedupeOverlapSpans(merged), true, nil
+}
+
+func rebaseSpans(spans []Span, offset int) []Span {
+	if len(spans) == 0 {
+		return nil
+	}
+	rebased := make([]Span, len(spans))
+	for j, s := range spans {
+		s.Start += offset
+		s.End += offset
+		rebased[j] = s
+	}
+	return rebased
 }
 
 // textChunk is a rune-offset view into the text passed to analyzeChunked.
