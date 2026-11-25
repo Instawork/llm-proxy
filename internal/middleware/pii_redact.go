@@ -85,8 +85,13 @@ func MaskKeyID(key string) string {
 	return apikeys.MaskKeyID(key)
 }
 
-// keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key.
+// keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key,
+// or "" when key is empty. Matches the suffix used in masked key IDs without
+// exposing any raw prefix characters.
 func keyIDHashSuffix(key string) string {
+	if key == "" {
+		return ""
+	}
 	return apikeys.CredentialHashSuffix(key)
 }
 

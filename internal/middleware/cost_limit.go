@@ -310,7 +310,7 @@ func enforceReadOnly(
 				return
 			}
 			proxylog.Proxy("costlimit: fleet spend read degraded, enforcing per-instance only provider=%s key_hash=%s limit_cents=%d",
-				prov.GetName(), hashKeyForLog(rec.PK), rec.DailyCostLimit)
+				prov.GetName(), keyIDHashSuffix(rec.PK), rec.DailyCostLimit)
 		}
 		spendCents := int64(math.Ceil(spendUSD * 100))
 		if spendCents >= rec.DailyCostLimit {
@@ -342,7 +342,7 @@ func enforceReadOnly(
 				return
 			}
 			proxylog.Proxy("costlimit: fleet monthly spend read degraded, enforcing per-instance only provider=%s key_hash=%s limit_cents=%d",
-				prov.GetName(), hashKeyForLog(rec.PK), rec.MonthlyCostLimit)
+				prov.GetName(), keyIDHashSuffix(rec.PK), rec.MonthlyCostLimit)
 		}
 		spendCents := int64(math.Ceil(spendUSD * 100))
 		if spendCents >= rec.MonthlyCostLimit {
@@ -358,7 +358,7 @@ func enforceReadOnly(
 func writeCostDegraded(w http.ResponseWriter, prov providers.Provider, rec *apikeys.APIKey, limitCents int64) {
 	w.Header().Set(costLimitReasonHeader, costLimitDegraded)
 	proxylog.Proxy("costlimit: fail-closed (fleet spend read degraded) provider=%s key_hash=%s limit_cents=%d",
-		prov.GetName(), hashKeyForLog(rec.PK), limitCents)
+		prov.GetName(), keyIDHashSuffix(rec.PK), limitCents)
 	proxylog.WriteProxyJSONError(w, http.StatusServiceUnavailable, "cost limit temporarily unverifiable")
 }
 
@@ -366,7 +366,7 @@ func writeCostBlocked(w http.ResponseWriter, prov providers.Provider, rec *apike
 	w.Header().Set(costLimitReasonHeader, reason)
 	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
 	proxylog.Proxy("costlimit: block (reserved) provider=%s key_hash=%s limit_cents=%d reason=%s",
-		prov.GetName(), hashKeyForLog(rec.PK), limitCents, reason)
+		prov.GetName(), keyIDHashSuffix(rec.PK), limitCents, reason)
 	proxylog.WriteProxyJSONError(w, http.StatusPaymentRequired, msg)
 }
 
@@ -375,6 +375,6 @@ func writeCostBlockedWithSpend(w http.ResponseWriter, prov providers.Provider, r
 	w.Header().Set(costLimitCentsHeader, strconv.FormatInt(limitCents, 10))
 	w.Header().Set(costSpendCentsHeader, strconv.FormatInt(spendCents, 10))
 	proxylog.Proxy("costlimit: block provider=%s key_hash=%s spend_cents=%d limit_cents=%d reason=%s",
-		prov.GetName(), hashKeyForLog(rec.PK), spendCents, limitCents, reason)
+		prov.GetName(), keyIDHashSuffix(rec.PK), spendCents, limitCents, reason)
 	proxylog.WriteProxyJSONError(w, http.StatusPaymentRequired, msg)
 }

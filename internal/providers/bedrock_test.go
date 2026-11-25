@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/redact"
@@ -543,44 +545,80 @@ func TestBedrock_ParseStreamingResponse_EmptyBody(t *testing.T) {
 	}
 }
 
-func TestBedrock_ParseStreamingResponse_ExceptionPayloadUsesLogPreview(t *testing.T) {
-	redact.SetGlobal(nil)
+func TestBedrock_ParseStreamingResponse_ExceptionPayloadOmitsBodyAndSkipsPresidio(t *testing.T) {
+	var analyzerCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		analyzerCalls.Add(1)
+		_ = json.NewEncoder(w).Encode([]redact.Span{})
+	}))
+	t.Cleanup(srv.Close)
 
-	b := NewBedrockProxy()
-	var buf bytes.Buffer
-	secretPrompt := "secret prompt mentioning alice@example.com and SSN 123-45-6789"
-	payloadJSON, err := json.Marshal(map[string]string{"message": secretPrompt})
+	r, err := redact.New(redact.Config{AnalyzerURL: srv.URL})
 	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
+		t.Fatalf("redact.New: %v", err)
 	}
-	enc := eventstream.NewEncoder()
-	if err := enc.Encode(&buf, eventstream.Message{
-		Headers: eventstream.Headers{
-			{Name: ":message-type", Value: eventstream.StringValue("exception")},
-			{Name: ":exception-type", Value: eventstream.StringValue("validationException")},
-			{Name: ":event-type", Value: eventstream.StringValue("validationException")},
+	redact.SetGlobal(r)
+	t.Cleanup(func() { redact.SetGlobal(nil) })
+
+	cases := []struct {
+		name    string
+		message string
+	}{
+		{
+			name:    "small JSON exception payload",
+			message: "secret prompt mentioning alice@example.com and SSN 123-45-6789",
 		},
-		Payload: payloadJSON,
-	}); err != nil {
-		t.Fatalf("encode exception event: %v", err)
+		{
+			name:    "large JSON exception payload (>264B)",
+			message: strings.Repeat("padding ", 40) + "alice@example.com SSN 123-45-6789",
+		},
 	}
 
-	var logBuf bytes.Buffer
-	prevOut := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(prevOut)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBedrockProxy()
+			var buf bytes.Buffer
+			payloadJSON, err := json.Marshal(map[string]string{"message": tc.message})
+			if err != nil {
+				t.Fatalf("marshal payload: %v", err)
+			}
+			enc := eventstream.NewEncoder()
+			if err := enc.Encode(&buf, eventstream.Message{
+				Headers: eventstream.Headers{
+					{Name: ":message-type", Value: eventstream.StringValue("exception")},
+					{Name: ":exception-type", Value: eventstream.StringValue("validationException")},
+				},
+				Payload: payloadJSON,
+			}); err != nil {
+				t.Fatalf("encode exception event: %v", err)
+			}
 
-	_, err = b.ParseResponseMetadata(&buf, true)
-	if err != nil {
-		t.Fatalf("ParseResponseMetadata: %v", err)
+			var logBuf bytes.Buffer
+			prevOut := log.Writer()
+			log.SetOutput(&logBuf)
+			defer log.SetOutput(prevOut)
+
+			if _, err := b.ParseResponseMetadata(&buf, true); err != nil {
+				t.Fatalf("ParseResponseMetadata: %v", err)
+			}
+
+			logged := logBuf.String()
+			for _, forbidden := range []string{tc.message, "alice@example.com", "123-45-6789"} {
+				if strings.Contains(logged, forbidden) {
+					t.Errorf("Bedrock exception log leaked raw payload substring %q: %s", forbidden, logged)
+				}
+			}
+			wantBytes := fmt.Sprintf("payload_bytes=%d", len(payloadJSON))
+			for _, want := range []string{"message_type=exception", "exception_type=validationException", wantBytes} {
+				if !strings.Contains(logged, want) {
+					t.Errorf("expected Bedrock exception log to contain %q; got: %s", want, logged)
+				}
+			}
+		})
 	}
 
-	logged := logBuf.String()
-	if strings.Contains(logged, secretPrompt) || strings.Contains(logged, "alice@example.com") || strings.Contains(logged, "123-45-6789") {
-		t.Errorf("Bedrock exception log leaked raw payload: %s", logged)
-	}
-	if !strings.Contains(logged, "pii_redact disabled") {
-		t.Errorf("expected Bedrock exception log to route through redact.LogPreview; got: %s", logged)
+	if got := analyzerCalls.Load(); got != 0 {
+		t.Errorf("Bedrock exception logging must not call Presidio analyzer; got %d call(s)", got)
 	}
 }
 

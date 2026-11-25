@@ -552,26 +552,26 @@ func TestRateLimitingMiddleware_ExtractedModelFlowsIntoScopeKeys(t *testing.T) {
 	}
 }
 
-// ─── hashKeyForLog / hashUserIDForLog helpers ──────────────────────────
+// ─── keyIDHashSuffix / hashUserIDForLog helpers ────────────────────────
 
 func TestHashHelpersForLogging(t *testing.T) {
-	if got := hashKeyForLog(""); got != "" {
-		t.Errorf("hashKeyForLog(\"\") = %q, want empty", got)
+	if got := keyIDHashSuffix(""); got != "" {
+		t.Errorf("keyIDHashSuffix(\"\") = %q, want empty", got)
 	}
 	if got := hashUserIDForLog(""); got != "" {
 		t.Errorf("hashUserIDForLog(\"\") = %q, want empty", got)
 	}
 
 	rawKey := "sk-iw-secretprefix1234567890"
-	keyHash := hashKeyForLog(rawKey)
+	keyHash := keyIDHashSuffix(rawKey)
 	if len(keyHash) != 8 {
-		t.Errorf("hashKeyForLog length = %d, want 8 (%q)", len(keyHash), keyHash)
+		t.Errorf("keyIDHashSuffix length = %d, want 8 (%q)", len(keyHash), keyHash)
 	}
 	if strings.Contains(keyHash, "sk-iw") || strings.Contains(keyHash, "secret") {
-		t.Errorf("hashKeyForLog leaked key prefix: %q", keyHash)
+		t.Errorf("keyIDHashSuffix leaked key prefix: %q", keyHash)
 	}
-	if hashKeyForLog(rawKey) != keyHash || hashKeyForLog(rawKey+"x") == keyHash {
-		t.Errorf("hashKeyForLog should be deterministic and distinct per key")
+	if keyIDHashSuffix(rawKey) != keyHash || keyIDHashSuffix(rawKey+"x") == keyHash {
+		t.Errorf("keyIDHashSuffix should be deterministic and distinct per key")
 	}
 
 	rawUser := "alice@example.com"
@@ -723,7 +723,7 @@ func TestRateLimitingMiddleware_LogsHashedUserAndKeyNotRaw(t *testing.T) {
 	if !strings.Contains(logOut, "user_hash="+hashUserIDForLog(rawUser)) {
 		t.Errorf("expected hashed user_hash in logs; got:\n%s", logOut)
 	}
-	if !strings.Contains(logOut, "key_hash="+hashKeyForLog(rawKey)) {
+	if !strings.Contains(logOut, "key_hash="+keyIDHashSuffix(rawKey)) {
 		t.Errorf("expected hashed key_hash in logs; got:\n%s", logOut)
 	}
 }
