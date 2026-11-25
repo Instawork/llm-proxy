@@ -1,11 +1,15 @@
 package cost
 
 import (
+	"bytes"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +115,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		ct.SetSyncMode()
 		mock := &mockTransport{}
 		ct.AddTransport(mock)
-		for _, p := range []string{"anthropic", "gemini", "openai"} {
+		for _, p := range []string{"anthropic", "bedrock", "bedrock-mantle", "gemini", "openai"} {
 			ct.SetPricingForModel(p, "m", &ModelPricing{
 				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
 			})
@@ -129,7 +133,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		}
 	}
 
-	for _, provider := range []string{"anthropic", "gemini", "openai"} {
+	for _, provider := range []string{"anthropic", "bedrock", "bedrock-mantle", "gemini", "openai"} {
 		t.Run(provider+" prices cache tokens from configured rates", func(t *testing.T) {
 			ct, mock := newTracker()
 			require.NoError(t, ct.TrackRequest(meta(provider), "u", "127.0.0.1", "/v1/messages", ""))
@@ -401,4 +405,175 @@ func TestCalculateCostWithCache_MatchesTrackedCost(t *testing.T) {
 	_, _, writes, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", 0, 0, 200_000, 0)
 	require.NoError(t, err)
 	assert.InDelta(t, 1.25, writes, 1e-9)
+}
+
+func TestCostTracker_TrackRequest_BedrockInvokeStreamCacheMetrics(t *testing.T) {
+	encodeChunk := func(t *testing.T, buf *bytes.Buffer, native any) {
+		t.Helper()
+		raw, err := json.Marshal(native)
+		require.NoError(t, err)
+		payload, err := json.Marshal(map[string]any{"bytes": raw})
+		require.NoError(t, err)
+		msg := eventstream.Message{
+			Headers: eventstream.Headers{
+				{Name: ":message-type", Value: eventstream.StringValue("event")},
+				{Name: ":event-type", Value: eventstream.StringValue("chunk")},
+			},
+			Payload: payload,
+		}
+		require.NoError(t, eventstream.NewEncoder().Encode(buf, msg))
+	}
+
+	// Load actual configs/base.yml so pricing stays in sync with production config.
+	cfg, err := config.LoadAndMergeConfigs([]string{"../../configs/base.yml"})
+	require.NoError(t, err)
+
+	loadBedrockModel := func(ct *CostTracker, modelName string) {
+		t.Helper()
+		mc, ok := cfg.Providers["bedrock"].Models[modelName]
+		require.True(t, ok, "missing bedrock/%s in configs/base.yml", modelName)
+		src, ok := mc.Pricing.(*config.ModelPricing)
+		require.True(t, ok)
+		mp := &ModelPricing{Tiers: make([]PricingTier, len(src.Tiers))}
+		for i, tier := range src.Tiers {
+			mp.Tiers[i] = PricingTier{
+				Threshold:  tier.Threshold,
+				Input:      tier.Input,
+				Output:     tier.Output,
+				CacheRead:  tier.CacheRead,
+				CacheWrite: tier.CacheWrite,
+			}
+		}
+		ct.SetPricingForModel("bedrock", modelName, mp)
+	}
+
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+	loadBedrockModel(ct, "us.anthropic.claude-haiku-5-5")
+	loadBedrockModel(ct, "us.openai.gpt-6.1-terra")
+
+	bp := providers.NewBedrockProxy()
+
+	t.Run("short tier meters Anthropic message_stop cache read and write distinctly", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           12_500,
+				"outputTokenCount":          12_500,
+				"cacheReadInputTokenCount":  50_000,
+				"cacheWriteInputTokenCount": 25_000,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.anthropic.claude-haiku-5-5"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.anthropic.claude-haiku-5-5/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		assert.Equal(t, 12_500, rec.InputTokens)
+		assert.Equal(t, 12_500, rec.OutputTokens)
+		assert.Equal(t, 50_000, rec.CacheReadInputTokens)
+		assert.Equal(t, 25_000, rec.CacheCreationInputTokens)
+		assert.Equal(t, 100_000, rec.TotalTokens)
+
+		// Prompt = 87.5k <= 100k (short tier: 0.11 / 0.55 / 0.011 / 0.1375):
+		// raw input: 0.0125*0.11 + 0.05*0.011 + 0.025*0.1375 = 0.0053625 -> 0.0054
+		// raw output: 0.0125*0.55 = 0.006875 -> 0.0069
+		// raw total: 0.0122375 -> 0.0123
+		assert.InDelta(t, 0.0054, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.0069, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.0123, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
+
+	t.Run("long tier selected when Anthropic message_stop cache tokens push prompt over 100K", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           12_500,
+				"outputTokenCount":          12_500,
+				"cacheReadInputTokenCount":  75_000,
+				"cacheWriteInputTokenCount": 25_000,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.anthropic.claude-haiku-5-5"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.anthropic.claude-haiku-5-5/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		// Prompt = 112.5k > 100k (long tier: 0.55 / 2.75 / 0.055 / 0.6875):
+		// raw input: 0.0125*0.55 + 0.075*0.055 + 0.025*0.6875 = 0.0281875 -> 0.0282
+		// raw output: 0.0125*2.75 = 0.034375 -> 0.0344
+		// raw total: 0.0625625 -> 0.0626
+		assert.InDelta(t, 0.0282, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.0344, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.0626, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
+
+	t.Run("non-Anthropic OpenAI invoke stream does not double-bill or escalate tier from invocationMetrics cache fields", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           125_000,
+				"outputTokenCount":          31_250,
+				"cacheReadInputTokenCount":  150_000,
+				"cacheWriteInputTokenCount": 20_000,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.openai.gpt-6.1-terra"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.openai.gpt-6.1-terra/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		assert.Equal(t, 125_000, rec.InputTokens)
+		assert.Equal(t, 31_250, rec.OutputTokens)
+		assert.Zero(t, rec.CacheReadInputTokens)
+		assert.Zero(t, rec.CacheCreationInputTokens)
+		assert.Equal(t, 156_250, rec.TotalTokens)
+
+		// Prompt stays at 125k <= 272k (short tier: 1.10 / 5.50), not escalated to >272k:
+		// raw input: 0.125*1.10 = 0.1375
+		// raw output: 0.03125*5.50 = 0.171875 -> 0.1719
+		// raw total: 0.309375 -> 0.3094
+		assert.InDelta(t, 0.1375, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.1719, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.3094, rec.TotalCost, 1e-9)
+	})
 }

@@ -821,9 +821,13 @@ providers:
           - threshold: 272_000
             input: 1.00
             output: 5.00
+            cache_read: 0.05
+            cache_write: 1.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.00
             output: 7.50
+            cache_read: 0.10
+            cache_write: 2.50
       "gpt-6-luna":
         enabled: true
         aliases: []
@@ -927,6 +931,7 @@ providers:
         pricing:
           input: 12.50
           output: 75.00
+          cache_read: 1.25
       # Codex line: gpt-5.3-codex (Responses API) was deprecated 2026-10-01 with
       # a 2027-04-01 shutdown; the gpt-5/5.1/5.2-codex snapshots shut down
       # 2026-07-23.
@@ -1037,6 +1042,7 @@ providers:
         pricing:
           input: 1.25
           output: 10.00
+          cache_read: 0.125
 
   # ---------------------------------------------------------------------------
   # ANTHROPIC PROVIDER
@@ -1795,7 +1801,9 @@ providers:
       # must name a geo (us.*, in.*) or global.* cross-region inference profile.
       # Geo CRIS bills OpenAI list +10% (same as Mantle In-Region); Global CRIS
       # bills OpenAI list, so the two profiles are separate entries. Both carry
-      # the 5.6-generation >272K tier (2x input / 1.5x output, whole request).
+      # the 5.6-generation >272K tier (2x input / 1.5x output, whole request)
+      # and cache_read / cache_write rates from the AWS Bedrock OpenAI model
+      # cards (docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-*.html).
       # Sol/Terra/Luna GA 2026-07-13, Astra 2026-09-08 (audit-09-14-2026).
       "us.openai.gpt-5.6-sol":
         enabled: true
@@ -1811,9 +1819,13 @@ providers:
           - threshold: 272_000
             input: 4.40
             output: 22.00
+            cache_read: 0.44
+            cache_write: 5.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 8.80
             output: 33.00
+            cache_read: 0.88
+            cache_write: 11.00
       "global.openai.gpt-5.6-sol":
         enabled: true
         aliases: []
@@ -1828,9 +1840,13 @@ providers:
           - threshold: 272_000
             input: 4.00
             output: 20.00
+            cache_read: 0.40
+            cache_write: 5.00
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 8.00
             output: 30.00
+            cache_read: 0.80
+            cache_write: 10.00
       # in.* is the India geo profile; same geo price as us.*.
       "us.openai.gpt-5.6-terra":
         enabled: true
@@ -1846,9 +1862,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 13.20
+            cache_read: 0.22
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 19.80
+            cache_read: 0.44
+            cache_write: 5.50
       "global.openai.gpt-5.6-terra":
         enabled: true
         aliases: []
@@ -1863,9 +1883,13 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 12.00
+            cache_read: 0.20
+            cache_write: 2.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 18.00
+            cache_read: 0.40
+            cache_write: 5.00
       "us.openai.gpt-5.6-luna":
         enabled: true
         aliases: ["in.openai.gpt-5.6-luna"]
@@ -1880,9 +1904,13 @@ providers:
           - threshold: 272_000
             input: 0.22
             output: 1.32
+            cache_read: 0.022
+            cache_write: 0.275
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.44
             output: 1.98
+            cache_read: 0.044
+            cache_write: 0.55
       "global.openai.gpt-5.6-luna":
         enabled: true
         aliases: []
@@ -1897,9 +1925,13 @@ providers:
           - threshold: 272_000
             input: 0.20
             output: 1.20
+            cache_read: 0.02
+            cache_write: 0.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.40
             output: 1.80
+            cache_read: 0.04
+            cache_write: 0.50
       "us.openai.gpt-6-astra":
         enabled: true
         aliases: []
@@ -1914,9 +1946,13 @@ providers:
           - threshold: 272_000
             input: 11.00
             output: 55.00
+            cache_read: 1.10
+            cache_write: 13.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 22.00
             output: 82.50
+            cache_read: 2.20
+            cache_write: 27.50
       "global.openai.gpt-6-astra":
         enabled: true
         aliases: []
@@ -1931,9 +1967,13 @@ providers:
           - threshold: 272_000
             input: 10.00
             output: 50.00
+            cache_read: 1.00
+            cache_write: 12.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 20.00
             output: 75.00
+            cache_read: 2.00
+            cache_write: 25.00
       # GPT-6 Sol / GPT-6 Luna on Bedrock (launch 2026-09-22, audit-09-28-2026).
       # Runtime accepts only the us./global. profiles (no in-Region id); the AWS
       # card prices US Geo CRIS at OpenAI list +10% and Global CRIS at list, with
@@ -1952,9 +1992,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 11.00
+            cache_read: 0.22
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+            cache_read: 0.44
+            cache_write: 5.50
       "global.openai.gpt-6-sol":
         enabled: true
         aliases: []
@@ -1969,9 +2013,13 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 10.00
+            cache_read: 0.20
+            cache_write: 2.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+            cache_read: 0.40
+            cache_write: 5.00
       # GPT-6.1 Sol (Bedrock launch 2026-09-29, audit-10-05-2026): same card
       # shape as gpt-6-sol — us./global. profiles only, US Geo CRIS at list +10%,
       # Global CRIS at list, >272K tier at 2x input / 1.5x output.
@@ -1989,9 +2037,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 11.00
+            cache_read: 0.11
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+            cache_read: 0.22
+            cache_write: 5.50
       "global.openai.gpt-6.1-sol":
         enabled: true
         aliases: []
@@ -2006,9 +2058,13 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 10.00
+            cache_read: 0.10
+            cache_write: 2.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+            cache_read: 0.20
+            cache_write: 5.00
       # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): same card
       # shape as gpt-6.1-sol — us./global. profiles only (no in-Region on
       # bedrock-runtime), US Geo CRIS at list +10%, Global CRIS at list, >272K
@@ -2027,9 +2083,13 @@ providers:
           - threshold: 272_000
             input: 1.10
             output: 5.50
+            cache_read: 0.055
+            cache_write: 1.375
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.20
             output: 8.25
+            cache_read: 0.11
+            cache_write: 2.75
       "global.openai.gpt-6.1-terra":
         enabled: true
         aliases: []
@@ -2044,9 +2104,13 @@ providers:
           - threshold: 272_000
             input: 1.00
             output: 5.00
+            cache_read: 0.05
+            cache_write: 1.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.00
             output: 7.50
+            cache_read: 0.10
+            cache_write: 2.50
       "us.openai.gpt-6-luna":
         enabled: true
         aliases: []
@@ -2061,9 +2125,13 @@ providers:
           - threshold: 272_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.22
             output: 0.825
+            cache_read: 0.022
+            cache_write: 0.275
       "global.openai.gpt-6-luna":
         enabled: true
         aliases: []
@@ -2078,9 +2146,13 @@ providers:
           - threshold: 272_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.20
             output: 0.75
+            cache_read: 0.02
+            cache_write: 0.25
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK MANTLE PROVIDER (OpenAI-compatible API + task-role SigV4)
@@ -2100,6 +2172,9 @@ providers:
       # model cards (audit-09-14-2026) publish a 1M context window and a >272K
       # input tier at 2x input / 1.5x output for the whole request, so the
       # In-Region price is encoded as two tiers like the native gpt-5.4+ entries.
+      # The GPT-5.4 and GPT-5.5 cards publish "—" (no additional fee) for cache
+      # writes, so only cache_read is set here; GPT-5.6+ cards publish 1.25x
+      # input for cache writes.
       "openai.gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-bedrock"]
@@ -2108,9 +2183,11 @@ providers:
           - threshold: 272_000
             input: 2.75
             output: 16.50
+            cache_read: 0.275
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 5.50
             output: 24.75
+            cache_read: 0.55
       "openai.gpt-5.5":
         enabled: true
         aliases: ["gpt-5.5-bedrock"]
@@ -2119,9 +2196,11 @@ providers:
           - threshold: 272_000
             input: 5.50
             output: 33.00
+            cache_read: 0.55
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 11.00
             output: 49.50
+            cache_read: 1.10
       # GPT-5.6 Sol/Terra/Luna on Bedrock (GA 2026-07-13) and GPT-6 Astra
       # (2026-09-08), bare ids for the Mantle In-Region endpoint. The us./in./
       # global. inference-profile ids are bedrock-runtime ids and live in the
@@ -2136,9 +2215,13 @@ providers:
           - threshold: 272_000
             input: 4.40
             output: 22.00
+            cache_read: 0.44
+            cache_write: 5.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 8.80
             output: 33.00
+            cache_read: 0.88
+            cache_write: 11.00
       "openai.gpt-5.6-terra":
         enabled: true
         aliases: ["gpt-5.6-terra-bedrock"]
@@ -2146,9 +2229,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 13.20
+            cache_read: 0.22
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 19.80
+            cache_read: 0.44
+            cache_write: 5.50
       "openai.gpt-5.6-luna":
         enabled: true
         aliases: ["gpt-5.6-luna-bedrock"]
@@ -2156,9 +2243,13 @@ providers:
           - threshold: 272_000
             input: 0.22
             output: 1.32
+            cache_read: 0.022
+            cache_write: 0.275
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.44
             output: 1.98
+            cache_read: 0.044
+            cache_write: 0.55
       "openai.gpt-6-astra":
         enabled: true
         aliases: ["gpt-6-astra-bedrock"]
@@ -2166,9 +2257,13 @@ providers:
           - threshold: 272_000
             input: 11.00
             output: 55.00
+            cache_read: 1.10
+            cache_write: 13.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 22.00
             output: 82.50
+            cache_read: 2.20
+            cache_write: 27.50
       # GPT-6 Sol / Luna (Bedrock launch 2026-09-22, audit-09-28-2026): Mantle
       # in-Region = OpenAI list +10%, >272K tier at 2x input / 1.5x output.
       "openai.gpt-6-sol":
@@ -2178,9 +2273,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 11.00
+            cache_read: 0.22
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+            cache_read: 0.44
+            cache_write: 5.50
       "openai.gpt-6-luna":
         enabled: true
         aliases: ["gpt-6-luna-bedrock"]
@@ -2188,9 +2287,13 @@ providers:
           - threshold: 272_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.22
             output: 0.825
+            cache_read: 0.022
+            cache_write: 0.275
       # GPT-6.1 Sol (Bedrock launch 2026-09-29, audit-10-05-2026): Mantle
       # in-Region (us-east-1) = OpenAI list +10%, >272K tier at 2x / 1.5x.
       "openai.gpt-6.1-sol":
@@ -2200,9 +2303,13 @@ providers:
           - threshold: 272_000
             input: 2.20
             output: 11.00
+            cache_read: 0.11
+            cache_write: 2.75
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+            cache_read: 0.22
+            cache_write: 5.50
       # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): Mantle
       # in-Region (us-east-1/2, us-west-2) = OpenAI list +10%, >272K tier at
       # 2x / 1.5x.
@@ -2213,9 +2320,13 @@ providers:
           - threshold: 272_000
             input: 1.10
             output: 5.50
+            cache_read: 0.055
+            cache_write: 1.375
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.20
             output: 8.25
+            cache_read: 0.11
+            cache_write: 2.75
       # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
       # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
       # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
@@ -2227,6 +2338,8 @@ providers:
         pricing:
           input: 13.75
           output: 82.50
+          cache_read: 1.375
+          cache_write: 17.1875
       # Daybreak Blue: GPT-5.6 Sol (Bedrock launch 2026-08-12, same Trusted
       # Access for Cyber gate as Daybreak Red). Mantle-only, us-east-2, no
       # geo/global inference profiles. First audited 2026-10-26 (card verified
@@ -2239,9 +2352,13 @@ providers:
           - threshold: 272_000
             input: 4.40
             output: 22.00
+            cache_read: 0.44
+            cache_write: 5.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 8.80
             output: 33.00
+            cache_read: 0.88
+            cache_write: 11.00
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
       # Legacy on AWS since 2026-10-08 (EOL 2027-04-08), mirroring the bedrock
