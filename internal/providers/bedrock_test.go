@@ -496,6 +496,165 @@ func TestBedrock_ParseInvokeChunk_PartialInvocationMetricsPreservesPriorCounts(t
 	}
 }
 
+func TestBedrock_ParseInvokeChunk_InvocationMetricsCacheTokens(t *testing.T) {
+	t.Run("metrics-only stream extracts cache read and write counts", func(t *testing.T) {
+		b := NewBedrockProxy()
+		var buf bytes.Buffer
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"choices": []map[string]any{{"delta": map[string]string{"content": "hello"}}},
+		})
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           1_200,
+				"outputTokenCount":          350,
+				"cacheReadInputTokenCount":  4_800,
+				"cacheWriteInputTokenCount": 600,
+				"invocationLatency":         420,
+				"firstByteLatency":          55,
+			},
+		})
+
+		md, err := b.ParseResponseMetadata(&buf, true)
+		if err != nil {
+			t.Fatalf("ParseResponseMetadata: %v", err)
+		}
+		if md.InputTokens != 1_200 || md.OutputTokens != 350 {
+			t.Errorf("in/out: got %d/%d want 1200/350", md.InputTokens, md.OutputTokens)
+		}
+		if md.CacheReadInputTokens != 4_800 || md.CacheCreationInputTokens != 600 {
+			t.Errorf("cache read/write: got %d/%d want 4800/600", md.CacheReadInputTokens, md.CacheCreationInputTokens)
+		}
+		wantTotal := 1_200 + 350 + 4_800 + 600
+		if md.TotalTokens != wantTotal {
+			t.Errorf("total tokens: got %d want %d", md.TotalTokens, wantTotal)
+		}
+	})
+
+	t.Run("metrics cache counts override message_start counts when present", func(t *testing.T) {
+		b := NewBedrockProxy()
+		var buf bytes.Buffer
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id": "msg_1",
+				"usage": map[string]int{
+					"input_tokens":                100,
+					"output_tokens":               1,
+					"cache_read_input_tokens":     200,
+					"cache_creation_input_tokens": 50,
+				},
+			},
+		})
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           100,
+				"outputTokenCount":          40,
+				"cacheReadInputTokenCount":  250,
+				"cacheWriteInputTokenCount": 75,
+			},
+		})
+
+		md, err := b.ParseResponseMetadata(&buf, true)
+		if err != nil {
+			t.Fatalf("ParseResponseMetadata: %v", err)
+		}
+		if md.CacheReadInputTokens != 250 || md.CacheCreationInputTokens != 75 {
+			t.Errorf("cache read/write: got %d/%d want 250/75", md.CacheReadInputTokens, md.CacheCreationInputTokens)
+		}
+		wantTotal := 100 + 40 + 250 + 75
+		if md.TotalTokens != wantTotal {
+			t.Errorf("total tokens: got %d want %d", md.TotalTokens, wantTotal)
+		}
+	})
+
+	t.Run("partial metrics without cache fields preserves message_start cache counts", func(t *testing.T) {
+		b := NewBedrockProxy()
+		var buf bytes.Buffer
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id": "msg_1",
+				"usage": map[string]int{
+					"input_tokens":                100,
+					"output_tokens":               1,
+					"cache_read_input_tokens":     500,
+					"cache_creation_input_tokens": 120,
+				},
+			},
+		})
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":  100,
+				"outputTokenCount": 25,
+			},
+		})
+
+		md, err := b.ParseResponseMetadata(&buf, true)
+		if err != nil {
+			t.Fatalf("ParseResponseMetadata: %v", err)
+		}
+		if md.CacheReadInputTokens != 500 || md.CacheCreationInputTokens != 120 {
+			t.Errorf("cache counts wiped by partial metrics: got read=%d write=%d want 500/120",
+				md.CacheReadInputTokens, md.CacheCreationInputTokens)
+		}
+		wantTotal := 100 + 25 + 500 + 120
+		if md.TotalTokens != wantTotal {
+			t.Errorf("total tokens: got %d want %d", md.TotalTokens, wantTotal)
+		}
+	})
+
+	t.Run("cache-only invocation metrics still counts as usage", func(t *testing.T) {
+		b := NewBedrockProxy()
+		var buf bytes.Buffer
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"cacheReadInputTokenCount":  1_000,
+				"cacheWriteInputTokenCount": 250,
+			},
+		})
+
+		md, err := b.ParseResponseMetadata(&buf, true)
+		if err != nil {
+			t.Fatalf("ParseResponseMetadata: %v", err)
+		}
+		if md.CacheReadInputTokens != 1_000 || md.CacheCreationInputTokens != 250 {
+			t.Errorf("cache read/write: got %d/%d want 1000/250", md.CacheReadInputTokens, md.CacheCreationInputTokens)
+		}
+		if md.TotalTokens != 1_250 {
+			t.Errorf("total tokens: got %d want 1250", md.TotalTokens)
+		}
+	})
+
+	t.Run("cache-only message_start still counts as usage", func(t *testing.T) {
+		b := NewBedrockProxy()
+		var buf bytes.Buffer
+		encodeBedrockInvokeChunk(t, &buf, map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id": "msg_1",
+				"usage": map[string]int{
+					"cache_read_input_tokens":     800,
+					"cache_creation_input_tokens": 100,
+				},
+			},
+		})
+
+		md, err := b.ParseResponseMetadata(&buf, true)
+		if err != nil {
+			t.Fatalf("ParseResponseMetadata: %v", err)
+		}
+		if md.CacheReadInputTokens != 800 || md.CacheCreationInputTokens != 100 {
+			t.Errorf("cache read/write: got %d/%d want 800/100", md.CacheReadInputTokens, md.CacheCreationInputTokens)
+		}
+		if md.TotalTokens != 900 {
+			t.Errorf("total tokens: got %d want 900", md.TotalTokens)
+		}
+	})
+}
+
 func TestSigV4HeaderSigned(t *testing.T) {
 	auth := "AWS4-HMAC-SHA256 Credential=AKIA/20260724/us-east-1/bedrock/aws4_request, " +
 		"SignedHeaders=accept-encoding;content-type;host;x-amz-date, Signature=abc123"

@@ -455,8 +455,10 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 		InvocationMetrics *struct {
-			InputTokenCount  int `json:"inputTokenCount"`
-			OutputTokenCount int `json:"outputTokenCount"`
+			InputTokenCount           int `json:"inputTokenCount"`
+			OutputTokenCount          int `json:"outputTokenCount"`
+			CacheReadInputTokenCount  int `json:"cacheReadInputTokenCount"`
+			CacheWriteInputTokenCount int `json:"cacheWriteInputTokenCount"`
 		} `json:"amazon-bedrock-invocationMetrics"`
 	}
 	if json.Unmarshal(wrapper.Bytes, &inner) != nil {
@@ -474,9 +476,14 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 			if u.OutputTokens > 0 {
 				metadata.OutputTokens = u.OutputTokens
 			}
-			metadata.CacheReadInputTokens = u.CacheReadInputTokens
-			metadata.CacheCreationInputTokens = u.CacheCreationInputTokens
-			sawUsage = u.InputTokens > 0 || u.OutputTokens > 0
+			if u.CacheReadInputTokens > 0 {
+				metadata.CacheReadInputTokens = u.CacheReadInputTokens
+			}
+			if u.CacheCreationInputTokens > 0 {
+				metadata.CacheCreationInputTokens = u.CacheCreationInputTokens
+			}
+			sawUsage = u.InputTokens > 0 || u.OutputTokens > 0 ||
+				u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0
 		}
 	case "message_delta":
 		if inner.Delta != nil && inner.Delta.StopReason != "" {
@@ -487,15 +494,23 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 			sawUsage = true
 		}
 	}
-	if m := inner.InvocationMetrics; m != nil && (m.InputTokenCount > 0 || m.OutputTokenCount > 0) {
+	if m := inner.InvocationMetrics; m != nil &&
+		(m.InputTokenCount > 0 || m.OutputTokenCount > 0 ||
+			m.CacheReadInputTokenCount > 0 || m.CacheWriteInputTokenCount > 0) {
 		// Overwrite each field independently. Bedrock may emit a metrics
-		// block with only one side populated; blindly assigning both would
-		// zero out a previously-correct count from message_start/delta.
+		// block with only a subset of fields populated; blindly assigning all
+		// fields would zero out previously-correct counts from message_start/delta.
 		if m.InputTokenCount > 0 {
 			metadata.InputTokens = m.InputTokenCount
 		}
 		if m.OutputTokenCount > 0 {
 			metadata.OutputTokens = m.OutputTokenCount
+		}
+		if m.CacheReadInputTokenCount > 0 {
+			metadata.CacheReadInputTokens = m.CacheReadInputTokenCount
+		}
+		if m.CacheWriteInputTokenCount > 0 {
+			metadata.CacheCreationInputTokens = m.CacheWriteInputTokenCount
 		}
 		metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
 		sawUsage = true

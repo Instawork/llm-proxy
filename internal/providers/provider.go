@@ -33,8 +33,8 @@ import (
 //	OutputTokens                Y       Y          Y       Y
 //	TotalTokens                 Y       Y          Y       Y
 //	ThoughtTokens               -       extended*  Y       extended*
-//	CacheReadInputTokens        Y       Y          Y       Y (Converse)
-//	CacheCreationInputTokens    -       Y          -       Y (Converse)
+//	CacheReadInputTokens        Y       Y          Y       Y
+//	CacheCreationInputTokens    Y*      Y          -       Y
 //	FinishReason                Y       Y          Y       Y
 //	RequestID                   Y       Y          Y       -
 //

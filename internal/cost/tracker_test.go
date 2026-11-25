@@ -1,11 +1,14 @@
 package cost
 
 import (
+	"bytes"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +114,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		ct.SetSyncMode()
 		mock := &mockTransport{}
 		ct.AddTransport(mock)
-		for _, p := range []string{"anthropic", "gemini", "openai"} {
+		for _, p := range []string{"anthropic", "bedrock", "bedrock-mantle", "gemini", "openai"} {
 			ct.SetPricingForModel(p, "m", &ModelPricing{
 				Tiers: []PricingTier{{Threshold: 0, Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
 			})
@@ -129,7 +132,7 @@ func TestCostTracker_TrackRequest_CacheTokensInInputCost(t *testing.T) {
 		}
 	}
 
-	for _, provider := range []string{"anthropic", "gemini", "openai"} {
+	for _, provider := range []string{"anthropic", "bedrock", "bedrock-mantle", "gemini", "openai"} {
 		t.Run(provider+" prices cache tokens from configured rates", func(t *testing.T) {
 			ct, mock := newTracker()
 			require.NoError(t, ct.TrackRequest(meta(provider), "u", "127.0.0.1", "/v1/messages", ""))
@@ -401,4 +404,118 @@ func TestCalculateCostWithCache_MatchesTrackedCost(t *testing.T) {
 	_, _, writes, err := ct.CalculateCostWithCache("openai", "gpt-5.6-sol", 0, 0, 200_000, 0)
 	require.NoError(t, err)
 	assert.InDelta(t, 1.25, writes, 1e-9)
+}
+
+func TestCostTracker_TrackRequest_BedrockInvokeStreamCacheMetrics(t *testing.T) {
+	encodeChunk := func(t *testing.T, buf *bytes.Buffer, native any) {
+		t.Helper()
+		raw, err := json.Marshal(native)
+		require.NoError(t, err)
+		payload, err := json.Marshal(map[string]any{"bytes": raw})
+		require.NoError(t, err)
+		msg := eventstream.Message{
+			Headers: eventstream.Headers{
+				{Name: ":message-type", Value: eventstream.StringValue("event")},
+				{Name: ":event-type", Value: eventstream.StringValue("chunk")},
+			},
+			Payload: payload,
+		}
+		require.NoError(t, eventstream.NewEncoder().Encode(buf, msg))
+	}
+
+	ct := NewCostTracker()
+	ct.SetSyncMode()
+	mock := &mockTransport{}
+	ct.AddTransport(mock)
+	// Mirrors us.openai.gpt-6.1-terra in configs/base.yml.
+	ct.SetPricingForModel("bedrock", "us.openai.gpt-6.1-terra", &ModelPricing{
+		Tiers: []PricingTier{
+			{Threshold: 272_000, Input: 1.10, Output: 5.50, CacheRead: 0.055, CacheWrite: 1.375},
+			{Threshold: 0, Input: 2.20, Output: 8.25, CacheRead: 0.11, CacheWrite: 2.75},
+		},
+	})
+
+	bp := providers.NewBedrockProxy()
+
+	t.Run("short tier meters cache read and write from invocationMetrics", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           125_000,
+				"outputTokenCount":          31_250,
+				"cacheReadInputTokenCount":  62_500,
+				"cacheWriteInputTokenCount": 62_500,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.openai.gpt-6.1-terra"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.openai.gpt-6.1-terra/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		assert.Equal(t, 125_000, rec.InputTokens)
+		assert.Equal(t, 31_250, rec.OutputTokens)
+		assert.Equal(t, 62_500, rec.CacheReadInputTokens)
+		assert.Equal(t, 62_500, rec.CacheCreationInputTokens)
+		assert.Equal(t, 281_250, rec.TotalTokens)
+
+		// Prompt = 250k <= 272k (short tier):
+		// raw input: 0.125 * 1.10 + 0.0625 * 0.055 + 0.0625 * 1.375 = 0.226875 -> 0.2269
+		// raw output: 0.03125 * 5.50 = 0.171875 -> 0.1719
+		// raw total: 0.39875 -> 0.3988
+		assert.InDelta(t, 0.2269, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.1719, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.3988, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
+
+	t.Run("long tier selected when cache read/write pushes prompt over 272K", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           125_000,
+				"outputTokenCount":          31_250,
+				"cacheReadInputTokenCount":  125_000,
+				"cacheWriteInputTokenCount": 62_500,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.openai.gpt-6.1-terra"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.openai.gpt-6.1-terra/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		// Prompt = 312.5k > 272k (long tier):
+		// raw input: 0.125 * 2.20 + 0.125 * 0.11 + 0.0625 * 2.75 = 0.460625 -> 0.4607
+		// raw output: 0.03125 * 8.25 = 0.2578125 -> 0.2579
+		// raw total: 0.7184375 -> 0.7185
+		assert.InDelta(t, 0.4607, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.2579, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.7185, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
 }

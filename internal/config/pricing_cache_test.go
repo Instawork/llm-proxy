@@ -164,3 +164,84 @@ func TestBaseConfig_ClaudeEntriesHaveCachePrices(t *testing.T) {
 	}
 	assert.NotZero(t, checked)
 }
+
+func TestBaseConfig_OpenAIAndBedrockGPTEntriesHaveCachePrices(t *testing.T) {
+	cfg, err := LoadAndMergeConfigs([]string{"../../configs/base.yml"})
+	require.NoError(t, err)
+
+	// Native OpenAI models backfilled in base.yml.
+	t.Run("native openai backfilled models", func(t *testing.T) {
+		mp, ok := cfg.Providers["openai"].Models["gpt-6.1-terra"].Pricing.(*ModelPricing)
+		require.True(t, ok)
+		require.Len(t, mp.Tiers, 2)
+		assert.Equal(t, PricingTier{Threshold: 272_000, Input: 1.00, Output: 5.00, CacheRead: 0.05, CacheWrite: 1.25}, mp.Tiers[0])
+		assert.Equal(t, PricingTier{Threshold: 0, Input: 2.00, Output: 7.50, CacheRead: 0.10, CacheWrite: 2.50}, mp.Tiers[1])
+
+		cyber, ok := cfg.Providers["openai"].Models["gpt-5.5-cyber"].Pricing.(*ModelPricing)
+		require.True(t, ok)
+		require.Len(t, cyber.Tiers, 1)
+		assert.Equal(t, PricingTier{Threshold: 0, Input: 12.50, Output: 75.00, CacheRead: 1.25}, cyber.Tiers[0])
+
+		search, ok := cfg.Providers["openai"].Models["gpt-5-search-api"].Pricing.(*ModelPricing)
+		require.True(t, ok)
+		require.Len(t, search.Tiers, 1)
+		assert.Equal(t, PricingTier{Threshold: 0, Input: 1.25, Output: 10.00, CacheRead: 0.125}, search.Tiers[0])
+	})
+
+	// Bedrock openai.gpt-* models: every tier has cache_read and cache_write,
+	// and Geo (us.*) is exactly 1.1x Global (global.*).
+	t.Run("bedrock openai.gpt-* models", func(t *testing.T) {
+		checked := 0
+		models := cfg.Providers["bedrock"].Models
+		for name, model := range models {
+			if !strings.Contains(name, "openai.gpt-") {
+				continue
+			}
+			mp, ok := model.Pricing.(*ModelPricing)
+			require.True(t, ok, "bedrock/%s pricing not parsed", name)
+			for i, tier := range mp.Tiers {
+				checked++
+				assert.Positive(t, tier.CacheRead, "bedrock/%s tier[%d] cache_read", name, i)
+				assert.Positive(t, tier.CacheWrite, "bedrock/%s tier[%d] cache_write", name, i)
+			}
+			if suffix, isUS := strings.CutPrefix(name, "us."); isUS {
+				globalModel, exists := models["global."+suffix]
+				require.True(t, exists, "missing global pair for bedrock/%s", name)
+				globalMP, ok := globalModel.Pricing.(*ModelPricing)
+				require.True(t, ok)
+				require.Len(t, mp.Tiers, len(globalMP.Tiers))
+				for i := range mp.Tiers {
+					assert.InDelta(t, globalMP.Tiers[i].Input*1.1, mp.Tiers[i].Input, 1e-9, "%s tier[%d] input", name, i)
+					assert.InDelta(t, globalMP.Tiers[i].Output*1.1, mp.Tiers[i].Output, 1e-9, "%s tier[%d] output", name, i)
+					assert.InDelta(t, globalMP.Tiers[i].CacheRead*1.1, mp.Tiers[i].CacheRead, 1e-9, "%s tier[%d] cache_read", name, i)
+					assert.InDelta(t, globalMP.Tiers[i].CacheWrite*1.1, mp.Tiers[i].CacheWrite, 1e-9, "%s tier[%d] cache_write", name, i)
+				}
+			}
+		}
+		assert.NotZero(t, checked)
+	})
+
+	// Bedrock Mantle openai.gpt-* models: every tier has cache_read; all except
+	// gpt-5.4 and gpt-5.5 (no published write price on AWS cards) also have cache_write.
+	t.Run("bedrock-mantle openai.gpt-* models", func(t *testing.T) {
+		checked := 0
+		noWrite := map[string]bool{"openai.gpt-5.4": true, "openai.gpt-5.5": true}
+		for name, model := range cfg.Providers["bedrock-mantle"].Models {
+			if !strings.HasPrefix(name, "openai.gpt-") {
+				continue
+			}
+			mp, ok := model.Pricing.(*ModelPricing)
+			require.True(t, ok, "bedrock-mantle/%s pricing not parsed", name)
+			for i, tier := range mp.Tiers {
+				checked++
+				assert.Positive(t, tier.CacheRead, "bedrock-mantle/%s tier[%d] cache_read", name, i)
+				if noWrite[name] {
+					assert.Zero(t, tier.CacheWrite, "bedrock-mantle/%s tier[%d] cache_write", name, i)
+				} else {
+					assert.Positive(t, tier.CacheWrite, "bedrock-mantle/%s tier[%d] cache_write", name, i)
+				}
+			}
+		}
+		assert.NotZero(t, checked)
+	})
+}
