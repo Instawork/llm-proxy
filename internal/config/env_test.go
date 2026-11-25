@@ -43,6 +43,26 @@ func TestLoadRuntimeEnv_ReadsAllKnobs(t *testing.T) {
 	}, env)
 }
 
+func TestLoadRuntimeEnv_OCRSidecarTokenRotationList(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "single token", raw: "secret-1", want: "secret-1"},
+		{name: "trimmed single token", raw: "  secret-1 \n", want: "secret-1"},
+		{name: "rotation list picks first", raw: "new-tok,old-tok", want: "new-tok"},
+		{name: "rotation list skips leading empty entries", raw: " , , new-tok , old-tok ", want: "new-tok"},
+		{name: "only commas and spaces", raw: " , , ", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OCR_SIDECAR_TOKEN", tc.raw)
+			assert.Equal(t, tc.want, LoadRuntimeEnv().OCRSidecarToken)
+		})
+	}
+}
+
 func TestRuntimeEnv_IsExplicitLocalDev(t *testing.T) {
 	cases := []struct {
 		name string

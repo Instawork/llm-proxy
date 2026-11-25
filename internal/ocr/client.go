@@ -13,9 +13,24 @@ import (
 )
 
 // ErrUnauthorized is returned when the OCR sidecar rejects X-OCR-Token
-// (HTTP 401 or 403). Callers treat this as a misconfiguration rather than
-// a transient upstream failure.
+// (HTTP 401 or 403) or when the configured token is invalid for an HTTP header.
+// Callers treat this as a misconfiguration rather than a transient upstream
+// failure.
 var ErrUnauthorized = errors.New("ocr: unauthorized")
+
+// IsValidToken reports whether token is non-empty and free of ASCII control
+// characters (such as CR or LF) that net/http rejects before sending a request.
+func IsValidToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		if token[i] < 0x20 || token[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 
 type Client struct {
 	baseURL string
@@ -49,6 +64,9 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (string, error) {
 	if len(img) == 0 {
 		return "", fmt.Errorf("ocr: empty image")
+	}
+	if !IsValidToken(c.token) {
+		return "", fmt.Errorf("%w: invalid X-OCR-Token value", ErrUnauthorized)
 	}
 	if filename == "" {
 		filename = "image.bin"

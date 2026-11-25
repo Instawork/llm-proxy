@@ -82,6 +82,26 @@ func TestClientExtractTextAuthErrors(t *testing.T) {
 	}
 }
 
+func TestClientExtractTextInvalidTokenFailsUnauthorized(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "OK"})
+	}))
+	defer srv.Close()
+
+	for _, badToken := range []string{"", "tok\nen", "tok\ren", "tok\x00en", "tok\x7fen"} {
+		client := New(srv.URL, badToken, time.Second)
+		_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
+		if !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("token %q: err = %v, want ErrUnauthorized", badToken, err)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("server called %d times for invalid tokens; expected 0", hits.Load())
+	}
+}
+
 func TestClientExtractTextDoesNotFollowRedirects(t *testing.T) {
 	var targetHits atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

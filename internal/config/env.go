@@ -69,8 +69,21 @@ func LoadRuntimeEnv() RuntimeEnv {
 		AdminPublicBaseURL:  os.Getenv("ADMIN_PUBLIC_BASE_URL"),
 		PresidioAnalyzerURL: os.Getenv("PRESIDIO_ANALYZER_URL"),
 		OCRSidecarURL:       os.Getenv("OCR_SIDECAR_URL"),
-		OCRSidecarToken:     strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")),
+		OCRSidecarToken:     firstCSVToken(os.Getenv("OCR_SIDECAR_TOKEN")),
 	}
+}
+
+// firstCSVToken returns the first non-empty trimmed entry from a
+// comma-separated value, allowing shared OCR_SIDECAR_TOKEN rotation lists
+// (e.g. "new,old") to supply one outbound token for the proxy while the
+// sidecar accepts every member.
+func firstCSVToken(raw string) string {
+	for part := range strings.SplitSeq(raw, ",") {
+		if tok := strings.TrimSpace(part); tok != "" {
+			return tok
+		}
+	}
+	return ""
 }
 
 // IsExplicitLocalDev reports whether the process is opted in to degraded

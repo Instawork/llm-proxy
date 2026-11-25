@@ -525,11 +525,12 @@ func apiKeyStoreFailureIsFatal(yc *config.YAMLConfig, store providers.APIKeyStor
 	return yc.Features.APIKeyManagement.Enabled && store == nil && !localDev
 }
 
-// idGateTokenMissingIsFatal reports whether a missing OCR_SIDECAR_TOKEN must
-// abort startup. Outside explicit local dev, an enabled ID gate without a
-// token would fail every image scan against an authenticated sidecar.
+// idGateTokenMissingIsFatal reports whether a missing or invalid
+// OCR_SIDECAR_TOKEN must abort startup. Outside explicit local dev, an enabled
+// ID gate without a valid header-safe token would fail every image scan against
+// an authenticated sidecar.
 func idGateTokenMissingIsFatal(yc *config.YAMLConfig, env config.RuntimeEnv) bool {
-	return yc.Features.IDGate.Enabled && env.OCRSidecarToken == "" && !env.IsExplicitLocalDev()
+	return yc.Features.IDGate.Enabled && !ocr.IsValidToken(env.OCRSidecarToken) && !env.IsExplicitLocalDev()
 }
 
 func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
@@ -1579,13 +1580,13 @@ func runServer(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip
 // the process here, before a listener is ever bound.
 func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) *serverDeps {
 	if idGateTokenMissingIsFatal(yamlConfig, env) {
-		logProxyError("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls",
+		logProxyError("id_gate enabled but OCR_SIDECAR_TOKEN is missing or contains control characters; the OCR sidecar rejects unauthenticated calls",
 			"environment", env.Environment,
-			"hint", "set OCR_SIDECAR_TOKEN (or LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 in local dev)")
+			"hint", "set a valid OCR_SIDECAR_TOKEN (or LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 in local dev)")
 		os.Exit(1)
 	}
-	if yamlConfig.Features.IDGate.Enabled && env.OCRSidecarToken == "" {
-		logProxyWarn("id_gate enabled without OCR_SIDECAR_TOKEN in local dev; calls to an authenticated OCR sidecar will fail closed with 503",
+	if yamlConfig.Features.IDGate.Enabled && !ocr.IsValidToken(env.OCRSidecarToken) {
+		logProxyWarn("id_gate enabled without a valid OCR_SIDECAR_TOKEN in local dev; calls to an authenticated OCR sidecar will fail closed with 503",
 			"environment", env.Environment)
 	}
 

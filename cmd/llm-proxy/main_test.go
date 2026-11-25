@@ -321,6 +321,8 @@ func TestIDGateTokenMissingIsFatal(t *testing.T) {
 		{name: "enabled, missing token, dev", enabled: true, env: config.RuntimeEnv{Environment: "dev"}, want: false},
 		{name: "enabled, missing token, local", enabled: true, env: config.RuntimeEnv{Environment: "local"}, want: false},
 		{name: "enabled, missing token, empty env", enabled: true, env: config.RuntimeEnv{}, want: false},
+		{name: "enabled, token with newline, production", enabled: true, env: config.RuntimeEnv{Environment: "production", OCRSidecarToken: "bad\ntoken"}, want: true},
+		{name: "enabled, token with newline, dev", enabled: true, env: config.RuntimeEnv{Environment: "dev", OCRSidecarToken: "bad\ntoken"}, want: false},
 		{name: "enabled, token present, production", enabled: true, env: config.RuntimeEnv{Environment: "production", OCRSidecarToken: "secret"}, want: false},
 		{name: "disabled, missing token, production", enabled: false, env: config.RuntimeEnv{Environment: "production"}, want: false},
 	}

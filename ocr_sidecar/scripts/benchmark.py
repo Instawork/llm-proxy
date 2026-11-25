@@ -14,6 +14,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({msg})", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
+def _ocr_token_header() -> bytes:
+    raw = os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token")
+    for part in raw.split(","):
+        tok = part.strip()
+        if tok:
+            return tok.encode("utf-8")
+    return b""
+
+
 def _post_image(url: str, image_path: Path, timeout: float) -> tuple[float, int, str]:
     boundary = "----ocrbench"
     data = image_path.read_bytes()
@@ -27,13 +44,13 @@ def _post_image(url: str, image_path: Path, timeout: float) -> tuple[float, int,
         data=body,
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token"),
+            "X-OCR-Token": _ocr_token_header(),
         },
         method="POST",
     )
     start = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             payload = resp.read().decode()
             elapsed_ms = (time.perf_counter() - start) * 1000
             return elapsed_ms, resp.status, payload

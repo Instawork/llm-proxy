@@ -62,7 +62,7 @@ if [ -z "$TOKEN_TRIMMED" ]; then
     exit 1
 fi
 if [ -n "${OCR_MAX_IMAGE_BYTES:-}" ]; then
-    MAX_BYTES_TRIMMED="$(printf '%s' "$OCR_MAX_IMAGE_BYTES" | tr -d '[:space:]')"
+    MAX_BYTES_TRIMMED="$(printf '%s' "$OCR_MAX_IMAGE_BYTES" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     if [ -n "$MAX_BYTES_TRIMMED" ]; then
         case "$MAX_BYTES_TRIMMED" in
             *[!0-9]*|0)

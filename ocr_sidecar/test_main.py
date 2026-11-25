@@ -395,6 +395,7 @@ def test_extract_text_succeeds_for_valid_authenticated_upload(monkeypatch: pytes
         ({"OCR_SIDECAR_TOKEN": "  ,  "}, "OCR_SIDECAR_TOKEN is required"),
         ({"OCR_SIDECAR_TOKEN": "secret", "OCR_MAX_IMAGE_BYTES": "0"}, "OCR_MAX_IMAGE_BYTES must be positive"),
         ({"OCR_SIDECAR_TOKEN": "secret", "OCR_MAX_IMAGE_BYTES": "-5"}, "OCR_MAX_IMAGE_BYTES must be positive"),
+        ({"OCR_SIDECAR_TOKEN": "secret", "OCR_MAX_IMAGE_BYTES": "1 0"}, "OCR_MAX_IMAGE_BYTES must be positive"),
         ({"OCR_SIDECAR_TOKEN": "secret", "OCR_MAX_IMAGE_BYTES": "abc"}, "OCR_MAX_IMAGE_BYTES must be positive"),
     ],
 )

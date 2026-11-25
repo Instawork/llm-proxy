@@ -17,6 +17,23 @@ GOV_ENTITIES = ["US_PASSPORT", "US_DRIVER_LICENSE"]
 SCORE_THRESHOLD = float(os.getenv("ID_GATE_SCORE_THRESHOLD", "0.4"))
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({msg})", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
+def _ocr_token_header() -> bytes:
+    raw = os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token")
+    for part in raw.split(","):
+        tok = part.strip()
+        if tok:
+            return tok.encode("utf-8")
+    return b""
+
+
 def _post_multipart(url: str, field: str, filename: str, data: bytes) -> dict:
     boundary = "----validate"
     body = (
@@ -29,11 +46,11 @@ def _post_multipart(url: str, field: str, filename: str, data: bytes) -> dict:
         data=body,
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token"),
+            "X-OCR-Token": _ocr_token_header(),
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with _OPENER.open(req, timeout=120) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -99,8 +116,7 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")
-        print(f"HTTP error {exc.code} from {exc.url}: {body}", file=sys.stderr)
+        print(f"HTTP error {exc.code} ({exc.reason}) from {exc.url}", file=sys.stderr)
         raise SystemExit(2) from exc
     except urllib.error.URLError as exc:
         print(f"connection error: {exc}", file=sys.stderr)
