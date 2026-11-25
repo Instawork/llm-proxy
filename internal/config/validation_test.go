@@ -329,6 +329,33 @@ func TestValidate_IDGate(t *testing.T) {
 	c.Features.PIIRedact.AnalyzerURL = "http://presidio:3000"
 	c.Features.IDGate.FailMode = "panic"
 	require.Error(t, c.Validate())
+
+	c.Features.IDGate.FailMode = "open"
+	c.Features.IDGate.QueueTimeoutMs = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.QueueTimeoutMs = 5000
+
+	c.Features.IDGate.ImageConcurrency = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.ImageConcurrency = 4
+
+	c.Features.IDGate.MaxInFlight = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.MaxInFlight = 6
+
+	negTTL := -1
+	c.Features.IDGate.CacheTTLSeconds = &negTTL
+	require.Error(t, c.Validate())
+	zeroTTL := 0
+	c.Features.IDGate.CacheTTLSeconds = &zeroTTL
+	require.NoError(t, c.Validate())
+	posTTL := 300
+	c.Features.IDGate.CacheTTLSeconds = &posTTL
+
+	c.Features.IDGate.CacheMaxEntries = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.CacheMaxEntries = 1024
+	require.NoError(t, c.Validate())
 }
 
 func TestValidatePIIRedactConfig_ProductionDisallowsLegacyWireMode(t *testing.T) {

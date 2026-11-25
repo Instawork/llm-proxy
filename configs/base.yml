@@ -126,6 +126,15 @@ features:
     # 0 -> default of 4. The OCR fleet bounds its own per-process load, so this
     # mainly cuts latency for multi-image requests.
     image_concurrency: 0
+    # Process-wide cap on concurrent OCR calls across all requests (0 = unbounded).
+    max_in_flight: 0
+    # Proxy-side wait cap (ms) for per-request/global admission slots before
+    # dispatching to OCR. Kept short and separate from timeout_ms so overload
+    # fast-fails in Go instead of stacking queue + OCR + Presidio budgets.
+    queue_timeout_ms: 5000
+    # Content-addressed (SHA-256) verdict cache TTL in seconds (0 = disabled).
+    cache_ttl_seconds: 300
+    cache_max_entries: 1024
   # ---------------------------------------------------------------------------
   # Standalone POST /redact (Presidio one-way markers for hooks/tools)
   # ---------------------------------------------------------------------------

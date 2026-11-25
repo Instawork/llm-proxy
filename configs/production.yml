@@ -207,10 +207,32 @@ features:
     ocr_sidecar_url: "http://ocr-sidecar:8000"
     fail_mode: "open"
     score_threshold: 0.4
-    # Tight enough to shed load fast (OCR p95 ~0.6 s + sidecar queue), loose
-    # enough to ride out a brief burst before failing open.
-    timeout_ms: 5000
+    # Must exceed sidecar queue timeout (5 s) + inference (~0.6-3 s) + burst
+    # queueing (Fargate 8-vCPU conc=8 p95 ~5.5 s, conc=16 p99 ~10 s) so Go does
+    # not abandon in-flight OCR inferences and collapse goodput under load.
+    timeout_ms: 15000
+    # Bound proxy-side admission queue wait separately from timeout_ms +
+    # pii_redact.timeout_ms (8 s): single-image worst case is 5 s queue + 15 s
+    # OCR + 8 s analyze = 28 s (multi-image queue capped at 15 s -> 38 s max).
+    queue_timeout_ms: 5000
     image_concurrency: 4
+    # Per-proxy-task cap on concurrent proxy-to-OCR+analyze calls.
+    # Production ECS sizing (Instawork/infrastructure):
+    #   - llm-proxy: 1 Fargate task steady-state (2 briefly during rolling deploys)
+    #   - ocr-gate:  2-12 Fargate tasks x 1 worker (8 vCPU, ocr_intra_threads=8,
+    #                ~700 ms p50/image, 5 s sidecar queue timeout)
+    # At 6 per proxy task: 1 proxy task sends <=3 calls/task to 2 baseline
+    # ocr-gate tasks (~2.1 s, saturating CPU enough to trigger ECS autoscaling)
+    # and 2 proxy tasks during a rolling deploy send <=6 calls/task (~4.2 s,
+    # still under ocr-gate's 5 s queue timeout). Lower this if llm-proxy
+    # desired_count scales above 2.
+    # Excess burst traffic queues in Go (bounded by queue_timeout_ms) where
+    # expired contexts abort before dispatching to ocr-gate; it does not cancel
+    # an inference already running in the sidecar executor if a dispatched call
+    # times out.
+    # Verdict caching (cache_ttl_seconds: 300, cache_max_entries: 1024) is
+    # inherited from base.yml; set cache_ttl_seconds: 0 here to disable.
+    max_in_flight: 6
     datadog:
       host: "localhost"
       port: "8125"
