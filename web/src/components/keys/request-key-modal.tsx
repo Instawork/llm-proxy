@@ -6,6 +6,7 @@ import { ProviderBadge, ProviderSelect } from "../ui/page-header";
 import { useToast } from "../ui/toast";
 import { dailyCostLimitFormDollars } from "../../lib/format";
 import { keyDetailPath } from "../../lib/key-routes";
+import { keyRequestStatusBadgeClass } from "../../lib/key-request-meta";
 import { KEY_REQUEST_NAME_MAX, slugifyKeyName } from "../../lib/key-request-name";
 import { useCreateKeyRequest, useMe, useMyKeyRequests } from "../../hooks/queries";
 import type { KeyRequestRecord, Provider } from "../../types";
@@ -20,13 +21,7 @@ function formatTime(value?: string): string {
 }
 
 function StatusBadge({ status }: { status: KeyRequestRecord["status"] }) {
-  const cls =
-    status === "pending"
-      ? "badge badge-warning"
-      : status === "approved"
-        ? "badge badge-success"
-        : "badge badge-error";
-  return <span className={cls}>{status}</span>;
+  return <span className={keyRequestStatusBadgeClass(status)}>{status}</span>;
 }
 
 type RequestKeyModalProps = {

@@ -157,7 +157,7 @@ func (h *handler) handleReviewKeyRequest(w http.ResponseWriter, r *http.Request)
 	action := strings.TrimSpace(strings.ToLower(body.Action))
 	switch action {
 	case "approve":
-		h.handleApproveKeyRequest(w, r, id, actor.Email)
+		h.handleApproveKeyRequest(w, r, id, actor.Email, body)
 	case "reject":
 		h.handleRejectKeyRequest(w, r, id, actor.Email, body.RejectionReason)
 	default:
@@ -165,7 +165,27 @@ func (h *handler) handleReviewKeyRequest(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request, id, reviewerEmail string) {
+func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request, id, reviewerEmail string, body ReviewKeyRequestBody) {
+	pending, err := h.deps.APIKeyStore.GetKeyRequest(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, apikeys.ErrKeyRequestNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "key request not found"})
+			return
+		}
+		h.deps.Logger.Error("admin: load key request for approval failed", "request_id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to approve key request"})
+		return
+	}
+	if strings.EqualFold(pending.RequesterEmail, strings.TrimSpace(reviewerEmail)) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you cannot approve your own key request"})
+		return
+	}
+	dailyLimit, monthlyLimit, err := h.keyRequestApprovalLimits(pending, body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	claimed, err := h.deps.APIKeyStore.BeginKeyRequestApproval(r.Context(), id, reviewerEmail)
 	if err != nil {
 		if errors.Is(err, apikeys.ErrKeyRequestNotFound) {
@@ -181,49 +201,45 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	dailyLimit := claimed.DailyCostLimit
-	if dailyLimit <= 0 {
-		dailyLimit = h.keyRequestDefaultDailyCostCents()
-	}
-	if err := h.validateKeyRequestDailyCostLimit(dailyLimit); err != nil {
-		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
 	name := claimed.Name
 	if name == "" {
 		// Pending requests created before key names existed have none; derive one.
 		name = apikeys.SlugifyKeyName(claimed.Description)
 	}
 
+	source := claimed.Source
+	if source == "" {
+		source = "dashboard"
+	}
 	createReq := CreateKeyRequest{
-		Provider:       claimed.Provider,
-		AutoProvision:  true,
-		Description:    name,
-		DailyCostLimit: dailyLimit,
-		RequesterEmail: claimed.RequesterEmail,
+		Provider:         claimed.Provider,
+		AutoProvision:    true,
+		Description:      name,
+		DailyCostLimit:   dailyLimit,
+		MonthlyCostLimit: monthlyLimit,
+		Tags:             map[string]string{"key_request": claimed.ID(), "source": source},
+		RequesterEmail:   claimed.RequesterEmail,
 	}
 
 	key, err := h.createOrgKey(r, adminusers.RoleAdmin, createReq)
 	if err != nil {
-		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id)
+		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id, reviewerEmail)
 		if httpErr, ok := errors.AsType[*orgKeyError](err); ok {
 			writeJSON(w, httpErr.status, map[string]string{"error": httpErr.message})
 			return
 		}
-		h.deps.Logger.Error("admin: approve key request failed", "error", err)
+		h.deps.Logger.Error("admin: approve key request failed", "request_id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create key"})
 		return
 	}
 
-	updated, err := h.deps.APIKeyStore.CompleteKeyRequestApproval(r.Context(), id, key.PK)
+	updated, err := h.deps.APIKeyStore.CompleteKeyRequestApproval(r.Context(), id, key.PK, reviewerEmail)
 	if err != nil {
 		if delErr := h.deps.APIKeyStore.DeleteKey(r.Context(), key.PK); delErr != nil {
-			h.deps.Logger.Error("admin: cleanup orphaned key after approval failed", "error", delErr, "key", key.PK)
+			h.deps.Logger.Error("admin: cleanup orphaned key after approval failed", "request_id", id, "error", delErr, "key", apikeys.RedactKey(key.PK))
 		}
-		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id)
-		h.deps.Logger.Error("admin: complete key request approval failed", "error", err, "key", key.PK)
+		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id, reviewerEmail)
+		h.deps.Logger.Error("admin: complete key request approval failed", "request_id", id, "error", err, "key", apikeys.RedactKey(key.PK))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to finalize key request approval"})
 		return
 	}
@@ -249,6 +265,35 @@ func (h *handler) handleRejectKeyRequest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, keyRequestToResponse(updated))
+}
+
+// keyRequestApprovalLimits returns the cost limits an approval provisions:
+// the requested ones, unless the reviewer overrides them in the review body.
+// A daily limit of 0 means the key-request default; a monthly limit of 0
+// means no monthly cap.
+func (h *handler) keyRequestApprovalLimits(req *apikeys.KeyRequest, body ReviewKeyRequestBody) (daily, monthly int64, err error) {
+	daily = req.DailyCostLimit
+	if body.DailyCostLimit != nil {
+		if err := h.validateKeyRequestDailyCostLimit(*body.DailyCostLimit); err != nil {
+			return 0, 0, err
+		}
+		daily = *body.DailyCostLimit
+	}
+	if daily <= 0 {
+		daily = h.keyRequestDefaultDailyCostCents()
+	}
+	if err := h.validateKeyRequestDailyCostLimit(daily); err != nil {
+		return 0, 0, err
+	}
+
+	monthly = req.MonthlyCostLimit
+	if body.MonthlyCostLimit != nil {
+		monthly = *body.MonthlyCostLimit
+	}
+	if err := validateKeyRequestMonthlyCostLimit(monthly); err != nil {
+		return 0, 0, err
+	}
+	return daily, monthly, nil
 }
 
 type orgKeyError struct {

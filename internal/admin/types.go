@@ -70,6 +70,12 @@ type KeyRequestResponse struct {
 	ReviewedAt      *time.Time `json:"reviewed_at,omitempty"`
 	CreatedKey      string     `json:"created_key,omitempty"`
 	RejectionReason string     `json:"rejection_reason,omitempty"`
+	// Source is empty for dashboard requests, else the integration caller id.
+	Source            string `json:"source,omitempty"`
+	ExternalTicketID  string `json:"external_ticket_id,omitempty"`
+	ExternalTicketURL string `json:"external_ticket_url,omitempty"`
+	Justification     string `json:"justification,omitempty"`
+	MonthlyCostLimit  int64  `json:"monthly_cost_limit,omitempty"`
 }
 
 // CreateKeyRequestBody submits a new org key request.
@@ -84,23 +90,32 @@ type CreateKeyRequestBody struct {
 type ReviewKeyRequestBody struct {
 	Action          string `json:"action"`
 	RejectionReason string `json:"rejection_reason,omitempty"`
+	// DailyCostLimit and MonthlyCostLimit, when set on approve, replace the
+	// requested limits on the created key.
+	DailyCostLimit   *int64 `json:"daily_cost_limit,omitempty"`
+	MonthlyCostLimit *int64 `json:"monthly_cost_limit,omitempty"`
 }
 
 func keyRequestToResponse(req *apikeys.KeyRequest) KeyRequestResponse {
 	return KeyRequestResponse{
-		ID:              req.ID(),
-		RequesterEmail:  req.RequesterEmail,
-		Provider:        req.Provider,
-		Name:            req.Name,
-		Description:     req.Description,
-		DailyCostLimit:  req.DailyCostLimit,
-		Status:          req.Status,
-		CreatedAt:       req.CreatedAt,
-		UpdatedAt:       req.UpdatedAt,
-		ReviewedBy:      req.ReviewedBy,
-		ReviewedAt:      req.ReviewedAt,
-		CreatedKey:      req.CreatedKey,
-		RejectionReason: req.RejectionReason,
+		ID:                req.ID(),
+		RequesterEmail:    req.RequesterEmail,
+		Provider:          req.Provider,
+		Name:              req.Name,
+		Description:       req.Description,
+		DailyCostLimit:    req.DailyCostLimit,
+		Status:            req.Status,
+		CreatedAt:         req.CreatedAt,
+		UpdatedAt:         req.UpdatedAt,
+		ReviewedBy:        req.ReviewedBy,
+		ReviewedAt:        req.ReviewedAt,
+		CreatedKey:        req.CreatedKey,
+		RejectionReason:   req.RejectionReason,
+		Source:            req.Source,
+		ExternalTicketID:  req.ExternalTicketID,
+		ExternalTicketURL: req.ExternalTicketURL,
+		Justification:     req.Justification,
+		MonthlyCostLimit:  req.MonthlyCostLimit,
 	}
 }
 
