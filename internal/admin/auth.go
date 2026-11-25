@@ -96,12 +96,17 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		Secure:   secureCookie,
 	}
 
+	publicBaseURL := strings.TrimSpace(adminCfg.PublicBaseURL)
+	if publicBaseURL == "" {
+		publicBaseURL = strings.TrimSpace(config.LoadRuntimeEnv().AdminPublicBaseURL)
+	}
+
 	auth := &authenticator{
 		sessionStore:      sessionStore,
 		allowedDomain:     allowedDomain,
 		devBypass:         adminCfg.DevBypassLogin,
 		devFrontendOrigin: adminCfg.DevCORSOrigin,
-		publicBaseURL:     strings.TrimRight(adminCfg.PublicBaseURL, "/"),
+		publicBaseURL:     strings.TrimRight(publicBaseURL, "/"),
 		userStore:         userStore,
 		editorLimits:      adminCfg.EditorLimits,
 		viewerLimits:      adminCfg.ViewerLimits,

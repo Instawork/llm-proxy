@@ -212,6 +212,30 @@ func TestNewAuthenticator_AllowedDomainHonorsEnvOverride(t *testing.T) {
 	assert.False(t, auth.isAllowedUser("alice@example.com", "example.com"))
 }
 
+func TestNewAuthenticator_PublicBaseURLHonorsEnvFallback(t *testing.T) {
+	t.Setenv("ADMIN_PUBLIC_BASE_URL", "https://llm.example.com/")
+	auth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
+		DevBypassLogin: true,
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "https://llm.example.com", auth.publicBaseURL)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/auth/login", nil)
+	req.Host = "internal-proxy:9002"
+	shareURL := "https://llm.example.com/admin/share/11111111-2222-3333-4444-555555555555"
+	ok, target := auth.sanitizeRedirectForRequest(shareURL, req)
+	assert.True(t, ok)
+	assert.Equal(t, shareURL, target)
+
+	// YAML public_base_url takes precedence over ADMIN_PUBLIC_BASE_URL (matching handlers.publicBaseURL).
+	yamlAuth, err := newAuthenticator(testLogger(), config.AdminDashboardConfig{
+		DevBypassLogin: true,
+		PublicBaseURL:  "https://yaml.example.com/",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "https://yaml.example.com", yamlAuth.publicBaseURL)
+}
+
 func TestIsAllowedUser(t *testing.T) {
 	auth := &authenticator{allowedDomain: "example.com"}
 	assert.True(t, auth.isAllowedUser("alice@example.com", ""))
