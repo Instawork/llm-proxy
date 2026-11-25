@@ -511,7 +511,6 @@ func (a *AnthropicProxy) UserIDFromRequest(req *http.Request) string {
 	// Extract user ID from the "metadata.user_id" field
 	if metadata, ok := data["metadata"].(map[string]any); ok {
 		if userValue, ok := metadata["user_id"].(string); ok && userValue != "" {
-			log.Printf("🔍 Anthropic: Extracted user ID: %s", userValue)
 			return userValue
 		}
 	}

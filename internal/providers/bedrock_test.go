@@ -8,12 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/Instawork/llm-proxy/internal/redact"
 	eventstream "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 )
 
@@ -538,6 +540,47 @@ func TestBedrock_ParseStreamingResponse_EmptyBody(t *testing.T) {
 	_, err := b.ParseResponseMetadata(bytes.NewReader(nil), true)
 	if err == nil {
 		t.Error("expected error on empty streaming body")
+	}
+}
+
+func TestBedrock_ParseStreamingResponse_ExceptionPayloadUsesLogPreview(t *testing.T) {
+	redact.SetGlobal(nil)
+
+	b := NewBedrockProxy()
+	var buf bytes.Buffer
+	secretPrompt := "secret prompt mentioning alice@example.com and SSN 123-45-6789"
+	payloadJSON, err := json.Marshal(map[string]string{"message": secretPrompt})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	enc := eventstream.NewEncoder()
+	if err := enc.Encode(&buf, eventstream.Message{
+		Headers: eventstream.Headers{
+			{Name: ":message-type", Value: eventstream.StringValue("exception")},
+			{Name: ":exception-type", Value: eventstream.StringValue("validationException")},
+			{Name: ":event-type", Value: eventstream.StringValue("validationException")},
+		},
+		Payload: payloadJSON,
+	}); err != nil {
+		t.Fatalf("encode exception event: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
+
+	_, err = b.ParseResponseMetadata(&buf, true)
+	if err != nil {
+		t.Fatalf("ParseResponseMetadata: %v", err)
+	}
+
+	logged := logBuf.String()
+	if strings.Contains(logged, secretPrompt) || strings.Contains(logged, "alice@example.com") || strings.Contains(logged, "123-45-6789") {
+		t.Errorf("Bedrock exception log leaked raw payload: %s", logged)
+	}
+	if !strings.Contains(logged, "pii_redact disabled") {
+		t.Errorf("expected Bedrock exception log to route through redact.LogPreview; got: %s", logged)
 	}
 }
 

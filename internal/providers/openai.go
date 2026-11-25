@@ -856,7 +856,6 @@ func (o *OpenAIProxy) UserIDFromRequest(req *http.Request) string {
 	}
 	var userValue string
 	if len(probe.User) > 0 && json.Unmarshal(probe.User, &userValue) == nil && userValue != "" {
-		log.Printf("🔍 OpenAI: Extracted user ID: %s", userValue)
 		return userValue
 	}
 

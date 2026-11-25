@@ -568,26 +568,16 @@ vet:
 	@go vet ./...
 	@echo "$(GREEN)✓ Vet completed$(NC)"
 
-# Guard against raw PII/model-output dumps in logs. A debug log line that
-# renders a request/response body (or a streaming chunk) with %v/%+v leaks
-# unredacted model output and prompt PII to the log stack. Such previews
-# MUST go through redact.LogPreview (internal/redact/log_helper.go), which
-# collapses PII when redaction is on and falls back to a length-only summary
-# otherwise. This check fails CI if a banned shape reappears.
+# Guard against PII, credential/token-prefix, and raw body/payload leaks in logs.
+# Uses the AST-based linter in cmd/piiloglint (internal/piiloglint) so multi-line
+# calls, slog/proxylog/log APIs, non-%+v verbs, and credential/user-ID leaks are
+# all caught reliably. Raw body/payload previews MUST go through redact.LogPreview,
+# keys MUST be hashed or redacted, and caller IDs/IPs MUST be hashed or omitted.
 .PHONY: lint-pii-logs
 lint-pii-logs:
-	@echo "$(BLUE)Checking for raw body/chunk dumps in log lines...$(NC)"
-	@hits=$$(grep -rnE 'log\.(Printf|Print|Println).*%\+v' \
-		--include='*.go' ./cmd ./internal \
-		| grep -vE '_test\.go' \
-		| grep -E '(chunkData|responseField|eventField|bodyBytes|reqBody|respBody|requestBody|responseBody|payload|prompt|messages)' \
-		| grep -v 'redact.LogPreview' || true); \
-	if [ -n "$$hits" ]; then \
-		echo "$(RED)✗ Found log line(s) dumping a body/chunk with %v/%+v (route through redact.LogPreview):$(NC)"; \
-		echo "$$hits"; \
-		exit 1; \
-	fi; \
-	echo "$(GREEN)✓ No raw body/chunk log dumps found$(NC)"
+	@echo "$(BLUE)Checking for PII/credential/body leaks in log lines...$(NC)"
+	@go run ./cmd/piiloglint -root .
+	@echo "$(GREEN)✓ No PII/credential/body log leaks found$(NC)"
 
 # Run all code quality checks
 .PHONY: check

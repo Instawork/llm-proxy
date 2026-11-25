@@ -374,13 +374,13 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				logger.Info("pii_redact: dev raw entities",
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
-					slog.Any("entities", result.DetectedEntities))
+					slog.Any("entities", result.DetectedEntities)) //piiloglint:ignore dev-only raw entity debugging gated by cfg.DevLogRawEntities
 			}
 			if cfg.DevLogRawEntities && len(result.AllowedEntities) > 0 {
 				logger.Info("pii_redact: dev allowed entities",
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
-					slog.Any("entities", result.AllowedEntities))
+					slog.Any("entities", result.AllowedEntities)) //piiloglint:ignore dev-only allowed entity debugging gated by cfg.DevLogRawEntities
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))

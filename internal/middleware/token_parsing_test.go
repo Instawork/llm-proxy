@@ -1358,3 +1358,94 @@ func TestTokenParsingMiddleware_UnmeteredCallback(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractUserIDFromRequest_DoesNotLogPIIOrTokenPrefix(t *testing.T) {
+	cases := []struct {
+		name      string
+		buildReq  func() *http.Request
+		provider  providers.Provider
+		forbidden string
+	}{
+		{
+			name: "context user ID",
+			buildReq: func() *http.Request {
+				req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+				return req.WithContext(context.WithValue(req.Context(), userIDContextKey, "alice@example.com"))
+			},
+			forbidden: "alice@example.com",
+		},
+		{
+			name: "meta URL path user ID",
+			buildReq: func() *http.Request {
+				return httptest.NewRequest("POST", "/meta/bob@example.com/openai/v1/chat/completions", nil)
+			},
+			forbidden: "bob@example.com",
+		},
+		{
+			name: "X-User-ID header",
+			buildReq: func() *http.Request {
+				req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+				req.Header.Set("X-User-ID", "carol@example.com")
+				return req
+			},
+			forbidden: "carol@example.com",
+		},
+		{
+			name: "provider body user ID",
+			buildReq: func() *http.Request {
+				return httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+			},
+			provider:  &configurableProvider{userID: "dave@example.com"},
+			forbidden: "dave@example.com",
+		},
+		{
+			name: "query param user ID",
+			buildReq: func() *http.Request {
+				return httptest.NewRequest("POST", "/openai/v1/chat/completions?llm_user_id=erin@example.com", nil)
+			},
+			forbidden: "erin@example.com",
+		},
+		{
+			name: "Authorization bearer token prefix",
+			buildReq: func() *http.Request {
+				req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+				req.Header.Set("Authorization", "Bearer sk-secret1234567890")
+				return req
+			},
+			forbidden: "sk-secre",
+		},
+		{
+			name: "short bearer token",
+			buildReq: func() *http.Request {
+				req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+				req.Header.Set("Authorization", "Bearer shorttok")
+				return req
+			},
+			forbidden: "shorttok",
+		},
+		{
+			name: "client IP fallback",
+			buildReq: func() *http.Request {
+				req := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+				req.Header.Set("X-Forwarded-For", "203.0.113.99")
+				return req
+			},
+			forbidden: "203.0.113.99",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.buildReq()
+			logOut := captureLogOutput(func() {
+				_ = ExtractUserIDFromRequest(req, tc.provider)
+			})
+			if strings.Contains(logOut, tc.forbidden) {
+				t.Errorf("ExtractUserIDFromRequest leaked %q to logs: %s", tc.forbidden, logOut)
+			}
+			if logOut != "" {
+				t.Errorf("ExtractUserIDFromRequest should not log per-request caller identity; got: %s", logOut)
+			}
+		})
+	}
+}

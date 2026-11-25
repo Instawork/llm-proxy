@@ -552,24 +552,38 @@ func TestRateLimitingMiddleware_ExtractedModelFlowsIntoScopeKeys(t *testing.T) {
 	}
 }
 
-// ─── prefix() helper ───────────────────────────────────────────────────
+// ─── hashKeyForLog / hashUserIDForLog helpers ──────────────────────────
 
-// TestPrefix_TruncatesAuthTokensForLogging covers the prefix() helper used by
-// the middleware to log an authorization-token prefix without leaking the
-// full secret.  Three branches: empty input, ≤12 chars (returned verbatim),
-// and >12 chars (truncated to the first 12).
-func TestPrefix_TruncatesAuthTokensForLogging(t *testing.T) {
-	cases := map[string]string{
-		"":                          "",
-		"short":                     "short",
-		"twelve-chars":              "twelve-chars", // exactly 12
-		"this-is-too-long":          "this-is-too-",
-		"verylongapikey-1234567890": "verylongapik",
+func TestHashHelpersForLogging(t *testing.T) {
+	if got := hashKeyForLog(""); got != "" {
+		t.Errorf("hashKeyForLog(\"\") = %q, want empty", got)
 	}
-	for in, want := range cases {
-		if got := prefix(in); got != want {
-			t.Errorf("prefix(%q) = %q, want %q", in, got, want)
-		}
+	if got := hashUserIDForLog(""); got != "" {
+		t.Errorf("hashUserIDForLog(\"\") = %q, want empty", got)
+	}
+
+	rawKey := "sk-iw-secretprefix1234567890"
+	keyHash := hashKeyForLog(rawKey)
+	if len(keyHash) != 8 {
+		t.Errorf("hashKeyForLog length = %d, want 8 (%q)", len(keyHash), keyHash)
+	}
+	if strings.Contains(keyHash, "sk-iw") || strings.Contains(keyHash, "secret") {
+		t.Errorf("hashKeyForLog leaked key prefix: %q", keyHash)
+	}
+	if hashKeyForLog(rawKey) != keyHash || hashKeyForLog(rawKey+"x") == keyHash {
+		t.Errorf("hashKeyForLog should be deterministic and distinct per key")
+	}
+
+	rawUser := "alice@example.com"
+	userHash := hashUserIDForLog(rawUser)
+	if len(userHash) != 12 {
+		t.Errorf("hashUserIDForLog length = %d, want 12 (%q)", len(userHash), userHash)
+	}
+	if strings.Contains(userHash, "alice") || strings.Contains(userHash, "example") {
+		t.Errorf("hashUserIDForLog leaked user identifier: %q", userHash)
+	}
+	if hashUserIDForLog(rawUser) != userHash || hashUserIDForLog("bob@example.com") == userHash {
+		t.Errorf("hashUserIDForLog should be deterministic and distinct per user")
 	}
 }
 
@@ -661,5 +675,55 @@ func TestRateLimitingTokensPerMinute_CacheReads(t *testing.T) {
 				t.Fatalf("second request: got %d, want %d", got, tc.wantSecondHTTP)
 			}
 		})
+	}
+}
+
+func TestRateLimitingMiddleware_LogsHashedUserAndKeyNotRaw(t *testing.T) {
+	cfg := makeCfg()
+	cfg.Features.RateLimiting.Limits.RequestsPerMinute = 1
+	cfg.Features.RateLimiting.Limits.TokensPerMinute = 1000
+
+	lim := ratelimit.NewMemoryLimiter(cfg)
+	pm := providers.NewProviderManager()
+	pm.RegisterProvider(&fakeProvider{})
+
+	h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const (
+		rawUser = "alice.secret@example.com"
+		rawKey  = "sk-iw-secretprefix1234567890abcdef"
+	)
+
+	send := func() int {
+		req := httptest.NewRequest("POST", "/openai/v1/chat/completions", bytes.NewReader([]byte(`{"model":"gpt-4o","messages":[]}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-User-ID", rawUser)
+		req.Header.Set("Authorization", "Bearer "+rawKey)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	logOut := captureLogOutput(func() {
+		if code := send(); code != http.StatusOK {
+			t.Fatalf("first request: got %d, want 200", code)
+		}
+		if code := send(); code != http.StatusTooManyRequests {
+			t.Fatalf("second request: got %d, want 429", code)
+		}
+	})
+
+	for _, forbidden := range []string{rawUser, rawKey, rawKey[:12], "key_prefix="} {
+		if strings.Contains(logOut, forbidden) {
+			t.Errorf("rate limit logs must not contain %q; got:\n%s", forbidden, logOut)
+		}
+	}
+	if !strings.Contains(logOut, "user_hash="+hashUserIDForLog(rawUser)) {
+		t.Errorf("expected hashed user_hash in logs; got:\n%s", logOut)
+	}
+	if !strings.Contains(logOut, "key_hash="+hashKeyForLog(rawKey)) {
+		t.Errorf("expected hashed key_hash in logs; got:\n%s", logOut)
 	}
 }

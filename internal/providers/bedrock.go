@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/proxylog"
+	"github.com/Instawork/llm-proxy/internal/redact"
 	eventstream "github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/gorilla/mux"
 )
@@ -351,11 +353,11 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 		eventType := eventstreamHeaderString(msg.Headers, ":event-type")
 		messageType := eventstreamHeaderString(msg.Headers, ":message-type")
 		if messageType != "" && messageType != "event" {
-			// Exception / error frames carry diagnostic JSON in the payload.
-			// We treat them as terminal: log and stop so the caller can
-			// surface a partial-metadata fallback.
+			// Exception / error frames carry diagnostic JSON in the payload
+			// that may echo prompt content; route through redact.LogPreview so
+			// raw upstream bytes never land in logs unredacted.
 			log.Printf("🪶 Bedrock eventstream non-event message_type=%s event_type=%s payload=%s",
-				messageType, eventType, string(msg.Payload[:min(200, len(msg.Payload))]))
+				messageType, eventType, redact.LogPreview(context.Background(), string(msg.Payload), 200))
 			break
 		}
 
