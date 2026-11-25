@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -214,4 +216,51 @@ func TestClientExtractTextPreservesCancelCauseDuringRetryBackoff(t *testing.T) {
 	if !strings.Contains(err.Error(), "503") {
 		t.Fatalf("expected 503 status detail in error, got %v", err)
 	}
+}
+
+func TestClientExtractTextPreservesCancelCauseWhileBlockedInBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var attempts atomic.Int32
+		client := New("http://ocr.local", 5*time.Second)
+		client.retryBaseDelay = 2 * time.Second
+		client.client.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			attempts.Add(1)
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("OCR busy; try later")),
+				Header:     make(http.Header),
+			}, nil
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := client.ExtractText(ctx, []byte("fake-image"), "image-0.bin")
+			errCh <- err
+		}()
+
+		// Wait until ExtractText has finished attempt 1 and is durably blocked
+		// inside sleepWithContext waiting on the 2s retry backoff timer.
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("attempts = %d, want 1 before backoff cancel", attempts.Load())
+		}
+		cancel()
+
+		err := <-errCh
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled in error chain, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "503") {
+			t.Fatalf("expected 503 status detail in error, got %v", err)
+		}
+		if attempts.Load() != 1 {
+			t.Fatalf("attempts = %d, want 1 (must not start attempt 2 after cancel)", attempts.Load())
+		}
+	})
 }

@@ -66,14 +66,23 @@ func (b *decodeMemoryBudget) release(bytes int64) {
 var ocrDecodeBudget = &decodeMemoryBudget{limit: maxAggregateDecodeBytes}
 
 // decodedBytesPerPixel estimates the decoded source buffer footprint per pixel
-// for the ColorModel reported by image.DecodeConfig.
-func decodedBytesPerPixel(m color.Model) int64 {
+// for the format and ColorModel reported by image.DecodeConfig.
+func decodedBytesPerPixel(format string, m color.Model) int64 {
 	switch m {
 	case color.RGBA64Model, color.NRGBA64Model:
 		return 8
 	case color.Gray16Model:
+		if format == "png" {
+			// png.DecodeConfig inspects IHDR before any tRNS chunk; a grayscale
+			// PNG with tRNS decodes to *image.NRGBA64 (8 B/px).
+			return 8
+		}
 		return 2
 	case color.GrayModel:
+		if format == "png" {
+			// Grayscale PNG with tRNS decodes to *image.NRGBA (4 B/px).
+			return 4
+		}
 		return 1
 	case color.RGBAModel, color.NRGBAModel, color.YCbCrModel, color.NYCbCrAModel:
 		return 4
@@ -85,43 +94,111 @@ func decodedBytesPerPixel(m color.Model) int64 {
 	}
 }
 
+// isProgressiveJPEG scans JPEG segment headers to determine whether the stream
+// uses progressive DCT (SOF2 et al.). Malformed or truncated streams before a
+// sequential SOF0/SOF1 marker conservatively return true.
+func isProgressiveJPEG(raw []byte) bool {
+	if len(raw) < 4 || raw[0] != 0xFF || raw[1] != 0xD8 {
+		return true
+	}
+	i := 2
+	for i < len(raw) {
+		if raw[i] != 0xFF {
+			return true
+		}
+		for i < len(raw) && raw[i] == 0xFF {
+			i++
+		}
+		if i >= len(raw) {
+			return true
+		}
+		marker := raw[i]
+		i++
+
+		switch {
+		case marker == 0xC0 || marker == 0xC1:
+			return false
+		case marker == 0xC2 || marker == 0xC6 || marker == 0xCA || marker == 0xCE:
+			return true
+		case marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7):
+			continue
+		case marker == 0xD9 || marker == 0xDA:
+			return true
+		default:
+			if i+2 > len(raw) {
+				return true
+			}
+			segLen := int(raw[i])<<8 | int(raw[i+1])
+			if segLen < 2 || i+segLen > len(raw) {
+				return true
+			}
+			i += segLen
+		}
+	}
+	return true
+}
+
+// estimatedDecodeBytes estimates peak decoded memory (source image, decoder
+// working buffers such as progressive JPEG int32 DCT coefficient blocks, and
+// resized RGBA output).
+func estimatedDecodeBytes(raw []byte, format string, cfg image.Config, dstW, dstH int) int64 {
+	pixels := int64(cfg.Width) * int64(cfg.Height)
+	srcBytes := pixels * decodedBytesPerPixel(format, cfg.ColorModel)
+	if format == "jpeg" && isProgressiveJPEG(raw) {
+		// Go's image/jpeg decoder holds progCoeffs ([maxComponents][]block,
+		// 256 bytes per 8x8 int32 block) alongside the decoded pixel buffer.
+		nComp := int64(3)
+		switch cfg.ColorModel {
+		case color.GrayModel:
+			nComp = 1
+		case color.CMYKModel:
+			nComp = 4
+		}
+		blocksX := ((int64(cfg.Width) + 15) / 16) * 2
+		blocksY := ((int64(cfg.Height) + 15) / 16) * 2
+		srcBytes += nComp * blocksX * blocksY * 256
+	}
+	return srcBytes + int64(dstW)*int64(dstH)*4
+}
+
 // downscaleImageForOCR shrinks JPEG/PNG images whose width or height exceeds
 // maxDim so the OCR sidecar does not spend upload bandwidth and decode CPU on
 // multi-megapixel inputs. It only transforms the copy sent to OCR — never the
 // upstream LLM request body. Small images, unsupported formats, images that
 // exceed per-image or aggregate decoded-memory limits, or any error fall back
-// to raw unchanged.
-func downscaleImageForOCR(raw []byte, maxDim int) []byte {
+// to raw unchanged. admissionRefused is true only when the transient shared
+// decode memory budget refused the image.
+func downscaleImageForOCR(raw []byte, maxDim int) ([]byte, bool) {
 	return downscaleImageForOCRWithBudget(raw, maxDim, ocrDecodeBudget)
 }
 
-func downscaleImageForOCRWithBudget(raw []byte, maxDim int, budget *decodeMemoryBudget) []byte {
+func downscaleImageForOCRWithBudget(raw []byte, maxDim int, budget *decodeMemoryBudget) ([]byte, bool) {
 	if maxDim <= 0 || len(raw) == 0 {
-		return raw
+		return raw, false
 	}
 
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return raw
+		return raw, false
 	}
 	if format != "jpeg" && format != "png" {
-		return raw
+		return raw, false
 	}
 	if cfg.Width <= maxDim && cfg.Height <= maxDim {
-		return raw
+		return raw, false
 	}
 	pixels := int64(cfg.Width) * int64(cfg.Height)
 	if pixels > maxDecodePixels {
-		return raw
+		return raw, false
 	}
 
 	dstW, dstH := fitWithinMaxDim(cfg.Width, cfg.Height, maxDim)
-	estimatedBytes := pixels*decodedBytesPerPixel(cfg.ColorModel) + int64(dstW)*int64(dstH)*4
+	estimatedBytes := estimatedDecodeBytes(raw, format, cfg, dstW, dstH)
 	if estimatedBytes > maxSingleDecodeBytes {
-		return raw
+		return raw, false
 	}
 	if budget != nil && !budget.tryAcquire(estimatedBytes) {
-		return raw
+		return raw, true
 	}
 	if budget != nil {
 		defer budget.release(estimatedBytes)
@@ -129,19 +206,19 @@ func downscaleImageForOCRWithBudget(raw []byte, maxDim int, budget *decodeMemory
 
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return raw
+		return raw, false
 	}
 
 	dst := resizeImageBox(src, dstW, dstH)
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: ocrDownscaleJPEGQuality}); err != nil {
-		return raw
+		return raw, false
 	}
 	if buf.Len() == 0 {
-		return raw
+		return raw, false
 	}
-	return buf.Bytes()
+	return buf.Bytes(), false
 }
 
 func fitWithinMaxDim(w, h, maxDim int) (int, int) {

@@ -33,6 +33,7 @@ type imageScanResult struct {
 	index      int
 	imageBytes int
 	blocked    bool
+	cacheHit   bool
 	entityType string
 	score      float64
 	stage      string
@@ -133,15 +134,24 @@ func (c *idGateScanCache) putLocked(digest [32]byte, v idGateVerdict) {
 	}
 }
 
+type idGateScanOutcome struct {
+	verdict       idGateVerdict
+	stage         string
+	cacheable     bool
+	leaderCtxDone bool
+	err           error
+}
+
 // do returns a cached verdict if present, joins an identical in-flight scan,
-// or runs fn as the leader for digest. Errors are never cached; if a leader
-// fails because its own request context was canceled or reached its deadline
-// while a follower is still alive, the follower retries rather than inheriting
-// the leader's context failure.
+// or runs fn as the leader for digest. Errors are never cached, and verdicts
+// produced under transient decode-admission refusal (cacheable=false) are not
+// stored in the cross-request cache. If a leader fails because its own request
+// context or admission wait expired while a follower is still alive, the
+// follower retries rather than inheriting the leader's context failure.
 func (c *idGateScanCache) do(
 	ctx context.Context,
 	digest [32]byte,
-	fn func() (idGateVerdict, string, error),
+	fn func() idGateScanOutcome,
 ) (idGateVerdict, string, bool, error) {
 	for {
 		c.mu.Lock()
@@ -175,16 +185,16 @@ func (c *idGateScanCache) do(
 		c.inflight[digest] = call
 		c.mu.Unlock()
 
-		verdict, stage, err := fn()
-		leaderCtxDone := err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled))
+		out := fn()
+		leaderCtxDone := out.err != nil && (out.leaderCtxDone || ctx.Err() != nil || errors.Is(out.err, context.Canceled))
 
 		c.mu.Lock()
-		call.verdict = verdict
-		call.stage = stage
-		call.err = err
+		call.verdict = out.verdict
+		call.stage = out.stage
+		call.err = out.err
 		call.leaderCtxDone = leaderCtxDone
-		if err == nil {
-			c.putLocked(digest, verdict)
+		if out.err == nil && out.cacheable {
+			c.putLocked(digest, out.verdict)
 		}
 		if c.inflight[digest] == call {
 			delete(c.inflight, digest)
@@ -192,7 +202,7 @@ func (c *idGateScanCache) do(
 		close(call.done)
 		c.mu.Unlock()
 
-		return verdict, stage, false, err
+		return out.verdict, out.stage, false, out.err
 	}
 }
 
@@ -223,11 +233,13 @@ type IDGateConfig struct {
 	// inference already running in the sidecar executor if a dispatched call
 	// times out.
 	MaxInFlight int
-	// ScanTimeout is the per-batch deadline budget for scanning images in a
-	// request (typically matched to the OCR client timeout). Multi-image
-	// requests scale linearly by batch count up to max(ScanTimeout, 60s).
-	// <=0 disables the extra middleware deadline and relies on caller/client
-	// deadlines.
+	// ScanTimeout is the post-admission stage deadline for OCR + analysis of a
+	// single image, and also the per-batch queue-wait budget when waiting for
+	// per-request or process-wide admission (scaled by batch count up to
+	// max(ScanTimeout, 60s)). Starting the stage deadline after global
+	// admission prevents moderate contention from starving OCR or analysis
+	// while still aborting requests that wait too long in queue. <=0 disables
+	// the extra middleware deadlines and relies on caller/client deadlines.
 	ScanTimeout time.Duration
 	// MaxImageDimension downscales JPEG/PNG images whose width or height
 	// exceeds this many pixels before sending them to OCR (never mutating the
@@ -349,19 +361,26 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 			}
 			if len(toScan) > 0 {
 				// Scan remaining unique images concurrently (bounded both
-				// per-request and process-wide). A government-ID hit is
+				// per-request and process-wide). Admission wait is bounded by
+				// queueCtx while each admitted scan receives its own full
+				// cfg.ScanTimeout stage deadline so contention queue time does
+				// not starve OCR or Presidio analysis. A government-ID hit is
 				// decisive and short-circuits the rest; errors are collected
 				// and only acted on if no image blocks (a block always wins
 				// over an error so a failing sibling can't mask a positive).
-				var scanCtx context.Context
-				var cancelScan context.CancelFunc
-				if cfg.ScanTimeout > 0 {
-					scanBudget := computeIDGateScanTimeout(len(toScan), budgetConcurrency, cfg.ScanTimeout)
-					scanCtx, cancelScan = context.WithTimeout(r.Context(), scanBudget)
-				} else {
-					scanCtx, cancelScan = context.WithCancel(r.Context())
-				}
+				reqCancelCtx, cancelScan := context.WithCancel(r.Context())
 				defer cancelScan()
+
+				queueCtx := reqCancelCtx
+				waitCtx := reqCancelCtx
+				if cfg.ScanTimeout > 0 {
+					queueBudget := computeIDGateScanTimeout(len(toScan), budgetConcurrency, cfg.ScanTimeout)
+					var cancelQueue, cancelWait context.CancelFunc
+					queueCtx, cancelQueue = context.WithTimeout(reqCancelCtx, queueBudget)
+					defer cancelQueue()
+					waitCtx, cancelWait = context.WithTimeout(reqCancelCtx, queueBudget+cfg.ScanTimeout)
+					defer cancelWait()
+				}
 
 				reqSem := make(chan struct{}, concurrency)
 				results := make(chan imageScanResult, len(toScan))
@@ -375,51 +394,77 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 						select {
 						case reqSem <- struct{}{}:
 							defer func() { <-reqSem }()
-						case <-scanCtx.Done():
+						case <-queueCtx.Done():
 							results <- imageScanResult{
 								index:      u.firstIndex,
 								imageBytes: len(u.raw),
 								stage:      "ocr",
-								err:        fmt.Errorf("id_gate: request concurrency wait timed out: %w", scanCtx.Err()),
+								err:        fmt.Errorf("id_gate: request concurrency wait timed out: %w", queueCtx.Err()),
 							}
 							return
 						}
 
-						verdict, stage, hit, scanErr := scanCache.do(scanCtx, u.digest, func() (idGateVerdict, string, error) {
+						verdict, stage, hit, scanErr := scanCache.do(waitCtx, u.digest, func() idGateScanOutcome {
 							if globalSem != nil {
 								select {
 								case globalSem <- struct{}{}:
 									defer func() { <-globalSem }()
-								case <-scanCtx.Done():
-									return idGateVerdict{}, "ocr", fmt.Errorf("id_gate: ocr queue wait timed out: %w", scanCtx.Err())
+								case <-queueCtx.Done():
+									return idGateScanOutcome{
+										stage:         "ocr",
+										leaderCtxDone: true,
+										err:           fmt.Errorf("id_gate: ocr queue wait timed out: %w", queueCtx.Err()),
+									}
 								}
 							}
-							if scanCtx.Err() != nil {
-								return idGateVerdict{}, "ocr", scanCtx.Err()
+							if err := queueCtx.Err(); err != nil {
+								return idGateScanOutcome{
+									stage:         "ocr",
+									leaderCtxDone: true,
+									err:           err,
+								}
 							}
 
-							ocrBytes := downscaleImageForOCR(u.raw, maxImageDim)
-							text, ocrErr := ocrClient.ExtractText(scanCtx, ocrBytes, imageFilename(u.firstIndex))
+							stageCtx := reqCancelCtx
+							if cfg.ScanTimeout > 0 {
+								var cancelStage context.CancelFunc
+								stageCtx, cancelStage = context.WithTimeout(reqCancelCtx, cfg.ScanTimeout)
+								defer cancelStage()
+							}
+
+							ocrBytes, admissionRefused := downscaleImageForOCR(u.raw, maxImageDim)
+							text, ocrErr := ocrClient.ExtractText(stageCtx, ocrBytes, imageFilename(u.firstIndex))
 							if ocrErr != nil {
-								return idGateVerdict{}, "ocr", ocrErr
+								return idGateScanOutcome{
+									stage:         "ocr",
+									leaderCtxDone: reqCancelCtx.Err() != nil,
+									err:           ocrErr,
+								}
 							}
 							if strings.TrimSpace(text) == "" {
-								return idGateVerdict{}, "", nil
+								return idGateScanOutcome{cacheable: !admissionRefused}
 							}
 
-							spans, analyzeErr := analyzer.AnalyzeEntities(scanCtx, text, entityTypes)
+							spans, analyzeErr := analyzer.AnalyzeEntities(stageCtx, text, entityTypes)
 							if analyzeErr != nil {
-								return idGateVerdict{}, "analyze", analyzeErr
+								return idGateScanOutcome{
+									stage:         "analyze",
+									leaderCtxDone: reqCancelCtx.Err() != nil,
+									err:           analyzeErr,
+								}
 							}
 
 							if blocked, entityType, score := govIDHit(spans, entityTypes, scoreThreshold); blocked {
-								return idGateVerdict{
-									blocked:    true,
-									entityType: entityType,
-									score:      score,
-								}, "", nil
+								return idGateScanOutcome{
+									verdict: idGateVerdict{
+										blocked:    true,
+										entityType: entityType,
+										score:      score,
+									},
+									cacheable: !admissionRefused,
+								}
 							}
-							return idGateVerdict{}, "", nil
+							return idGateScanOutcome{cacheable: !admissionRefused}
 						})
 						if hit {
 							cacheHits.Add(1)
@@ -438,6 +483,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 								index:      u.firstIndex,
 								imageBytes: len(u.raw),
 								blocked:    true,
+								cacheHit:   hit,
 								entityType: verdict.entityType,
 								score:      verdict.score,
 							}
@@ -459,7 +505,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 							blocked:    true,
 							entityType: res.entityType,
 							score:      res.score,
-						}, false, time.Since(gateStart))
+						}, res.cacheHit, time.Since(gateStart))
 						return
 					}
 					if res.err != nil && !haveErr {

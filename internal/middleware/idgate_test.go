@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/proxylog"
@@ -285,11 +288,19 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 	const n = 8
 	leaderStarted := make(chan struct{})
 	releaseLeader := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
 	followersJoined := make(chan struct{}, n-1)
 
 	prevHook := idGateTestOnInflightWait
 	idGateTestOnInflightWait = func() { followersJoined <- struct{}{} }
-	defer func() { idGateTestOnInflightWait = prevHook }()
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		release()
+		wg.Wait()
+	})
 
 	var calls atomic.Int32
 	ocrClient := &funcOCR{
@@ -312,7 +323,6 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 	img := base64.StdEncoding.EncodeToString([]byte("shared-burst-img"))
 	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
 
-	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -322,7 +332,11 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 			t.Errorf("leader status = %d, want 200", rec.Code)
 		}
 	}()
-	<-leaderStarted
+	select {
+	case <-leaderStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for leader to start OCR")
+	}
 
 	for range n - 1 {
 		wg.Add(1)
@@ -336,10 +350,16 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 		}()
 	}
 
-	for range n - 1 {
-		<-followersJoined
+	joinTimer := time.NewTimer(5 * time.Second)
+	defer joinTimer.Stop()
+	for i := range n - 1 {
+		select {
+		case <-followersJoined:
+		case <-joinTimer.C:
+			t.Fatalf("timed out waiting for follower %d/%d to join in-flight scan", i+1, n-1)
+		}
 	}
-	close(releaseLeader)
+	release()
 	wg.Wait()
 
 	if calls.Load() != 1 {
@@ -353,7 +373,14 @@ func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.
 
 	prevHook := idGateTestOnInflightWait
 	idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
-	defer func() { idGateTestOnInflightWait = prevHook }()
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		cancelLeader()
+		wg.Wait()
+	})
 
 	var calls atomic.Int32
 	ocrClient := &funcOCR{
@@ -378,25 +405,32 @@ func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.
 	img := base64.StdEncoding.EncodeToString([]byte("leader-cancel-img"))
 	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
 
-	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	leaderReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body).WithContext(leaderCtx)
 	followerReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		mw.ServeHTTP(httptest.NewRecorder(), leaderReq)
 	}()
 
-	<-leaderStarted
+	select {
+	case <-leaderStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for leader to start OCR")
+	}
 	followerRec := httptest.NewRecorder()
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		mw.ServeHTTP(followerRec, followerReq)
 	}()
 
-	<-followerJoined
+	select {
+	case <-followerJoined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for follower to join in-flight scan")
+	}
 	cancelLeader()
 	wg.Wait()
 
@@ -409,106 +443,374 @@ func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.
 }
 
 func TestIDGateMiddleware_CoalescedLeaderDeadlineDoesNotPoisonFollower(t *testing.T) {
-	leaderStarted := make(chan struct{})
-	followerJoined := make(chan struct{}, 1)
-
 	prevHook := idGateTestOnInflightWait
-	idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
-	defer func() { idGateTestOnInflightWait = prevHook }()
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
 
-	var calls atomic.Int32
-	ocrClient := &funcOCR{
-		fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
-			if calls.Add(1) == 1 {
-				close(leaderStarted)
-				<-ctx.Done()
-				return "", ctx.Err()
-			}
-			return "PASSPORT 123456789", nil
-		},
-	}
+	synctest.Test(t, func(t *testing.T) {
+		leaderStarted := make(chan struct{})
+		followerJoined := make(chan struct{}, 1)
+		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
 
-	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{
-		spans: []redact.Span{{EntityType: "US_PASSPORT", Score: 0.9}},
-	}, IDGateConfig{
-		FailClosed:     false,
-		ScoreThreshold: 0.6,
-		CacheTTL:       time.Minute,
-	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		var calls atomic.Int32
+		ocrClient := &funcOCR{
+			fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
+				if calls.Add(1) == 1 {
+					close(leaderStarted)
+					<-ctx.Done()
+					return "", ctx.Err()
+				}
+				return "PASSPORT 123456789", nil
+			},
+		}
 
-	img := base64.StdEncoding.EncodeToString([]byte("leader-deadline-img"))
-	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{
+			spans: []redact.Span{{EntityType: "US_PASSPORT", Score: 0.9}},
+		}, IDGateConfig{
+			FailClosed:     false,
+			ScoreThreshold: 0.6,
+			CacheTTL:       time.Minute,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
 
-	leaderCtx, cancelLeader := context.WithTimeout(context.Background(), 60*time.Millisecond)
-	defer cancelLeader()
-	leaderReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body).WithContext(leaderCtx)
-	followerReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		img := base64.StdEncoding.EncodeToString([]byte("leader-deadline-img"))
+		body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		mw.ServeHTTP(httptest.NewRecorder(), leaderReq)
-	}()
+		leaderCtx, cancelLeader := context.WithTimeout(context.Background(), 60*time.Millisecond)
+		var wg sync.WaitGroup
+		defer func() {
+			cancelLeader()
+			wg.Wait()
+		}()
 
-	<-leaderStarted
-	followerRec := httptest.NewRecorder()
-	go func() {
-		defer wg.Done()
-		mw.ServeHTTP(followerRec, followerReq)
-	}()
+		leaderReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body).WithContext(leaderCtx)
+		followerReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
 
-	<-followerJoined
-	wg.Wait()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(httptest.NewRecorder(), leaderReq)
+		}()
 
-	if followerRec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("follower status = %d, want 422 (must retry and block after leader deadline expires)", followerRec.Code)
-	}
-	if calls.Load() != 2 {
-		t.Fatalf("calls = %d, want 2", calls.Load())
-	}
+		// synctest.Wait waits until the leader is durably blocked in OCR
+		// without advancing fake time, so leaderCtx cannot expire prematurely.
+		synctest.Wait()
+		select {
+		case <-leaderStarted:
+		default:
+			t.Fatal("leader did not enter OCR")
+		}
+
+		followerRec := httptest.NewRecorder()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(followerRec, followerReq)
+		}()
+
+		synctest.Wait()
+		select {
+		case <-followerJoined:
+		default:
+			t.Fatal("follower did not join in-flight scan before leader expired")
+		}
+
+		// Advancing past 60ms expires leaderCtx with context.DeadlineExceeded
+		// after the follower has joined; the live follower must retry and block.
+		time.Sleep(60 * time.Millisecond)
+		wg.Wait()
+
+		if followerRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("follower status = %d, want 422 (must retry and block after leader deadline expires)", followerRec.Code)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("calls = %d, want 2", calls.Load())
+		}
+	})
 }
 
 func TestIDGateMiddleware_ScanBudgetAccountsForGlobalMaxInFlight(t *testing.T) {
-	ocrClient := &funcOCR{
-		fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
-			timer := time.NewTimer(70 * time.Millisecond)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				return "ok", nil
-			case <-ctx.Done():
-				return "", ctx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		ocrClient := &funcOCR{
+			fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
+				timer := time.NewTimer(70 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					return "ok", nil
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			},
+		}
+
+		// ImageConcurrency=4 > MaxInFlight=1 serializes 3 images (wait times
+		// 0ms, 70ms, 140ms). A single-batch 110ms queue budget would expire
+		// image 3 while queued; using budgetConcurrency = min(4, 1) = 1 scales
+		// queueBudget to 3 batches (330ms), allowing all 3 scans to complete.
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+			FailClosed:       true,
+			ImageConcurrency: 4,
+			MaxInFlight:      1,
+			ScanTimeout:      110 * time.Millisecond,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		img1 := base64.StdEncoding.EncodeToString([]byte("serial-img-1"))
+		img2 := base64.StdEncoding.EncodeToString([]byte("serial-img-2"))
+		img3 := base64.StdEncoding.EncodeToString([]byte("serial-img-3"))
+		body := fmt.Sprintf(
+			`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}}]}]}`,
+			img1, img2, img3,
+		)
+
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (scan budget must account for MaxInFlight=1)", rec.Code)
+		}
+	})
+}
+
+func TestIDGateMiddleware_AdmissionWaitDoesNotConsumeStageTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		firstEntered := make(chan struct{})
+		ocrClient := &funcOCR{
+			fn: func(ctx context.Context, img []byte, _ string) (string, error) {
+				dur := 9 * time.Second
+				if string(img) == "holder-img" {
+					dur = 10 * time.Second
+					close(firstEntered)
+				}
+				timer := time.NewTimer(dur)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					return "clean", nil
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			},
+		}
+
+		// With ScanTimeout=18s and MaxInFlight=1: request 1 holds the sole slot
+		// for 10s, then request 2 is admitted and needs 9s of OCR (19s total).
+		// Because stage timeout starts after global admission, request 2 retains
+		// its full 18s stage budget and succeeds.
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+			FailClosed:  true,
+			MaxInFlight: 1,
+			ScanTimeout: 18 * time.Second,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		body1 := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + base64.StdEncoding.EncodeToString([]byte("holder-img")) + `"}}]}]}`
+		body2 := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + base64.StdEncoding.EncodeToString([]byte("waiter-img")) + `"}}]}]}`
+
+		rec1 := httptest.NewRecorder()
+		rec2 := httptest.NewRecorder()
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(rec1, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body1))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-firstEntered:
+		default:
+			t.Fatal("first request did not acquire global slot")
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(rec2, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body2))
+		}()
+
+		wg.Wait()
+		if rec1.Code != http.StatusOK || rec2.Code != http.StatusOK {
+			t.Fatalf("statuses = (%d, %d), want (200, 200)", rec1.Code, rec2.Code)
+		}
+	})
+}
+
+func TestIDGateMiddleware_CoalescedBlockedFollowerLogsCacheHit(t *testing.T) {
+	prevHook := idGateTestOnInflightWait
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+
+	synctest.Test(t, func(t *testing.T) {
+		leaderStarted := make(chan struct{})
+		releaseLeader := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
+		followerJoined := make(chan struct{}, 1)
+		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+
+		var wg sync.WaitGroup
+		defer func() {
+			release()
+			wg.Wait()
+		}()
+
+		var logBuf bytes.Buffer
+		var logMu sync.Mutex
+		logger := slog.New(slog.NewJSONHandler(&lockedWriter{mu: &logMu, w: &logBuf}, nil))
+
+		ocrClient := &funcOCR{
+			fn: func(_ context.Context, _ []byte, _ string) (string, error) {
+				close(leaderStarted)
+				<-releaseLeader
+				return "PASSPORT 123456789", nil
+			},
+		}
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{
+			spans: []redact.Span{{EntityType: "US_PASSPORT", Score: 0.9}},
+		}, IDGateConfig{
+			ScoreThreshold: 0.6,
+			CacheTTL:       -1,
+			Logger:         logger,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		img := base64.StdEncoding.EncodeToString([]byte("coalesced-block-img"))
+		body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
+
+		leaderRec := httptest.NewRecorder()
+		followerRec := httptest.NewRecorder()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(leaderRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-leaderStarted:
+		default:
+			t.Fatal("leader did not start OCR")
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(followerRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-followerJoined:
+		default:
+			t.Fatal("follower did not join in-flight scan")
+		}
+
+		release()
+		wg.Wait()
+
+		if leaderRec.Code != http.StatusUnprocessableEntity || followerRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("statuses = (%d, %d), want (422, 422)", leaderRec.Code, followerRec.Code)
+		}
+
+		lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+		var blockLogs, cacheHitLogs int
+		for _, line := range lines {
+			if strings.Contains(line, "id_gate: blocked government identity document") {
+				blockLogs++
+				if strings.Contains(line, `"cache_hit":true`) {
+					cacheHitLogs++
+				}
 			}
+		}
+		if blockLogs != 2 || cacheHitLogs != 1 {
+			t.Fatalf("blockLogs=%d cacheHitLogs=%d, want 2 and 1; logs:\n%s", blockLogs, cacheHitLogs, logBuf.String())
+		}
+	})
+}
+
+func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T) {
+	largePNG := makeSyntheticPNG(t, 600, 400)
+	var calls atomic.Int32
+	var seenLens []int
+	ocrClient := &funcOCR{
+		fn: func(_ context.Context, img []byte, _ string) (string, error) {
+			calls.Add(1)
+			seenLens = append(seenLens, len(img))
+			return "plain text", nil
 		},
 	}
 
-	// ImageConcurrency=4 > MaxInFlight=1 serializes the 2 images (~140ms total),
-	// which exceeds a single 110ms batch budget unless budgetConcurrency uses
-	// min(ImageConcurrency, MaxInFlight) = 1 -> 2 batches = 220ms.
 	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
-		FailClosed:       true,
-		ImageConcurrency: 4,
-		MaxInFlight:      1,
-		ScanTimeout:      110 * time.Millisecond,
+		MaxBodyBytes:      10 * 1024 * 1024,
+		MaxImageDimension: 400,
+		CacheTTL:          time.Minute,
 	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	img1 := base64.StdEncoding.EncodeToString([]byte("serial-img-1"))
-	img2 := base64.StdEncoding.EncodeToString([]byte("serial-img-2"))
-	body := fmt.Sprintf(
-		`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}}]}]}`,
-		img1, img2,
-	)
+	imgB64 := base64.StdEncoding.EncodeToString(largePNG)
+	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + imgB64 + `"}}]}]}`
 
-	rec := httptest.NewRecorder()
-	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (scan budget must account for MaxInFlight=1)", rec.Code)
+	// Exhaust the shared decode budget so the first scan falls back to raw bytes.
+	if !ocrDecodeBudget.tryAcquire(maxAggregateDecodeBytes) {
+		t.Fatal("expected to reserve full decode budget")
 	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			ocrDecodeBudget.release(maxAggregateDecodeBytes)
+		}
+	})
+
+	rec1 := httptest.NewRecorder()
+	mw.ServeHTTP(rec1, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("req1 status = %d, want 200", rec1.Code)
+	}
+	if len(seenLens) != 1 || seenLens[0] != len(largePNG) {
+		t.Fatalf("req1 OCR bytes len = %v, want raw PNG len %d", seenLens, len(largePNG))
+	}
+
+	// Release decode capacity. Because the first verdict was produced under
+	// decode admission refusal, it must NOT be cached; req2 must re-scan with
+	// the downscaled JPEG and cache that result for req3.
+	ocrDecodeBudget.release(maxAggregateDecodeBytes)
+	released = true
+
+	rec2 := httptest.NewRecorder()
+	mw.ServeHTTP(rec2, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("req2 status = %d, want 200", rec2.Code)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls after req2 = %d, want 2 (admission-refused verdict must not be cached)", calls.Load())
+	}
+	if seenLens[1] == len(largePNG) {
+		t.Fatalf("req2 should have downscaled image once budget recovered (len=%d)", seenLens[1])
+	}
+
+	rec3 := httptest.NewRecorder()
+	mw.ServeHTTP(rec3, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("req3 status = %d, want 200", rec3.Code)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls after req3 = %d, want 2 (downscaled verdict should be cached)", calls.Load())
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
 }
 
 func TestIDGateMiddleware_MaxInFlightBoundsCrossRequestConcurrency(t *testing.T) {

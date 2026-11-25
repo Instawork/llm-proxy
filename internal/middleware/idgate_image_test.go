@@ -51,7 +51,10 @@ func makeSyntheticJPEG(t *testing.T, w, h int) []byte {
 
 func TestDownscaleImageForOCR_LargePNGDownscales(t *testing.T) {
 	raw := makeSyntheticPNG(t, 600, 400)
-	out := downscaleImageForOCR(raw, 400)
+	out, refused := downscaleImageForOCR(raw, 400)
+	if refused {
+		t.Fatal("unexpected decode admission refusal")
+	}
 
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(out))
 	if err != nil {
@@ -67,7 +70,10 @@ func TestDownscaleImageForOCR_LargePNGDownscales(t *testing.T) {
 
 func TestDownscaleImageForOCR_PortraitPreservesAspectRatio(t *testing.T) {
 	raw := makeSyntheticJPEG(t, 300, 600)
-	out := downscaleImageForOCR(raw, 400)
+	out, refused := downscaleImageForOCR(raw, 400)
+	if refused {
+		t.Fatal("unexpected decode admission refusal")
+	}
 
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(out))
 	if err != nil {
@@ -80,7 +86,10 @@ func TestDownscaleImageForOCR_PortraitPreservesAspectRatio(t *testing.T) {
 
 func TestDownscaleImageForOCR_SmallImageUnchanged(t *testing.T) {
 	raw := makeSyntheticPNG(t, 200, 150)
-	out := downscaleImageForOCR(raw, 400)
+	out, refused := downscaleImageForOCR(raw, 400)
+	if refused {
+		t.Fatal("unexpected decode admission refusal")
+	}
 	if !bytes.Equal(out, raw) {
 		t.Fatal("expected small image to pass through unchanged")
 	}
@@ -88,7 +97,10 @@ func TestDownscaleImageForOCR_SmallImageUnchanged(t *testing.T) {
 
 func TestDownscaleImageForOCR_NonImageBytesUnchanged(t *testing.T) {
 	raw := []byte("not-a-real-image")
-	out := downscaleImageForOCR(raw, 1600)
+	out, refused := downscaleImageForOCR(raw, 1600)
+	if refused {
+		t.Fatal("unexpected decode admission refusal")
+	}
 	if !bytes.Equal(out, raw) {
 		t.Fatal("expected non-image bytes to pass through unchanged")
 	}
@@ -96,7 +108,10 @@ func TestDownscaleImageForOCR_NonImageBytesUnchanged(t *testing.T) {
 
 func TestDownscaleImageForOCR_DisabledWhenMaxDimNonPositive(t *testing.T) {
 	raw := makeSyntheticPNG(t, 400, 200)
-	out := downscaleImageForOCR(raw, -1)
+	out, refused := downscaleImageForOCR(raw, -1)
+	if refused {
+		t.Fatal("unexpected decode admission refusal")
+	}
 	if !bytes.Equal(out, raw) {
 		t.Fatal("expected disabled downscale to return original bytes")
 	}
@@ -131,8 +146,11 @@ func TestDownscaleImageForOCR_NRGBAAndPalettedTransparencyMatch(t *testing.T) {
 		t.Fatalf("encode paletted png: %v", err)
 	}
 
-	outNRGBA := downscaleImageForOCR(nrgbaBuf.Bytes(), 200)
-	outPaletted := downscaleImageForOCR(palettedBuf.Bytes(), 200)
+	outNRGBA, refused1 := downscaleImageForOCR(nrgbaBuf.Bytes(), 200)
+	outPaletted, refused2 := downscaleImageForOCR(palettedBuf.Bytes(), 200)
+	if refused1 || refused2 {
+		t.Fatal("unexpected decode admission refusal")
+	}
 	if !bytes.Equal(outNRGBA, outPaletted) {
 		t.Fatalf("expected equivalent NRGBA and Paletted PNGs to produce identical OCR JPEG (lens %d vs %d)", len(outNRGBA), len(outPaletted))
 	}
@@ -153,26 +171,91 @@ func TestDownscaleImageForOCR_NRGBAAndPalettedTransparencyMatch(t *testing.T) {
 	}
 }
 
+func TestDownscaleImageForOCR_DecodedMemoryEstimates(t *testing.T) {
+	if got := decodedBytesPerPixel("png", color.NRGBA64Model); got != 8 {
+		t.Fatalf("PNG NRGBA64 decodedBytesPerPixel = %d, want 8", got)
+	}
+	if got := decodedBytesPerPixel("png", color.Gray16Model); got != 8 {
+		t.Fatalf("PNG Gray16 decodedBytesPerPixel = %d, want 8 (accounts for tRNS -> NRGBA64)", got)
+	}
+	if got := decodedBytesPerPixel("png", color.GrayModel); got != 4 {
+		t.Fatalf("PNG Gray decodedBytesPerPixel = %d, want 4 (accounts for tRNS -> NRGBA)", got)
+	}
+	if got := decodedBytesPerPixel("jpeg", color.GrayModel); got != 1 {
+		t.Fatalf("JPEG Gray decodedBytesPerPixel = %d, want 1", got)
+	}
+
+	baseline := makeSyntheticJPEG(t, 400, 200)
+	if isProgressiveJPEG(baseline) {
+		t.Fatal("expected stdlib baseline JPEG to be detected as non-progressive")
+	}
+
+	// Minimal JPEG header containing SOI + SOF2 (0xFFC2, progressive DCT).
+	progressiveHeader := []byte{
+		0xFF, 0xD8, // SOI
+		0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, // APP0 length 4
+		0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x0E, 0x10, 0x0E, 0x10, 0x03, 0x01, 0x11, 0x00, // SOF2
+	}
+	if !isProgressiveJPEG(progressiveHeader) {
+		t.Fatal("expected SOF2 header to be detected as progressive JPEG")
+	}
+
+	// 3600x3600 baseline YCbCr fits within 64 MiB single-image limit, while
+	// 3600x3600 progressive YCbCr exceeds it due to ~156 MB coefficient blocks.
+	largeCfg := image.Config{Width: 3600, Height: 3600, ColorModel: color.YCbCrModel}
+	baseEst := estimatedDecodeBytes(baseline, "jpeg", largeCfg, 1600, 1600)
+	progEst := estimatedDecodeBytes(progressiveHeader, "jpeg", largeCfg, 1600, 1600)
+	if baseEst > maxSingleDecodeBytes {
+		t.Fatalf("3600x3600 baseline estimate = %d, want <= %d", baseEst, maxSingleDecodeBytes)
+	}
+	if progEst <= maxSingleDecodeBytes {
+		t.Fatalf("3600x3600 progressive estimate = %d, want > %d", progEst, maxSingleDecodeBytes)
+	}
+
+	// Smaller 1800x1200 progressive JPEG still fits within 64 MiB.
+	medCfg := image.Config{Width: 1800, Height: 1200, ColorModel: color.YCbCrModel}
+	medProgEst := estimatedDecodeBytes(progressiveHeader, "jpeg", medCfg, 1600, 1067)
+	if medProgEst > maxSingleDecodeBytes {
+		t.Fatalf("1800x1200 progressive estimate = %d, want <= %d", medProgEst, maxSingleDecodeBytes)
+	}
+}
+
 func TestDownscaleImageForOCR_RespectsAggregateMemoryBudget(t *testing.T) {
-	if got := decodedBytesPerPixel(color.NRGBA64Model); got != 8 {
-		t.Fatalf("NRGBA64 decodedBytesPerPixel = %d, want 8", got)
-	}
-
 	raw := makeSyntheticPNG(t, 400, 200)
-	// Budget too small to cover 400*200*4 + 200*100*4 = 400,000 bytes.
+	// Required estimate for 400x200 RGBA -> 200x100 RGBA is 400,000 bytes.
+	// Budget too small even when empty -> refuses admission without mutating used.
 	tinyBudget := &decodeMemoryBudget{limit: 100_000}
-	out := downscaleImageForOCRWithBudget(raw, 200, tinyBudget)
-	if !bytes.Equal(out, raw) {
-		t.Fatal("expected fallback to raw when aggregate decode budget is exceeded")
+	out, refused := downscaleImageForOCRWithBudget(raw, 200, tinyBudget)
+	if !refused || !bytes.Equal(out, raw) {
+		t.Fatal("expected admission refusal and raw fallback when aggregate decode budget is exceeded")
+	}
+	if tinyBudget.used != 0 {
+		t.Fatalf("tinyBudget.used = %d, want 0", tinyBudget.used)
 	}
 
-	// Budget sufficient -> downscales and releases memory cleanly.
-	okBudget := &decodeMemoryBudget{limit: 1_000_000}
-	out = downscaleImageForOCRWithBudget(raw, 200, okBudget)
-	if bytes.Equal(out, raw) {
-		t.Fatal("expected downscale to succeed within decode budget")
+	// Hold an existing reservation so the resize fits within limit alone
+	// (400,000 <= 1,000,000) but exceeds limit alongside the held reservation
+	// (700,000 + 400,000 > 1,000,000).
+	budget := &decodeMemoryBudget{limit: 1_000_000}
+	const held int64 = 700_000
+	if !budget.tryAcquire(held) {
+		t.Fatal("expected initial reservation to succeed")
 	}
-	if okBudget.used != 0 {
-		t.Fatalf("decode budget leak: used = %d, want 0", okBudget.used)
+	out, refused = downscaleImageForOCRWithBudget(raw, 200, budget)
+	if !refused || !bytes.Equal(out, raw) {
+		t.Fatal("expected admission refusal while another reservation occupies the budget")
+	}
+	if budget.used != held {
+		t.Fatalf("budget.used = %d, want %d (must not mutate held reservation)", budget.used, held)
+	}
+
+	// Releasing the reservation restores admission and releases cleanly.
+	budget.release(held)
+	out, refused = downscaleImageForOCRWithBudget(raw, 200, budget)
+	if refused || bytes.Equal(out, raw) {
+		t.Fatal("expected downscale to succeed once held reservation is released")
+	}
+	if budget.used != 0 {
+		t.Fatalf("decode budget leak: used = %d, want 0", budget.used)
 	}
 }
