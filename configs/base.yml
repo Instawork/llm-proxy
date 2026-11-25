@@ -824,6 +824,56 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.00
             output: 7.50
+      # GPT-6.2 Astra / Sol (released 2026-11-17, audit-11-23-2026). Cards list
+      # the bare id as the only snapshot. Standard list (pricing.md): Astra
+      # $8/$40, cached $0.40, 30-min cache write $10; Sol $2/$10, cached $0.10,
+      # cache write $2.50. Both cards: "For requests with more than 272K input
+      # tokens, input and cache rates double and output costs 1.5 times the
+      # short-context rate for the full request." Ultrafast (3x through
+      # 2027-02-28, then 6x) and background windows (-30%/-40%) are service
+      # tiers, not list. Limits mirror gpt-6-astra / gpt-6.1-sol.
+      "gpt-6.2-astra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 8.00
+            output: 40.00
+            cache_read: 0.40
+            cache_write: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 16.00
+            output: 60.00
+            cache_read: 0.80
+            cache_write: 20.00
+      "gpt-6.2-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+            cache_read: 0.10
+            cache_write: 2.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
+            cache_read: 0.20
+            cache_write: 5.00
       "gpt-6-luna":
         enabled: true
         aliases: []
@@ -2047,6 +2097,97 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.00
             output: 7.50
+      # GPT-6.2 Astra / Sol (Bedrock launch 2026-11-17, audit-11-23-2026): same
+      # card shape as gpt-6.1-sol — bedrock-runtime offers only the us./global.
+      # profiles (In-Region "Not supported"), US Geo CRIS at OpenAI list +10%,
+      # Global CRIS at list, >272K tier at 2x input / 1.5x output. The cards
+      # print cache rates (Geo: Astra $0.44 read / $11.00 30-min write, Sol
+      # $0.11 / $2.75; Global: $0.40 / $10.00, $0.10 / $2.50; both 2x >272K),
+      # so they are encoded here unlike the older OpenAI-on-Bedrock entries.
+      "us.openai.gpt-6.2-astra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 8.80
+            output: 44.00
+            cache_read: 0.44
+            cache_write: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 17.60
+            output: 66.00
+            cache_read: 0.88
+            cache_write: 22.00
+      "global.openai.gpt-6.2-astra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 8.00
+            output: 40.00
+            cache_read: 0.40
+            cache_write: 10.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 16.00
+            output: 60.00
+            cache_read: 0.80
+            cache_write: 20.00
+      "us.openai.gpt-6.2-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+            cache_read: 0.11
+            cache_write: 2.75
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
+            cache_read: 0.22
+            cache_write: 5.50
+      "global.openai.gpt-6.2-sol":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 2.00
+            output: 10.00
+            cache_read: 0.10
+            cache_write: 2.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.00
+            output: 15.00
+            cache_read: 0.20
+            cache_write: 5.00
       "us.openai.gpt-6-luna":
         enabled: true
         aliases: []
@@ -2216,6 +2357,38 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 2.20
             output: 8.25
+      # GPT-6.2 Astra / Sol (Bedrock launch 2026-11-17, audit-11-23-2026):
+      # Mantle in-Region (us-east-1 only) = OpenAI list +10%, >272K tier at
+      # 2x / 1.5x; the cards print In-Region cache rates (Astra $0.44 read /
+      # $11.00 write, Sol $0.11 / $2.75, both 2x >272K), encoded here.
+      "openai.gpt-6.2-astra":
+        enabled: true
+        aliases: ["gpt-6.2-astra-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 8.80
+            output: 44.00
+            cache_read: 0.44
+            cache_write: 11.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 17.60
+            output: 66.00
+            cache_read: 0.88
+            cache_write: 22.00
+      "openai.gpt-6.2-sol":
+        enabled: true
+        aliases: ["gpt-6.2-sol-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 2.20
+            output: 11.00
+            cache_read: 0.11
+            cache_write: 2.75
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 4.40
+            output: 16.50
+            cache_read: 0.22
+            cache_write: 5.50
       # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
       # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
       # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
@@ -2345,6 +2518,26 @@ providers:
       burst_requests: 100
 
     models:
+      # Gemini 4 Neon (GA 2026-11-18, audit-11-23-2026): "frontier-level
+      # intelligence with fast end-to-end task completion", slotted between
+      # Hydrogen and Carbon. Flat pricing, no prompt-length tier, no promo:
+      # pricing page "$3.00" input / "$15.00" output (including thinking) /
+      # context caching "$0.15" (implicit only). Not on the Free tier. Limits
+      # copied from gemini-4-carbon.
+      "gemini-4-neon":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 3.00
+          output: 15.00
+          cache_read: 0.15
       # Gemini 4 Carbon (GA 2026-11-10, audit-11-16-2026): "our most capable
       # reasoning model". Flat pricing, no prompt-length tier. Pricing page:
       # "$2.00 through November 30, 2026. $4.00 starting December 1, 2026" /
