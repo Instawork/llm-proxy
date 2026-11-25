@@ -287,7 +287,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				registry = redact.NewRegistry()
 				if logger.Enabled(r.Context(), slog.LevelDebug) {
 					logger.Debug("pii_redact: wire request before scrub",
-						piiWireBodyLogAttrs(r.Context(), r.URL.Path, provider, body)...)
+						piiWireBodyLogAttrs(r.URL.Path, provider, body)...)
 				}
 				result, redactErr = redactor.Scrub(redactCtx, string(analysisBody), registry)
 			} else {
@@ -351,7 +351,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				}
 				if logger.Enabled(ctx, slog.LevelDebug) {
 					logger.Debug("pii_redact: wire request after scrub",
-						piiWireBodyLogAttrs(ctx, r.URL.Path, provider, upstreamBody)...)
+						piiWireBodyLogAttrs(r.URL.Path, provider, upstreamBody)...)
 				}
 				setRequestBody(r, upstreamBody)
 			}
@@ -415,7 +415,7 @@ func setRequestBody(r *http.Request, body []byte) {
 	r.Header.Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
 }
 
-func piiWireBodyLogAttrs(ctx context.Context, path, provider string, body []byte) []any {
+func piiWireBodyLogAttrs(path, provider string, body []byte) []any {
 	sum := sha256.Sum256(body)
 	return []any{
 		slog.String("path", path),
@@ -424,7 +424,6 @@ func piiWireBodyLogAttrs(ctx context.Context, path, provider string, body []byte
 		slog.Bool("utf8_valid", utf8.Valid(body)),
 		slog.Bool("json_valid", json.Valid(body)),
 		slog.String("sha256_prefix", hex.EncodeToString(sum[:8])),
-		slog.String("preview", redact.LogPreview(ctx, string(body), 600)),
 	}
 }
 

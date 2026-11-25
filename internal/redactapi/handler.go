@@ -41,6 +41,9 @@ type Config struct {
 	AllowUnauthenticated bool
 	// AuthFailures may be nil to disable failed-credential throttling.
 	AuthFailures AuthFailureGuard
+	// AnalyzeTimeout scales the whole-body Presidio /analyze deadline with the
+	// input text size. Zero leaves the redactor's default Timeout in effect.
+	AnalyzeTimeout redact.AnalyzeTimeoutConfig
 }
 
 // Handler serves POST /redact.
@@ -141,7 +144,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, redactErr := h.redactor.Redact(r.Context(), text)
+	redactCtx := r.Context()
+	if h.cfg.AnalyzeTimeout.Base > 0 || h.cfg.AnalyzeTimeout.Per100KiB > 0 {
+		budget := redact.ComputeAnalyzeTimeout(len(text), h.cfg.AnalyzeTimeout)
+		redactCtx = redact.WithAnalyzeTimeout(redactCtx, budget)
+	}
+
+	result, redactErr := h.redactor.Redact(redactCtx, text)
 	if redactErr != nil {
 		h.logger.Warn(proxylog.ProxyMsg("redact_api: redactor failed"),
 			slog.String("reason", redactFailureReason(redactErr)))

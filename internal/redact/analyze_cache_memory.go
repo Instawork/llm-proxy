@@ -62,6 +62,16 @@ func (c *memoryAnalyzeCache) Set(_ context.Context, analysisText string, spans [
 	}
 }
 
+func (c *memoryAnalyzeCache) getLocal(analysisText string) ([]Span, bool) {
+	return c.Get(context.Background(), analysisText)
+}
+
+func (c *memoryAnalyzeCache) setLocal(analysisText string, spans []Span) {
+	c.Set(context.Background(), analysisText, spans)
+}
+
+func (c *memoryAnalyzeCache) setRemote(_ context.Context, _ string, _ []Span) {}
+
 func (c *memoryAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string) map[string][]Span {
 	hits := make(map[string][]Span)
 	for _, text := range uniqueAnalysisTexts(analysisTexts) {

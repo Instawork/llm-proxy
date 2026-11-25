@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/Instawork/llm-proxy/internal/proxylog"
-	"github.com/Instawork/llm-proxy/internal/redact"
 	"github.com/gorilla/mux"
 )
 
@@ -379,12 +377,9 @@ func parseOpenAINonStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Operator debug preview, routed through redact.LogPreview so that
-	// (1) when pii_redact is enabled, PII is collapsed to ``[REDACTED:...]``
-	// markers, and (2) when it isn't, the line still gives byte-length
-	// context but never raw model output. See internal/redact/log_helper.go.
-	log.Printf("🔍 Debug: OpenAI response body preview: %s",
-		redact.LogPreview(context.Background(), string(bodyBytes), 100))
+	// Log byte length only — never log raw response bodies or invoke
+	// Presidio synchronously on the hot response-parsing path.
+	log.Printf("🔍 Debug: OpenAI response body (%d bytes)", len(bodyBytes))
 
 	var response OpenAIResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
@@ -544,12 +539,9 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 		// compatibility with older fixtures.
 		switch typeField {
 		case "response.created", "response.completed", "response.incomplete", "response.failed", "response.done":
-			// These events may contain usage information
-			log.Printf("🔄 OpenAI Responses API: Found %s event", typeField)
-			// Routed through redact.LogPreview: the chunk carries model
-			// output text, so never dump it raw. See log_helper.go.
-			log.Printf("🔄 OpenAI Responses API: Full chunk data: %s",
-				redact.LogPreview(context.Background(), fmt.Sprintf("%+v", chunkData), 200))
+			// Log metadata only (event type and payload length) — never dump
+			// chunk contents or invoke Presidio on hot-path streaming events.
+			log.Printf("🔄 OpenAI Responses API: Found %s event (%d bytes)", typeField, len(jsonData))
 
 			// Try to extract usage information from either response or event field
 			var dataField map[string]any
@@ -559,14 +551,10 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 			if responseField, hasResponse := chunkData["response"].(map[string]any); hasResponse {
 				dataField = responseField
 				fieldName = "response"
-				log.Printf("🔄 OpenAI Responses API: Response field found: %s",
-					redact.LogPreview(context.Background(), fmt.Sprintf("%+v", responseField), 200))
 			} else if eventField, hasEvent := chunkData["event"].(map[string]any); hasEvent {
 				// Fallback to event field (test data format)
 				dataField = eventField
 				fieldName = "event"
-				log.Printf("🔄 OpenAI Responses API: Event field found: %s",
-					redact.LogPreview(context.Background(), fmt.Sprintf("%+v", eventField), 200))
 			}
 
 			if dataField != nil {
@@ -782,9 +770,9 @@ func parseOpenAIResponsesNonStreamingResponse(responseBody io.Reader) (*LLMRespo
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// See companion preview above (ParseResponseMetadata) — same rationale.
-	log.Printf("🔍 Debug: OpenAI Responses API response body preview: %s",
-		redact.LogPreview(context.Background(), string(bodyBytes), 100))
+	// Log byte length only — never log raw response bodies or invoke
+	// Presidio synchronously on the hot response-parsing path.
+	log.Printf("🔍 Debug: OpenAI Responses API response body (%d bytes)", len(bodyBytes))
 
 	var response OpenAIResponsesAPIResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {

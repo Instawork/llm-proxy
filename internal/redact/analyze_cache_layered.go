@@ -53,3 +53,32 @@ func (c *layeredAnalyzeCache) Set(ctx context.Context, analysisText string, span
 		layer.Set(ctx, analysisText, spans)
 	}
 }
+
+func (c *layeredAnalyzeCache) getLocal(analysisText string) ([]Span, bool) {
+	for _, layer := range c.layers {
+		if split, ok := layer.(splitAnalyzeCache); ok {
+			if spans, hit := split.getLocal(analysisText); hit {
+				return spans, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (c *layeredAnalyzeCache) setLocal(analysisText string, spans []Span) {
+	for _, layer := range c.layers {
+		if split, ok := layer.(splitAnalyzeCache); ok {
+			split.setLocal(analysisText, spans)
+		}
+	}
+}
+
+func (c *layeredAnalyzeCache) setRemote(ctx context.Context, analysisText string, spans []Span) {
+	for _, layer := range c.layers {
+		if split, ok := layer.(splitAnalyzeCache); ok {
+			split.setRemote(ctx, analysisText, spans)
+		} else {
+			layer.Set(ctx, analysisText, spans)
+		}
+	}
+}

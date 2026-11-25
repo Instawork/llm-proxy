@@ -71,7 +71,10 @@ rewriting YAML per env.
 | `enabled`         | `bool`    | `false`       | Master gate. When false, no other field matters.                                              |
 | `analyzer_url`    | `string`  | required      | Base URL of the Presidio analyzer sidecar.                                                    |
 | `fail_mode`       | `enum`    | `open`        | `open` = log warn + pass through unredacted; `closed` = abort 503.                            |
-| `timeout_ms`      | `int`     | `3000`        | Per-/analyze deadline. When PII redaction is on, prefer a generous budget so redaction succeeds; tune down only after baselining warm sidecar p99. |
+| `timeout_ms`      | `int`     | `8000`        | Base whole-body `/analyze` deadline shared across all JSON fields and chunks of a single request. Combined with `timeout_ms_per_100kb` and capped by `timeout_ms_max`. |
+| `timeout_ms_per_100kb` | `int` | `6000`       | Extra whole-body `/analyze` budget added per 100 KiB of request body (`0` disables size scaling). |
+| `timeout_ms_max`  | `int`     | `60000` (`180000` in prod) | Upper bound on the scaled whole-body `/analyze` deadline. |
+| `analyze_chunk_chars` | `int` | `32768`       | Splits individual text fields larger than this many characters into overlapping chunks analyzed in parallel with per-chunk caching (`0` disables chunking). |
 | `score_threshold` | `float64` | `0.5`         | Min Presidio confidence for a span to be redacted.                                            |
 | `entity_types`    | `[]string`| `DefaultEntityTypes` | Recognizer scope. Narrow it to save latency. **Cannot be widened via YAML** — `redact.New` filters out anything that isn't on the in-code allowlist (with a `WARN` log). |
 | `language`        | `string`  | `en`          | Forwarded as the `language` parameter to /analyze.                                            |
@@ -161,10 +164,10 @@ adding the feature; the findings are below.
 
 | Location                                                       | Was                                  | Now                                                       |
 | -------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| `internal/providers/openai.go` (ParseResponseMetadata)         | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/providers/openai.go` (ParseResponsesAPIMetadata)     | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/providers/anthropic.go` (ParseResponseMetadata)      | Logged 100 raw bytes of every response | Routed through `redact.LogPreview`                        |
-| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Routed through `redact.LogPreview`                        |
+| `internal/providers/openai.go` (ParseResponseMetadata)         | Logged 100 raw bytes of every response | Logs byte length only (no Presidio call on hot path)     |
+| `internal/providers/openai.go` (ParseResponsesAPIMetadata)     | Logged 100 raw bytes / `%+v` chunks  | Logs event type and byte length only (no Presidio call)   |
+| `internal/providers/anthropic.go` (ParseResponseMetadata)      | Logged 100 raw bytes of every response | Logs byte length only (no Presidio call on hot path)     |
+| `internal/middleware/token_parsing.go` (parse-error preview)   | Logged 200 raw bytes (gzip + plain) on metadata-parse failure | Routed through `redact.LogPreview` (error path only) |
 
 `redact.LogPreview` returns:
 
@@ -231,10 +234,7 @@ directly.
 
 ### What `timeout_ms` does on a slow sidecar
 
-`timeout_ms` is enforced via `context.WithTimeout` on every `/analyze`
-call. When the deadline fires, `redact.Redact` returns a `context
-deadline exceeded` error — and from there the middleware honours
-`fail_mode`:
+The request's whole-body Presidio deadline is computed from `timeout_ms + floor(body_bytes / 100 KiB) * timeout_ms_per_100kb`, capped at `timeout_ms_max`, and enforced via a shared `context.WithTimeout` across all JSON fields and chunks of that request (cache prefetch runs under its own tight timeout before this budget starts so a degraded Redis does not eat Presidio headroom). When the deadline fires, `redact.Scrub` / `redact.Redact` returns a `context deadline exceeded` error — and from there the middleware honours `fail_mode`:
 
 - `fail_mode: open` (default) → log WARN with the
   `error="context deadline exceeded"` field and pass the request

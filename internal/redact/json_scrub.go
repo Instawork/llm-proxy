@@ -34,7 +34,17 @@ func (r *Redactor) scrubJSON(ctx context.Context, text string, reg *Registry, fo
 	var tasks []jsonScrubTask
 	collectJSONScrubTasks(root, nil, &tasks, adapter)
 
+	// Run cache prefetch under its own tight timeout BEFORE starting the
+	// whole-body Presidio deadline so a slow or stalled Redis never eats into
+	// the Presidio budget.
 	ctx = r.prefetchAnalyzeCache(ctx, tasks)
+
+	if len(tasks) > 0 {
+		overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, overallTimeout)
+		defer cancel()
+	}
 
 	acc := Result{EntityCounts: map[string]int{}}
 	if err := r.runJSONScrubTasks(ctx, tasks, reg, forceRedactMarkers, &acc); err != nil {
@@ -228,13 +238,34 @@ func mergeScrubResult(dst *Result, src Result) {
 }
 
 func (r *Redactor) prefetchAnalyzeCache(ctx context.Context, tasks []jsonScrubTask) context.Context {
-	if r.analyzeCache == nil || len(tasks) <= 1 {
+	if r.analyzeCache == nil || len(tasks) == 0 {
 		return ctx
 	}
 	adapter := AdapterForContext(ctx)
-	texts := make([]string, len(tasks))
+	texts := make([]string, 0, len(tasks))
+	checked := make(map[string]struct{}, len(tasks))
 	for i := range tasks {
-		texts[i] = prepareJSONForAnalysis(tasks[i].text, adapter)
+		prepared := prepareJSONForAnalysis(tasks[i].text, adapter)
+		if prepared == "" {
+			continue
+		}
+		texts = append(texts, prepared)
+		checked[prepared] = struct{}{}
+		// Also include chunk texts for fields that will split in analyzeChunked
+		// so both field-level and chunk-level cache lookups finish in one
+		// bounded batch BEFORE scrubJSON starts the Presidio deadline.
+		if r.cfg.ChunkChars > 0 {
+			if runes := []rune(prepared); len(runes) > r.cfg.ChunkChars {
+				for _, ch := range chunkRunes(runes, r.cfg.ChunkChars, analyzeChunkOverlapChars) {
+					if ch.text != "" {
+						texts = append(texts, ch.text)
+						checked[ch.text] = struct{}{}
+					}
+				}
+			}
+		}
 	}
-	return WithAnalyzeCachePrefetch(ctx, r.analyzeCache.GetMulti(ctx, texts))
+	prefetchCtx, cancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)
+	defer cancel()
+	return withAnalyzeCachePrefetchChecked(ctx, r.analyzeCache.GetMulti(prefetchCtx, texts), checked)
 }

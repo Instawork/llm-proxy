@@ -151,21 +151,26 @@ features:
     fail_mode: "closed"
     # Large vision bodies (the proxy strips embedded base64 before /analyze,
     # but big multi-part text + cold starts still take a while). Base timeout
-    # plus per-100KiB scaling covers tool-result payloads (Redshift ACLs).
+    # plus per-100KiB scaling covers large chat/tool-result payloads: measured
+    # ECS Presidio throughput is ~3.5-4.5s per 100 KiB under CPU contention,
+    # so 6s/100KiB keeps ~400 KiB bodies (~26s budget) and ~1 MiB bodies
+    # (~68s budget) safely inside the deadline without weakening fail_mode.
     timeout_ms: 8000
-    timeout_ms_per_100kb: 2000
-    # Must cover the largest body max_body_bytes admits: 8 MiB scales to
-    # 8s + 80 * 2s = 168s under the formula above. Stays well under the
-    # dedicated ALB's 300s idle_timeout so the upstream call still fits.
+    timeout_ms_per_100kb: 6000
+    # Caps the scaled whole-body deadline well under the dedicated ALB's 300s
+    # idle_timeout so the upstream call still fits. The 180s cap binds around
+    # ~2.9 MiB (~3.9-5.0 MiB at measured throughput); larger payloads up to
+    # max_body_bytes (8 MiB) rely on per-chunk caching across retries within
+    # the 300s analyze_cache TTL.
     timeout_ms_max: 180000
     analyze_concurrency: 4
     # Presidio's spaCy NER is single-threaded per /analyze call, so one large
     # field (e.g. a big tool-result string) pins a single sidecar worker for
-    # its whole call no matter how many workers are running — the root cause
-    # of the Aug 2026 fail_mode "closed" 503 incident on large bodies. Fields
-    # above 64 KiB are split into overlapping chunks and analyzed in
-    # parallel (bounded by analyze_concurrency) instead of one long call.
-    analyze_chunk_chars: 65536
+    # its whole call no matter how many workers are running. Fields above
+    # 32 KiB are split into overlapping chunks and analyzed in parallel
+    # (bounded by analyze_concurrency) with per-chunk caching, keeping tail
+    # latency and cache granularity tight with ~0.6% overlap overhead.
+    analyze_chunk_chars: 32768
     # Without this, max_body_bytes falls back to the 1 MiB default. With
     # fail_mode "closed" any body over the limit 503s instead of skipping
     # redaction, and a caller that retries an oversized payload keeps

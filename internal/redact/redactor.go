@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -161,9 +162,9 @@ type Config struct {
 	// docker-compose network.
 	AnalyzerURL string
 
-	// Timeout caps each /analyze round trip. Keep this tight (50–250 ms)
-	// — the proxy serves user traffic and a slow sidecar must not stall
-	// requests. Default: 200 ms.
+	// Timeout is the default whole-body /analyze deadline when the caller
+	// does not attach a size-scaled budget via WithAnalyzeTimeout. Shared
+	// across all fields and chunks of a request. Default: 3s.
 	Timeout time.Duration
 
 	// EntityTypes scopes which recognizers run. Empty means "use
@@ -223,6 +224,9 @@ type Redactor struct {
 	client          *http.Client
 	allowTestEmails bool
 	analyzeCache    AnalyzeCache
+	cacheWriteSem   chan struct{}
+	inflightMu      sync.Mutex
+	inflight        map[[32]byte]*inflightAnalyzeCall
 }
 
 // New constructs a Redactor. AnalyzerURL is required.
@@ -283,13 +287,27 @@ func New(cfg Config) (*Redactor, error) {
 	if client == nil {
 		// Per-request context deadlines in analyze() govern /analyze latency;
 		// a non-zero Client.Timeout would cap scaled body-size budgets.
-		client = &http.Client{}
+		// Raise MaxIdleConnsPerHost above Go's default (2) so parallel
+		// chunk/field waves reuse localhost keep-alive sockets.
+		idlePerHost := max(cfg.AnalyzeConcurrency*4, 16)
+		var transport http.RoundTripper
+		if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+			cloned := base.Clone()
+			cloned.MaxIdleConnsPerHost = idlePerHost
+			if cloned.MaxIdleConns < idlePerHost*2 {
+				cloned.MaxIdleConns = idlePerHost * 2
+			}
+			transport = cloned
+		}
+		client = &http.Client{Transport: transport}
 	}
 	return &Redactor{
 		cfg:             cfg,
 		client:          client,
 		allowTestEmails: allowTestEmails,
 		analyzeCache:    cfg.AnalyzeCache,
+		cacheWriteSem:   make(chan struct{}, defaultCacheWriteConcurrency),
+		inflight:        make(map[[32]byte]*inflightAnalyzeCall),
 	}, nil
 }
 
@@ -297,6 +315,7 @@ func New(cfg Config) (*Redactor, error) {
 // “[REDACTED:ENTITY_TYPE]“ regardless of policy tier. Use this for
 // one-way observability (log previews) where placeholders must not leak.
 func (r *Redactor) Redact(ctx context.Context, text string) (Result, error) {
+	ctx = withAnalyzeSem(ctx, r.analyzeConcurrency())
 	if json.Valid([]byte(text)) {
 		return r.scrubJSON(ctx, text, nil, true)
 	}
@@ -306,6 +325,7 @@ func (r *Redactor) Redact(ctx context.Context, text string) (Result, error) {
 // Scrub analyzes text and replaces spans using policy-aware placeholders.
 // When reg is non-nil, MASK/SEAL entries are recorded for response restore.
 func (r *Redactor) Scrub(ctx context.Context, text string, reg *Registry) (Result, error) {
+	ctx = withAnalyzeSem(ctx, r.analyzeConcurrency())
 	if json.Valid([]byte(text)) {
 		return r.scrubJSON(ctx, text, reg, false)
 	}
@@ -325,22 +345,38 @@ func (r *Redactor) scrub(ctx context.Context, text string, reg *Registry, forceR
 }
 
 func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Span, error) {
-	if prefetch := analyzeCachePrefetchFromContext(ctx); prefetch != nil {
-		if spans, ok := prefetch[analysisText]; ok {
+	prefetch := analyzeCachePrefetchFromContext(ctx)
+	if prefetch.hits != nil {
+		if spans, ok := prefetch.hits[analysisText]; ok {
 			return spans, nil
 		}
 	}
 	if r.analyzeCache != nil {
-		if spans, ok := r.analyzeCache.Get(ctx, analysisText); ok {
-			return spans, nil
+		if _, alreadyPrefetched := prefetch.checked[analysisText]; alreadyPrefetched {
+			// Batch GetMulti already queried remote layers before the Presidio
+			// deadline started; only consult in-process memory here so a
+			// stalled Redis is never hit again per task.
+			if spans, ok := r.cacheGetLocal(analysisText); ok {
+				return spans, nil
+			}
+		} else {
+			getCtx, cancel := context.WithTimeout(ctx, redisAnalyzeCacheOpTimeout)
+			spans, ok := r.analyzeCache.Get(getCtx, analysisText)
+			cancel()
+			if ok {
+				return spans, nil
+			}
 		}
 	}
-	spans, err := r.analyzeChunked(ctx, analysisText)
+	spans, wasChunked, err := r.analyzeChunked(ctx, analysisText)
 	if err != nil {
 		return nil, err
 	}
-	if r.analyzeCache != nil {
-		r.analyzeCache.Set(ctx, analysisText, spans)
+	// Non-chunked calls already populate r.analyzeCache inside analyzeLeaf;
+	// for chunked texts we also cache the merged full-text spans so exact
+	// repeats hit in one lookup without re-chunking.
+	if wasChunked && r.analyzeCache != nil {
+		r.cacheSet(analysisText, spans)
 	}
 	return spans, nil
 }
@@ -349,7 +385,9 @@ func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Spa
 // entity scope and returns raw spans without redacting the input. The
 // redactor's ScoreThreshold is applied server-side.
 func (r *Redactor) Analyze(ctx context.Context, text string) ([]Span, error) {
-	return r.analyzeChunked(ctx, text)
+	ctx = withAnalyzeSem(ctx, r.analyzeConcurrency())
+	spans, _, err := r.analyzeChunked(ctx, text)
+	return spans, err
 }
 
 // AnalyzeEntities posts text to Presidio /analyze scoped to entityTypes
@@ -370,6 +408,19 @@ func (r *Redactor) AnalyzeEntities(ctx context.Context, text string, entityTypes
 // EntityTypes for this call (after allowlist filtering). wireThreshold is
 // forwarded to Presidio as score_threshold (server-side span filtering).
 func (r *Redactor) analyze(ctx context.Context, text string, entityTypesOverride []string, wireThreshold float64) ([]Span, error) {
+	timeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return r.doAnalyzeHTTP(reqCtx, analyzeSemFromContext(ctx), text, entityTypesOverride, wireThreshold)
+}
+
+func (r *Redactor) doAnalyzeHTTP(
+	reqCtx context.Context,
+	sem chan struct{},
+	text string,
+	entityTypesOverride []string,
+	wireThreshold float64,
+) ([]Span, error) {
 	entityTypes := r.cfg.EntityTypes
 	if entityTypesOverride != nil {
 		kept, dropped := filterToAllowlist(entityTypesOverride)
@@ -399,9 +450,14 @@ func (r *Redactor) analyze(ctx context.Context, text string, entityTypesOverride
 		return nil, fmt.Errorf("redact: marshal payload: %w", err)
 	}
 
-	timeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	if sem != nil {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-reqCtx.Done():
+			return nil, fmt.Errorf("redact: analyze call failed: %w", reqCtx.Err())
+		}
+	}
 
 	httpReq, err := http.NewRequestWithContext(
 		reqCtx, http.MethodPost,

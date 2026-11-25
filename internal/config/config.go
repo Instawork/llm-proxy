@@ -167,17 +167,19 @@ type PIIRedactConfig struct {
 	//                        log line outweighs availability.
 	FailMode string `yaml:"fail_mode"`
 
-	// TimeoutMs caps each /analyze round trip. Default: 3000ms (see base.yml).
-	// Tune downward only after baselining warm sidecar p99 if latency matters.
+	// TimeoutMs is the base whole-body /analyze deadline shared across all
+	// fields and chunks of a single request. Default: 8000ms (see base.yml).
+	// Combined with TimeoutMsPer100KB and TimeoutMsMax to compute the total
+	// per-request budget.
 	TimeoutMs int `yaml:"timeout_ms"`
 
-	// TimeoutMsPer100KB adds extra /analyze budget per 100 KiB of request
-	// body (see redact.analyze100KiB). Zero disables scaling. Large tool
-	// results (Redshift table_acl, etc.) need the extra headroom.
+	// TimeoutMsPer100KB adds extra whole-body /analyze budget per 100 KiB of
+	// request body (see redact.analyze100KiB). Zero disables scaling. Large
+	// tool results (Redshift table_acl, etc.) need the extra headroom.
 	TimeoutMsPer100KB int `yaml:"timeout_ms_per_100kb,omitempty"`
 
-	// TimeoutMsMax caps the scaled deadline. Zero defaults to 30s when
-	// timeout_ms_per_100kb is set.
+	// TimeoutMsMax caps the scaled whole-body deadline. Zero defaults to 30s
+	// when timeout_ms_per_100kb is set.
 	TimeoutMsMax int `yaml:"timeout_ms_max,omitempty"`
 
 	// AnalyzeConcurrency caps parallel Presidio /analyze calls per JSON body.

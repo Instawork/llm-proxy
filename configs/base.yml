@@ -43,14 +43,15 @@ features:
     # "closed" - abort the request with 503. Use only when regulatory cost
     #            of an unredacted log line outweighs availability.
     fail_mode: "open"
-    # Presidio /analyze can take hundreds of ms (cold start, large bodies).
-    # When pii_redact is on, prefer waiting for redaction over failing open early.
-    timeout_ms: 3000
-    # Extra /analyze budget per 100 KiB of request body. Large tool results
-    # (Redshift table_acl, etc.) need headroom beyond the base timeout.
-    timeout_ms_per_100kb: 1000
-    timeout_ms_max: 30000
+    # Whole-body Presidio /analyze budget shared across all JSON fields and
+    # chunks of a single request (base + per-100KiB scaling, capped at
+    # timeout_ms_max). Sized for ~3.5-4.5s/100KiB spaCy throughput so
+    # fail-open overlays do not time out prematurely on multi-message bodies.
+    timeout_ms: 8000
+    timeout_ms_per_100kb: 6000
+    timeout_ms_max: 60000
     analyze_concurrency: 4
+    analyze_chunk_chars: 32768
     score_threshold: 0.5
     # Empty -> use redact.DefaultEntityTypes. Narrow this list to save
     # latency on known-safe payload shapes, never widen it here — the

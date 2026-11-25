@@ -459,3 +459,62 @@ func TestRealEnvConfigs_ProductionSidecarProfile(t *testing.T) {
 	assert.Equal(t, ProviderAuthTaskSigV4, cfg.Providers["bedrock-mantle"].Auth,
 		"sidecar profile must set bedrock-mantle.auth=task_sigv4")
 }
+
+func computeExpectedAnalyzeBudgetMs(bodyBytes int, pii PIIRedactConfig) int {
+	budget := pii.TimeoutMs
+	if budget <= 0 {
+		budget = 3000
+	}
+	if pii.TimeoutMsPer100KB > 0 && bodyBytes > 0 {
+		budget += (bodyBytes / (100 * 1024)) * pii.TimeoutMsPer100KB
+	}
+	maxMs := pii.TimeoutMsMax
+	if maxMs <= 0 && pii.TimeoutMsPer100KB > 0 {
+		maxMs = 30000
+	}
+	if maxMs > 0 && budget > maxMs {
+		budget = maxMs
+	}
+	return budget
+}
+
+func TestRealEnvConfigs_ProductionPIIRedactLargePayloadHeadroom(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	require.NoError(t, err)
+	if _, err := os.Stat(configsDir); err != nil {
+		t.Skipf("configs dir not found (%s) — skipping", configsDir)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	require.NoError(t, os.Chdir(repoRoot))
+
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("LLM_PROXY_CONFIG_PROFILE", "")
+	cfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+
+	pii := cfg.Features.PIIRedact
+	assert.True(t, pii.Enabled)
+	assert.Equal(t, "closed", pii.FailMode)
+	assert.GreaterOrEqual(t, computeExpectedAnalyzeBudgetMs(407*1024, pii), 24000,
+		"production 407 KiB whole-body budget must exceed measured ~3.5-4.5s/100KiB Presidio throughput")
+	assert.LessOrEqual(t, computeExpectedAnalyzeBudgetMs(8*1024*1024, pii), 180000,
+		"production max scaled budget must stay well under the ALB 300s idle timeout")
+	assert.Greater(t, pii.AnalyzeChunkChars, 0,
+		"production should enable chunking for large fields")
+	assert.LessOrEqual(t, pii.AnalyzeChunkChars, 65536,
+		"production chunk size should stay at or below 64 KiB for bounded tail latency")
+
+	t.Setenv("ENVIRONMENT", "dev")
+	devCfg, err := LoadEnvironmentConfig()
+	require.NoError(t, err)
+	devPII := devCfg.Features.PIIRedact
+	assert.GreaterOrEqual(t, computeExpectedAnalyzeBudgetMs(200*1024, devPII), 14000,
+		"dev whole-body budget for a 200 KiB payload should not regress into premature fail-open timeouts")
+	assert.Greater(t, devPII.AnalyzeChunkChars, 0,
+		"dev should inherit chunking from base.yml")
+}
