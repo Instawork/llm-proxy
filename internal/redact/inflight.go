@@ -43,14 +43,16 @@ type inflightAnalyzeCall struct {
 }
 
 // canJoin reports whether a new waiter with waitBudget should coalesce onto an
-// existing in-flight call. Rejecting calls that have already expired or run for
-// at least half the waiter's budget prevents one hung sidecar call from
-// poisoning every overlapping arrival on a shared text (such as a system prompt).
+// existing in-flight call. Rejecting calls that have already run for at least
+// half the waiter's budget prevents one hung sidecar call from poisoning every
+// overlapping arrival on a shared text (such as a system prompt), and requiring
+// at least waitBudget/2 of remaining call lifetime prevents a long-budget
+// waiter from inheriting a short-budget call's earlier deadline.
 func (c *inflightAnalyzeCall) canJoin(now time.Time, waitBudget time.Duration) bool {
-	if !now.Before(c.deadline) {
+	if waitBudget <= 0 || !now.Before(c.deadline) {
 		return false
 	}
-	if waitBudget <= 0 {
+	if c.deadline.Sub(now) < waitBudget/2 {
 		return false
 	}
 	return now.Sub(c.startedAt) < waitBudget/2
@@ -94,6 +96,13 @@ func (r *Redactor) analyzeLeaf(ctx context.Context, text string) ([]Span, error)
 	}
 	r.inflightMu.Unlock()
 
+	// Check fast in-process L1 cache before starting a new Presidio HTTP call
+	// so identical chunks/fields that completed earlier in the same scan reuse
+	// the cached spans with zero network I/O.
+	if cached, ok := r.cacheGetLocal(text); ok {
+		return cached, nil
+	}
+
 	// Acquire our own request's concurrency slot BEFORE registering in the
 	// in-flight map so another independent request never coalesces onto a call
 	// that is still queued behind our semaphore.
@@ -106,6 +115,13 @@ func (r *Redactor) analyzeLeaf(ctx context.Context, text string) ([]Span, error)
 		case <-waitCtx.Done():
 			return nil, fmt.Errorf("redact: analyze call failed: %w", waitCtx.Err())
 		}
+	}
+
+	if cached, ok := r.cacheGetLocal(text); ok {
+		if releaseSem != nil {
+			releaseSem()
+		}
+		return cached, nil
 	}
 
 	now = time.Now()

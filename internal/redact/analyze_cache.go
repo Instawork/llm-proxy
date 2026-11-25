@@ -68,6 +68,8 @@ func AnalyzeCacheFingerprint(cfg Config) string {
 	fmt.Fprintf(&b, "%.4f", cfg.ScoreThreshold)
 	b.WriteByte(0)
 	b.WriteString(strings.Join(types, ","))
+	b.WriteByte(0)
+	fmt.Fprintf(&b, "%d", cfg.ChunkChars)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:8])
 }

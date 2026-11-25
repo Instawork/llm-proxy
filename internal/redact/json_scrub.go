@@ -242,13 +242,27 @@ func (r *Redactor) prefetchAnalyzeCache(ctx context.Context, tasks []jsonScrubTa
 		return ctx
 	}
 	adapter := AdapterForContext(ctx)
-	texts := make([]string, len(tasks))
+	texts := make([]string, 0, len(tasks))
 	checked := make(map[string]struct{}, len(tasks))
 	for i := range tasks {
 		prepared := prepareJSONForAnalysis(tasks[i].text, adapter)
-		texts[i] = prepared
-		if prepared != "" {
-			checked[prepared] = struct{}{}
+		if prepared == "" {
+			continue
+		}
+		texts = append(texts, prepared)
+		checked[prepared] = struct{}{}
+		// Also include chunk texts for fields that will split in analyzeChunked
+		// so both field-level and chunk-level cache lookups finish in one
+		// bounded batch BEFORE scrubJSON starts the Presidio deadline.
+		if r.cfg.ChunkChars > 0 {
+			if runes := []rune(prepared); len(runes) > r.cfg.ChunkChars {
+				for _, ch := range chunkRunes(runes, r.cfg.ChunkChars, analyzeChunkOverlapChars) {
+					if ch.text != "" {
+						texts = append(texts, ch.text)
+						checked[ch.text] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 	prefetchCtx, cancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)

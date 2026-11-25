@@ -45,24 +45,41 @@ func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, boo
 
 	perChunkSpans := make([][]Span, len(chunks))
 
-	// Batch-prefetch per-chunk cache entries under a tight timeout BEFORE
-	// starting the Presidio deadline so retries or growing-prefix payloads skip
-	// chunks that already succeeded without letting a stalled Redis eat the
-	// Presidio budget.
+	// Resolve per-chunk cache entries BEFORE starting the Presidio deadline.
+	// When scrubJSON already batch-prefetched these chunks before starting its
+	// shared deadline, reuse those results (plus fast in-process L1 hits) so a
+	// stalled Redis is never queried again inside the Presidio budget.
 	var missing []int
 	if r.analyzeCache != nil {
-		chunkTexts := make([]string, len(chunks))
+		prefetch := analyzeCachePrefetchFromContext(ctx)
+		var unprefetchedIdx []int
+		var unprefetchedTexts []string
 		for i := range chunks {
-			chunkTexts[i] = chunks[i].text
-		}
-		prefetchCtx, prefetchCancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)
-		hits := r.analyzeCache.GetMulti(prefetchCtx, chunkTexts)
-		prefetchCancel()
-		for i := range chunks {
-			if cached, ok := hits[chunks[i].text]; ok {
+			if cached, ok := prefetch.hits[chunks[i].text]; ok {
 				perChunkSpans[i] = rebaseSpans(cached, chunks[i].offset)
-			} else {
+				continue
+			}
+			if _, alreadyChecked := prefetch.checked[chunks[i].text]; alreadyChecked {
+				if cached, ok := r.cacheGetLocal(chunks[i].text); ok {
+					perChunkSpans[i] = rebaseSpans(cached, chunks[i].offset)
+					continue
+				}
 				missing = append(missing, i)
+				continue
+			}
+			unprefetchedIdx = append(unprefetchedIdx, i)
+			unprefetchedTexts = append(unprefetchedTexts, chunks[i].text)
+		}
+		if len(unprefetchedTexts) > 0 {
+			prefetchCtx, prefetchCancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)
+			hits := r.analyzeCache.GetMulti(prefetchCtx, unprefetchedTexts)
+			prefetchCancel()
+			for _, i := range unprefetchedIdx {
+				if cached, ok := hits[chunks[i].text]; ok {
+					perChunkSpans[i] = rebaseSpans(cached, chunks[i].offset)
+				} else {
+					missing = append(missing, i)
+				}
 			}
 		}
 	} else {

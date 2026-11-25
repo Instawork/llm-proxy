@@ -2,6 +2,7 @@ package redact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,6 +144,12 @@ func TestAnalyzeChunked_PerChunkCacheSurvivesPartialTimeoutAndAcceleratesRetry(t
 		t.Fatalf("US_SSN count = %d, want 2", res.EntityCounts["US_SSN"])
 	}
 
+	// Attempt 2 must also populate the merged full-text cache entry so attempt 3
+	// hits in a single lookup without re-chunking.
+	if cachedFull, ok := cache.Get(context.Background(), text); !ok || len(cachedFull) != 2 {
+		t.Fatalf("merged full-text cache entry missing after attempt 2: ok=%v len=%d", ok, len(cachedFull))
+	}
+
 	// Attempt 3: full-field cache entry is now warm -> zero Presidio calls.
 	callsBeforeAttempt3 := calls.Load()
 	if _, err := r.Scrub(attempt2Ctx, text, NewRegistry()); err != nil {
@@ -150,6 +157,36 @@ func TestAnalyzeChunked_PerChunkCacheSurvivesPartialTimeoutAndAcceleratesRetry(t
 	}
 	if delta := calls.Load() - callsBeforeAttempt3; delta != 0 {
 		t.Fatalf("attempt 3 made %d Presidio calls, want 0 (warm full-text cache)", delta)
+	}
+}
+
+func TestAnalyzeCacheFingerprint_IncludesChunkChars(t *testing.T) {
+	base := Config{
+		EntityTypes:    DefaultEntityTypes,
+		ScoreThreshold: 0.5,
+		Language:       "en",
+		ChunkChars:     32768,
+	}
+	other := base
+	other.ChunkChars = 65536
+	if AnalyzeCacheFingerprint(base) == AnalyzeCacheFingerprint(other) {
+		t.Fatal("AnalyzeCacheFingerprint must differ when ChunkChars differs")
+	}
+}
+
+func TestInflightCanJoin_RejectsShorterRemainingLifetime(t *testing.T) {
+	now := time.Now()
+	shortCall := &inflightAnalyzeCall{
+		startedAt: now.Add(-10 * time.Millisecond),
+		deadline:  now.Add(90 * time.Millisecond),
+	}
+	// A 1000ms waiter must not join a call with only 90ms left (< 500ms).
+	if shortCall.canJoin(now, time.Second) {
+		t.Fatal("expected long-budget waiter to reject short-remaining-lifetime call")
+	}
+	// A 100ms waiter with 10ms elapsed (< 50ms) and 90ms left (>= 50ms) joins.
+	if !shortCall.canJoin(now, 100*time.Millisecond) {
+		t.Fatal("expected equal-budget waiter to join fresh call")
 	}
 }
 
@@ -284,26 +321,56 @@ func TestAnalyzeChunked_PrefixCacheHitOnAppendedText(t *testing.T) {
 	}
 }
 
+func waitSignal(t *testing.T, ch <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+	}
+}
+
+func waitInflightWaiters(t *testing.T, r *Redactor, text string, want int) {
+	t.Helper()
+	key := sha256.Sum256([]byte(text))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.inflightMu.Lock()
+		call := r.inflight[key]
+		got := 0
+		if call != nil {
+			got = call.waiters
+		}
+		r.inflightMu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for inflight waiter count == %d", want)
+}
+
 func TestAnalyzeLeaf_CoalescesConcurrentIdenticalRequestsAndPreservesSurvivor(t *testing.T) {
 	const ssn = "222-33-4444"
 	var calls atomic.Int32
-	started := make(chan struct{}, 2)
+	var startOnce sync.Once
+	started := make(chan struct{})
+	var releaseOnce sync.Once
+	release := make(chan struct{})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
 		calls.Add(1)
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-		select {
-		case <-time.After(120 * time.Millisecond):
-		case <-req.Context().Done():
-			return
-		}
 		var payload struct {
 			Text string `json:"text"`
 		}
 		_ = json.NewDecoder(req.Body).Decode(&payload)
+		startOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+		case <-req.Context().Done():
+			return
+		}
 		idx := strings.Index(payload.Text, ssn)
 		_ = json.NewEncoder(w).Encode([]Span{{
 			Start: idx, End: idx + len(ssn), EntityType: "US_SSN", Score: 0.95,
@@ -335,32 +402,52 @@ func TestAnalyzeLeaf_CoalescesConcurrentIdenticalRequestsAndPreservesSurvivor(t 
 
 	text := "caller ssn is " + ssn
 
-	// Caller A has a short timeout (40ms) and will abandon early; Caller B
-	// joins the same in-flight call with a generous timeout and must succeed
-	// without triggering a second Presidio HTTP call.
-	var wg sync.WaitGroup
-	var errA, errB error
-	var resB Result
-
-	wg.Add(2)
+	// Caller A starts the call, Caller B attaches deterministically, then A
+	// cancels early; B must survive and succeed without a second HTTP call.
+	ctxA, cancelA := context.WithCancel(context.Background())
+	defer cancelA()
+	doneA := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		ctxA := WithAnalyzeTimeout(context.Background(), 40*time.Millisecond)
-		_, errA = r.Scrub(ctxA, text, NewRegistry())
+		_, err := r.Scrub(ctxA, text, NewRegistry())
+		doneA <- err
 	}()
-	go func() {
-		defer wg.Done()
-		<-started
-		ctxB := WithAnalyzeTimeout(context.Background(), 500*time.Millisecond)
-		resB, errB = r.Scrub(ctxB, text, NewRegistry())
-	}()
-	wg.Wait()
 
-	if !errors.Is(errA, context.DeadlineExceeded) {
-		t.Fatalf("caller A err = %v, want context.DeadlineExceeded", errA)
+	waitSignal(t, started, "caller A analyzer request")
+
+	type scrubOutcome struct {
+		res Result
+		err error
 	}
-	if errB != nil {
-		t.Fatalf("caller B failed: %v", errB)
+	doneB := make(chan scrubOutcome, 1)
+	go func() {
+		ctxB := WithAnalyzeTimeout(context.Background(), time.Second)
+		res, err := r.Scrub(ctxB, text, NewRegistry())
+		doneB <- scrubOutcome{res: res, err: err}
+	}()
+
+	waitInflightWaiters(t, r, text, 2)
+	cancelA()
+
+	select {
+	case errA := <-doneA:
+		if !errors.Is(errA, context.Canceled) {
+			t.Fatalf("caller A err = %v, want context.Canceled", errA)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for caller A to exit after cancel")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+
+	var resB Result
+	select {
+	case outB := <-doneB:
+		if outB.err != nil {
+			t.Fatalf("caller B failed: %v", outB.err)
+		}
+		resB = outB.res
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for caller B to succeed")
 	}
 	if strings.Contains(resB.Text, ssn) {
 		t.Fatalf("caller B leaked raw SSN: %q", resB.Text)
@@ -401,41 +488,57 @@ func TestAnalyzeLeaf_AllWaitersCanceledCancelsUpstream(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
+	const text = "shared cancel text"
 	ctxA, cancelA := context.WithCancel(context.Background())
 	ctxB, cancelB := context.WithCancel(context.Background())
 	defer cancelA()
 	defer cancelB()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	doneA := make(chan error, 1)
+	doneB := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		_, _ = r.Scrub(ctxA, "shared cancel text", NewRegistry())
+		_, err := r.Scrub(ctxA, text, NewRegistry())
+		doneA <- err
 	}()
-	go func() {
-		defer wg.Done()
-		<-started
-		_, _ = r.Scrub(ctxB, "shared cancel text", NewRegistry())
-	}()
+	waitSignal(t, started, "upstream request start")
 
-	<-started
-	time.Sleep(15 * time.Millisecond)
+	go func() {
+		_, err := r.Scrub(ctxB, text, NewRegistry())
+		doneB <- err
+	}()
+	waitInflightWaiters(t, r, text, 2)
+
+	// Canceling only caller A must NOT cancel upstream while B is still attached.
 	cancelA()
-	cancelB()
-	wg.Wait()
-
+	select {
+	case <-doneA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for caller A to exit")
+	}
+	waitInflightWaiters(t, r, text, 1)
 	select {
 	case <-upstreamCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("upstream Presidio request was not canceled after all waiters abandoned it")
+		t.Fatal("upstream canceled prematurely while caller B was still waiting")
+	default:
 	}
+
+	// Canceling the last waiter (B) must cancel upstream promptly.
+	cancelB()
+	select {
+	case <-doneB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for caller B to exit")
+	}
+	waitSignal(t, upstreamCanceled, "upstream cancellation after all waiters left")
 }
 
 func TestAnalyzeLeaf_LeaderErrorFansOutAndDoesNotPoisonNextRequest(t *testing.T) {
 	var calls atomic.Int32
 	var startOnce sync.Once
 	started := make(chan struct{})
+	var releaseOnce sync.Once
 	release := make(chan struct{})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, _ *http.Request) {
 		n := calls.Add(1)
@@ -456,22 +559,24 @@ func TestAnalyzeLeaf_LeaderErrorFansOutAndDoesNotPoisonNextRequest(t *testing.T)
 		t.Fatalf("New: %v", err)
 	}
 
+	const text = "shared error text"
 	var wg sync.WaitGroup
 	var errA, errB error
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, errA = r.Scrub(context.Background(), "shared error text", NewRegistry())
+		_, errA = r.Scrub(context.Background(), text, NewRegistry())
 	}()
-	go func() {
-		defer wg.Done()
-		<-started
-		_, errB = r.Scrub(context.Background(), "shared error text", NewRegistry())
-	}()
+	waitSignal(t, started, "leader error request start")
 
-	<-started
-	time.Sleep(15 * time.Millisecond)
-	close(release)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, errB = r.Scrub(context.Background(), text, NewRegistry())
+	}()
+	waitInflightWaiters(t, r, text, 2)
+
+	releaseOnce.Do(func() { close(release) })
 	wg.Wait()
 
 	if errA == nil || errB == nil {
@@ -482,7 +587,7 @@ func TestAnalyzeLeaf_LeaderErrorFansOutAndDoesNotPoisonNextRequest(t *testing.T)
 	}
 
 	// Subsequent call must start fresh and succeed (no stale inflight entry).
-	if _, err := r.Scrub(context.Background(), "shared error text", NewRegistry()); err != nil {
+	if _, err := r.Scrub(context.Background(), text, NewRegistry()); err != nil {
 		t.Fatalf("subsequent Scrub after leader error failed: %v", err)
 	}
 	if got := calls.Load(); got != 2 {
@@ -491,23 +596,22 @@ func TestAnalyzeLeaf_LeaderErrorFansOutAndDoesNotPoisonNextRequest(t *testing.T)
 }
 
 // TestAnalyzeLeaf_HungLeaderBoundedAndFreshWaiterSucceeds verifies P1-3: a hung
-// coalesced Presidio call never runs unbounded and stops accepting new waiters
-// once half their budget has elapsed, letting fresh arrivals hit a healthy
-// worker while the hung call cancels cleanly once its waiters leave.
+// coalesced Presidio call stops accepting new waiters once half their budget
+// has elapsed even while earlier waiters remain attached, letting fresh
+// arrivals hit a healthy worker while the hung call cancels cleanly once its
+// waiters leave.
 func TestAnalyzeLeaf_HungLeaderBoundedAndFreshWaiterSucceeds(t *testing.T) {
 	const ssn = "333-44-5555"
 	var calls atomic.Int32
-	call1Started := make(chan struct{}, 1)
+	var call1StartOnce sync.Once
+	call1Started := make(chan struct{})
 	call1Canceled := make(chan struct{}, 1)
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
 		n := calls.Add(1)
 		if n == 1 {
 			_, _ = io.Copy(io.Discard, req.Body)
-			select {
-			case call1Started <- struct{}{}:
-			default:
-			}
+			call1StartOnce.Do(func() { close(call1Started) })
 			<-req.Context().Done()
 			select {
 			case call1Canceled <- struct{}{}:
@@ -534,50 +638,36 @@ func TestAnalyzeLeaf_HungLeaderBoundedAndFreshWaiterSucceeds(t *testing.T) {
 	}
 
 	text := "shared system prompt " + ssn
-	const budget = 120 * time.Millisecond
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel1()
+	defer cancel2()
 
-	var wg sync.WaitGroup
-	var err1, err2, err3 error
-	var res3 Result
-
-	// Waiter 1 starts the hung call.
-	wg.Add(1)
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		ctx := WithAnalyzeTimeout(context.Background(), budget)
-		_, err1 = r.Scrub(ctx, text, NewRegistry())
+		_, err := r.Scrub(ctx1, text, NewRegistry())
+		done1 <- err
 	}()
+	waitSignal(t, call1Started, "hung call 1 start")
 
-	<-call1Started
-
-	// Waiter 2 arrives quickly (< budget/2) and coalesces onto call 1.
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		ctx := WithAnalyzeTimeout(context.Background(), budget)
-		_, err2 = r.Scrub(ctx, text, NewRegistry())
+		_, err := r.Scrub(ctx2, text, NewRegistry())
+		done2 <- err
 	}()
+	waitInflightWaiters(t, r, text, 2)
 
-	// Wait past budget/2 so call 1 is too stale for Waiter 3 to join; Waiter 3
-	// starts call 2 on a healthy worker and must succeed.
-	time.Sleep(budget/2 + 20*time.Millisecond)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ctx := WithAnalyzeTimeout(context.Background(), budget)
-		res3, err3 = r.Scrub(ctx, text, NewRegistry())
-	}()
+	// Age call 1 past Waiter 3's half-budget while Waiters 1 and 2 are STILL
+	// attached, proving stale-call rejection on a live in-flight call.
+	key := sha256.Sum256([]byte(text))
+	r.inflightMu.Lock()
+	r.inflight[key].startedAt = time.Now().Add(-200 * time.Millisecond)
+	r.inflightMu.Unlock()
 
-	wg.Wait()
-
-	if !errors.Is(err1, context.DeadlineExceeded) {
-		t.Fatalf("waiter 1 err = %v, want context.DeadlineExceeded", err1)
-	}
-	if !errors.Is(err2, context.DeadlineExceeded) {
-		t.Fatalf("waiter 2 err = %v, want context.DeadlineExceeded", err2)
-	}
+	ctx3 := WithAnalyzeTimeout(context.Background(), 200*time.Millisecond)
+	res3, err3 := r.Scrub(ctx3, text, NewRegistry())
 	if err3 != nil {
-		t.Fatalf("waiter 3 should have started a fresh call and succeeded, got: %v", err3)
+		t.Fatalf("waiter 3 should have bypassed stale live call 1 and succeeded, got: %v", err3)
 	}
 	if strings.Contains(res3.Text, ssn) {
 		t.Fatalf("waiter 3 leaked raw SSN: %q", res3.Text)
@@ -586,11 +676,17 @@ func TestAnalyzeLeaf_HungLeaderBoundedAndFreshWaiterSucceeds(t *testing.T) {
 		t.Fatalf("Presidio calls = %d, want 2 (1 hung + 1 fresh)", got)
 	}
 
-	select {
-	case <-call1Canceled:
-	case <-time.After(time.Second):
-		t.Fatal("hung call 1 was never canceled after its waiters timed out")
+	// Now abandon Waiters 1 and 2; even though call 1 was superseded in the
+	// inflight map, dropping its waiter count to 0 must cancel call 1 upstream.
+	cancel1()
+	cancel2()
+	if err1 := <-done1; !errors.Is(err1, context.Canceled) {
+		t.Fatalf("waiter 1 err = %v, want context.Canceled", err1)
 	}
+	if err2 := <-done2; !errors.Is(err2, context.Canceled) {
+		t.Fatalf("waiter 2 err = %v, want context.Canceled", err2)
+	}
+	waitSignal(t, call1Canceled, "hung call 1 cancellation after waiters left")
 }
 
 // TestAnalyzeLeaf_FollowerDoesNotQueueBehindLeaderSemaphore verifies P2-3:
@@ -598,8 +694,11 @@ func TestAnalyzeLeaf_HungLeaderBoundedAndFreshWaiterSucceeds(t *testing.T) {
 // Request B asking for a shared block does not wait behind Request A's
 // semaphore queue.
 func TestAnalyzeLeaf_FollowerDoesNotQueueBehindLeaderSemaphore(t *testing.T) {
-	slowStarted := make(chan struct{}, 1)
+	var slowStartOnce sync.Once
+	slowStarted := make(chan struct{})
+	var releaseOnce sync.Once
 	releaseSlow := make(chan struct{})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseSlow) }) })
 
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
 		var payload struct {
@@ -607,10 +706,7 @@ func TestAnalyzeLeaf_FollowerDoesNotQueueBehindLeaderSemaphore(t *testing.T) {
 		}
 		_ = json.NewDecoder(req.Body).Decode(&payload)
 		if strings.Contains(payload.Text, "slow-block") {
-			select {
-			case slowStarted <- struct{}{}:
-			default:
-			}
+			slowStartOnce.Do(func() { close(slowStarted) })
 			select {
 			case <-releaseSlow:
 			case <-req.Context().Done():
@@ -639,24 +735,24 @@ func TestAnalyzeLeaf_FollowerDoesNotQueueBehindLeaderSemaphore(t *testing.T) {
 		reqADone <- err
 	}()
 
-	<-slowStarted
+	waitSignal(t, slowStarted, "request A slow-block start")
 
 	// Request B arrives independently for "shared-system-prompt" with a tight
 	// deadline while Request A is still blocked on slow-block.
 	ctxB := WithAnalyzeTimeout(context.Background(), 150*time.Millisecond)
 	start := time.Now()
 	if _, err := r.Scrub(ctxB, "shared-system-prompt", NewRegistry()); err != nil {
-		close(releaseSlow)
+		releaseOnce.Do(func() { close(releaseSlow) })
 		<-reqADone
 		t.Fatalf("request B failed while request A held its semaphore: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 120*time.Millisecond {
-		close(releaseSlow)
+		releaseOnce.Do(func() { close(releaseSlow) })
 		<-reqADone
 		t.Fatalf("request B took %v, expected immediate completion without waiting on request A", elapsed)
 	}
 
-	close(releaseSlow)
+	releaseOnce.Do(func() { close(releaseSlow) })
 	if err := <-reqADone; err != nil {
 		t.Fatalf("request A failed: %v", err)
 	}
@@ -743,6 +839,7 @@ func TestScrubJSON_StalledRedisDoesNotFailClosed(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 
 	var stalled atomic.Bool
+	var stalledCmds atomic.Int32
 	proxyDone := make(chan struct{})
 	var proxyWG sync.WaitGroup
 	proxyWG.Add(1)
@@ -758,6 +855,7 @@ func TestScrubJSON_StalledRedisDoesNotFailClosed(t *testing.T) {
 				defer proxyWG.Done()
 				defer func() { _ = cc.Close() }()
 				if stalled.Load() {
+					stalledCmds.Add(1)
 					<-proxyDone
 					return
 				}
@@ -775,6 +873,7 @@ func TestScrubJSON_StalledRedisDoesNotFailClosed(t *testing.T) {
 					}
 					if stalled.Load() {
 						// Socket stays open without replying, simulating a stalled Redis.
+						stalledCmds.Add(1)
 						<-proxyDone
 						return
 					}
@@ -853,6 +952,9 @@ func TestScrubJSON_StalledRedisDoesNotFailClosed(t *testing.T) {
 	if strings.Contains(res.Text, ssn) {
 		t.Fatalf("raw SSN leaked under stalled Redis: %q", res.Text)
 	}
+	if stalledCmds.Load() == 0 {
+		t.Fatal("expected Redis proxy to stall at least one Redis command during Scrub")
+	}
 	// Prefetch times out quickly (~150ms), Presidio succeeds instantly, and
 	// remote Redis Set runs off the critical path -> total latency stays low.
 	if elapsed > 600*time.Millisecond {
@@ -916,12 +1018,14 @@ func TestScrubJSON_NestedChunkingRespectsAnalyzeConcurrency(t *testing.T) {
 }
 
 func TestScrubJSON_SharesOverallDeadlineAcrossMultipleFields(t *testing.T) {
+	var completed atomic.Int32
 	srv := fakeAnalyzer(t, func(w http.ResponseWriter, req *http.Request) {
 		select {
 		case <-time.After(70 * time.Millisecond):
 		case <-req.Context().Done():
 			return
 		}
+		completed.Add(1)
 		_ = json.NewEncoder(w).Encode([]Span{})
 	})
 
@@ -946,8 +1050,11 @@ func TestScrubJSON_SharesOverallDeadlineAcrossMultipleFields(t *testing.T) {
 	start := time.Now()
 	_, err = r.Scrub(ctx, body, NewRegistry())
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatalf("expected shared deadline timeout, got nil in %v", elapsed)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded (elapsed %v)", err, elapsed)
+	}
+	if got := completed.Load(); got < 1 || got >= 4 {
+		t.Fatalf("completed fields = %d, want at least 1 and fewer than 4", got)
 	}
 	if elapsed > 260*time.Millisecond {
 		t.Fatalf("took %v; scrubJSON should share one 130ms deadline across fields", elapsed)
