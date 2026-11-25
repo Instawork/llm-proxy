@@ -1987,11 +1987,7 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 	)
 }
 
-func installPIIRedactMiddleware(r *mux.Router, deps *serverDeps) {
-	if !deps.piiActive() {
-		return
-	}
-	piiCfg := deps.yamlConfig.Features.PIIRedact
+func piiRedactConfigFromYAML(piiCfg config.PIIRedactConfig, env config.RuntimeEnv) middleware.PIIRedactConfig {
 	wirePlaceholders := true
 	if piiCfg.WirePlaceholders != nil {
 		wirePlaceholders = *piiCfg.WirePlaceholders
@@ -2000,28 +1996,37 @@ func installPIIRedactMiddleware(r *mux.Router, deps *serverDeps) {
 	if piiCfg.DefaultAllowStreaming != nil {
 		defaultAllowStreaming = *piiCfg.DefaultAllowStreaming
 	}
-	devLogRawEntities := deps.env.IsDevLike()
-	r.Use(middleware.PIIRedactMiddleware(deps.redactor, middleware.PIIRedactConfig{
+	return middleware.PIIRedactConfig{
 		GlobalEnabled:           piiCfg.Enabled,
+		AllowPerKeyOverride:     piiCfg.AllowPerKeyOverride,
 		FailClosed:              piiCfg.FailMode == "closed",
 		MaxBodyBytes:            piiCfg.MaxBodyBytes,
-		Logger:                  logger,
-		Recorder:                globalPIIRecorder,
-		Metrics:                 initializePIIMetrics(deps.yamlConfig),
 		WirePlaceholders:        wirePlaceholders,
 		DefaultAllowStreaming:   defaultAllowStreaming,
-		DevLogRawEntities:       devLogRawEntities,
+		DevLogRawEntities:       env.IsDevLike(),
 		AnalyzeTimeout:          time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
 		AnalyzeTimeoutPer100KiB: time.Duration(piiCfg.TimeoutMsPer100KB) * time.Millisecond,
 		AnalyzeTimeoutMax:       time.Duration(piiCfg.TimeoutMsMax) * time.Millisecond,
-	}))
+	}
+}
+
+func installPIIRedactMiddleware(r *mux.Router, deps *serverDeps) {
+	if !deps.piiActive() {
+		return
+	}
+	piiCfg := deps.yamlConfig.Features.PIIRedact
+	mwCfg := piiRedactConfigFromYAML(piiCfg, deps.env)
+	mwCfg.Logger = logger
+	mwCfg.Recorder = globalPIIRecorder
+	mwCfg.Metrics = initializePIIMetrics(deps.yamlConfig)
+	r.Use(middleware.PIIRedactMiddleware(deps.redactor, mwCfg))
 	logger.Info(
 		"🛡️  PII redaction middleware installed",
-		"global_enabled", piiCfg.Enabled,
-		"allow_per_key_override", piiCfg.AllowPerKeyOverride,
-		"wire_placeholders", wirePlaceholders,
-		"default_allow_streaming", defaultAllowStreaming,
-		"dev_log_raw_entities", devLogRawEntities,
+		"global_enabled", mwCfg.GlobalEnabled,
+		"allow_per_key_override", mwCfg.AllowPerKeyOverride,
+		"wire_placeholders", mwCfg.WirePlaceholders,
+		"default_allow_streaming", mwCfg.DefaultAllowStreaming,
+		"dev_log_raw_entities", mwCfg.DevLogRawEntities,
 		"analyzer_url", piiCfg.AnalyzerURL,
 		"fail_mode", piiCfg.FailMode,
 		"timeout_ms", piiCfg.TimeoutMs,

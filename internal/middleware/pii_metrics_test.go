@@ -6,14 +6,21 @@ import (
 	"time"
 )
 
+type metricCall struct {
+	name string
+	tags []string
+}
+
 type fakeDogstatsd struct {
-	mu    sync.Mutex
-	calls []string
+	mu      sync.Mutex
+	calls   []string
+	records []metricCall
 }
 
 func (f *fakeDogstatsd) Incr(name string, tags []string, rate float64) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, name)
+	f.records = append(f.records, metricCall{name: name, tags: append([]string(nil), tags...)})
 	f.mu.Unlock()
 	return nil
 }

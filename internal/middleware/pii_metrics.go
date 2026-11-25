@@ -41,6 +41,20 @@ func emitPIIRedactionMetrics(
 	}
 }
 
+func emitPIIOverrideIgnored(metrics observability.MetricsSink, provider string, keyRedactPII bool) {
+	if metrics == nil {
+		return
+	}
+	val := "false"
+	if keyRedactPII {
+		val = "true"
+	}
+	_ = metrics.Incr("pii.override_ignored", []string{
+		"provider:" + normalizeDogstatsdTag(provider),
+		"key_redact_pii:" + val,
+	}, 1.0)
+}
+
 func emitIDGateBlocked(metrics observability.MetricsSink, provider, entityType string) {
 	if metrics == nil {
 		return

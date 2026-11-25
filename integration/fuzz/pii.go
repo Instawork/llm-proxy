@@ -54,6 +54,13 @@ func normalizeEcho(s string) string {
 	return strings.TrimSpace(strings.Trim(s, `"`))
 }
 
+func (k *keyHelper) createForPII(ctx context.Context, piiCfg map[string]any, desc string, rpm, tpm int) (string, error) {
+	if allow, _ := piiCfg["allow_per_key_override"].(bool); allow {
+		return k.createWithPII(ctx, desc, rpm, tpm, true)
+	}
+	return k.create(ctx, desc, rpm, tpm)
+}
+
 // piiPresidioRedaction sends known PII through the real proxy and asserts
 // Presidio scrubbed it (admin requests_scanned / requests_with_pii grow).
 // Common failure: Presidio sidecar down → fail_open passthrough.
@@ -71,7 +78,7 @@ func (r *Runner) piiPresidioRedaction(ctx context.Context) (bool, string) {
 
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
-	key, err := kh.createWithPII(ctx, "fuzz-pii-redact", 1000, 5_000_000, true)
+	key, err := kh.createForPII(ctx, piiCfg, "fuzz-pii-redact", 1000, 5_000_000)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -135,12 +142,13 @@ func (r *Runner) piiWireRestoreFormats(ctx context.Context) (bool, string) {
 }
 
 func (r *Runner) piiWireRestoreEmailWithFormat(ctx context.Context, keyDesc, echoFormat string) (bool, string) {
-	if _, ok, msg := r.requirePIIReady(ctx); !ok {
+	piiCfg, ok, msg := r.requirePIIReady(ctx)
+	if !ok {
 		return false, msg
 	}
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
-	key, err := kh.createWithPII(ctx, keyDesc, 1000, 5_000_000, true)
+	key, err := kh.createForPII(ctx, piiCfg, keyDesc, 1000, 5_000_000)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -190,12 +198,13 @@ func (r *Runner) piiWireRestoreEmailWithFormat(ctx context.Context, keyDesc, ech
 // request must see its own value, an A↔B swap is detected (set-equality would
 // not catch it), so we pair sent↔restored per request rather than using Burst.
 func (r *Runner) piiConcurrentNoBleed(ctx context.Context) (bool, string) {
-	if _, ok, msg := r.requirePIIReady(ctx); !ok {
+	piiCfg, ok, msg := r.requirePIIReady(ctx)
+	if !ok {
 		return false, msg
 	}
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
-	key, err := kh.createWithPII(ctx, "fuzz-pii-nobleed", 100_000, 500_000_000, true)
+	key, err := kh.createForPII(ctx, piiCfg, "fuzz-pii-nobleed", 100_000, 500_000_000)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -255,12 +264,13 @@ func (r *Runner) piiConcurrentNoBleed(ctx context.Context) (bool, string) {
 // piiWireSealSSN exercises SEAL-tier opacity: even when the fake upstream
 // echoes the scrubbed placeholder back, the client must never see the raw SSN.
 func (r *Runner) piiWireSealSSN(ctx context.Context) (bool, string) {
-	if _, ok, msg := r.requirePIIReady(ctx); !ok {
+	piiCfg, ok, msg := r.requirePIIReady(ctx)
+	if !ok {
 		return false, msg
 	}
 	kh := newKeyHelper(r.admin)
 	defer kh.cleanup(ctx)
-	key, err := kh.createWithPII(ctx, "fuzz-pii-seal", 1000, 5_000_000, true)
+	key, err := kh.createForPII(ctx, piiCfg, "fuzz-pii-seal", 1000, 5_000_000)
 	if err != nil {
 		return false, err.Error()
 	}

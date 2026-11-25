@@ -224,8 +224,11 @@ type PIIRedactConfig struct {
 	// raise it if the WARN counter trends up in Datadog.
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
 
-	// AllowPerKeyOverride installs the redactor middleware when true even if
-	// Enabled is false, so individual iw: keys can opt in via redact_pii.
+	// AllowPerKeyOverride controls whether per-key redact_pii settings on iw:
+	// keys may override Enabled. When false, Enabled is enforced for all
+	// requests and per-key redact_pii values are ignored. When true, the
+	// redactor middleware is installed even if Enabled is false so individual
+	// keys can opt in, and keys with redact_pii: false can opt out.
 	AllowPerKeyOverride bool `yaml:"allow_per_key_override"`
 
 	// WirePlaceholders sends scrubbed placeholder text to the upstream LLM

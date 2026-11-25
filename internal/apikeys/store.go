@@ -167,8 +167,11 @@ type APIKey struct {
 	Enabled bool `dynamodbav:"enabled"`
 	// Tags for organizational purposes
 	Tags map[string]string `dynamodbav:"tags,omitempty"`
-	// RedactPII overrides the global pii_redact.enabled flag when set.
-	// nil = inherit global default.
+	// RedactPII overrides the global pii_redact.enabled flag when set and
+	// features.pii_redact.allow_per_key_override is true. When
+	// allow_per_key_override is false, non-Bedrock keys ignore this field and
+	// follow the global setting; SigV4 passthrough Bedrock (/bedrock) is always
+	// exempt from wire-mode PII redaction. nil = inherit global default.
 	RedactPII *bool `dynamodbav:"redact_pii,omitempty"`
 	// AllowStreaming overrides the global pii_redact.default_allow_streaming
 	// flag when wire-mode scrubbing is active. nil = inherit global default.

@@ -30,7 +30,7 @@ import KeyViewersPanel from "../../components/keys/key-viewers-panel";
 import SharedKeyDetail from "../../components/keys/shared-key-detail";
 import { DAILY_HISTORY_SUBTITLE } from "../../lib/daily-history";
 import { UNMETERED_HELP } from "../../lib/spend-overview";
-import { formatExpiresAt, isExpired, type KeyFormTab } from "../../lib/key-form";
+import { formatExpiresAt, isExpired, piiDisplayLabel, type KeyFormTab } from "../../lib/key-form";
 import {
   formatDailyCostLimit,
   formatMonthlyCostLimit,
@@ -49,12 +49,6 @@ import { rateLimitOverrideForKey, rateLimitUsageForKey } from "../../lib/key-sta
 import type { KeyStatsSource } from "../../types";
 
 type DetailTab = "cost" | "pii" | "rate-limits" | "usage";
-
-function piiLabel(value: boolean | null | undefined): string {
-  if (value === true) return "On";
-  if (value === false) return "Off";
-  return "Inherit";
-}
 
 function formatLimit(value?: number): string {
   return value && value > 0 ? value.toLocaleString() : "∞";
@@ -236,7 +230,14 @@ export default function KeyDetailPage() {
                 <ProviderBadge provider={keyRecord.provider} />
                 <StatusBadge active={keyRecord.enabled} activeLabel="Enabled" inactiveLabel="Disabled" />
                 {!isViewer ? (
-                  <span className="badge badge-ghost badge-sm">PII {piiLabel(keyRecord.redact_pii)}</span>
+                  <span className="badge badge-ghost badge-sm">
+                    PII{" "}
+                    {piiDisplayLabel(
+                      keyRecord.redact_pii,
+                      piiQuery.data?.allow_per_key_override,
+                      keyRecord.provider,
+                    )}
+                  </span>
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
@@ -550,7 +551,14 @@ export default function KeyDetailPage() {
                       {!isViewer ? (
                         <>
                           <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
-                          <Meta label="Per-key override" value={piiLabel(keyRecord.redact_pii)} />
+                          <Meta
+                            label="Per-key override"
+                            value={piiDisplayLabel(
+                              keyRecord.redact_pii,
+                              piiQuery.data?.allow_per_key_override,
+                              keyRecord.provider,
+                            )}
+                          />
                         </>
                       ) : null}
                     </div>

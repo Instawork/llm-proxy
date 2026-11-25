@@ -268,7 +268,7 @@ func (h *handler) createOrgKey(r *http.Request, role adminusers.Role, req Create
 		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
 	}
 
-	if err := h.validatePIIOffPolicy(r, req.Provider, req.RedactPII); err != nil {
+	if err := h.validatePIIOverridePolicy(r, req.Provider, req.RedactPII); err != nil {
 		return nil, &orgKeyError{status: http.StatusBadRequest, message: err.Error()}
 	}
 

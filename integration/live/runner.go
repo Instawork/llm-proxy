@@ -480,9 +480,14 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 		out = append(out, skipResult("pii", "wire-seal", "Presidio sidecar not reachable"))
 		return out
 	}
+	var redactOverride *bool
+	if allowPerKey {
+		v := true
+		redactOverride = &v
+	}
 	if r.cfg.OpenAIKey != "" {
-		out = append(out, r.runPIIRedaction(ctx, piiCfg)...)
-		out = append(out, r.runPIIWireRestore(ctx)...)
+		out = append(out, r.runPIIRedaction(ctx, piiCfg, redactOverride)...)
+		out = append(out, r.runPIIWireRestore(ctx, redactOverride)...)
 	} else {
 		out = append(out, skipResult("pii", "redaction", "OPENAI_API_KEY not set"))
 		out = append(out, skipResult("pii", "entities", "OPENAI_API_KEY not set"))
@@ -491,15 +496,15 @@ func (r *Runner) runPII(ctx context.Context) []Result {
 		out = append(out, skipResult("pii", "wire-seal", "OPENAI_API_KEY not set"))
 	}
 	if r.cfg.AnthropicKey != "" {
-		out = append(out, r.runPIIWireRestoreAnthropic(ctx)...)
+		out = append(out, r.runPIIWireRestoreAnthropic(ctx, redactOverride)...)
 	} else {
 		out = append(out, skipResult("pii", "wire-restore-anthropic", "ANTHROPIC_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-anthropic-stream", "ANTHROPIC_API_KEY not set"))
 	}
 	if r.cfg.GeminiKey != "" {
-		out = append(out, r.runPIIWireRestoreGemini(ctx)...)
-		out = append(out, r.runPIIWireRestoreGeminiJSONSafety(ctx)...)
-		out = append(out, r.runPIIWireRestoreGeminiInteractions(ctx)...)
+		out = append(out, r.runPIIWireRestoreGemini(ctx, redactOverride)...)
+		out = append(out, r.runPIIWireRestoreGeminiJSONSafety(ctx, redactOverride)...)
+		out = append(out, r.runPIIWireRestoreGeminiInteractions(ctx, redactOverride)...)
 	} else {
 		out = append(out, skipResult("pii", "wire-restore-gemini", "GEMINI_API_KEY not set"))
 		out = append(out, skipResult("pii", "wire-restore-gemini-stream", "GEMINI_API_KEY not set"))
@@ -521,7 +526,7 @@ func (r *Runner) runPIIAdminStats(_ context.Context, piiCfg map[string]any) []Re
 	return []Result{passResult("pii", "admin-stats", fmt.Sprintf("live recorder fail_mode=%s scanned=%.0f", failMode, piiStatsScanned(stats)), elapsed(start))}
 }
 
-func (r *Runner) runPIIRedaction(ctx context.Context, piiCfg map[string]any) []Result {
+func (r *Runner) runPIIRedaction(ctx context.Context, piiCfg map[string]any, redactOverride *bool) []Result {
 	statsBefore, _ := piiCfg["stats"].(map[string]any)
 	scannedBefore := piiStatsScanned(statsBefore)
 	withPIIBefore := piiStatsWithPII(statsBefore)
@@ -529,12 +534,11 @@ func (r *Runner) runPIIRedaction(ctx context.Context, piiCfg map[string]any) []R
 	recentBefore := piiStatsRecentCount(statsBefore)
 
 	start := time.Now()
-	redact := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    "openai",
 		ActualKey:   r.cfg.OpenAIKey,
 		Description: "live-pii",
-		RedactPII:   &redact,
+		RedactPII:   redactOverride,
 	})
 	if err != nil {
 		return []Result{failResult("pii", "redaction", "create key: "+err.Error())}
@@ -595,14 +599,13 @@ func (r *Runner) runPIIRedaction(ctx context.Context, piiCfg map[string]any) []R
 	return out
 }
 
-func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
+func (r *Runner) runPIIWireRestore(ctx context.Context, redactOverride *bool) []Result {
 	start := time.Now()
-	redactPII := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    "openai",
 		ActualKey:   r.cfg.OpenAIKey,
 		Description: "live-pii-wire",
-		RedactPII:   &redactPII,
+		RedactPII:   redactOverride,
 	})
 	if err != nil {
 		return []Result{
@@ -659,33 +662,36 @@ func (r *Runner) runPIIWireRestore(ctx context.Context) []Result {
 	return out
 }
 
-func (r *Runner) runPIIWireRestoreAnthropic(ctx context.Context) []Result {
+func (r *Runner) runPIIWireRestoreAnthropic(ctx context.Context, redactOverride *bool) []Result {
 	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
-		provider:    "anthropic",
-		actualKey:   r.cfg.AnthropicKey,
-		keyDesc:     "live-pii-wire-anthropic",
-		suitePrefix: "wire-restore-anthropic",
-		repeatEmail: r.proxy.AnthropicChatRepeatEmail,
+		provider:       "anthropic",
+		actualKey:      r.cfg.AnthropicKey,
+		keyDesc:        "live-pii-wire-anthropic",
+		suitePrefix:    "wire-restore-anthropic",
+		repeatEmail:    r.proxy.AnthropicChatRepeatEmail,
+		redactOverride: redactOverride,
 	})
 }
 
-func (r *Runner) runPIIWireRestoreGemini(ctx context.Context) []Result {
+func (r *Runner) runPIIWireRestoreGemini(ctx context.Context, redactOverride *bool) []Result {
 	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
-		provider:    "gemini",
-		actualKey:   r.cfg.GeminiKey,
-		keyDesc:     "live-pii-wire-gemini",
-		suitePrefix: "wire-restore-gemini",
-		repeatEmail: r.proxy.GeminiChatRepeatEmail,
+		provider:       "gemini",
+		actualKey:      r.cfg.GeminiKey,
+		keyDesc:        "live-pii-wire-gemini",
+		suitePrefix:    "wire-restore-gemini",
+		repeatEmail:    r.proxy.GeminiChatRepeatEmail,
+		redactOverride: redactOverride,
 	})
 }
 
-func (r *Runner) runPIIWireRestoreGeminiInteractions(ctx context.Context) []Result {
+func (r *Runner) runPIIWireRestoreGeminiInteractions(ctx context.Context, redactOverride *bool) []Result {
 	return r.runPIIWireRestoreProvider(ctx, piiWireRestoreProviderSpec{
-		provider:    "gemini",
-		actualKey:   r.cfg.GeminiKey,
-		keyDesc:     "live-pii-wire-gemini-interactions",
-		suitePrefix: "wire-restore-gemini-interactions",
-		repeatEmail: r.proxy.GeminiInteractionsRepeatEmail,
+		provider:       "gemini",
+		actualKey:      r.cfg.GeminiKey,
+		keyDesc:        "live-pii-wire-gemini-interactions",
+		suitePrefix:    "wire-restore-gemini-interactions",
+		repeatEmail:    r.proxy.GeminiInteractionsRepeatEmail,
+		redactOverride: redactOverride,
 	})
 }
 
@@ -697,21 +703,21 @@ func liveTestEmail(prefix string) string {
 }
 
 type piiWireRestoreProviderSpec struct {
-	provider    string
-	actualKey   string
-	keyDesc     string
-	suitePrefix string
-	repeatEmail func(context.Context, string, string, bool) (*ProxyResponse, string, error)
+	provider       string
+	actualKey      string
+	keyDesc        string
+	suitePrefix    string
+	repeatEmail    func(context.Context, string, string, bool) (*ProxyResponse, string, error)
+	redactOverride *bool
 }
 
 func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRestoreProviderSpec) []Result {
 	start := time.Now()
-	redactPII := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    spec.provider,
 		ActualKey:   spec.actualKey,
 		Description: spec.keyDesc,
-		RedactPII:   &redactPII,
+		RedactPII:   spec.redactOverride,
 	})
 	if err != nil {
 		return []Result{
@@ -786,14 +792,13 @@ func (r *Runner) runPIIWireRestoreProvider(ctx context.Context, spec piiWireRest
 // raw text back into the response byte stream verbatim, producing invalid
 // JSON that reaches the client. The upstream model only ever sees the
 // placeholder, so any corruption here was introduced by the proxy.
-func (r *Runner) runPIIWireRestoreGeminiJSONSafety(ctx context.Context) []Result {
+func (r *Runner) runPIIWireRestoreGeminiJSONSafety(ctx context.Context, redactOverride *bool) []Result {
 	start := time.Now()
-	redactPII := true
 	key, err := r.admin.CreateKey(ctx, createKeyRequest{
 		Provider:    "gemini",
 		ActualKey:   r.cfg.GeminiKey,
 		Description: "live-pii-wire-gemini-json-safety",
-		RedactPII:   &redactPII,
+		RedactPII:   redactOverride,
 	})
 	if err != nil {
 		return []Result{

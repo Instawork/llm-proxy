@@ -114,7 +114,7 @@ go run ./cmd/llm-proxy-live -suite snippets
 | `ratelimit` | per-key `rate_limit_rpm: 1` → second request returns 429 with `X-RateLimit-*` |
 | `cost` | JSONL record after proxy call + `/admin/api/cost` `stats.spend_today_usd` > 0 |
 | `presidio` | sidecar `/health` |
-| `pii` | admin stats live; PII-bearing request via `redact_pii` key; `requests_scanned` / `requests_with_pii` / `entities_total` / recent events increase; **wire-restore** (MASK email round-trip through running proxy); **wire-seal** (SSN stays opaque to client) |
+| `pii` | admin stats live; PII-bearing request via key (using `redact_pii: true` when `allow_per_key_override` is enabled, otherwise inheriting global); `requests_scanned` / `requests_with_pii` / `entities_total` / recent events increase; **wire-restore** (MASK email round-trip through running proxy); **wire-seal** (SSN stays opaque to client) |
 | `snippets` | Every share-box tab: curl, Raw HTTP (httpx), Go, Node, Python (+ env tabs for OpenAI/Anthropic) |
 
 Skipped suites (missing keys, disabled features, unreachable sidecar) do not fail the run.

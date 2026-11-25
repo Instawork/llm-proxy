@@ -108,6 +108,7 @@ export default function KeysPage() {
   const hasCostRedis = Boolean(costData?.stats?.daily_history_available);
   const hasPiiRedis = Boolean(piiData?.stats?.daily_history_available);
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
+  const allowPerKeyPiiOverride = piiData?.allow_per_key_override;
   const canBypassPiiBedrockPolicy = Boolean(
     me?.can_bypass_pii_off_non_bedrock_policy,
   );
@@ -828,6 +829,7 @@ export default function KeysPage() {
                 canDelete={canDeleteKeys}
                 viewerMode={isViewer}
                 sharingKey={sharingKey}
+                allowPerKeyPiiOverride={allowPerKeyPiiOverride}
                 formatRateLimits={formatRateLimits}
               />
             )}
@@ -854,6 +856,7 @@ export default function KeysPage() {
             showAnthropicTierSelect={showAnthropicTierSelect}
             anthropicTierOptions={anthropicTierOptions}
             piiOffRequiresBedrock={piiOffRequiresBedrock}
+            allowPerKeyPiiOverride={allowPerKeyPiiOverride}
             viewerMonthlyLimitLabel={viewerMonthlyLimitLabel}
             editorMaxDollars={editorMaxDollars}
           />

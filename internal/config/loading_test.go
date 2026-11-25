@@ -413,6 +413,8 @@ func TestRealEnvConfigs_ProductionStandalonePIIEnabled(t *testing.T) {
 
 	assert.True(t, cfg.Features.PIIRedact.Enabled,
 		"standalone production llm-proxy must enable PII redaction")
+	assert.False(t, cfg.Features.PIIRedact.AllowPerKeyOverride,
+		"standalone production llm-proxy must disable per-key PII redaction overrides")
 	assert.True(t, cfg.Features.RedactAPI.Enabled,
 		"standalone production must expose POST /redact")
 	assert.False(t, cfg.Features.BYOKeys.Enabled,

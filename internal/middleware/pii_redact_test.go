@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,13 +22,13 @@ import (
 // the middleware tests focused on body capture, context plumbing, and
 // fail-mode branching.
 type fakeRedactor struct {
-	called  int
+	called  atomic.Int64
 	mutate  func(in string) (redact.Result, error)
 	scrubFn func(in string, reg *redact.Registry) (redact.Result, error)
 }
 
 func (f *fakeRedactor) Redact(ctx context.Context, text string) (redact.Result, error) {
-	f.called++
+	f.called.Add(1)
 	if f.mutate != nil {
 		return f.mutate(text)
 	}
@@ -34,7 +36,7 @@ func (f *fakeRedactor) Redact(ctx context.Context, text string) (redact.Result, 
 }
 
 func (f *fakeRedactor) Scrub(ctx context.Context, text string, reg *redact.Registry) (redact.Result, error) {
-	f.called++
+	f.called.Add(1)
 	if f.scrubFn != nil {
 		return f.scrubFn(text, reg)
 	}
@@ -73,8 +75,8 @@ func TestPIIRedactMiddleware_NonProviderRouteSkipped(t *testing.T) {
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/health", "{}"))
 
-	if r.called != 0 {
-		t.Errorf("redactor called for /health (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("redactor called for /health (count=%d)", r.called.Load())
 	}
 }
 
@@ -85,8 +87,8 @@ func TestPIIRedactMiddleware_GETSkipped(t *testing.T) {
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodGet, "/openai/v1/chat/completions", ""))
 
-	if r.called != 0 {
-		t.Errorf("redactor called for GET request (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("redactor called for GET request (count=%d)", r.called.Load())
 	}
 }
 
@@ -97,8 +99,8 @@ func TestPIIRedactMiddleware_ModelsListSkipped(t *testing.T) {
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/openai/v1/models", "{}"))
 
-	if r.called != 0 {
-		t.Errorf("redactor called for /models route (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("redactor called for /models route (count=%d)", r.called.Load())
 	}
 }
 
@@ -121,8 +123,8 @@ func TestPIIRedactMiddleware_RedactsAndStashesInContext(t *testing.T) {
 		newReq(t, http.MethodPost, "/openai/v1/chat/completions", original),
 	)
 
-	if r.called != 1 {
-		t.Fatalf("expected redactor called once, got %d", r.called)
+	if r.called.Load() != 1 {
+		t.Fatalf("expected redactor called once, got %d", r.called.Load())
 	}
 	if string(cap.bodySeen) != original {
 		t.Errorf("upstream saw redacted body — must see original.\n got %q\nwant %q",
@@ -150,8 +152,8 @@ func TestPIIRedactMiddleware_EmptyBodyShortCircuits(t *testing.T) {
 		newReq(t, http.MethodPost, "/openai/v1/chat/completions", ""),
 	)
 
-	if r.called != 0 {
-		t.Errorf("redactor called for empty body (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("redactor called for empty body (count=%d)", r.called.Load())
 	}
 	if _, ok := PIIRedactedBody(cap.reqSeen.Context()); ok {
 		t.Error("empty body must not stash a value in context")
@@ -359,8 +361,8 @@ func TestPIIRedactMiddleware_OversizeBodyFailOpenPassthrough(t *testing.T) {
 		newReq(t, http.MethodPost, "/openai/v1/chat/completions", big),
 	)
 
-	if r.called != 0 {
-		t.Errorf("oversize body should skip redactor (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("oversize body should skip redactor (count=%d)", r.called.Load())
 	}
 	if string(cap.bodySeen) != big {
 		t.Error("oversize body must still reach upstream intact")
@@ -400,8 +402,8 @@ func TestPIIRedactMiddleware_OversizeBodyFailClosed503(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
-	if r.called != 0 {
-		t.Errorf("oversize fail-closed should skip redactor (count=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Errorf("oversize fail-closed should skip redactor (count=%d)", r.called.Load())
 	}
 	if cap.bodySeen != nil {
 		t.Error("oversize fail-closed must not reach upstream")
@@ -425,8 +427,8 @@ func TestPIIRedactMiddleware_DefaultMaxBodyBytesIs1MiB(t *testing.T) {
 		newReq(t, http.MethodPost, "/openai/v1/chat/completions", body),
 	)
 
-	if r.called != 1 {
-		t.Errorf("body just under 1 MiB must be redacted under default cap; redactor called %d times", r.called)
+	if r.called.Load() != 1 {
+		t.Errorf("body just under 1 MiB must be redacted under default cap; redactor called %d times", r.called.Load())
 	}
 }
 
@@ -545,30 +547,425 @@ func TestPIIRedactMiddleware_PerKeyOverrideMatrix(t *testing.T) {
 		return redact.Result{Text: "redacted"}, nil
 	}}
 
+	keyInherit := &apikeys.APIKey{}
+	keyOn := &apikeys.APIKey{RedactPII: new(true)}
+	keyOff := &apikeys.APIKey{RedactPII: new(false)}
+
 	cases := []struct {
-		name   string
-		global bool
-		key    *apikeys.APIKey
-		called bool
+		name                string
+		global              bool
+		allowPerKeyOverride bool
+		key                 *apikeys.APIKey
+		called              bool
 	}{
-		{"global on inherit", true, nil, true},
-		{"global off inherit", false, nil, false},
-		{"global off key on", false, func() *apikeys.APIKey { v := true; return &apikeys.APIKey{RedactPII: &v} }(), true},
-		{"global on key off", true, func() *apikeys.APIKey { v := false; return &apikeys.APIKey{RedactPII: &v} }(), false},
+		// allow_per_key_override = false: global setting is always enforced.
+		{"override off / global on / nil key", true, false, nil, true},
+		{"override off / global on / inherit key", true, false, keyInherit, true},
+		{"override off / global on / key on", true, false, keyOn, true},
+		{"override off / global on / key off ignored", true, false, keyOff, true},
+		{"override off / global off / nil key", false, false, nil, false},
+		{"override off / global off / inherit key", false, false, keyInherit, false},
+		{"override off / global off / key on ignored", false, false, keyOn, false},
+		{"override off / global off / key off", false, false, keyOff, false},
+
+		// allow_per_key_override = true: explicit per-key overrides are honored.
+		{"override on / global on / nil key", true, true, nil, true},
+		{"override on / global on / inherit key", true, true, keyInherit, true},
+		{"override on / global on / key on", true, true, keyOn, true},
+		{"override on / global on / key off honored", true, true, keyOff, false},
+		{"override on / global off / nil key", false, true, nil, false},
+		{"override on / global off / inherit key", false, true, keyInherit, false},
+		{"override on / global off / key on honored", false, true, keyOn, true},
+		{"override on / global off / key off", false, true, keyOff, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r.called = 0
+			r.called.Store(0)
 			cap := &captureHandler{}
-			mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: tc.global})(cap)
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       tc.global,
+				AllowPerKeyOverride: tc.allowPerKeyOverride,
+			})(cap)
 			req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
 			if tc.key != nil {
 				req = req.WithContext(apikeys.WithContext(req.Context(), tc.key))
 			}
 			mw.ServeHTTP(httptest.NewRecorder(), req)
-			if (r.called > 0) != tc.called {
-				t.Fatalf("redactor called=%d want called=%v", r.called, tc.called)
+			if (r.called.Load() > 0) != tc.called {
+				t.Fatalf("redactor called=%d want called=%v", r.called.Load(), tc.called)
+			}
+		})
+	}
+}
+
+func TestPIIRedactMiddleware_AllowPerKeyOverride_WireMode(t *testing.T) {
+	const rawSSN = "222-33-4444"
+	const scrubbed = "<PII_US_SSN_1>"
+	body := `{"messages":[{"role":"user","content":"my ssn is ` + rawSSN + `"}]}`
+	keyOff := &apikeys.APIKey{PK: "iw:test-key-off", RedactPII: new(false)}
+
+	makeRedactor := func() *fakeRedactor {
+		return &fakeRedactor{
+			scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+				out := strings.ReplaceAll(in, rawSSN, scrubbed)
+				return redact.Result{Text: out, EntityCounts: map[string]int{"US_SSN": 1}}, nil
+			},
+		}
+	}
+
+	t.Run("override disabled enforces wire redaction even when key sets redact_pii=false", func(t *testing.T) {
+		r := makeRedactor()
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			WirePlaceholders:    true,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called.Load() != 1 {
+			t.Fatalf("expected redactor called once, got %d", r.called.Load())
+		}
+		if strings.Contains(string(cap.bodySeen), rawSSN) {
+			t.Fatalf("raw SSN leaked to upstream when allow_per_key_override=false: %s", string(cap.bodySeen))
+		}
+		if !strings.Contains(string(cap.bodySeen), scrubbed) {
+			t.Fatalf("expected scrubbed placeholder in upstream body, got %s", string(cap.bodySeen))
+		}
+	})
+
+	t.Run("override enabled honors key redact_pii=false", func(t *testing.T) {
+		r := makeRedactor()
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: true,
+			WirePlaceholders:    true,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called.Load() != 0 {
+			t.Fatalf("expected redactor skipped when override enabled and key off, got %d", r.called.Load())
+		}
+		if string(cap.bodySeen) != body {
+			t.Fatalf("expected original body upstream, got %s", string(cap.bodySeen))
+		}
+	})
+}
+
+func TestPIIRedactMiddleware_SigV4BedrockExempt(t *testing.T) {
+	const rawSSN = "222-33-4444"
+	const scrubbed = "<PII_US_SSN_1>"
+	body := `{"messages":[{"role":"user","content":[{"text":"my ssn is ` + rawSSN + `"}]}]}`
+	const sigHeader = "AWS4-HMAC-SHA256 Credential=TESTKEY0000000000000/20261125/us-east-1/bedrock/aws4_request"
+	const payloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	for _, tc := range []struct {
+		name string
+		path string
+		key  *apikeys.APIKey
+	}{
+		{
+			name: "bedrock prefix with inherit key",
+			path: "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			key:  &apikeys.APIKey{PK: "iw:bedrock-inherit", Provider: "bedrock"},
+		},
+		{
+			name: "bedrock prefix with redact_pii=false",
+			path: "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			key:  &apikeys.APIKey{PK: "iw:bedrock-off", Provider: "bedrock", RedactPII: new(false)},
+		},
+		{
+			name: "legacy /model prefix without key",
+			path: "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			key:  nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Configure a failing redactor + tight MaxBodyBytes + FailClosed
+			// to prove SigV4 /bedrock short-circuits before reading/mutating or
+			// failing closed.
+			r := &fakeRedactor{
+				scrubFn: func(_ string, _ *redact.Registry) (redact.Result, error) {
+					return redact.Result{}, errors.New("redactor must not be called for SigV4 bedrock")
+				},
+			}
+			metrics := &fakeDogstatsd{}
+			var logBuf bytes.Buffer
+			cap := &captureHandler{}
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       true,
+				AllowPerKeyOverride: false,
+				FailClosed:          true,
+				WirePlaceholders:    true,
+				MaxBodyBytes:        16, // smaller than body; must still not trigger oversize 503
+				Metrics:             metrics,
+				Logger:              captureLogger(&logBuf),
+			})(cap)
+
+			req := newReq(t, http.MethodPost, tc.path, body)
+			req.Header.Set("Authorization", sigHeader)
+			req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+			req.Header.Set("Accept-Encoding", "gzip")
+			if tc.key != nil {
+				req = req.WithContext(apikeys.WithContext(req.Context(), tc.key))
+			}
+
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+			}
+			if r.called.Load() != 0 {
+				t.Fatalf("expected redactor skipped for SigV4 bedrock, called %d times", r.called.Load())
+			}
+			if string(cap.bodySeen) != body {
+				t.Fatalf("SigV4 bedrock body was mutated!\n got %q\nwant %q", string(cap.bodySeen), body)
+			}
+			if got := cap.reqSeen.Header.Get("X-Amz-Content-Sha256"); got != payloadHash {
+				t.Fatalf("X-Amz-Content-Sha256 = %q, want %q", got, payloadHash)
+			}
+			if got := cap.reqSeen.Header.Get("Authorization"); got != sigHeader {
+				t.Fatalf("Authorization = %q, want %q", got, sigHeader)
+			}
+			if got := cap.reqSeen.Header.Get("Accept-Encoding"); got != "gzip" {
+				t.Fatalf("Accept-Encoding = %q, want %q", got, "gzip")
+			}
+			if len(metrics.records) != 0 {
+				t.Fatalf("expected no PII metrics emitted for SigV4 bedrock, got %+v", metrics.records)
+			}
+			if logBuf.Len() != 0 {
+				t.Fatalf("expected no override-ignored warning for SigV4 bedrock, got %s", logBuf.String())
+			}
+		})
+	}
+
+	t.Run("observability mode (WirePlaceholders=false) still redacts context copy for bedrock without mutating upstream body", func(t *testing.T) {
+		r := &fakeRedactor{
+			mutate: func(in string) (redact.Result, error) {
+				return redact.Result{
+					Text:         strings.ReplaceAll(in, rawSSN, "[REDACTED:US_SSN]"),
+					EntityCounts: map[string]int{"US_SSN": 1},
+				}, nil
+			},
+		}
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			WirePlaceholders:    false,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse", body)
+		req.Header.Set("Authorization", sigHeader)
+		req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called.Load() != 1 {
+			t.Fatalf("expected observability redactor called once, got %d", r.called.Load())
+		}
+		if string(cap.bodySeen) != body {
+			t.Fatalf("upstream SigV4 body mutated in observability mode: got %q want %q", string(cap.bodySeen), body)
+		}
+		if got := cap.reqSeen.Header.Get("X-Amz-Content-Sha256"); got != payloadHash {
+			t.Fatalf("X-Amz-Content-Sha256 = %q, want %q", got, payloadHash)
+		}
+		red, ok := PIIRedactedBody(cap.reqSeen.Context())
+		if !ok || !strings.Contains(string(red), "[REDACTED:US_SSN]") {
+			t.Fatalf("expected redacted context copy in observability mode, ok=%v body=%q", ok, string(red))
+		}
+	})
+
+	t.Run("bedrock-mantle is NOT exempt and still redacts under allow_per_key_override=false", func(t *testing.T) {
+		r := &fakeRedactor{
+			scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+				return redact.Result{
+					Text:         strings.ReplaceAll(in, rawSSN, scrubbed),
+					EntityCounts: map[string]int{"US_SSN": 1},
+				}, nil
+			},
+		}
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			FailClosed:          true,
+			WirePlaceholders:    true,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/bedrock-mantle/openai/v1/responses", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), &apikeys.APIKey{
+			PK:        "iw:mantle-off",
+			Provider:  "bedrock-mantle",
+			RedactPII: new(false),
+		}))
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if r.called.Load() != 1 {
+			t.Fatalf("expected redactor called once for bedrock-mantle, got %d", r.called.Load())
+		}
+		if strings.Contains(string(cap.bodySeen), rawSSN) {
+			t.Fatalf("raw SSN leaked on bedrock-mantle: %s", string(cap.bodySeen))
+		}
+		if !strings.Contains(string(cap.bodySeen), scrubbed) {
+			t.Fatalf("expected scrubbed placeholder on bedrock-mantle, got %s", string(cap.bodySeen))
+		}
+	})
+}
+
+func TestPIIRedactMiddleware_IgnoredOverrideTelemetry(t *testing.T) {
+	const rawKey = "iw:0123456789abcdef0123456789abcdef"
+	body := `{"messages":[{"role":"user","content":"hello"}]}`
+
+	t.Run("emits warn log and metric when non-Bedrock override conflicts with global", func(t *testing.T) {
+		r := &fakeRedactor{}
+		metrics := &fakeDogstatsd{}
+		var logBuf bytes.Buffer
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			Metrics:             metrics,
+			Logger:              captureLogger(&logBuf),
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), &apikeys.APIKey{
+			PK:        rawKey,
+			Provider:  "openai",
+			RedactPII: new(false),
+		}))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		logOut := logBuf.String()
+		for _, want := range []string{
+			`"msg":"[PROXY] pii_redact: per-key redact_pii override ignored (allow_per_key_override is false)"`,
+			`"provider":"openai"`,
+			`"key_redact_pii":false`,
+			`"global_enabled":true`,
+			`"key_id":"` + MaskKeyID(rawKey) + `"`,
+		} {
+			if !strings.Contains(logOut, want) {
+				t.Errorf("ignored-override WARN missing %q\nfull log: %s", want, logOut)
+			}
+		}
+		if strings.Contains(logOut, rawKey) {
+			t.Fatalf("raw API key leaked into ignored-override log: %s", logOut)
+		}
+
+		var found bool
+		for _, rec := range metrics.records {
+			if rec.name == "pii.override_ignored" {
+				found = true
+				wantTags := "provider:openai,key_redact_pii:false"
+				if got := strings.Join(rec.tags, ","); got != wantTags {
+					t.Errorf("pii.override_ignored tags = %q, want %q", got, wantTags)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected pii.override_ignored metric, got %+v", metrics.records)
+		}
+	})
+
+	t.Run("does not emit when override matches global or key inherits", func(t *testing.T) {
+		for _, key := range []*apikeys.APIKey{
+			{PK: rawKey, Provider: "openai", RedactPII: nil},
+			{PK: rawKey, Provider: "openai", RedactPII: new(true)},
+		} {
+			r := &fakeRedactor{}
+			metrics := &fakeDogstatsd{}
+			var logBuf bytes.Buffer
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       true,
+				AllowPerKeyOverride: false,
+				Metrics:             metrics,
+				Logger:              captureLogger(&logBuf),
+			})(&captureHandler{})
+
+			req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+			req = req.WithContext(apikeys.WithContext(req.Context(), key))
+			mw.ServeHTTP(httptest.NewRecorder(), req)
+
+			if strings.Contains(logBuf.String(), "override ignored") {
+				t.Errorf("unexpected override-ignored warning for key %+v: %s", key, logBuf.String())
+			}
+			for _, rec := range metrics.records {
+				if rec.name == "pii.override_ignored" {
+					t.Errorf("unexpected pii.override_ignored metric for key %+v", key)
+				}
+			}
+		}
+	})
+}
+
+func TestPIIRedactMiddleware_PerKeyOverride_Concurrent(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"secret"}]}`
+	keys := []*apikeys.APIKey{
+		nil,
+		{PK: "iw:inherit"},
+		{PK: "iw:on", RedactPII: new(true)},
+		{PK: "iw:off", RedactPII: new(false)},
+	}
+
+	const workersPerKey = 8
+
+	for _, allowOverride := range []bool{false, true} {
+		name := "override_false"
+		wantCalls := int64(len(keys) * workersPerKey)
+		if allowOverride {
+			name = "override_true"
+			wantCalls = int64((len(keys) - 1) * workersPerKey)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			r := &fakeRedactor{
+				scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+					return redact.Result{
+						Text:         strings.ReplaceAll(in, "secret", "<SECRET_1>"),
+						EntityCounts: map[string]int{"SECRET": 1},
+					}, nil
+				},
+			}
+			next := http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+				_, _ = io.ReadAll(req.Body)
+			})
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       true,
+				AllowPerKeyOverride: allowOverride,
+				WirePlaceholders:    true,
+			})(next)
+
+			var wg sync.WaitGroup
+			for _, k := range keys {
+				for range workersPerKey {
+					wg.Add(1)
+					go func(key *apikeys.APIKey) {
+						defer wg.Done()
+						req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+						if key != nil {
+							req = req.WithContext(apikeys.WithContext(req.Context(), key))
+						}
+						mw.ServeHTTP(httptest.NewRecorder(), req)
+					}(k)
+				}
+			}
+			wg.Wait()
+
+			if got := r.called.Load(); got != wantCalls {
+				t.Fatalf("redactor calls = %d, want %d", got, wantCalls)
 			}
 		})
 	}

@@ -1,13 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 // TestCircuitConfigFromYAML_ExpandsRedisURLEnvVar nails down the env-var
@@ -193,6 +201,131 @@ func TestProductionYAML_PIIRedactSetsExplicitMaxBodyBytes(t *testing.T) {
 	got := merged.Features.PIIRedact.MaxBodyBytes
 	if got <= oneMiB {
 		t.Fatalf("production.yml pii_redact.max_body_bytes must be set above the 1 MiB default, got %d", got)
+	}
+}
+
+type stubPIIRedactor struct {
+	called int
+}
+
+func (s *stubPIIRedactor) Redact(_ context.Context, text string) (redact.Result, error) {
+	s.called++
+	return redact.Result{Text: strings.ReplaceAll(text, "222-33-4444", "[REDACTED:US_SSN]")}, nil
+}
+
+func (s *stubPIIRedactor) Scrub(_ context.Context, text string, _ *redact.Registry) (redact.Result, error) {
+	s.called++
+	return redact.Result{Text: strings.ReplaceAll(text, "222-33-4444", "<PII_US_SSN_1>")}, nil
+}
+
+// TestPIIRedactConfigFromYAML_AllowPerKeyOverride loads the real production
+// and dev YAML overlays, feeds them through piiRedactConfigFromYAML into
+// PIIRedactMiddleware, and verifies:
+//   - production's allow_per_key_override: false prevents non-Bedrock keys
+//     (including bedrock-mantle) from bypassing global redaction;
+//   - SigV4 passthrough /bedrock stays untouched even under production config;
+//   - dev's allow_per_key_override: true honors per-key redact_pii: false.
+func TestPIIRedactConfigFromYAML_AllowPerKeyOverride(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	const body = `{"messages":[{"role":"user","content":"ssn 222-33-4444"}]}`
+	keyOff := &apikeys.APIKey{PK: "iw:key-off", RedactPII: new(false)}
+	keyInherit := &apikeys.APIKey{PK: "iw:key-inherit"}
+
+	tests := []struct {
+		name               string
+		env                string
+		overlay            string
+		path               string
+		key                *apikeys.APIKey
+		wantAllowOverride  bool
+		wantRedactorCalled int
+		wantScrubbed       bool
+	}{
+		{
+			name:               "production redacts openai despite key redact_pii=false",
+			env:                "production",
+			overlay:            "production.yml",
+			path:               "/openai/v1/chat/completions",
+			key:                keyOff,
+			wantAllowOverride:  false,
+			wantRedactorCalled: 1,
+			wantScrubbed:       true,
+		},
+		{
+			name:               "production redacts bedrock-mantle despite key redact_pii=false",
+			env:                "production",
+			overlay:            "production.yml",
+			path:               "/bedrock-mantle/openai/v1/responses",
+			key:                keyOff,
+			wantAllowOverride:  false,
+			wantRedactorCalled: 1,
+			wantScrubbed:       true,
+		},
+		{
+			name:               "production leaves SigV4 bedrock body untouched",
+			env:                "production",
+			overlay:            "production.yml",
+			path:               "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			key:                keyInherit,
+			wantAllowOverride:  false,
+			wantRedactorCalled: 0,
+			wantScrubbed:       false,
+		},
+		{
+			name:               "dev honors key redact_pii=false",
+			env:                "dev",
+			overlay:            "dev.yml",
+			path:               "/openai/v1/chat/completions",
+			key:                keyOff,
+			wantAllowOverride:  true,
+			wantRedactorCalled: 0,
+			wantScrubbed:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", tc.env)
+			merged, err := config.LoadAndMergeConfigs([]string{
+				filepath.Join(configsDir, "base.yml"),
+				filepath.Join(configsDir, tc.overlay),
+			})
+			if err != nil {
+				t.Fatalf("load %s configs: %v", tc.env, err)
+			}
+
+			mwCfg := piiRedactConfigFromYAML(merged.Features.PIIRedact, config.RuntimeEnv{Environment: tc.env})
+			if !mwCfg.GlobalEnabled {
+				t.Fatalf("%s GlobalEnabled must be true", tc.env)
+			}
+			if mwCfg.AllowPerKeyOverride != tc.wantAllowOverride {
+				t.Fatalf("%s AllowPerKeyOverride = %v, want %v", tc.env, mwCfg.AllowPerKeyOverride, tc.wantAllowOverride)
+			}
+
+			redactor := &stubPIIRedactor{}
+			var upstreamBody []byte
+			mw := middleware.PIIRedactMiddleware(redactor, mwCfg)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				upstreamBody, _ = io.ReadAll(r.Body)
+			}))
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(body))
+			req = req.WithContext(apikeys.WithContext(req.Context(), tc.key))
+			mw.ServeHTTP(httptest.NewRecorder(), req)
+
+			if redactor.called != tc.wantRedactorCalled {
+				t.Fatalf("redactor.called = %d, want %d", redactor.called, tc.wantRedactorCalled)
+			}
+			if tc.wantScrubbed {
+				if strings.Contains(string(upstreamBody), "222-33-4444") {
+					t.Fatalf("raw SSN reached upstream: %s", string(upstreamBody))
+				}
+			} else if string(upstreamBody) != body {
+				t.Fatalf("expected original body upstream, got %s", string(upstreamBody))
+			}
+		})
 	}
 }
 
