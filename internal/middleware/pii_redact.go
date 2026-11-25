@@ -85,8 +85,13 @@ func MaskKeyID(key string) string {
 	return apikeys.MaskKeyID(key)
 }
 
-// keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key.
+// keyIDHashSuffix returns the 8-char lowercase hex FNV-1a/32 digest of key,
+// or "" when key is empty. Matches the suffix used in masked key IDs without
+// exposing any raw prefix characters.
 func keyIDHashSuffix(key string) string {
+	if key == "" {
+		return ""
+	}
 	return apikeys.CredentialHashSuffix(key)
 }
 
@@ -374,13 +379,13 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				logger.Info("pii_redact: dev raw entities",
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
-					slog.Any("entities", result.DetectedEntities))
+					slog.Any("entities", result.DetectedEntities)) //piiloglint:ignore dev-only raw entity debugging gated by cfg.DevLogRawEntities
 			}
 			if cfg.DevLogRawEntities && len(result.AllowedEntities) > 0 {
 				logger.Info("pii_redact: dev allowed entities",
 					slog.String("path", r.URL.Path),
 					slog.String("provider", provider),
-					slog.Any("entities", result.AllowedEntities))
+					slog.Any("entities", result.AllowedEntities)) //piiloglint:ignore dev-only allowed entity debugging gated by cfg.DevLogRawEntities
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -197,7 +197,7 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	fmt.Printf("\n✅ API Key Created Successfully!\n\n")
 	fmt.Printf("⚠️  This is the only time the full key value will be displayed.\n")
 	fmt.Printf("    Copy it to a secrets manager now; subsequent `list`/`show` calls will show a redacted form.\n\n")
-	fmt.Printf("Key:         %s\n", apiKey.PK)
+	fmt.Printf("Key:         %s\n", apiKey.PK) //piiloglint:ignore intentional one-time display of newly created proxy key in operator CLI
 	fmt.Printf("Provider:    %s\n", apiKey.Provider)
 	fmt.Printf("Description: %s\n", apiKey.Description)
 	fmt.Printf("Cost Limit:  %s\n", formatKeyCostLimit(apiKey))

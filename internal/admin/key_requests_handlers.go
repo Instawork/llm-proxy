@@ -220,10 +220,10 @@ func (h *handler) handleApproveKeyRequest(w http.ResponseWriter, r *http.Request
 	updated, err := h.deps.APIKeyStore.CompleteKeyRequestApproval(r.Context(), id, key.PK)
 	if err != nil {
 		if delErr := h.deps.APIKeyStore.DeleteKey(r.Context(), key.PK); delErr != nil {
-			h.deps.Logger.Error("admin: cleanup orphaned key after approval failed", "error", delErr, "key", key.PK)
+			h.deps.Logger.Error("admin: cleanup orphaned key after approval failed", "error", delErr, "key", apikeys.RedactKey(key.PK))
 		}
 		_ = h.deps.APIKeyStore.RollbackKeyRequestApproval(r.Context(), id)
-		h.deps.Logger.Error("admin: complete key request approval failed", "error", err, "key", key.PK)
+		h.deps.Logger.Error("admin: complete key request approval failed", "error", err, "key", apikeys.RedactKey(key.PK))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to finalize key request approval"})
 		return
 	}

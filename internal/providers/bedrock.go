@@ -351,11 +351,12 @@ func (b *BedrockProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespo
 		eventType := eventstreamHeaderString(msg.Headers, ":event-type")
 		messageType := eventstreamHeaderString(msg.Headers, ":message-type")
 		if messageType != "" && messageType != "event" {
-			// Exception / error frames carry diagnostic JSON in the payload.
-			// We treat them as terminal: log and stop so the caller can
-			// surface a partial-metadata fallback.
-			log.Printf("🪶 Bedrock eventstream non-event message_type=%s event_type=%s payload=%s",
-				messageType, eventType, string(msg.Payload[:min(200, len(msg.Payload))]))
+			exceptionType := eventstreamHeaderString(msg.Headers, ":exception-type")
+			// Exception / error frames carry diagnostic JSON that may echo
+			// prompt content; log only framing metadata and payload byte
+			// length (no raw payload bytes, no Presidio network call).
+			log.Printf("🪶 Bedrock eventstream non-event message_type=%s exception_type=%s event_type=%s payload_bytes=%d",
+				messageType, exceptionType, eventType, len(msg.Payload))
 			break
 		}
 

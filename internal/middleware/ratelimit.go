@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"log"
 	"net/http"
@@ -88,8 +89,8 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 						false, res.Reason, metric, window, scopeKey, limit, remaining,
 					)
 				}
-				log.Printf("ratelimit: throttle provider=%s model=%s user=%s key_prefix=%s reason=%s",
-					prov.GetName(), model, userID, prefix(apiKey), res.Reason)
+				log.Printf("ratelimit: throttle provider=%s model=%s user_hash=%s key_hash=%s reason=%s",
+					prov.GetName(), model, hashUserIDForLog(userID), keyIDHashSuffix(apiKey), res.Reason)
 				proxylog.ProxyHTTPError(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
@@ -98,8 +99,8 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				stats.RecordDecision(prov.GetName(), model, apiKey, userID, true, "", "", "", "", 0, 0)
 			}
 
-			log.Printf("ratelimit: allow provider=%s model=%s user=%s key_prefix=%s est_tokens=%d",
-				prov.GetName(), model, userID, prefix(apiKey), estTokens)
+			log.Printf("ratelimit: allow provider=%s model=%s user_hash=%s key_hash=%s est_tokens=%d",
+				prov.GetName(), model, hashUserIDForLog(userID), keyIDHashSuffix(apiKey), estTokens)
 
 			// Proceed to next middleware/handler; TokenParsingMiddleware later
 			// in the chain will set X-LLM-Total-Tokens if available. Wrap the
@@ -127,8 +128,8 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				if err := limiter.Adjust(reconcileCtx, reservationID, scope, delta, reservedAt, time.Now()); err != nil {
 					proxylog.Proxy("ratelimit: adjust error: %v", err)
 				} else if delta != 0 {
-					log.Printf("ratelimit: adjust (input) provider=%s model=%s user=%s key_prefix=%s delta_input_tokens=%d",
-						prov.GetName(), model, userID, prefix(apiKey), delta)
+					log.Printf("ratelimit: adjust (input) provider=%s model=%s user_hash=%s key_hash=%s delta_input_tokens=%d",
+						prov.GetName(), model, hashUserIDForLog(userID), keyIDHashSuffix(apiKey), delta)
 				}
 			} else if sw.status >= 500 {
 				// Hard upstream failure (5xx) after we already reserved capacity.
@@ -142,8 +143,8 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 				if err := limiter.Cancel(reconcileCtx, reservationID, scope, estTokens, reservedAt, time.Now()); err != nil {
 					proxylog.Proxy("ratelimit: cancel error: %v", err)
 				} else {
-					log.Printf("ratelimit: cancel (upstream %d) provider=%s model=%s user=%s key_prefix=%s est_tokens=%d",
-						sw.status, prov.GetName(), model, userID, prefix(apiKey), estTokens)
+					log.Printf("ratelimit: cancel (upstream %d) provider=%s model=%s user_hash=%s key_hash=%s est_tokens=%d",
+						sw.status, prov.GetName(), model, hashUserIDForLog(userID), keyIDHashSuffix(apiKey), estTokens)
 				}
 			}
 		})
@@ -241,14 +242,17 @@ func newReservationID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func prefix(s string) string {
-	if s == "" {
+// hashUserIDForLog returns a truncated SHA-256 hex digest (12 hex chars) of a
+// caller user ID so operational logs can correlate requests without emitting
+// raw emails, client IPs, or bearer-token prefixes directly. Note: this is an
+// unsalted digest intended to keep PII out of plaintext logs, not a
+// cryptographically irreversible pseudonym against offline dictionary attacks.
+func hashUserIDForLog(userID string) string {
+	if userID == "" {
 		return ""
 	}
-	if len(s) > 12 {
-		return s[:12]
-	}
-	return s
+	sum := sha256.Sum256([]byte(userID))
+	return hex.EncodeToString(sum[:6])
 }
 
 // extractRateLimitAPIKey returns the iw: proxy key for rate-limit scoping.

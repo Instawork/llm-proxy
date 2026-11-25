@@ -629,7 +629,6 @@ func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) string {
 	// Priority 0: Check for user ID in request context (from meta URL rewriting)
 	if userID, ok := req.Context().Value(userIDContextKey).(string); ok && userID != "" {
-		log.Printf("🔍 User ID from context: %s", userID)
 		return userID
 	}
 
@@ -640,7 +639,6 @@ func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) st
 		if len(parts) >= 3 { // ["", "meta", "userID", ...]
 			userID := parts[2]
 			if userID != "" {
-				log.Printf("🔍 User ID from URL path: %s", userID)
 				return userID
 			}
 		}
@@ -648,44 +646,34 @@ func ExtractUserIDFromRequest(req *http.Request, provider providers.Provider) st
 
 	// Priority 2: Check for custom user ID header
 	if userID := req.Header.Get("X-User-ID"); userID != "" {
-		log.Printf("🔍 User ID from X-User-ID header: %s", userID)
 		return userID
 	}
 
 	// Priority 3: Provider-specific extraction from request body
 	if provider != nil {
 		if userID := providers.RequestUserID(provider, req); userID != "" {
-			log.Printf("🔍 User ID from provider-specific extraction: %s", userID)
 			return userID
 		}
 	}
 
 	// Priority 4: Check query parameters
 	if userID := req.URL.Query().Get("llm_user_id"); userID != "" {
-		log.Printf("🔍 User ID from query parameter: %s", userID)
 		return userID
 	}
 
 	// Priority 5: Check Authorization header for API key or JWT token
 	if auth := req.Header.Get("Authorization"); auth != "" {
-		// For API keys, use a hash of the key as user ID (for privacy)
 		if strings.HasPrefix(auth, "Bearer ") {
-			// Use first 8 characters of the token for identification
 			token := auth[7:]
 			if len(token) > 8 {
-				tokenID := fmt.Sprintf("token:%s", token[:8])
-				log.Printf("🔍 User ID from Authorization header: %s", tokenID)
-				return tokenID
+				return fmt.Sprintf("token:%s", token[:8])
 			}
-			tokenID := fmt.Sprintf("token:%s", token)
-			log.Printf("🔍 User ID from Authorization header: %s", tokenID)
-			return tokenID
+			return fmt.Sprintf("token:%s", token)
 		}
 	}
 
 	// Fallback to IP address if no user identification
 	ipAddr := ExtractIPAddressFromRequest(req)
-	log.Printf("🔍 User ID fallback to IP address: %s", ipAddr)
 	return fmt.Sprintf("ip:%s", ipAddr)
 }
 

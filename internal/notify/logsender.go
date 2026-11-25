@@ -18,6 +18,7 @@ func NewLogSender(logger *slog.Logger) *LogSender {
 
 // Send logs n at Info level and always succeeds.
 func (s *LogSender) Send(_ context.Context, n Notification) error {
+	//piiloglint:ignore dev/test-only log notification backend
 	s.logger.Info("notify: notification (log)", "kind", n.Kind, "to", n.To, "title", n.Title, "body", n.Body)
 	return nil
 }

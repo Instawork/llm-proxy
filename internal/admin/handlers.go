@@ -859,7 +859,7 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		"id", link.ID(),
 		"key", apikeys.RedactKey(record.PK),
 		"provider", record.Provider,
-		"client_ip", middleware.TrustedClientIP(r),
+		"client_ip", middleware.TrustedClientIP(r), //piiloglint:ignore intentional admin audit log for credential share link resolution
 		"created_by", link.CreatedBy,
 	)
 
