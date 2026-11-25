@@ -302,6 +302,39 @@ func TestAPIKeyStoreFailureIsFatal(t *testing.T) {
 	}
 }
 
+func TestIDGateTokenMissingIsFatal(t *testing.T) {
+	cfgWith := func(enabled bool) *config.YAMLConfig {
+		yc := config.GetDefaultYAMLConfig()
+		yc.Features.IDGate.Enabled = enabled
+		return yc
+	}
+
+	tests := []struct {
+		name    string
+		enabled bool
+		env     config.RuntimeEnv
+		want    bool
+	}{
+		{name: "enabled, missing token, production", enabled: true, env: config.RuntimeEnv{Environment: "production"}, want: true},
+		{name: "enabled, missing token, staging", enabled: true, env: config.RuntimeEnv{Environment: "staging"}, want: true},
+		{name: "enabled, missing token, production with override", enabled: true, env: config.RuntimeEnv{Environment: "production", AllowDefaultConfig: true}, want: false},
+		{name: "enabled, missing token, dev", enabled: true, env: config.RuntimeEnv{Environment: "dev"}, want: false},
+		{name: "enabled, missing token, local", enabled: true, env: config.RuntimeEnv{Environment: "local"}, want: false},
+		{name: "enabled, missing token, empty env", enabled: true, env: config.RuntimeEnv{}, want: false},
+		{name: "enabled, token with newline, production", enabled: true, env: config.RuntimeEnv{Environment: "production", OCRSidecarToken: "bad\ntoken"}, want: true},
+		{name: "enabled, token with newline, dev", enabled: true, env: config.RuntimeEnv{Environment: "dev", OCRSidecarToken: "bad\ntoken"}, want: false},
+		{name: "enabled, token present, production", enabled: true, env: config.RuntimeEnv{Environment: "production", OCRSidecarToken: "secret"}, want: false},
+		{name: "disabled, missing token, production", enabled: false, env: config.RuntimeEnv{Environment: "production"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idGateTokenMissingIsFatal(cfgWith(tt.enabled), tt.env); got != tt.want {
+				t.Fatalf("idGateTokenMissingIsFatal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsExplicitLocalDev(t *testing.T) {
 	tests := []struct {
 		env, allowDefault string

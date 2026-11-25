@@ -94,6 +94,28 @@ jobs:
           name: Run unit tests
           command: make test
 
+  ocr-sidecar-tests:
+    docker:
+      - image: cimg/python:3.11.8
+    working_directory: ~/llm-proxy
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - ocr-sidecar-dev-v1-{{ checksum "ocr_sidecar/requirements-dev.txt" }}
+      - run:
+          name: Install OCR sidecar test dependencies
+          command: |
+            python -m venv ocr_sidecar/.venv
+            ocr_sidecar/.venv/bin/pip install --no-cache-dir -r ocr_sidecar/requirements-dev.txt
+      - save_cache:
+          key: ocr-sidecar-dev-v1-{{ checksum "ocr_sidecar/requirements-dev.txt" }}
+          paths:
+            - ocr_sidecar/.venv
+      - run:
+          name: Run OCR sidecar unit tests
+          command: make test-ocr-sidecar
+
   integration-tests:
     docker:
       - image: cimg/base:stable
@@ -336,6 +358,13 @@ workflows:
             tags:
               only: /.*/
 
+      - ocr-sidecar-tests:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /.*/
+
       - integration-tests:
           context:
             - LLMs
@@ -358,6 +387,7 @@ workflows:
           requires:
             - lint
             - unit-tests
+            - ocr-sidecar-tests
             - integration-tests
             - fuzz-tests
           filters:
@@ -373,6 +403,7 @@ workflows:
           requires:
             - lint
             - unit-tests
+            - ocr-sidecar-tests
             - integration-tests
             - fuzz-tests
           filters:

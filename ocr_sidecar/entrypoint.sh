@@ -54,6 +54,29 @@ else
 fi
 [ "$WORKERS" -ge 1 ] 2>/dev/null || WORKERS=1
 
+# Fail fast before spawning uvicorn workers; with --workers > 1 a worker
+# SystemExit at import time turns into a respawn loop in the parent process.
+TOKEN_TRIMMED="$(printf '%s' "${OCR_SIDECAR_TOKEN:-}" | tr -d '[:space:],')"
+if [ -z "$TOKEN_TRIMMED" ]; then
+    echo "ocr_sidecar: OCR_SIDECAR_TOKEN is required" >&2
+    exit 1
+fi
+if [ -n "${OCR_MAX_IMAGE_BYTES:-}" ]; then
+    MAX_BYTES_TRIMMED="$(printf '%s' "$OCR_MAX_IMAGE_BYTES" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -n "$MAX_BYTES_TRIMMED" ]; then
+        case "$MAX_BYTES_TRIMMED" in
+            *[!0-9]*|0)
+                echo "ocr_sidecar: OCR_MAX_IMAGE_BYTES must be positive" >&2
+                exit 1
+                ;;
+        esac
+        if [ "$MAX_BYTES_TRIMMED" -le 0 ] 2>/dev/null; then
+            echo "ocr_sidecar: OCR_MAX_IMAGE_BYTES must be positive" >&2
+            exit 1
+        fi
+    fi
+fi
+
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 

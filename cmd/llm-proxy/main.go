@@ -525,6 +525,14 @@ func apiKeyStoreFailureIsFatal(yc *config.YAMLConfig, store providers.APIKeyStor
 	return yc.Features.APIKeyManagement.Enabled && store == nil && !localDev
 }
 
+// idGateTokenMissingIsFatal reports whether a missing or invalid
+// OCR_SIDECAR_TOKEN must abort startup. Outside explicit local dev, an enabled
+// ID gate without a valid header-safe token would fail every image scan against
+// an authenticated sidecar.
+func idGateTokenMissingIsFatal(yc *config.YAMLConfig, env config.RuntimeEnv) bool {
+	return yc.Features.IDGate.Enabled && !ocr.IsValidToken(env.OCRSidecarToken) && !env.IsExplicitLocalDev()
+}
+
 func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
 	fu := yc.Features.FakeUpstream
 	est := providers.NewYAMLConfigEstimationAdapter(yc.Features.RateLimiting.Estimation)
@@ -1571,6 +1579,17 @@ func runServer(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip
 // and returns the locals the later stages need. Fatal misconfiguration exits
 // the process here, before a listener is ever bound.
 func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) *serverDeps {
+	if idGateTokenMissingIsFatal(yamlConfig, env) {
+		logProxyError("id_gate enabled but OCR_SIDECAR_TOKEN is missing or contains control characters; the OCR sidecar rejects unauthenticated calls",
+			"environment", env.Environment,
+			"hint", "set a valid OCR_SIDECAR_TOKEN (or LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 in local dev)")
+		os.Exit(1)
+	}
+	if yamlConfig.Features.IDGate.Enabled && !ocr.IsValidToken(env.OCRSidecarToken) {
+		logProxyWarn("id_gate enabled without a valid OCR_SIDECAR_TOKEN in local dev; calls to an authenticated OCR sidecar will fail closed with 503",
+			"environment", env.Environment)
+	}
+
 	port := env.Port
 	if port == "" {
 		port = defaultPort
@@ -1968,7 +1987,7 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 	if scoreThreshold <= 0 {
 		scoreThreshold = 0.4
 	}
-	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, ocrTimeout), deps.redactor, middleware.IDGateConfig{
+	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, deps.env.OCRSidecarToken, ocrTimeout), deps.redactor, middleware.IDGateConfig{
 		FailClosed:       idGateCfg.FailMode == "closed",
 		MaxBodyBytes:     idGateCfg.MaxBodyBytes,
 		MaxImageBytes:    idGateCfg.MaxImageBytes,

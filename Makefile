@@ -91,6 +91,7 @@ help:
 	@echo "  test-anthropic - Run Anthropic tests only"
 	@echo "  test-gemini    - Run Gemini tests only"
 	@echo "  test-health    - Run health check tests"
+	@echo "  test-ocr-sidecar - Run Python unit tests for ocr_sidecar (ML deps stubbed)"
 	@echo "  test-live      - Run standalone HTTP integration CLI (needs running proxy)"
 	@echo "  test-live-pii  - Bring up Presidio + run live admin/pii/presidio suites"
 	@echo "  test-live-snippets - Verify share-box snippets (see integration/snippets/README.md)"
@@ -324,6 +325,16 @@ test-pii:
 		-timeout 120s
 	@echo "$(GREEN)✓ --pii integration tests completed$(NC)"
 
+.PHONY: test-ocr-sidecar
+test-ocr-sidecar:
+	@echo "$(BLUE)Running OCR sidecar unit tests...$(NC)"
+	@if [ -x ocr_sidecar/.venv/bin/pytest ]; then \
+		ocr_sidecar/.venv/bin/pytest -v ocr_sidecar/test_main.py; \
+	else \
+		python3 -m pytest -v ocr_sidecar/test_main.py; \
+	fi
+	@echo "$(GREEN)✓ OCR sidecar unit tests completed$(NC)"
+
 .PHONY: test-ocr-up
 test-ocr-up:
 	@echo "$(BLUE)Bringing up OCR sidecar...$(NC)"
@@ -345,6 +356,7 @@ test-ocr-up:
 validate-id-gate-pipeline: test-ocr-up test-pii-up
 	@echo "$(BLUE)Validating OCR + Presidio against committed testdata...$(NC)"
 	@OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
+		OCR_SIDECAR_TOKEN="$${OCR_SIDECAR_TOKEN:-dev-ocr-token}" \
 		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
 		python3 ocr_sidecar/scripts/validate_pipeline.py
 	@echo "$(GREEN)✓ Pipeline validation passed$(NC)"
@@ -355,6 +367,7 @@ test-id-gate: test-ocr-up test-pii-up
 	@LLM_PROXY_ID_GATE_INTEGRATION=1 \
 		LLM_PROXY_PII_INTEGRATION=1 \
 		OCR_SIDECAR_URL="$${OCR_SIDECAR_URL:-http://localhost:$${OCR_SIDECAR_PORT:-8000}}" \
+		OCR_SIDECAR_TOKEN="$${OCR_SIDECAR_TOKEN:-dev-ocr-token}" \
 		PRESIDIO_ANALYZER_URL="$${PRESIDIO_ANALYZER_URL:-http://localhost:$${PRESIDIO_PORT:-5004}}" \
 		go test -race -v ./internal/middleware/... \
 		-run 'TestIntegration_IDGate|TestIntegration_OCR' \

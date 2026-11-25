@@ -10,8 +10,14 @@ From the repo root:
 docker compose build ocr-sidecar
 OCR_SIDECAR_PORT=8010 docker compose up -d ocr-sidecar   # use 8010 if :8000 is taken
 curl -s http://localhost:8010/health
-curl -s -F "image=@/path/to/scan.jpg" http://localhost:8010/extract-text
+curl -s -H "X-OCR-Token: dev-ocr-token" -F "image=@/path/to/scan.jpg" http://localhost:8010/extract-text
 ```
+
+`/extract-text` requires a shared secret from `OCR_SIDECAR_TOKEN` in the
+`X-OCR-Token` header (compose sets `dev-ocr-token` on both containers) and
+rejects uploads over `OCR_MAX_IMAGE_BYTES` (default 10 MiB) with 413. For
+zero-downtime rotation, set comma-separated values in `OCR_SIDECAR_TOKEN` or
+supply the outgoing secret in `OCR_SIDECAR_PREVIOUS_TOKEN`.
 
 First startup downloads OnnxTR model weights (~100 MB) and can take 1–2 minutes before `/health` returns 200.
 
@@ -32,7 +38,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # Run the server (downloads model weights on first request)
-export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OCR_SIDECAR_TOKEN=dev-ocr-token
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -40,7 +46,7 @@ Smoke test (in another terminal, with the venv active or not):
 
 ```bash
 curl -s http://localhost:8000/health
-curl -s -F "image=@/path/to/scan.jpg" http://localhost:8000/extract-text
+curl -s -H "X-OCR-Token: dev-ocr-token" -F "image=@/path/to/scan.jpg" http://localhost:8000/extract-text
 ```
 
 Generate a quick test image with text (requires Pillow, installed via onnxtr):
@@ -53,10 +59,20 @@ draw = ImageDraw.Draw(img)
 draw.text((20, 40), "PASSPORT 123456789", fill="black")
 img.save("/tmp/ocr-test.png")
 PY
-curl -s -F "image=@/tmp/ocr-test.png" http://localhost:8000/extract-text
+curl -s -H "X-OCR-Token: dev-ocr-token" -F "image=@/tmp/ocr-test.png" http://localhost:8000/extract-text
 ```
 
 Deactivate the venv when done: `deactivate`. The `.venv/` directory is gitignored.
+
+## Unit tests (no ML dependencies required)
+
+`test_main.py` stubs `onnxruntime` and `onnxtr` to test startup guards, token
+authentication/rotation, and streaming upload caps without downloading models:
+
+```bash
+pip install -r ocr_sidecar/requirements-dev.txt
+make test-ocr-sidecar
+```
 
 ## Testdata and validation
 
@@ -107,6 +123,9 @@ With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embed
 | `OCR_MAX_CONCURRENCY` | same as workers | Max in-flight OCR requests (semaphore) |
 | `OCR_QUEUE_TIMEOUT_SEC` | 5 | Max wait to acquire semaphore |
 | `OCR_INFER_TIMEOUT_SEC` | 30 | Max per-image inference time |
+| `OCR_SIDECAR_TOKEN` | (required) | Shared secret(s) callers must send in `X-OCR-Token` (comma-separated for rotation) |
+| `OCR_SIDECAR_PREVIOUS_TOKEN` | (optional) | Previous shared secret accepted alongside `OCR_SIDECAR_TOKEN` during rotation |
+| `OCR_MAX_IMAGE_BYTES` | 10 MiB | Upload cap; larger bodies get 413 |
 | `OMP_NUM_THREADS` | 1 | ONNX Runtime intra-op threads |
 
 For high scale, run uvicorn with multiple workers (each loads its own model copy) or move inference to Triton/Ray Serve.

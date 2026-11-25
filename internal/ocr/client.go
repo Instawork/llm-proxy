@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -11,8 +12,29 @@ import (
 	"time"
 )
 
+// ErrUnauthorized is returned when the OCR sidecar rejects X-OCR-Token
+// (HTTP 401 or 403) or when the configured token is invalid for an HTTP header.
+// Callers treat this as a misconfiguration rather than a transient upstream
+// failure.
+var ErrUnauthorized = errors.New("ocr: unauthorized")
+
+// IsValidToken reports whether token is non-empty and free of ASCII control
+// characters (such as CR or LF) that net/http rejects before sending a request.
+func IsValidToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		if token[i] < 0x20 || token[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 type Client struct {
 	baseURL string
+	token   string
 	client  *http.Client
 }
 
@@ -20,19 +42,31 @@ type extractTextResponse struct {
 	Text string `json:"text"`
 }
 
-func New(baseURL string, timeout time.Duration) *Client {
+// New builds a client for the OCR sidecar. token is sent as X-OCR-Token; the
+// sidecar rejects requests without it. Redirects are not followed so neither
+// the token nor uploaded images can be forwarded to another host.
+func New(baseURL, token string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	return &Client{
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: timeout},
+		token:   token,
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
 func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (string, error) {
 	if len(img) == 0 {
 		return "", fmt.Errorf("ocr: empty image")
+	}
+	if !IsValidToken(c.token) {
+		return "", fmt.Errorf("%w: invalid X-OCR-Token value", ErrUnauthorized)
 	}
 	if filename == "" {
 		filename = "image.bin"
@@ -61,6 +95,7 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 		return "", fmt.Errorf("ocr: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-OCR-Token", c.token)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -68,6 +103,10 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("%w: extract-text returned %d: %s", ErrUnauthorized, resp.StatusCode, string(excerpt))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("ocr: extract-text returned %d: %s", resp.StatusCode, string(excerpt))

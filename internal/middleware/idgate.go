@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/idgatestats"
 	"github.com/Instawork/llm-proxy/internal/observability"
+	"github.com/Instawork/llm-proxy/internal/ocr"
 	"github.com/Instawork/llm-proxy/internal/proxylog"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
@@ -151,7 +153,11 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 
 					text, ocrErr := ocrClient.ExtractText(scanCtx, img, imageFilename(index))
 					if ocrErr != nil {
-						results <- imageScanResult{index: index, stage: "ocr", err: ocrErr}
+						stage := "ocr"
+						if errors.Is(ocrErr, ocr.ErrUnauthorized) {
+							stage = "ocr_auth"
+						}
+						results <- imageScanResult{index: index, stage: stage, err: ocrErr}
 						return
 					}
 					if strings.TrimSpace(text) == "" {
@@ -201,15 +207,22 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					proxylog.ProxyHTTPError(w, idGateBlockMessage, http.StatusUnprocessableEntity)
 					return
 				}
-				if res.err != nil && !haveErr {
-					firstErr = res
-					haveErr = true
+				if res.err != nil {
+					if !haveErr || (errors.Is(res.err, ocr.ErrUnauthorized) && !errors.Is(firstErr.err, ocr.ErrUnauthorized)) {
+						firstErr = res
+						haveErr = true
+					}
 				}
 			}
 
 			if haveErr {
-				if cfg.FailClosed {
-					logger.Error(proxylog.ProxyMsg("id_gate: scan failed; FailClosed -> 503"),
+				authErr := errors.Is(firstErr.err, ocr.ErrUnauthorized)
+				if cfg.FailClosed || authErr {
+					msg := "id_gate: scan failed; FailClosed -> 503"
+					if authErr {
+						msg = "id_gate: OCR sidecar authentication failed (X-OCR-Token mismatch); failing closed -> 503"
+					}
+					logger.Error(proxylog.ProxyMsg(msg),
 						slog.String("path", r.URL.Path),
 						slog.String("provider", provider),
 						slog.Int("image_index", firstErr.index),
