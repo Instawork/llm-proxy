@@ -51,6 +51,7 @@ type authenticator struct {
 	redirectURLEnv    string
 	devBypass         bool
 	devFrontendOrigin string
+	publicBaseURL     string
 	userStore         *adminusers.Store
 	editorLimits      config.EditorLimitsConfig
 	viewerLimits      config.ViewerLimitsConfig
@@ -95,11 +96,17 @@ func newAuthenticator(logger *slog.Logger, adminCfg config.AdminDashboardConfig,
 		Secure:   secureCookie,
 	}
 
+	publicBaseURL := strings.TrimSpace(adminCfg.PublicBaseURL)
+	if publicBaseURL == "" {
+		publicBaseURL = strings.TrimSpace(config.LoadRuntimeEnv().AdminPublicBaseURL)
+	}
+
 	auth := &authenticator{
 		sessionStore:      sessionStore,
 		allowedDomain:     allowedDomain,
 		devBypass:         adminCfg.DevBypassLogin,
 		devFrontendOrigin: adminCfg.DevCORSOrigin,
+		publicBaseURL:     strings.TrimRight(publicBaseURL, "/"),
 		userStore:         userStore,
 		editorLimits:      adminCfg.EditorLimits,
 		viewerLimits:      adminCfg.ViewerLimits,
@@ -185,7 +192,7 @@ func (a *authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 	session, _ := a.sessionStore.Get(r, sessionName)
 	session.Values[sessionOAuthState] = state
 	if redirectTarget := r.URL.Query().Get("redirect"); redirectTarget != "" {
-		if safe, target := sanitizeRedirect(redirectTarget, a.devFrontendOrigin); safe {
+		if safe, target := a.sanitizeRedirectForRequest(redirectTarget, r); safe {
 			session.Values[sessionOAuthRedirect] = target
 		}
 	}
@@ -277,7 +284,7 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 
 	a.logger.Info("admin auth: dev bypass login", "email", email)
 
-	if safe, target := sanitizeRedirect(redirectTarget, a.devFrontendOrigin); safe {
+	if safe, target := a.sanitizeRedirectForRequest(redirectTarget, r); safe {
 		writeJSON(w, http.StatusOK, map[string]string{"redirect": target, "email": email})
 		return
 	}
@@ -289,18 +296,40 @@ func (a *authenticator) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"redirect": defaultRedirect, "email": email})
 }
 
-func sanitizeRedirect(raw, devOrigin string) (bool, string) {
+func requestOriginURL(r *http.Request) string {
+	if r == nil || r.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") || r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func (a *authenticator) sanitizeRedirectForRequest(raw string, r *http.Request) (bool, string) {
+	return sanitizeRedirect(raw, a.devFrontendOrigin, requestOriginURL(r), a.publicBaseURL)
+}
+
+func sanitizeRedirect(raw string, allowedOrigins ...string) (bool, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return false, ""
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return false, ""
 	}
-	if devOrigin != "" {
-		dev, err := url.Parse(devOrigin)
-		if err == nil && strings.EqualFold(u.Scheme, dev.Scheme) && strings.EqualFold(u.Host, dev.Host) {
+	for _, origin := range allowedOrigins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		allowed, err := url.Parse(origin)
+		if err != nil || allowed.Scheme == "" || allowed.Host == "" {
+			continue
+		}
+		if strings.EqualFold(u.Scheme, allowed.Scheme) && strings.EqualFold(u.Host, allowed.Host) {
 			return true, raw
 		}
 	}
@@ -386,6 +415,17 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	redirectTarget := "/admin/"
+	if a.devFrontendOrigin != "" {
+		redirectTarget = strings.TrimRight(a.devFrontendOrigin, "/") + "/admin/"
+	}
+	if stored, ok := session.Values[sessionOAuthRedirect].(string); ok && stored != "" {
+		if safe, target := a.sanitizeRedirectForRequest(stored, r); safe {
+			redirectTarget = target
+		}
+	}
+	delete(session.Values, sessionOAuthRedirect)
+
 	session.Values[sessionUserEmail] = claims.Email
 	session.Values[sessionUserName] = claims.Name
 	session.Values[sessionUserPicture] = claims.Picture
@@ -396,16 +436,6 @@ func (a *authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectTarget := "/admin/"
-	if a.devFrontendOrigin != "" {
-		redirectTarget = strings.TrimRight(a.devFrontendOrigin, "/") + "/admin/"
-	}
-	if stored, ok := session.Values[sessionOAuthRedirect].(string); ok && stored != "" {
-		if safe, target := sanitizeRedirect(stored, a.devFrontendOrigin); safe {
-			redirectTarget = target
-		}
-	}
-	delete(session.Values, sessionOAuthRedirect)
 	http.Redirect(w, r, redirectTarget, http.StatusFound)
 }
 

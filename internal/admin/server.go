@@ -66,15 +66,6 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 		authRouter.HandleFunc("/dev-login", auth.handleDevLogin).Methods(http.MethodPost, http.MethodOptions)
 	}
 
-	publicAPI := adminRouter.PathPrefix("/api").Subrouter()
-	publicAPI.Use(h.corsMiddleware)
-	// Share read is public — the UUID in the URL is the capability token.
-	// A per-client token bucket caps abuse/DoS against this unauthenticated
-	// endpoint (guessing the UUID is already infeasible). Generous enough for
-	// legitimate use: a 10-request burst refilling at 1/sec per client IP.
-	publicAPI.Use(ipLimitMiddleware(middleware.NewTokenBucketLimiter(1, 10)))
-	publicAPI.HandleFunc("/share/{id}", h.handleGetShare).Methods(http.MethodGet, http.MethodOptions)
-
 	api := adminRouter.PathPrefix("/api").Subrouter()
 	api.Use(h.corsMiddleware)
 	api.Use(auth.requireSession)
@@ -101,7 +92,11 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.GetKey), h.handleGetKey)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.UpdateKey), h.handleUpdateKey)).Methods(http.MethodPatch, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.DeleteKey), h.handleDeleteKey)).Methods(http.MethodDelete, http.MethodOptions)
+	// Share reads require a signed-in dashboard session (any org role) and
+	// retain a per-IP token bucket to cap probing/abuse against share UUIDs.
+	shareReadLimit := ipLimitMiddleware(middleware.NewTokenBucketLimiter(1, 10))
 	api.Handle("/share", roleHandler(auth, permissions.MinRole(permissions.ShareKey), h.handleCreateShare)).Methods(http.MethodPost, http.MethodOptions)
+	api.Handle("/share/{id}", shareReadLimit(roleHandler(auth, permissions.MinRole(permissions.ShareKey), h.handleGetShare))).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/share/{id}", roleHandler(auth, permissions.MinRole(permissions.ShareKey), h.handleDeleteShare)).Methods(http.MethodDelete, http.MethodOptions)
 
 	api.Handle("/byo-keys", roleHandler(auth, permissions.MinRole(permissions.ManageBYO), h.handleListBYOKeys)).Methods(http.MethodGet, http.MethodOptions)

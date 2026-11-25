@@ -2,6 +2,8 @@ package apikeys
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,7 +100,7 @@ func TestStore_GetShareLink_NotFound(t *testing.T) {
 func TestStore_GetShareLink_Expired(t *testing.T) {
 	store, fake := newFakeStore(t)
 	past := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339Nano)
-	id := "dead-beef-dead-beef-deadbeefdead"
+	id := "deadbeef-dead-beef-dead-deadbeefdead"
 	fake.InjectItem("test-keys", ShareKeyPrefix+id, map[string]any{
 		"pk":             map[string]any{"S": ShareKeyPrefix + id},
 		"share_api_key":  map[string]any{"S": KeyPrefix + "abc"},
@@ -109,6 +111,88 @@ func TestStore_GetShareLink_Expired(t *testing.T) {
 	_, err := store.GetShareLink(context.Background(), id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
+}
+
+func TestValidateShareID(t *testing.T) {
+	valid := []string{
+		"00000000-0000-0000-0000-000000000000",
+		"11111111-2222-3333-4444-555555555555",
+		"deadbeef-dead-beef-dead-deadbeefdead",
+		"DEADBEEF-DEAD-BEEF-DEAD-DEADBEEFDEAD",
+	}
+	for _, id := range valid {
+		assert.NoError(t, ValidateShareID(id), "expected valid UUID: %q", id)
+	}
+
+	invalid := []string{
+		"",
+		"not-a-real-id",
+		"missing",
+		"dead-beef-dead-beef-deadbeefdead",
+		"11111111-2222-3333-4444-55555555555g",
+		"11111111_2222_3333_4444_555555555555",
+		"11111111-2222-3333-4444-5555555555550",
+		ShareKeyPrefix + "11111111-2222-3333-4444-555555555555",
+		strings.Repeat("a", 2049),
+		strings.Repeat("a", 3000),
+	}
+	for _, id := range invalid {
+		err := ValidateShareID(id)
+		require.ErrorIs(t, err, ErrInvalidShareID, "expected ErrInvalidShareID for len=%d", len(id))
+	}
+}
+
+func TestStore_ShareLink_RejectsMalformedAndOversizedBeforeDynamoDB(t *testing.T) {
+	store, fake := newFakeStore(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"malformed", "not-a-uuid"},
+		{"non-hex", "11111111-2222-3333-4444-55555555555z"},
+		{"oversized_over_2048_bytes", strings.Repeat("a", 2500)},
+	}
+
+	for _, tc := range cases {
+		t.Run("get/"+tc.name, func(t *testing.T) {
+			fake.FailOnce("GetItem", errors.New("ValidationException"))
+			_, err := store.GetShareLink(ctx, tc.id)
+			require.ErrorIs(t, err, ErrInvalidShareID)
+
+			// Confirm the armed DynamoDB failure was NOT consumed by the invalid ID.
+			_, err = store.GetShareLink(ctx, "00000000-0000-0000-0000-000000000000")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ValidationException")
+		})
+
+		t.Run("delete/"+tc.name, func(t *testing.T) {
+			fake.FailOnce("DeleteItem", errors.New("ValidationException"))
+			err := store.DeleteShareLink(ctx, tc.id)
+			require.ErrorIs(t, err, ErrInvalidShareID)
+
+			// Confirm the armed DynamoDB failure was NOT consumed by the invalid ID.
+			err = store.DeleteShareLink(ctx, "00000000-0000-0000-0000-000000000000")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ValidationException")
+		})
+	}
+}
+
+func TestStore_GetShareLink_UppercaseUUIDResolvesLowercaseRecord(t *testing.T) {
+	store, _ := newFakeStore(t)
+	ctx := context.Background()
+
+	key, err := store.CreateKey(ctx, "openai", "sk-real", "desc", 0, nil, nil)
+	require.NoError(t, err)
+	link, err := store.CreateShareLink(ctx, key.PK, "admin@example.com")
+	require.NoError(t, err)
+
+	got, err := store.GetShareLink(ctx, strings.ToUpper(link.ID()))
+	require.NoError(t, err)
+	assert.Equal(t, link.PK, got.PK)
 }
 
 func TestStore_DeleteShareLink(t *testing.T) {

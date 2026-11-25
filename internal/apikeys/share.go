@@ -3,6 +3,7 @@ package apikeys
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,11 +14,42 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
+// ErrInvalidShareID marks a malformed or oversized share link identifier
+// supplied by the caller before querying DynamoDB.
+var ErrInvalidShareID = errors.New("invalid share link identifier")
+
 // ShareKeyPrefix namespaces share-link items in the same DynamoDB table as
 // API keys. Share items deliberately do NOT carry a `provider` attribute
 // (they use `share_provider` instead) so they stay out of the ProviderIndex
 // GSI and the iw:-filtered key scan.
 const ShareKeyPrefix = "share:"
+
+// ShareIDLength is the exact length of a canonical UUID string (8-4-4-4-12).
+const ShareIDLength = 36
+
+// ValidateShareID checks that id is a canonical 36-character UUID
+// (8-4-4-4-12 ASCII hex digits). Rejecting malformed or oversized IDs before
+// querying DynamoDB avoids 2048-byte partition-key ValidationExceptions and
+// unnecessary store lookups.
+func ValidateShareID(id string) error {
+	if len(id) != ShareIDLength {
+		return ErrInvalidShareID
+	}
+	for i := range ShareIDLength {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return ErrInvalidShareID
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return ErrInvalidShareID
+			}
+		}
+	}
+	return nil
+}
 
 // ShareLinkTTL is how long a minted share URL stays valid before a new UUID
 // is required. Re-clicking Share within this window returns the same link.
@@ -192,6 +224,10 @@ func (s *Store) listShareLinksForKey(ctx context.Context, apiKey string) ([]*Sha
 // an expired link can still be inspected or revoked.
 func (s *Store) GetShareLinkRecord(ctx context.Context, id string) (*ShareLink, error) {
 	id = strings.TrimPrefix(id, ShareKeyPrefix)
+	if err := ValidateShareID(id); err != nil {
+		return nil, err
+	}
+	id = strings.ToLower(id)
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{
@@ -227,6 +263,10 @@ func (s *Store) GetShareLink(ctx context.Context, id string) (*ShareLink, error)
 // DeleteShareLink revokes a share link by UUID.
 func (s *Store) DeleteShareLink(ctx context.Context, id string) error {
 	id = strings.TrimPrefix(id, ShareKeyPrefix)
+	if err := ValidateShareID(id); err != nil {
+		return err
+	}
+	id = strings.ToLower(id)
 	_, err := s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{

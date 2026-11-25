@@ -555,7 +555,6 @@ export interface ShareInfo {
   proxy_base: string;
   base_url: string;
   created_at: string;
-  created_by?: string;
   expires_at?: string;
 }
 

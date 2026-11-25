@@ -83,7 +83,7 @@ Dashboard users with the **viewer** role can manage personal proxy keys only:
 - Viewers see the **API Keys** page only; monitoring routes require **editor** or **admin**
 - Viewers may create share links and delete keys they own; org-wide keys remain editor/admin scoped
 - Key routes (`GET`/`PATCH`/`DELETE /admin/api/keys/{key}`, `/stats`, and `POST /admin/api/share`) return `404` for any key the caller may not access, so a key's existence cannot be probed
-- Share links are capability URLs: anyone holding the link (signed in or not, any role) can resolve it
+- Resolving a share link (`GET /admin/api/share/{id}`) requires a signed-in dashboard session (any org role); unauthenticated callers receive `401` and are redirected through SSO before claiming the link. Creator emails are omitted from the share payload.
 - Revoking a share link (`DELETE /admin/api/share/{id}`) requires access to the shared key or having created the link; otherwise the route returns `404`
 
 Legacy keys with an empty `owner_email` are unchanged and remain visible to editors and admins only.

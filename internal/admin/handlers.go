@@ -827,14 +827,28 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
+	user, err := h.auth.currentUser(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 	if h.deps.APIKeyStore == nil {
 		h.writeAPIKeyStoreUnavailable(w)
 		return
 	}
 
 	id := mux.Vars(r)["id"]
+	if err := apikeys.ValidateShareID(id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	link, err := h.deps.APIKeyStore.GetShareLink(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, apikeys.ErrInvalidShareID) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "expired") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found or expired"})
 			return
@@ -851,27 +865,29 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audit every successful resolution of a public share link. The link hands
-	// out a working credential, so we record who pulled it (client IP), which
-	// link, and the redacted key — never the raw secret.
+	// Audit every successful resolution of a share link. The link hands out a
+	// working credential, so we record who pulled it (authenticated user and
+	// client IP), which link, and the redacted key — never the raw secret.
 	h.deps.Logger.Info(
 		"admin: share link resolved",
 		"id", link.ID(),
 		"key", apikeys.RedactKey(record.PK),
 		"provider", record.Provider,
+		"user", user.Email,
 		"client_ip", middleware.TrustedClientIP(r),
 		"created_by", link.CreatedBy,
 	)
 
-	if user, err := h.auth.currentUser(r); err == nil && h.deps.UserStore != nil {
-		if recErr := h.deps.UserStore.RecordShareAwareness(r.Context(), user.Email, id); recErr != nil {
-			h.deps.Logger.Warn("admin: record share awareness failed", "error", recErr, "email", user.Email, "share_id", id)
+	if h.deps.UserStore != nil {
+		if recErr := h.deps.UserStore.RecordShareAwareness(r.Context(), user.Email, link.ID()); recErr != nil {
+			h.deps.Logger.Warn("admin: record share awareness failed", "error", recErr, "email", user.Email, "share_id", link.ID())
 		}
 	}
 
-	// Belt-and-suspenders against the capability URL being indexed if it ever
-	// leaks into a crawlable surface.
+	// Belt-and-suspenders against the credential response being cached or
+	// indexed if a share URL ever leaks into a crawlable surface.
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	w.Header().Set("Cache-Control", "no-store")
 
 	base := h.publicBaseURL(r)
 	resp := map[string]any{
@@ -883,7 +899,6 @@ func (h *handler) handleGetShare(w http.ResponseWriter, r *http.Request) {
 		"proxy_base":  base,
 		"base_url":    base + providerBasePath(record.Provider),
 		"created_at":  link.CreatedAt,
-		"created_by":  link.CreatedBy,
 	}
 	if link.ExpiresAt != nil {
 		resp["expires_at"] = link.ExpiresAt
@@ -910,8 +925,16 @@ func (h *handler) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := mux.Vars(r)["id"]
+	if err := apikeys.ValidateShareID(id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	link, err := h.deps.APIKeyStore.GetShareLinkRecord(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, apikeys.ErrInvalidShareID) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share link not found"})
 			return

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { APIClientError } from "../client";
 import { ProxyKeyUsagePanel } from "../components/keys/proxy-key-usage-panel";
 import LLMProxyLogo from "../components/llm-proxy-logo";
 import { CopyButton } from "../components/ui/copy-button";
@@ -39,7 +40,7 @@ export default function SharePage() {
   const { data, isLoading, error } = useShare(id);
   const [revealed, setRevealed] = useState(false);
 
-  if (isLoading) {
+  if (isLoading || (error instanceof APIClientError && error.status === 401)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <span className="loading loading-spinner loading-lg text-primary" />
@@ -130,7 +131,6 @@ export default function SharePage() {
 
         <footer className="pb-6 text-center text-xs text-base-content/40">
           Shared via the LLM Proxy admin dashboard
-          {data.created_by ? ` · by ${data.created_by}` : ""}
         </footer>
       </div>
     </div>
