@@ -525,6 +525,13 @@ func apiKeyStoreFailureIsFatal(yc *config.YAMLConfig, store providers.APIKeyStor
 	return yc.Features.APIKeyManagement.Enabled && store == nil && !localDev
 }
 
+// idGateTokenMissingIsFatal reports whether a missing OCR_SIDECAR_TOKEN must
+// abort startup. Outside explicit local dev, an enabled ID gate without a
+// token would fail every image scan against an authenticated sidecar.
+func idGateTokenMissingIsFatal(yc *config.YAMLConfig, env config.RuntimeEnv) bool {
+	return yc.Features.IDGate.Enabled && env.OCRSidecarToken == "" && !env.IsExplicitLocalDev()
+}
+
 func fakeConfigFromYAML(yc *config.YAMLConfig, allowed bool) fake.Config {
 	fu := yc.Features.FakeUpstream
 	est := providers.NewYAMLConfigEstimationAdapter(yc.Features.RateLimiting.Estimation)
@@ -1571,9 +1578,15 @@ func runServer(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip
 // and returns the locals the later stages need. Fatal misconfiguration exits
 // the process here, before a listener is ever bound.
 func initDeps(yamlConfig *config.YAMLConfig, env config.RuntimeEnv, disableGzip bool) *serverDeps {
-	if yamlConfig.Features.IDGate.Enabled && env.OCRSidecarToken == "" {
-		logger.Error("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls")
+	if idGateTokenMissingIsFatal(yamlConfig, env) {
+		logProxyError("id_gate enabled but OCR_SIDECAR_TOKEN is not set; the OCR sidecar rejects unauthenticated calls",
+			"environment", env.Environment,
+			"hint", "set OCR_SIDECAR_TOKEN (or LLM_PROXY_ALLOW_DEFAULT_CONFIG=1 in local dev)")
 		os.Exit(1)
+	}
+	if yamlConfig.Features.IDGate.Enabled && env.OCRSidecarToken == "" {
+		logProxyWarn("id_gate enabled without OCR_SIDECAR_TOKEN in local dev; calls to an authenticated OCR sidecar will fail closed with 503",
+			"environment", env.Environment)
 	}
 
 	port := env.Port

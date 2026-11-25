@@ -4,12 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"time"
 )
+
+// ErrUnauthorized is returned when the OCR sidecar rejects X-OCR-Token
+// (HTTP 401 or 403). Callers treat this as a misconfiguration rather than
+// a transient upstream failure.
+var ErrUnauthorized = errors.New("ocr: unauthorized")
 
 type Client struct {
 	baseURL string
@@ -22,7 +28,8 @@ type extractTextResponse struct {
 }
 
 // New builds a client for the OCR sidecar. token is sent as X-OCR-Token; the
-// sidecar rejects requests without it.
+// sidecar rejects requests without it. Redirects are not followed so neither
+// the token nor uploaded images can be forwarded to another host.
 func New(baseURL, token string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -30,7 +37,12 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
-		client:  &http.Client{Timeout: timeout},
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -73,6 +85,10 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("%w: extract-text returned %d: %s", ErrUnauthorized, resp.StatusCode, string(excerpt))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("ocr: extract-text returned %d: %s", resp.StatusCode, string(excerpt))

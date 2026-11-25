@@ -120,7 +120,7 @@ func TestIntegration_IDGate_TestdataManifest(t *testing.T) {
 	dir := idGateTestdataDir(t)
 	manifest := loadIDGateManifest(t)
 
-	ocrClient := ocr.New(ocrURL, os.Getenv("OCR_SIDECAR_TOKEN"), 60*time.Second)
+	ocrClient := ocr.New(ocrURL, strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")), 60*time.Second)
 	redactor, err := redact.New(redact.Config{
 		AnalyzerURL:    presidioURL,
 		Timeout:        15 * time.Second,
@@ -167,7 +167,7 @@ func TestIntegration_OCRSidecar_TestdataExtractsText(t *testing.T) {
 	ocrURL := requireOCRSidecar(t)
 	dir := idGateTestdataDir(t)
 	manifest := loadIDGateManifest(t)
-	client := ocr.New(ocrURL, os.Getenv("OCR_SIDECAR_TOKEN"), 60*time.Second)
+	client := ocr.New(ocrURL, strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")), 60*time.Second)
 
 	for _, tc := range manifest.Cases {
 		t.Run(tc.File, func(t *testing.T) {

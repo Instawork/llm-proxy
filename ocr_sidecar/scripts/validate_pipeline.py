@@ -29,7 +29,7 @@ def _post_multipart(url: str, field: str, filename: str, data: bytes) -> dict:
         data=body,
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", ""),
+            "X-OCR-Token": os.getenv("OCR_SIDECAR_TOKEN", "dev-ocr-token"),
         },
         method="POST",
     )
@@ -98,6 +98,10 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        print(f"HTTP error {exc.code} from {exc.url}: {body}", file=sys.stderr)
+        raise SystemExit(2) from exc
     except urllib.error.URLError as exc:
         print(f"connection error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

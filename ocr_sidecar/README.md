@@ -13,9 +13,11 @@ curl -s http://localhost:8010/health
 curl -s -H "X-OCR-Token: dev-ocr-token" -F "image=@/path/to/scan.jpg" http://localhost:8010/extract-text
 ```
 
-`/extract-text` requires the shared secret from `OCR_SIDECAR_TOKEN` in the
+`/extract-text` requires a shared secret from `OCR_SIDECAR_TOKEN` in the
 `X-OCR-Token` header (compose sets `dev-ocr-token` on both containers) and
-rejects uploads over `OCR_MAX_IMAGE_BYTES` (default 10 MiB) with 413.
+rejects uploads over `OCR_MAX_IMAGE_BYTES` (default 10 MiB) with 413. For
+zero-downtime rotation, set comma-separated values in `OCR_SIDECAR_TOKEN` or
+supply the outgoing secret in `OCR_SIDECAR_PREVIOUS_TOKEN`.
 
 First startup downloads OnnxTR model weights (~100 MB) and can take 1–2 minutes before `/health` returns 200.
 
@@ -61,6 +63,16 @@ curl -s -H "X-OCR-Token: dev-ocr-token" -F "image=@/tmp/ocr-test.png" http://loc
 ```
 
 Deactivate the venv when done: `deactivate`. The `.venv/` directory is gitignored.
+
+## Unit tests (no ML dependencies required)
+
+`test_main.py` stubs `onnxruntime` and `onnxtr` to test startup guards, token
+authentication/rotation, and streaming upload caps without downloading models:
+
+```bash
+pip install -r ocr_sidecar/requirements-dev.txt
+make test-ocr-sidecar
+```
 
 ## Testdata and validation
 
@@ -111,7 +123,8 @@ With `features.id_gate.enabled: true` in `configs/dev.yml`, the proxy OCRs embed
 | `OCR_MAX_CONCURRENCY` | same as workers | Max in-flight OCR requests (semaphore) |
 | `OCR_QUEUE_TIMEOUT_SEC` | 5 | Max wait to acquire semaphore |
 | `OCR_INFER_TIMEOUT_SEC` | 30 | Max per-image inference time |
-| `OCR_SIDECAR_TOKEN` | (required) | Shared secret callers must send in `X-OCR-Token` |
+| `OCR_SIDECAR_TOKEN` | (required) | Shared secret(s) callers must send in `X-OCR-Token` (comma-separated for rotation) |
+| `OCR_SIDECAR_PREVIOUS_TOKEN` | (optional) | Previous shared secret accepted alongside `OCR_SIDECAR_TOKEN` during rotation |
 | `OCR_MAX_IMAGE_BYTES` | 10 MiB | Upload cap; larger bodies get 413 |
 | `OMP_NUM_THREADS` | 1 | ONNX Runtime intra-op threads |
 

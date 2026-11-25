@@ -3,8 +3,10 @@ package ocr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -57,5 +59,48 @@ func TestClientExtractTextErrorStatus(t *testing.T) {
 	_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("503 should not wrap ErrUnauthorized: %v", err)
+	}
+}
+
+func TestClientExtractTextAuthErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "bad token", status)
+			}))
+			defer srv.Close()
+
+			client := New(srv.URL, "wrong-token", time.Second)
+			_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("status %d: err = %v, want ErrUnauthorized", status, err)
+			}
+		})
+	}
+}
+
+func TestClientExtractTextDoesNotFollowRedirects(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "LEAKED"})
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/extract-text", http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	client := New(redirector.URL, "secret-token", time.Second)
+	_, err := client.ExtractText(context.Background(), []byte("sensitive-image"), "id.png")
+	if err == nil {
+		t.Fatal("expected error on 307 redirect")
+	}
+	if targetHits.Load() != 0 {
+		t.Fatalf("redirect target was called %d times; token/image must not follow redirects", targetHits.Load())
 	}
 }

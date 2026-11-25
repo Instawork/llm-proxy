@@ -1,0 +1,5 @@
+# Lightweight test dependencies for ocr_sidecar/test_main.py (ML deps are stubbed).
+fastapi
+python-multipart
+httpx
+pytest
