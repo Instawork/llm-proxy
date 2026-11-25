@@ -334,6 +334,14 @@ func TestHandleUpdateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.handleUpdateKey(rec, req)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+		// Sending ONLY an unchanged redact_pii omits it from updates -> no fields to update.
+		noopReq := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": false}`))
+		noopReq = mux.SetURLVars(noopReq, map[string]string{"key": key.PK})
+		noopRec := httptest.NewRecorder()
+		h.handleUpdateKey(noopRec, noopReq)
+		assert.Equal(t, http.StatusBadRequest, noopRec.Code, noopRec.Body.String())
+		assert.Contains(t, noopRec.Body.String(), "no fields to update")
 	})
 
 	t.Run("allow updating unrelated fields on key with legacy override", func(t *testing.T) {

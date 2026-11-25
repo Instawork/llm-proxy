@@ -57,7 +57,12 @@ export default function KeysTable({
 }: KeysTableProps) {
   // Viewers only see their own keys, so stacking would collapse the whole page into one row
   // and hide Reveal/Copy/"How to use" behind a click; keep their rows flat.
-  const rows = useMemo(() => keyDisplayRows(keys, { stack: !viewerMode }), [keys, viewerMode]);
+  // Include allowPerKeyPiiOverride so TanStack Table rebuilds rows and recomputes
+  // cached PII labels if /admin/api/pii resolves after /admin/api/keys.
+  const rows = useMemo(
+    () => keyDisplayRows(keys, { stack: !viewerMode }),
+    [keys, viewerMode, allowPerKeyPiiOverride],
+  );
 
   const columns = useMemo<ColumnDef<KeyRow, unknown>[]>(() => {
     const cols: ColumnDef<KeyRow, unknown>[] = [

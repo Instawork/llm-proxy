@@ -507,7 +507,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	if req.Tags != nil {
 		updates["tags"] = req.Tags
 	}
-	if req.RedactPII.Defined {
+	if req.RedactPII.Defined && !boolPtrEqual(req.RedactPII.Value, existing.RedactPII) {
 		if req.RedactPII.Value == nil {
 			updates["redact_pii"] = nil
 		} else {

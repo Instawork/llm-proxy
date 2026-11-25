@@ -748,6 +748,42 @@ func TestPIIRedactMiddleware_SigV4BedrockExempt(t *testing.T) {
 		})
 	}
 
+	t.Run("observability mode (WirePlaceholders=false) still redacts context copy for bedrock without mutating upstream body", func(t *testing.T) {
+		r := &fakeRedactor{
+			mutate: func(in string) (redact.Result, error) {
+				return redact.Result{
+					Text:         strings.ReplaceAll(in, rawSSN, "[REDACTED:US_SSN]"),
+					EntityCounts: map[string]int{"US_SSN": 1},
+				}, nil
+			},
+		}
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			WirePlaceholders:    false,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse", body)
+		req.Header.Set("Authorization", sigHeader)
+		req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called.Load() != 1 {
+			t.Fatalf("expected observability redactor called once, got %d", r.called.Load())
+		}
+		if string(cap.bodySeen) != body {
+			t.Fatalf("upstream SigV4 body mutated in observability mode: got %q want %q", string(cap.bodySeen), body)
+		}
+		if got := cap.reqSeen.Header.Get("X-Amz-Content-Sha256"); got != payloadHash {
+			t.Fatalf("X-Amz-Content-Sha256 = %q, want %q", got, payloadHash)
+		}
+		red, ok := PIIRedactedBody(cap.reqSeen.Context())
+		if !ok || !strings.Contains(string(red), "[REDACTED:US_SSN]") {
+			t.Fatalf("expected redacted context copy in observability mode, ok=%v body=%q", ok, string(red))
+		}
+	})
+
 	t.Run("bedrock-mantle is NOT exempt and still redacts under allow_per_key_override=false", func(t *testing.T) {
 		r := &fakeRedactor{
 			scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {

@@ -210,12 +210,14 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			}
 
 			provider := getProviderFromPath(r.URL.Path)
-			// SigV4 passthrough Bedrock (/bedrock/*, /model/*) forwards
-			// client-signed bytes verbatim; mutating the body or signed headers
-			// breaks X-Amz-Content-Sha256 and violates the SigV4 non-mutation
-			// contract. Bedrock Mantle (/bedrock-mantle/*) signs upstream
-			// server-side and is NOT exempt.
-			if isSigV4PassthroughProvider(provider) {
+			// In wire mode, SigV4 passthrough Bedrock (/bedrock/*, /model/*)
+			// forwards client-signed bytes verbatim; mutating the body or signed
+			// headers breaks X-Amz-Content-Sha256 and violates the SigV4
+			// non-mutation contract. Observability-only mode (WirePlaceholders=
+			// false) leaves the upstream body and headers untouched, so it can
+			// still stash a redacted copy in context. Bedrock Mantle
+			// (/bedrock-mantle/*) signs upstream server-side and is NOT exempt.
+			if cfg.WirePlaceholders && isSigV4PassthroughProvider(provider) {
 				next.ServeHTTP(w, r)
 				return
 			}
