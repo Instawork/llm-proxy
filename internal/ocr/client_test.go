@@ -49,7 +49,9 @@ func TestClientExtractText(t *testing.T) {
 }
 
 func TestClientExtractTextErrorStatus(t *testing.T) {
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
 		http.Error(w, "busy", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
@@ -59,6 +61,25 @@ func TestClientExtractTextErrorStatus(t *testing.T) {
 	_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1 (503 busy must not retry and hold a concurrency slot)", attempts.Load())
+	}
+}
+
+func TestClientExtractTextRejectsMissingOrNullText(t *testing.T) {
+	for _, body := range []string{`{}`, `{"error":"degraded"}`, `{"text":null}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+
+		client := New(srv.URL, time.Second)
+		_, err := client.ExtractText(context.Background(), []byte("x"), "image.bin")
+		srv.Close()
+		if err == nil {
+			t.Fatalf("body %s: expected error for missing/null text field", body)
+		}
 	}
 }
 
@@ -76,10 +97,10 @@ func TestClientTransportConfigured(t *testing.T) {
 	}
 }
 
-func TestClientExtractTextRetriesTransient503ThenSucceeds(t *testing.T) {
-	var attempts int
+func TestClientExtractTextRetriesTransient502OnceThenSucceeds(t *testing.T) {
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		n := attempts.Add(1)
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -91,8 +112,8 @@ func TestClientExtractTextRetriesTransient503ThenSucceeds(t *testing.T) {
 		}
 		_ = file.Close()
 
-		if attempts <= 2 {
-			http.Error(w, "OCR busy; try later", http.StatusServiceUnavailable)
+		if n == 1 {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "RECOVERED"})
@@ -109,16 +130,21 @@ func TestClientExtractTextRetriesTransient503ThenSucceeds(t *testing.T) {
 	if text != "RECOVERED" {
 		t.Fatalf("text = %q, want RECOVERED", text)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts = %d, want 3", attempts)
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts.Load())
 	}
 }
 
 func TestClientExtractTextDoesNotRetryNonTransientErrors(t *testing.T) {
-	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError, http.StatusGatewayTimeout} {
-		var attempts int
+	for _, status := range []int{
+		http.StatusBadRequest,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		var attempts atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			attempts++
+			attempts.Add(1)
 			http.Error(w, "fatal", status)
 		}))
 
@@ -130,8 +156,8 @@ func TestClientExtractTextDoesNotRetryNonTransientErrors(t *testing.T) {
 		if err == nil {
 			t.Fatalf("status %d: expected error", status)
 		}
-		if attempts != 1 {
-			t.Fatalf("status %d: attempts = %d, want 1 (no retry)", status, attempts)
+		if attempts.Load() != 1 {
+			t.Fatalf("status %d: attempts = %d, want 1 (no retry)", status, attempts.Load())
 		}
 	}
 }
@@ -182,7 +208,7 @@ func (c *onCloseReadCloser) Close() error {
 
 func TestClientExtractTextPreservesCancelCauseDuringRetryBackoff(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "OCR busy; try later", http.StatusServiceUnavailable)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
 	}))
 	defer srv.Close()
 
@@ -213,8 +239,8 @@ func TestClientExtractTextPreservesCancelCauseDuringRetryBackoff(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled in error chain, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "503") {
-		t.Fatalf("expected 503 status detail in error, got %v", err)
+	if !strings.Contains(err.Error(), "502") {
+		t.Fatalf("expected 502 status detail in error, got %v", err)
 	}
 }
 
@@ -226,8 +252,8 @@ func TestClientExtractTextPreservesCancelCauseWhileBlockedInBackoff(t *testing.T
 		client.client.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 			attempts.Add(1)
 			return &http.Response{
-				StatusCode: http.StatusServiceUnavailable,
-				Body:       io.NopCloser(strings.NewReader("OCR busy; try later")),
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader("bad gateway")),
 				Header:     make(http.Header),
 			}, nil
 		})
@@ -256,8 +282,8 @@ func TestClientExtractTextPreservesCancelCauseWhileBlockedInBackoff(t *testing.T
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled in error chain, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "503") {
-			t.Fatalf("expected 503 status detail in error, got %v", err)
+		if !strings.Contains(err.Error(), "502") {
+			t.Fatalf("expected 502 status detail in error, got %v", err)
 		}
 		if attempts.Load() != 1 {
 			t.Fatalf("attempts = %d, want 1 (must not start attempt 2 after cancel)", attempts.Load())

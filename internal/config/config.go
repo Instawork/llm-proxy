@@ -296,28 +296,32 @@ type IDGateConfig struct {
 	// TimeoutMs caps each OCR round trip. Default: 30000.
 	TimeoutMs int `yaml:"timeout_ms"`
 
+	// QueueTimeoutMs bounds how long a request waits in Go for per-request or
+	// process-wide admission slots before dispatching to OCR. Keeping this
+	// short and separate from TimeoutMs prevents queue wait from stacking on
+	// top of OCR + Presidio stage timeouts under overload. 0 -> middleware
+	// fallback min(ScanTimeout, 5s).
+	QueueTimeoutMs int `yaml:"queue_timeout_ms,omitempty"`
+
 	// ImageConcurrency caps how many embedded images in a single request are
 	// OCR'd + analyzed in parallel. 0 -> middleware default of 4. Raise to
 	// reduce multi-image gate latency when the OCR fleet has spare capacity.
 	ImageConcurrency int `yaml:"image_concurrency,omitempty"`
 
 	// MaxInFlight caps concurrent proxy-to-OCR+analyze calls across ALL
-	// requests handled by this proxy instance. 0 leaves cross-request
-	// concurrency unbounded. Excess burst requests wait in Go where expired
-	// contexts abort before dispatching to ocr-gate; it does not cancel an
-	// inference already running in the sidecar's executor if a dispatched call
-	// times out.
+	// requests handled by this proxy task (per-task, not fleet-wide). 0 leaves
+	// cross-request concurrency unbounded. Excess burst requests wait in Go
+	// where expired contexts abort before dispatching to ocr-gate; it does not
+	// cancel an inference already running in the sidecar's executor if a
+	// dispatched call times out.
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
-
-	// MaxImageDimension downscales JPEG/PNG images whose longest edge exceeds
-	// this many pixels before sending them to OCR (never mutating the upstream
-	// LLM request body). 0 -> middleware default of 1600.
-	MaxImageDimension int `yaml:"max_image_dimension,omitempty"`
 
 	// CacheTTLSeconds caches content-addressed (SHA-256) scan verdicts
 	// (clear/blocked only, never errors or raw bytes/text) across turns and
-	// repeated uploads. 0 -> middleware default of 300s.
-	CacheTTLSeconds int `yaml:"cache_ttl_seconds,omitempty"`
+	// repeated uploads. Pointer so overlays can explicitly set 0 to disable
+	// caching (overriding base.yml); omitted (nil) inherits base.yml or
+	// defaults to 300s.
+	CacheTTLSeconds *int `yaml:"cache_ttl_seconds,omitempty"`
 
 	// CacheMaxEntries bounds the in-memory scan verdict cache. 0 -> 1024.
 	CacheMaxEntries int `yaml:"cache_max_entries,omitempty"`
@@ -1489,16 +1493,16 @@ func (c *YAMLConfig) validateIDGateConfig() error {
 	if g.TimeoutMs < 0 {
 		return fmt.Errorf("timeout_ms cannot be negative")
 	}
+	if g.QueueTimeoutMs < 0 {
+		return fmt.Errorf("queue_timeout_ms cannot be negative")
+	}
 	if g.ImageConcurrency < 0 {
 		return fmt.Errorf("image_concurrency cannot be negative")
 	}
 	if g.MaxInFlight < 0 {
 		return fmt.Errorf("max_in_flight cannot be negative")
 	}
-	if g.MaxImageDimension < 0 {
-		return fmt.Errorf("max_image_dimension cannot be negative")
-	}
-	if g.CacheTTLSeconds < 0 {
+	if g.CacheTTLSeconds != nil && *g.CacheTTLSeconds < 0 {
 		return fmt.Errorf("cache_ttl_seconds cannot be negative")
 	}
 	if g.CacheMaxEntries < 0 {

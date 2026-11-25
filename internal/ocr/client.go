@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultOCRTimeout     = 30 * time.Second
-	defaultMaxRetries     = 2
+	defaultMaxRetries     = 1
 	defaultRetryBaseDelay = 150 * time.Millisecond
 )
 
@@ -27,7 +27,7 @@ type Client struct {
 }
 
 type extractTextResponse struct {
-	Text string `json:"text"`
+	Text *string `json:"text"`
 }
 
 func newHTTPTransport() *http.Transport {
@@ -37,7 +37,6 @@ func newHTTPTransport() *http.Transport {
 			Timeout:   5 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   32,
 		IdleConnTimeout:       90 * time.Second,
@@ -139,12 +138,19 @@ func (c *Client) doExtractOnce(ctx context.Context, payload []byte, contentType 
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", false, fmt.Errorf("ocr: decode response: %w", err)
 	}
-	return out.Text, false, nil
+	if out.Text == nil {
+		return "", false, fmt.Errorf("ocr: response missing text field")
+	}
+	return *out.Text, false, nil
 }
 
+// isRetryableOCRStatus retries only 502 Bad Gateway (fast transient ALB/target
+// reset during ECS deploys). It deliberately does NOT retry 503 Service
+// Unavailable: ocr_sidecar only returns 503 after waiting its full 5s queue
+// timeout, so retrying 503 holds a proxy max_in_flight slot for 10-15s and
+// compounds sidecar backlog.
 func isRetryableOCRStatus(code int) bool {
-	return code == http.StatusBadGateway ||
-		code == http.StatusServiceUnavailable
+	return code == http.StatusBadGateway
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

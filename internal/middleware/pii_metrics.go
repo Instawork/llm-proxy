@@ -78,6 +78,24 @@ func emitIDGateScanned(metrics observability.MetricsSink, provider string, image
 	_ = metrics.Distribution("id_gate.images_scanned", float64(imageCount), tags, 1.0)
 }
 
+func emitIDGateQueueWait(metrics observability.MetricsSink, provider string, wait time.Duration) {
+	if metrics == nil || wait <= 0 {
+		return
+	}
+	tags := []string{"provider:" + normalizeDogstatsdTag(provider)}
+	_ = metrics.Distribution("id_gate.queue_wait_ms", float64(wait.Milliseconds()), tags, 1.0)
+}
+
+func emitIDGateCacheHit(metrics observability.MetricsSink, provider string, count int64) {
+	if metrics == nil || count <= 0 {
+		return
+	}
+	tags := []string{"provider:" + normalizeDogstatsdTag(provider)}
+	for range count {
+		_ = metrics.Incr("id_gate.cache_hit", tags, 1.0)
+	}
+}
+
 func normalizeDogstatsdTag(v string) string {
 	if v == "" {
 		return "unknown"

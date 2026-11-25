@@ -128,9 +128,11 @@ features:
     image_concurrency: 0
     # Process-wide cap on concurrent OCR calls across all requests (0 = unbounded).
     max_in_flight: 0
-    # Downscale JPEG/PNG images above this longest edge before OCR (0 -> 1600px).
-    max_image_dimension: 1600
-    # Content-addressed (SHA-256) verdict cache TTL in seconds (0 -> 300s).
+    # Proxy-side wait cap (ms) for per-request/global admission slots before
+    # dispatching to OCR. Kept short and separate from timeout_ms so overload
+    # fast-fails in Go instead of stacking queue + OCR + Presidio budgets.
+    queue_timeout_ms: 5000
+    # Content-addressed (SHA-256) verdict cache TTL in seconds (0 = disabled).
     cache_ttl_seconds: 300
     cache_max_entries: 1024
   # ---------------------------------------------------------------------------

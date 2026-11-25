@@ -1969,25 +1969,30 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 		analyzeTimeout = 3 * time.Second
 	}
 	scanTimeout := ocrTimeout + analyzeTimeout
+	queueTimeout := time.Duration(idGateCfg.QueueTimeoutMs) * time.Millisecond
+	cacheTTL := 5 * time.Minute
+	if idGateCfg.CacheTTLSeconds != nil {
+		cacheTTL = time.Duration(*idGateCfg.CacheTTLSeconds) * time.Second
+	}
 	scoreThreshold := idGateCfg.ScoreThreshold
 	if scoreThreshold <= 0 {
 		scoreThreshold = 0.4
 	}
 	r.Use(middleware.IDGateMiddleware(ocr.New(ocrURL, ocrTimeout), deps.redactor, middleware.IDGateConfig{
-		FailClosed:        idGateCfg.FailMode == "closed",
-		MaxBodyBytes:      idGateCfg.MaxBodyBytes,
-		MaxImageBytes:     idGateCfg.MaxImageBytes,
-		ScoreThreshold:    scoreThreshold,
-		EntityTypes:       idGateCfg.EntityTypes,
-		ImageConcurrency:  idGateCfg.ImageConcurrency,
-		MaxInFlight:       idGateCfg.MaxInFlight,
-		ScanTimeout:       scanTimeout,
-		MaxImageDimension: idGateCfg.MaxImageDimension,
-		CacheTTL:          time.Duration(idGateCfg.CacheTTLSeconds) * time.Second,
-		CacheMaxEntries:   idGateCfg.CacheMaxEntries,
-		Logger:            logger,
-		Metrics:           initializeIDGateMetrics(deps.yamlConfig),
-		Recorder:          globalIDGateRecorder,
+		FailClosed:       idGateCfg.FailMode == "closed",
+		MaxBodyBytes:     idGateCfg.MaxBodyBytes,
+		MaxImageBytes:    idGateCfg.MaxImageBytes,
+		ScoreThreshold:   scoreThreshold,
+		EntityTypes:      idGateCfg.EntityTypes,
+		ImageConcurrency: idGateCfg.ImageConcurrency,
+		MaxInFlight:      idGateCfg.MaxInFlight,
+		ScanTimeout:      scanTimeout,
+		QueueTimeout:     queueTimeout,
+		CacheTTL:         cacheTTL,
+		CacheMaxEntries:  idGateCfg.CacheMaxEntries,
+		Logger:           logger,
+		Metrics:          initializeIDGateMetrics(deps.yamlConfig),
+		Recorder:         globalIDGateRecorder,
 	}))
 	logger.Info(
 		"🪪  Government ID gate middleware installed",
@@ -1995,8 +2000,10 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 		"fail_mode", idGateCfg.FailMode,
 		"score_threshold", scoreThreshold,
 		"timeout_ms", ocrTimeout.Milliseconds(),
+		"queue_timeout_ms", queueTimeout.Milliseconds(),
 		"image_concurrency", idGateCfg.ImageConcurrency,
 		"max_in_flight", idGateCfg.MaxInFlight,
+		"cache_ttl_seconds", int(cacheTTL/time.Second),
 	)
 }
 

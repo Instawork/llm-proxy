@@ -331,17 +331,26 @@ func TestValidate_IDGate(t *testing.T) {
 	require.Error(t, c.Validate())
 
 	c.Features.IDGate.FailMode = "open"
+	c.Features.IDGate.QueueTimeoutMs = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.QueueTimeoutMs = 5000
+
+	c.Features.IDGate.ImageConcurrency = -1
+	require.Error(t, c.Validate())
+	c.Features.IDGate.ImageConcurrency = 4
+
 	c.Features.IDGate.MaxInFlight = -1
 	require.Error(t, c.Validate())
-	c.Features.IDGate.MaxInFlight = 8
+	c.Features.IDGate.MaxInFlight = 6
 
-	c.Features.IDGate.MaxImageDimension = -1
+	negTTL := -1
+	c.Features.IDGate.CacheTTLSeconds = &negTTL
 	require.Error(t, c.Validate())
-	c.Features.IDGate.MaxImageDimension = 1600
-
-	c.Features.IDGate.CacheTTLSeconds = -1
-	require.Error(t, c.Validate())
-	c.Features.IDGate.CacheTTLSeconds = 300
+	zeroTTL := 0
+	c.Features.IDGate.CacheTTLSeconds = &zeroTTL
+	require.NoError(t, c.Validate())
+	posTTL := 300
+	c.Features.IDGate.CacheTTLSeconds = &posTTL
 
 	c.Features.IDGate.CacheMaxEntries = -1
 	require.Error(t, c.Validate())
