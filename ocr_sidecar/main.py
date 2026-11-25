@@ -64,6 +64,7 @@ OCR_ORT_INTER_THREADS = _env_int("OCR_ORT_INTER_THREADS", 1)
 OCR_SIDECAR_TOKEN = os.getenv("OCR_SIDECAR_TOKEN", "").strip()
 if not OCR_SIDECAR_TOKEN:
     raise SystemExit("OCR_SIDECAR_TOKEN is required")
+_OCR_SIDECAR_TOKEN_BYTES = OCR_SIDECAR_TOKEN.encode("utf-8")
 # Cap the upload before it is buffered; matches id_gate.max_image_bytes upstream.
 OCR_MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
 if OCR_MAX_IMAGE_BYTES <= 0:
@@ -157,17 +158,23 @@ def _capped_receive(receive, limit: int):
 async def extract_text(request: Request) -> JSONResponse:
     # Authenticate from headers alone, before the multipart body is parsed; a
     # declared UploadFile parameter would spool the upload first and let
-    # anonymous callers burn disk and CPU.
-    if not hmac.compare_digest(request.headers.get("x-ocr-token", ""), OCR_SIDECAR_TOKEN):
+    # anonymous callers burn disk and CPU. Compare UTF-8 bytes because
+    # hmac.compare_digest rejects non-ASCII str values (Starlette decodes
+    # HTTP headers as latin-1).
+    if not hmac.compare_digest(
+        request.headers.get("x-ocr-token", "").encode("utf-8"),
+        _OCR_SIDECAR_TOKEN_BYTES,
+    ):
         raise HTTPException(status_code=401, detail="missing or invalid X-OCR-Token")
     body_limit = OCR_MAX_IMAGE_BYTES + _MULTIPART_OVERHEAD
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > body_limit:
+    if declared is not None and declared.strip().isdigit() and int(declared.strip()) > body_limit:
         raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
     if predictor is None or executor is None or gate is None:
         raise HTTPException(status_code=503, detail="OCR service not ready")
 
     capped = Request(request.scope, _capped_receive(request.receive, body_limit))
+    form = None
     try:
         form = await capped.form()
         image = form.get("image")
@@ -181,7 +188,12 @@ async def extract_text(request: Request) -> JSONResponse:
     except Exception as exc:
         logger.exception("failed to read upload")
         raise HTTPException(status_code=400, detail=f"invalid upload: {exc}") from exc
+    finally:
+        if form is not None:
+            await form.close()
 
+    if len(img_bytes) > OCR_MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="image exceeds OCR_MAX_IMAGE_BYTES")
     if not img_bytes:
         raise HTTPException(status_code=400, detail="empty upload")
 

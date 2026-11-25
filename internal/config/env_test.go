@@ -21,7 +21,7 @@ func TestLoadRuntimeEnv_ReadsAllKnobs(t *testing.T) {
 	t.Setenv("ADMIN_PUBLIC_BASE_URL", "https://proxy.example.com")
 	t.Setenv("PRESIDIO_ANALYZER_URL", "http://presidio:3000")
 	t.Setenv("OCR_SIDECAR_URL", "http://ocr:8080")
-	t.Setenv("OCR_SIDECAR_TOKEN", "ocr-token")
+	t.Setenv("OCR_SIDECAR_TOKEN", "  ocr-token \n")
 
 	env := LoadRuntimeEnv()
 	assert.Equal(t, RuntimeEnv{

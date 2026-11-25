@@ -69,7 +69,7 @@ func LoadRuntimeEnv() RuntimeEnv {
 		AdminPublicBaseURL:  os.Getenv("ADMIN_PUBLIC_BASE_URL"),
 		PresidioAnalyzerURL: os.Getenv("PRESIDIO_ANALYZER_URL"),
 		OCRSidecarURL:       os.Getenv("OCR_SIDECAR_URL"),
-		OCRSidecarToken:     os.Getenv("OCR_SIDECAR_TOKEN"),
+		OCRSidecarToken:     strings.TrimSpace(os.Getenv("OCR_SIDECAR_TOKEN")),
 	}
 }
 
