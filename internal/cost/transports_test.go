@@ -152,6 +152,91 @@ func TestDatadogTransport_NewAndWriteRecord_Defaults(t *testing.T) {
 	assert.NoError(t, zero.Close())
 }
 
+func TestDatadogTransport_WriteRecord_CacheTokenCounts(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		record   *CostRecord
+		want     []string
+	}{
+		{
+			name:     "anthropic includes cache tokens",
+			provider: "anthropic",
+			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
+		},
+		{
+			name:     "openai includes cache tokens",
+			provider: "openai",
+			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
+		},
+		{
+			// AWS's documented Converse example: inputTokens 100, outputTokens
+			// 50, totalTokens 150, cacheReadInputTokens 200 means 300 input
+			// tokens and 350 tokens processed. The parser folds the cache
+			// tokens into TotalTokens, so the metric must not add them again.
+			name:     "bedrock converse total is not double counted",
+			provider: "bedrock",
+			record: &CostRecord{
+				Provider: "bedrock", Model: "m",
+				InputTokens: 100, OutputTokens: 50, TotalTokens: 350,
+				CacheReadInputTokens: 200,
+			},
+			want: []string{"llm.tokens.input:300|d", "llm.tokens.output:50|d", "llm.tokens.total:350|d"},
+		},
+		{
+			name:     "gemini includes cache tokens",
+			provider: "gemini",
+			want:     []string{"llm.tokens.input:50512|d", "llm.tokens.output:40|d", "llm.tokens.total:50552|d"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			require.NoError(t, err)
+			defer conn.Close()
+
+			tr, err := NewDatadogTransport(DatadogTransportConfig{
+				Host:      "127.0.0.1",
+				Port:      strings.Split(conn.LocalAddr().String(), ":")[1],
+				Namespace: "llm",
+			})
+			require.NoError(t, err)
+
+			rec := &CostRecord{
+				Provider:                 tc.provider,
+				Model:                    "m",
+				InputTokens:              12,
+				OutputTokens:             40,
+				TotalTokens:              12 + 40 + 48000 + 2500,
+				CacheReadInputTokens:     48000,
+				CacheCreationInputTokens: 2500,
+			}
+			if tc.record != nil {
+				rec = tc.record
+			}
+			require.NoError(t, tr.WriteRecord(rec))
+			require.NoError(t, tr.Close())
+
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+			var payload strings.Builder
+			buf := make([]byte, 65535)
+			for {
+				n, _, err := conn.ReadFromUDP(buf)
+				if err != nil {
+					break
+				}
+				payload.Write(buf[:n])
+			}
+
+			for _, w := range tc.want {
+				assert.Contains(t, payload.String(), w)
+			}
+			assert.NotContains(t, payload.String(), "cache_read")
+			assert.NotContains(t, payload.String(), "cache_creation")
+		})
+	}
+}
+
 func TestDatadogTransport_FromConfig_StructAndMap(t *testing.T) {
 	host, port, stop := startUDPSink(t)
 	defer stop()
@@ -500,10 +585,7 @@ func TestGetPricingForModel_TieredAndOverride(t *testing.T) {
 			{Threshold: 100, Input: 1, Output: 2},
 			{Threshold: 0, Input: 10, Output: 20}, // catch-all
 		},
-		Overrides: map[string]struct {
-			Input  float64 `json:"input"`
-			Output float64 `json:"output"`
-		}{},
+		Overrides: map[string]PricingOverride{},
 	})
 
 	tier, err := ct.GetPricingForModel("p", "m", 50)

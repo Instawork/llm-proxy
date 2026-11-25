@@ -7,6 +7,7 @@ import DataTable from "../ui/data-table";
 import type { CostKeyAgg } from "../../lib/daily-history";
 import { spendByKeyDisplayRows, type SpendByKeyDisplayRow } from "../../lib/group-rows";
 import { formatCount, formatUsd } from "../../lib/format";
+import TokensCell from "./tokens-cell";
 import { inferProviderFromMaskedId } from "../../lib/byo-ban";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 import type { ByoBanActions } from "../../hooks/use-byo-ban-actions";
@@ -86,11 +87,7 @@ export default function SpendByKeyTable({ rows, keys, byoBanActions }: SpendByKe
         accessorFn: (row) => `${row.input_tokens}/${row.output_tokens}`,
         header: "Tokens",
         meta: { alignRight: true },
-        cell: ({ row }) => (
-          <span className="text-base-content/70">
-            {formatCount(row.original.input_tokens)}/{formatCount(row.original.output_tokens)}
-          </span>
-        ),
+        cell: ({ row }) => <TokensCell row={row.original} />,
       },
     ],
     [keys, byoBanActions],

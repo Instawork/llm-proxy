@@ -434,19 +434,21 @@ func initializeCostTracker(yamlConfig *config.YAMLConfig, env config.RuntimeEnv)
 						Threshold: tier.Threshold,
 						Input:     tier.Input,
 						Output:    tier.Output,
+
+						CacheRead:  tier.CacheRead,
+						CacheWrite: tier.CacheWrite,
 					})
 				}
 
 				if modelPricing.Overrides != nil {
-					costTrackerPricing.Overrides = make(map[string]struct {
-						Input  float64 `json:"input"`
-						Output float64 `json:"output"`
-					})
+					costTrackerPricing.Overrides = make(map[string]cost.PricingOverride)
 					for alias, override := range modelPricing.Overrides {
-						costTrackerPricing.Overrides[alias] = struct {
-							Input  float64 `json:"input"`
-							Output float64 `json:"output"`
-						}{Input: override.Input, Output: override.Output}
+						costTrackerPricing.Overrides[alias] = cost.PricingOverride{
+							Input:      override.Input,
+							Output:     override.Output,
+							CacheRead:  override.CacheRead,
+							CacheWrite: override.CacheWrite,
+						}
 					}
 				}
 
@@ -1942,8 +1944,8 @@ func costLimitOptions(yamlConfig *config.YAMLConfig) middleware.CostLimitOptions
 		}
 	}
 	if globalCostTracker != nil {
-		opts.Estimate = func(provider, model string, inputTokens, outputTokens int) float64 {
-			_, _, total, err := globalCostTracker.CalculateCost(provider, model, inputTokens, outputTokens)
+		opts.Estimate = func(provider, model string, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int) float64 {
+			_, _, total, err := globalCostTracker.CalculateCostWithCache(provider, model, inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens)
 			if err != nil {
 				return 0
 			}

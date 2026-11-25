@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { capFraction, sortBySpend, unmeteredEndpointSummary } from "./spend-overview";
+import {
+  capFraction,
+  overviewScopeCopy,
+  parseSpendView,
+  rowInSpendTotal,
+  sortBySpend,
+  unmeteredEndpointSummary,
+} from "./spend-overview";
 import type { KeyCostMonthStats, KeyCostStats } from "../types";
 
 function today(spend: number): KeyCostStats {
@@ -68,5 +75,67 @@ describe("unmeteredEndpointSummary", () => {
       "/v1/embeddings, /v1/models, /v1/chat/completions (HTTP 401)",
     );
     expect(unmeteredEndpointSummary({ endpoints: [] })).toBe("");
+  });
+});
+
+describe("spend view", () => {
+  it("parses the scope param and defaults to my spend", () => {
+    expect(parseSpendView("all")).toBe("all");
+    expect(parseSpendView("shared")).toBe("shared");
+    expect(parseSpendView("mine")).toBe("mine");
+    expect(parseSpendView("bogus")).toBe("mine");
+    expect(parseSpendView(null)).toBe("mine");
+  });
+
+  it("decides which rows count toward each view", () => {
+    const own = {};
+    const shared = { shared: true };
+    expect(rowInSpendTotal(own, "mine")).toBe(true);
+    expect(rowInSpendTotal(shared, "mine")).toBe(false);
+    expect(rowInSpendTotal(own, "shared")).toBe(false);
+    expect(rowInSpendTotal(shared, "shared")).toBe(true);
+    expect(rowInSpendTotal(own, "all")).toBe(true);
+    expect(rowInSpendTotal(shared, "all")).toBe(true);
+  });
+});
+
+describe("overviewScopeCopy", () => {
+  it("labels my spend as keys you own and counts excluded shared keys", () => {
+    const copy = overviewScopeCopy("mine", { owned: 2, shared: 2 });
+    expect(copy.totalsTitle).toBe("Your spend (keys you own)");
+    expect(copy.scopePhrase).toBe("keys you own");
+    expect(copy.excludesNote).toBe("Excludes 2 shared keys — see each key for its spend.");
+    expect(copy.rowNote({ shared: true })).toBe("Not included in your spend total");
+    expect(copy.rowNote({})).toBeNull();
+  });
+
+  it("uses the singular and omits the note when nothing is excluded", () => {
+    expect(overviewScopeCopy("mine", { owned: 1, shared: 1 }).excludesNote).toBe(
+      "Excludes 1 shared key — see each key for its spend.",
+    );
+    expect(overviewScopeCopy("mine", { owned: 1, shared: 0 }).excludesNote).toBeNull();
+  });
+
+  it("labels shared key spend and notes the owned keys it leaves out", () => {
+    const copy = overviewScopeCopy("shared", { owned: 2, shared: 3 });
+    expect(copy.totalsTitle).toBe("Shared key spend (keys shared with you)");
+    expect(copy.excludesNote).toBe("Excludes your 2 own keys — see each key for its spend.");
+    expect(copy.rowNote({})).toBe("Not included in the shared key spend total");
+    expect(copy.rowNote({ shared: true })).toBeNull();
+  });
+
+  it("covers every visible key in the all view", () => {
+    const copy = overviewScopeCopy("all", { owned: 2, shared: 3 });
+    expect(copy.totalsTitle).toContain("All spend");
+    expect(copy.excludesNote).toBeNull();
+    expect(copy.rowNote({ shared: true })).toBeNull();
+    expect(copy.rowNote({})).toBeNull();
+  });
+
+  it("leaves the fleet view unlabelled", () => {
+    const copy = overviewScopeCopy(null, { owned: 0, shared: 0 });
+    expect(copy.totalsTitle).toBe("Spend");
+    expect(copy.scopePhrase).toBe("");
+    expect(copy.excludesNote).toBeNull();
   });
 });

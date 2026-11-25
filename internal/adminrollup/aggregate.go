@@ -232,6 +232,9 @@ func costScalarsFromTotals(totals map[string]float64) map[string]any {
 		"requests_today":         int64(totals["requests"]),
 		"input_tokens_today":     int64(totals["input_tokens"]),
 		"output_tokens_today":    int64(totals["output_tokens"]),
+
+		"cache_read_tokens_today":     int64(totals["cache_read_tokens"]),
+		"cache_creation_tokens_today": int64(totals["cache_creation_tokens"]),
 	}
 }
 
@@ -245,11 +248,11 @@ func usageDataFromAggregates(totals map[string]float64, byModel, byProvider, byK
 	}
 	if len(byKey) > 0 {
 		top, other := topNWithOther(flattenScopeDim(byKey), caps.ByKey)
-		data["by_key"] = scopeMapFromNames(top, other, "key")
+		data["by_key"] = scopeMapFromNames(buildDimRows(byKey, nil), top, other, "key")
 	}
 	if len(byUser) > 0 {
 		top, other := topNWithOther(flattenScopeDim(byUser), caps.ByUser)
-		data["by_user"] = scopeMapFromNames(top, other, "user")
+		data["by_user"] = scopeMapFromNames(buildDimRows(byUser, nil), top, other, "user")
 	}
 	return data
 }
@@ -258,6 +261,9 @@ func usageScalarsFromTotals(totals map[string]float64) map[string]any {
 	return map[string]any{
 		"requests_today": int64(totals["requests"]),
 		"tokens_today":   int64(totals["tokens"]),
+
+		"cache_read_tokens_today":     int64(totals["cache_read_tokens"]),
+		"cache_creation_tokens_today": int64(totals["cache_creation_tokens"]),
 	}
 }
 
@@ -284,9 +290,15 @@ func scopeMapFromDim(h map[string]float64) map[string]map[string]float64 {
 	return out
 }
 
-func scopeMapFromNames(top []nameVal, other float64, kind string) map[string]map[string]float64 {
+func scopeMapFromNames(rows map[string]map[string]float64, top []nameVal, other float64, kind string) map[string]map[string]float64 {
 	out := make(map[string]map[string]float64, len(top)+1)
 	for _, p := range top {
+		if fields := rows[p.Name]; fields != nil {
+			m := make(map[string]float64, len(fields))
+			maps.Copy(m, fields)
+			out[p.Name] = m
+			continue
+		}
 		out[p.Name] = map[string]float64{"tokens": p.Val}
 	}
 	if other > 0 {

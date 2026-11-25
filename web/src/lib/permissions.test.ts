@@ -27,6 +27,8 @@ const canMatrix: CanCase[] = [
   { role: "viewer", permission: "review_key_request", want: false },
   { role: "viewer", permission: "bulk_generate_personal_keys", want: true },
   { role: "viewer", permission: "bulk_generate_org_keys", want: false },
+  { role: "viewer", permission: "view_shared_org_keys", want: true },
+  { role: "viewer", permission: "manage_key_viewers", want: false },
   { role: "admin", permission: "create_key_request", want: false },
 
   { role: "editor", permission: "view_monitoring", want: true },
@@ -43,6 +45,8 @@ const canMatrix: CanCase[] = [
   { role: "editor", permission: "bulk_generate_personal_keys", want: false },
   { role: "editor", permission: "bulk_generate_org_keys", want: true },
   { role: "editor", permission: "create_key_request", want: true },
+  { role: "editor", permission: "view_shared_org_keys", want: true },
+  { role: "editor", permission: "manage_key_viewers", want: true },
 
   { role: "admin", permission: "update_key_policy", want: true },
   { role: "admin", permission: "paste_provider_key", want: true },
@@ -53,6 +57,8 @@ const canMatrix: CanCase[] = [
   { role: "admin", permission: "list_key_requests", want: true },
   { role: "admin", permission: "bulk_generate_personal_keys", want: true },
   { role: "admin", permission: "bulk_generate_org_keys", want: false },
+  { role: "admin", permission: "view_shared_org_keys", want: true },
+  { role: "admin", permission: "manage_key_viewers", want: true },
 ];
 
 describe("can permission matrix", () => {

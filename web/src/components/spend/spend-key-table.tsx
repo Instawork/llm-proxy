@@ -14,10 +14,13 @@ export default function SpendKeyTable({
   rows,
   monthLabel,
   showOwner,
+  scopeNote,
 }: {
   rows: SpendKeyRow[];
   monthLabel: string;
   showOwner: boolean;
+  /** Returns a note for rows whose spend is not part of the totals for the selected view. */
+  scopeNote?: (row: SpendKeyRow) => string | null;
 }) {
   const columns = useMemo<ColumnDef<SpendKeyRow, unknown>[]>(() => {
     const cols: ColumnDef<SpendKeyRow, unknown>[] = [
@@ -31,7 +34,11 @@ export default function SpendKeyTable({
             className={`link link-hover link-primary no-underline ${row.original.enabled ? "" : "opacity-60"}`}
           >
             <span className="font-medium">{row.original.description || row.original.key_id}</span>
+            {row.original.shared ? <span className="badge badge-info badge-outline badge-xs ml-2">Shared</span> : null}
             <MaskedCredentialId value={row.original.key_id} className="mt-0.5 block opacity-70" />
+            {scopeNote?.(row.original) ? (
+              <span className="mt-0.5 block text-xs text-base-content/50">{scopeNote(row.original)}</span>
+            ) : null}
           </Link>
         ),
       },
@@ -107,7 +114,7 @@ export default function SpendKeyTable({
       },
     );
     return cols;
-  }, [monthLabel, showOwner]);
+  }, [monthLabel, showOwner, scopeNote]);
 
   return (
     <DataTable

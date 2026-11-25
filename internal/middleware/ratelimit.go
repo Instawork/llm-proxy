@@ -116,6 +116,12 @@ func RateLimitingMiddleware(pm *providers.ProviderManager, cfg *config.YAMLConfi
 			reconcileCtx, reconcileCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 			defer reconcileCancel()
 			actualInput := headerToInt(w.Header().Get("X-LLM-Input-Tokens"))
+			if rateLimitCountsCacheReads(prov.GetName()) {
+				actualInput += headerToInt(w.Header().Get("X-LLM-Cache-Read-Tokens"))
+			}
+			if rateLimitCountsCacheWrites(prov.GetName()) {
+				actualInput += headerToInt(w.Header().Get("X-LLM-Cache-Write-Tokens"))
+			}
 			if actualInput > 0 {
 				delta := actualInput - estTokens
 				if err := limiter.Adjust(reconcileCtx, reservationID, scope, delta, reservedAt, time.Now()); err != nil {
@@ -186,6 +192,29 @@ func (w *statusCapturingWriter) Flush() {
 func (w *statusCapturingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func fmtInt(v int) string { return strconv.FormatInt(int64(v), 10) }
+
+// rateLimitCountsCacheReads reports whether cache reads count toward the
+// provider's token limits. X-LLM-Input-Tokens excludes cached tokens for every
+// provider; OpenAI-style and Gemini limits have always counted them, while
+// Anthropic-family limits have not.
+func rateLimitCountsCacheReads(provider string) bool {
+	switch provider {
+	case "openai", "gemini", "openrouter":
+		return true
+	}
+	return false
+}
+
+// rateLimitCountsCacheWrites reports whether cache-write tokens count toward
+// the provider's token limits. OpenAI-format usage splits cache writes out of
+// X-LLM-Input-Tokens, but their limits cover the full prompt.
+func rateLimitCountsCacheWrites(provider string) bool {
+	switch provider {
+	case "openai", "openrouter":
+		return true
+	}
+	return false
+}
 
 func headerToInt(s string) int {
 	if s == "" {

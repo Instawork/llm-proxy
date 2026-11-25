@@ -206,8 +206,12 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 		tags = append(tags, fmt.Sprintf("finish_reason:%s", record.FinishReason))
 	}
 
-	// Send token metrics
-	if err := dt.client.Distribution("tokens.input", float64(record.InputTokens), tags, dt.sampleRate); err != nil {
+	// Send token metrics. The record's InputTokens excludes cache tokens for
+	// every provider while TotalTokens includes them, so only the input
+	// metric adds them back.
+	inputTokens := record.InputTokens + record.CacheReadInputTokens + record.CacheCreationInputTokens
+	totalTokens := record.TotalTokens
+	if err := dt.client.Distribution("tokens.input", float64(inputTokens), tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send input tokens metric to Datadog", "error", err)
 	}
 
@@ -215,7 +219,7 @@ func (dt *DatadogTransport) WriteRecord(record *CostRecord) error {
 		dt.logger.Warn("💹 Failed to send output tokens metric to Datadog", "error", err)
 	}
 
-	if err := dt.client.Distribution("tokens.total", float64(record.TotalTokens), tags, dt.sampleRate); err != nil {
+	if err := dt.client.Distribution("tokens.total", float64(totalTokens), tags, dt.sampleRate); err != nil {
 		dt.logger.Warn("💹 Failed to send total tokens metric to Datadog", "error", err)
 	}
 

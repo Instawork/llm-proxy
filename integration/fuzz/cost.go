@@ -18,6 +18,9 @@ type CostRecord struct {
 	TotalCost    float64 `json:"total_cost"`
 	IsEstimate   bool    `json:"is_estimate"`
 	MatchedModel string  `json:"matched_model"`
+
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 func CountLines(path string) (int, error) {

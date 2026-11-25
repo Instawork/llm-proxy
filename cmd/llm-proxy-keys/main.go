@@ -25,6 +25,10 @@ func main() {
 		runPoolCommand(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "viewers" {
+		runViewersCommand(os.Args[2:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "personal" {
 		runPersonalCommand(os.Args[2:])
 		return
@@ -61,6 +65,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  pool add:        pool add --provider anthropic --key sk-ant-api03-...\n")
 		fmt.Fprintf(os.Stderr, "  pool status:     pool status --provider anthropic\n")
 		fmt.Fprintf(os.Stderr, "  personal bump:   personal bump-limit -env=production [--apply]\n\n")
+		fmt.Fprintf(os.Stderr, "Viewer commands (read-only access to one org key):\n")
+		fmt.Fprintf(os.Stderr, "  viewers add:     viewers add -key sk-iw-xxx -email a@x.com,b@x.com\n")
+		fmt.Fprintf(os.Stderr, "  viewers list:    viewers list -key sk-iw-xxx\n")
+		fmt.Fprintf(os.Stderr, "  viewers remove:  viewers remove -key sk-iw-xxx -email a@x.com\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -257,6 +265,12 @@ func handleShow(ctx context.Context, store *apikeys.Store, keyID string, logger 
 	}
 	if len(key.Tags) > 0 {
 		fmt.Printf("Tags:        %v\n", key.Tags)
+	}
+	if key.RequesterEmail != "" {
+		fmt.Printf("Requester:   %s (implicit viewer)\n", key.RequesterEmail)
+	}
+	if len(key.ViewerEmails) > 0 {
+		fmt.Printf("Viewers:     %s\n", strings.Join(key.ViewerEmails, ", "))
 	}
 	// Don't show the actual key for security reasons
 	fmt.Printf("Actual Key:  ***HIDDEN***\n")

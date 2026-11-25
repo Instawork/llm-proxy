@@ -612,3 +612,54 @@ func TestRateLimitingAPIKeyScoped(t *testing.T) {
 		t.Fatalf("unexpected X-RateLimit-Metric: %q", got)
 	}
 }
+
+type namedFakeProvider struct {
+	fakeProvider
+	name string
+}
+
+func (f *namedFakeProvider) GetName() string { return f.name }
+
+func TestRateLimitingTokensPerMinute_CacheReads(t *testing.T) {
+	cases := []struct {
+		provider       string
+		wantSecondHTTP int
+	}{
+		{"openai", http.StatusTooManyRequests},
+		{"gemini", http.StatusTooManyRequests},
+		{"openrouter", http.StatusTooManyRequests},
+		{"anthropic", http.StatusOK},
+		{"bedrock", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			cfg := makeCfg()
+			cfg.Features.RateLimiting.Limits.RequestsPerMinute = 100
+			cfg.Features.RateLimiting.Limits.TokensPerMinute = 20
+
+			lim := ratelimit.NewMemoryLimiter(cfg)
+			pm := providers.NewProviderManager()
+			pm.RegisterProvider(&namedFakeProvider{name: tc.provider})
+
+			h := RateLimitingMiddleware(pm, cfg, lim, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-LLM-Input-Tokens", "5")
+				w.Header().Set("X-LLM-Cache-Read-Tokens", "20")
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			send := func() int {
+				req := httptest.NewRequest("POST", "/"+tc.provider+"/v1/chat/completions", bytes.NewReader([]byte(`{"model":"m","messages":[]}`)))
+				req.Header.Set("Content-Type", "application/json")
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				return rr.Code
+			}
+			if got := send(); got != http.StatusOK {
+				t.Fatalf("first request: got %d", got)
+			}
+			if got := send(); got != tc.wantSecondHTTP {
+				t.Fatalf("second request: got %d, want %d", got, tc.wantSecondHTTP)
+			}
+		})
+	}
+}

@@ -49,7 +49,7 @@ func TestGeminiParseInteractions_NonStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if md.Model != "gemini-3.8-flash" || md.InputTokens != 7 || md.OutputTokens != 20 ||
+	if md.Model != "gemini-3.8-flash" || md.InputTokens != 4 || md.OutputTokens != 20 ||
 		md.TotalTokens != 49 || md.ThoughtTokens != 22 || md.CacheReadInputTokens != 3 ||
 		md.RequestID != "v1_ChdPU0F4YWFtNkFwS2kxZThQZ05lbXdROBIX" || md.IsStreaming {
 		t.Fatalf("unexpected metadata: %+v", md)

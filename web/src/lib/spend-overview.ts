@@ -49,3 +49,88 @@ export function unmeteredEndpointSummary(stats: Pick<UnmeteredStats, "endpoints"
   const rest = names.length - max;
   return rest > 0 ? `${shown} +${rest} more` : shown;
 }
+
+export type SpendView = "all" | "mine" | "shared";
+
+export const DEFAULT_SPEND_VIEW: SpendView = "mine";
+
+export const SPEND_VIEW_OPTIONS: { value: SpendView; label: string; hint: string }[] = [
+  { value: "all", label: "All spend", hint: "Keys you own and keys shared with you" },
+  { value: "mine", label: "My spend", hint: "Keys you own" },
+  { value: "shared", label: "Shared key spend", hint: "Keys shared with you (read-only)" },
+];
+
+/** Reads the `scope` URL value; anything unknown falls back to the default view. */
+export function parseSpendView(raw: string | null | undefined): SpendView {
+  return SPEND_VIEW_OPTIONS.find((o) => o.value === raw)?.value ?? DEFAULT_SPEND_VIEW;
+}
+
+/** Whether a key row counts toward the totals of the selected view. */
+export function rowInSpendTotal(row: Pick<SpendKeyRow, "shared">, view: SpendView): boolean {
+  if (view === "all") return true;
+  return view === "shared" ? Boolean(row.shared) : !row.shared;
+}
+
+export interface OverviewScopeCopy {
+  /** Heading for the spend totals panel. */
+  totalsTitle: string;
+  /** Short scope phrase reused in subtitles ("keys you own"); empty for the fleet view. */
+  scopePhrase: string;
+  /** Visible exclusion note, or null when nothing is excluded. */
+  excludesNote: string | null;
+  /** Note on a key row that does not count toward the totals, or null when it does. */
+  rowNote: (row: Pick<SpendKeyRow, "shared">) => string | null;
+}
+
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * One source for the wording that tells a viewer what the overview totals, provider breakdown,
+ * daily chart and unmetered count cover, so every section uses the same phrasing. `view` is null
+ * for the fleet (editor/admin) overview, which has no scoping.
+ */
+export function overviewScopeCopy(
+  view: SpendView | null,
+  counts: { owned: number; shared: number },
+): OverviewScopeCopy {
+  if (view === null) {
+    return { totalsTitle: "Spend", scopePhrase: "", excludesNote: null, rowNote: () => null };
+  }
+  const rowNote = (row: Pick<SpendKeyRow, "shared">) =>
+    rowInSpendTotal(row, view)
+      ? null
+      : view === "mine"
+        ? "Not included in your spend total"
+        : "Not included in the shared key spend total";
+
+  if (view === "all") {
+    return {
+      totalsTitle: "All spend (keys you own + keys shared with you)",
+      scopePhrase: "all keys you can see",
+      excludesNote: null,
+      rowNote,
+    };
+  }
+  if (view === "shared") {
+    return {
+      totalsTitle: "Shared key spend (keys shared with you)",
+      scopePhrase: "keys shared with you",
+      excludesNote:
+        counts.owned > 0
+          ? `Excludes your ${plural(counts.owned, "own key")} — see each key for its spend.`
+          : null,
+      rowNote,
+    };
+  }
+  return {
+    totalsTitle: "Your spend (keys you own)",
+    scopePhrase: "keys you own",
+    excludesNote:
+      counts.shared > 0
+        ? `Excludes ${plural(counts.shared, "shared key")} — see each key for its spend.`
+        : null,
+    rowNote,
+  };
+}

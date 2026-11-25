@@ -175,7 +175,11 @@ export default function KeysPage() {
   const [bulkGenerating, setBulkGenerating] = useState(false);
 
   const filter = providerFilter || undefined;
-  const { data: keys = [], isLoading, error } = useKeys();
+  const { data: allKeys = [], isLoading, error } = useKeys();
+  // Read-only shared keys carry masked IDs only; keep them out of every
+  // calculation that assumes the list is the user's own keys.
+  const keys = useMemo(() => allKeys.filter((k) => !k.read_only), [allKeys]);
+  const sharedKeys = useMemo(() => allKeys.filter((k) => k.read_only), [allKeys]);
   const { data: provisioning } = useProvisioning();
   const createKey = useCreateKey();
   const deleteKey = useDeleteKey();
@@ -588,6 +592,13 @@ export default function KeysPage() {
     return keys.filter((key) => key.provider === filter);
   }, [keys, filter]);
 
+  // Viewers see keys shared with them in the same table as their own; rows are
+  // flagged read_only and render without credentials or write actions.
+  const tableKeys = useMemo(() => {
+    const shared = filter ? sharedKeys.filter((key) => key.provider === filter) : sharedKeys;
+    return [...visibleKeys, ...shared];
+  }, [visibleKeys, sharedKeys, filter]);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -759,7 +770,7 @@ export default function KeysPage() {
             />
           ) : null}
 
-          {showBulkGenerate && visibleKeys.length > 0 ? (
+          {showBulkGenerate && tableKeys.length > 0 ? (
             <BulkGeneratePanel
               providers={bulkProviderStatuses}
               missingCount={bulkTargetProviders.length}
@@ -772,7 +783,7 @@ export default function KeysPage() {
           <div className="glass-panel overflow-hidden">
             {isLoading ? (
               <LoadingBlock />
-            ) : visibleKeys.length === 0 ? (
+            ) : tableKeys.length === 0 ? (
               <EmptyState
                 message={
                   isViewer
@@ -810,7 +821,7 @@ export default function KeysPage() {
               />
             ) : (
               <KeysTable
-                keys={visibleKeys}
+                keys={tableKeys}
                 onShare={onShare}
                 onEdit={openEdit}
                 onDelete={setDeleteTarget}

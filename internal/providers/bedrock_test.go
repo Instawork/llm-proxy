@@ -297,7 +297,7 @@ func TestBedrock_ParseNonStreamingResponse(t *testing.T) {
 	if md.Provider != "bedrock" {
 		t.Errorf("provider: %q", md.Provider)
 	}
-	if md.InputTokens != 42 || md.OutputTokens != 7 || md.TotalTokens != 49 {
+	if md.InputTokens != 42 || md.OutputTokens != 7 || md.TotalTokens != 49+12 {
 		t.Errorf("usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
 	}
 	if md.CacheReadInputTokens != 12 {
@@ -400,7 +400,7 @@ func TestBedrock_ParseNonStreaming_InvokeAnthropicNative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata invoke: %v", err)
 	}
-	if md.InputTokens != 100 || md.OutputTokens != 50 || md.TotalTokens != 150 {
+	if md.InputTokens != 100 || md.OutputTokens != 50 || md.TotalTokens != 100+50+10+5 {
 		t.Errorf("invoke usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
 	}
 	if md.CacheReadInputTokens != 10 || md.CacheCreationInputTokens != 5 {
@@ -450,7 +450,7 @@ func TestBedrock_ParseStreamingResponse_InvokeChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponseMetadata invoke stream: %v", err)
 	}
-	if md.InputTokens != 25 || md.OutputTokens != 17 || md.TotalTokens != 42 {
+	if md.InputTokens != 25 || md.OutputTokens != 17 || md.TotalTokens != 25+17+8 {
 		t.Errorf("invoke stream usage: in=%d out=%d total=%d", md.InputTokens, md.OutputTokens, md.TotalTokens)
 	}
 	if md.CacheReadInputTokens != 8 {

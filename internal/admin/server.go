@@ -42,9 +42,15 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	// mounted on the "/admin" prefix subrouter, whose effective matcher is
 	// "/admin/…", so bare "/admin" would otherwise fall through to mux's
 	// default 404. Registered on the parent router because the subrouter
-	// cannot match the slash-less form.
+	// cannot match the slash-less form. The query string is kept: the SPA's
+	// root route renders at "/admin?…" (for example the Overview ?scope=
+	// filter), so dropping it would lose that state on reload.
 	r.HandleFunc("/admin", func(w http.ResponseWriter, req *http.Request) {
-		http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+		target := "/admin/"
+		if req.URL.RawQuery != "" {
+			target += "?" + req.URL.RawQuery
+		}
+		http.Redirect(w, req, target, http.StatusMovedPermanently)
 	}).Methods(http.MethodGet)
 
 	adminRouter := r.PathPrefix("/admin").Subrouter()
@@ -88,6 +94,9 @@ func RegisterRoutes(r *mux.Router, deps Deps) {
 	api.Handle("/keys", roleHandler(auth, permissions.MinRole(permissions.ListKeys), h.handleListKeys)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys", roleHandler(auth, permissions.MinRole(permissions.CreateKey), h.handleCreateKey)).Methods(http.MethodPost, http.MethodOptions)
 	api.Handle("/provisioning", roleHandler(auth, permissions.MinRole(permissions.Provisioning), h.handleProvisioning)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys/{key:.+}/viewers/{email:.+}", roleHandler(auth, permissions.MinRole(permissions.ManageKeyViewers), h.handleRemoveKeyViewer)).Methods(http.MethodDelete, http.MethodOptions)
+	api.Handle("/keys/{key:.+}/viewers", roleHandler(auth, permissions.MinRole(permissions.ManageKeyViewers), h.handleListKeyViewers)).Methods(http.MethodGet, http.MethodOptions)
+	api.Handle("/keys/{key:.+}/viewers", roleHandler(auth, permissions.MinRole(permissions.ManageKeyViewers), h.handleAddKeyViewers)).Methods(http.MethodPost, http.MethodOptions)
 	api.Handle("/keys/{key:.+}/stats", roleHandler(auth, permissions.MinRole(permissions.KeyStats), h.handleKeyStats)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.GetKey), h.handleGetKey)).Methods(http.MethodGet, http.MethodOptions)
 	api.Handle("/keys/{key:.+}", roleHandler(auth, permissions.MinRole(permissions.UpdateKey), h.handleUpdateKey)).Methods(http.MethodPatch, http.MethodOptions)

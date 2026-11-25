@@ -292,6 +292,7 @@ func parseAnthropicNonStreamingResponse(responseBody io.Reader) (*LLMResponseMet
 		IsStreaming:              false,
 		FinishReason:             response.StopReason,
 	}
+	metadata.addCacheToTotal()
 
 	return metadata, nil
 }
@@ -424,8 +425,9 @@ func parseAnthropicStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 					IsStreaming:              true,
 					FinishReason:             finishReason,
 				}
+				metadata.addCacheToTotal()
 				log.Printf("🔍 Anthropic message_stop: input=%d output=%d thought=%d total=%d",
-					inputTokens, outputTokens, thoughtTokens, inputTokens+outputTokens)
+					inputTokens, outputTokens, thoughtTokens, metadata.TotalTokens)
 			}
 		}
 	}
@@ -441,7 +443,7 @@ func parseAnthropicStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 	// Accumulated tokens without an explicit message_stop (truncated stream).
 	if hasData && (inputTokens > 0 || outputTokens > 0) && (model != "" || requestID != "") {
 		thoughtTokens := thoughtChars / 4
-		return &LLMResponseMetadata{
+		metadata = &LLMResponseMetadata{
 			Model:                    model,
 			InputTokens:              inputTokens,
 			OutputTokens:             outputTokens,
@@ -453,7 +455,9 @@ func parseAnthropicStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 			RequestID:                requestID,
 			IsStreaming:              true,
 			FinishReason:             finishReason,
-		}, nil
+		}
+		metadata.addCacheToTotal()
+		return metadata, nil
 	}
 
 	// If we found streaming data but no usage information, return partial metadata

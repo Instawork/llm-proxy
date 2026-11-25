@@ -167,6 +167,8 @@ export interface CostKeyAgg {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export function aggCostByKey(
@@ -193,6 +195,8 @@ export function aggCostByKey(
       cur.requests += asNum(raw.requests);
       cur.input_tokens += asNum(raw.input_tokens);
       cur.output_tokens += asNum(raw.output_tokens);
+      cur.cache_read_tokens = (cur.cache_read_tokens ?? 0) + asNum(raw.cache_read_tokens);
+      cur.cache_creation_tokens = (cur.cache_creation_tokens ?? 0) + asNum(raw.cache_creation_tokens);
       acc.set(id, cur);
     }
   }
@@ -208,6 +212,8 @@ export interface CostUserAgg {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export function aggCostByUser(
@@ -236,6 +242,8 @@ export function aggCostByUser(
       cur.requests += asNum(rec.requests);
       cur.input_tokens += asNum(rec.input_tokens);
       cur.output_tokens += asNum(rec.output_tokens);
+      cur.cache_read_tokens = (cur.cache_read_tokens ?? 0) + asNum(rec.cache_read_tokens);
+      cur.cache_creation_tokens = (cur.cache_creation_tokens ?? 0) + asNum(rec.cache_creation_tokens);
       acc.set(scope, cur);
     }
   }
@@ -272,6 +280,8 @@ export interface ScopeAgg {
   scope: string;
   requests: number;
   tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
 }
 
 export function aggScopeMap(
@@ -284,9 +294,11 @@ export function aggScopeMap(
     const map = asRecord(row[field]);
     for (const [scope, raw] of Object.entries(map)) {
       const rec = asRecord(raw);
-      const cur = acc.get(scope) ?? { scope, requests: 0, tokens: 0 };
+      const cur = acc.get(scope) ?? { scope, requests: 0, tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
       cur.requests += asNum(rec.requests ?? rec.Requests);
       cur.tokens += asNum(rec.tokens ?? rec.Tokens);
+      cur.cache_read_tokens += asNum(rec.cache_read_tokens);
+      cur.cache_creation_tokens += asNum(rec.cache_creation_tokens);
       acc.set(scope, cur);
     }
   }

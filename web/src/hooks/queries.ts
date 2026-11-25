@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
 import { permissions } from "../lib/permissions";
 import { roleAtLeast } from "../lib/rbac";
+import type { SpendView } from "../lib/spend-overview";
 import type {
   AdminUser,
   AdminUserRecord,
@@ -14,6 +15,7 @@ import type {
   CreateKeyRequestBody,
   HealthResponse,
   KeyRequestRecord,
+  KeyViewersResponse,
   KeyStatsResponse,
   CircuitActivityResponse,
   ModelStatusResponse,
@@ -38,6 +40,7 @@ export const queryKeys = {
   me: ["admin", "me"] as const,
   keys: (provider?: string) => ["admin", "keys", provider ?? "all"] as const,
   key: (key: string) => ["admin", "keys", "detail", key] as const,
+  keyViewers: (key: string) => ["admin", "keys", "viewers", key] as const,
   keyStats: (key: string) => ["admin", "keys", "stats", key] as const,
   spendOverview: ["admin", "spend-overview"] as const,
   config: ["admin", "config"] as const,
@@ -97,13 +100,61 @@ export function useKeyStats(key: string | undefined) {
   });
 }
 
-export function useSpendOverview() {
+export function useKeyViewers(key: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.keyViewers(key ?? ""),
+    queryFn: () =>
+      apiFetch<KeyViewersResponse>(`/admin/api/keys/${encodeURIComponent(key!)}/viewers`),
+    enabled: Boolean(key) && enabled,
+  });
+}
+
+function useViewerMutation<V>(
+  key: string,
+  fn: (variables: V) => Promise<KeyViewersResponse>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.keyViewers(key), data);
+      queryClient.invalidateQueries({ queryKey: queryKeys.key(key) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.keys() });
+    },
+  });
+}
+
+export function useAddKeyViewers(key: string) {
+  return useViewerMutation(key, (emails: string[]) =>
+    apiFetch<KeyViewersResponse>(`/admin/api/keys/${encodeURIComponent(key)}/viewers`, {
+      method: "POST",
+      body: JSON.stringify({ emails }),
+    }),
+  );
+}
+
+export function useRemoveKeyViewer(key: string) {
+  return useViewerMutation(key, (email: string) =>
+    apiFetch<KeyViewersResponse>(
+      `/admin/api/keys/${encodeURIComponent(key)}/viewers/${encodeURIComponent(email)}`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
+/** `view` only applies to viewers; editors and admins always get the fleet overview. */
+export function useSpendOverview(view?: SpendView) {
   const { data: me } = useMe();
   const role = me?.role ?? "viewer";
   const refetchInterval = usePollInterval();
+  const scoped = role === "viewer" ? view : undefined;
   return useQuery({
-    queryKey: queryKeys.spendOverview,
-    queryFn: () => apiFetch<SpendOverviewResponse>("/admin/api/spend-overview"),
+    queryKey: [...queryKeys.spendOverview, scoped ?? "fleet"] as const,
+    queryFn: () =>
+      apiFetch<SpendOverviewResponse>(
+        scoped ? `/admin/api/spend-overview?scope=${scoped}` : "/admin/api/spend-overview",
+      ),
+    placeholderData: keepPreviousData,
     enabled: roleAtLeast(role, "viewer"),
     refetchInterval,
     refetchIntervalInBackground: true,

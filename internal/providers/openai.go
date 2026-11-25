@@ -175,9 +175,24 @@ type OpenAIResponse struct {
 
 // OpenAIUsage represents token usage in OpenAI responses
 type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                 `json:"prompt_tokens"`
+	CompletionTokens    int                 `json:"completion_tokens"`
+	TotalTokens         int                 `json:"total_tokens"`
+	PromptTokensDetails *OpenAITokenDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+func (u *OpenAIUsage) cacheWriteTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CacheWriteTokens
+}
+
+func (u *OpenAIUsage) cachedTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }
 
 // OpenAIChoice represents a choice in OpenAI responses
@@ -245,9 +260,24 @@ type OpenAIResponsesUsage struct {
 	OutputTokensDetails *OpenAIResponseTokenDetails `json:"output_tokens_details,omitempty"`
 }
 
+func (u *OpenAIResponsesUsage) cacheWriteTokens() int {
+	if u.InputTokensDetails == nil {
+		return 0
+	}
+	return u.InputTokensDetails.CacheWriteTokens
+}
+
+func (u *OpenAIResponsesUsage) cachedTokens() int {
+	if u.InputTokensDetails == nil {
+		return 0
+	}
+	return u.InputTokensDetails.CachedTokens
+}
+
 // OpenAITokenDetails represents token details
 type OpenAITokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // OpenAIResponseTokenDetails represents output token details for responses API
@@ -370,6 +400,8 @@ func parseOpenAINonStreamingResponse(responseBody io.Reader) (*LLMResponseMetada
 		RequestID:    response.ID,
 		IsStreaming:  false,
 	}
+	metadata.splitCachedInput(response.Usage.cachedTokens())
+	metadata.splitCacheWrites(response.Usage.cacheWriteTokens())
 
 	// Extract finish reason from the first choice if available
 	if len(response.Choices) > 0 {
@@ -558,6 +590,8 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 					outputTokens := 0
 					totalTokens := 0
 					reasoningTokens := 0
+					cachedTokens := 0
+					cacheWriteTokens := 0
 
 					if inputVal, ok := usageField["input_tokens"].(float64); ok {
 						inputTokens = int(inputVal)
@@ -571,6 +605,14 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 					if outputDetails, ok := usageField["output_tokens_details"].(map[string]any); ok {
 						if reasoningVal, ok := outputDetails["reasoning_tokens"].(float64); ok {
 							reasoningTokens = int(reasoningVal)
+						}
+					}
+					if inputDetails, ok := usageField["input_tokens_details"].(map[string]any); ok {
+						if cachedVal, ok := inputDetails["cached_tokens"].(float64); ok {
+							cachedTokens = int(cachedVal)
+						}
+						if writeVal, ok := inputDetails["cache_write_tokens"].(float64); ok {
+							cacheWriteTokens = int(writeVal)
 						}
 					}
 
@@ -602,6 +644,8 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 							FinishReason:  finishReason,
 							ThoughtTokens: reasoningTokens,
 						}
+						metadata.splitCachedInput(cachedTokens)
+						metadata.splitCacheWrites(cacheWriteTokens)
 						thoughtTokens = reasoningTokens
 						return metadata, model, requestID, finishReason, thoughtTokens
 					}
@@ -664,6 +708,8 @@ func parseOpenAIResponsesStreamingChunk(jsonData []byte, model, requestID, finis
 			FinishReason:  finishReason,
 			ThoughtTokens: reasoningTokens,
 		}
+		metadata.splitCachedInput(event.Usage.cachedTokens())
+		metadata.splitCacheWrites(event.Usage.cacheWriteTokens())
 		thoughtTokens = reasoningTokens
 	}
 
@@ -711,6 +757,8 @@ func parseOpenAICompletionsStreamingChunk(jsonData []byte, model, requestID, fin
 			IsStreaming:  true,
 			FinishReason: finishReason,
 		}
+		metadata.splitCachedInput(streamResponse.Usage.cachedTokens())
+		metadata.splitCacheWrites(streamResponse.Usage.cacheWriteTokens())
 	}
 
 	return metadata, model, requestID, finishReason
@@ -760,6 +808,8 @@ func parseOpenAIResponsesNonStreamingResponse(responseBody io.Reader) (*LLMRespo
 		IsStreaming:   false,
 		ThoughtTokens: reasoningTokens,
 	}
+	metadata.splitCachedInput(response.Usage.cachedTokens())
+	metadata.splitCacheWrites(response.Usage.cacheWriteTokens())
 
 	// Extract finish reason from the output if available
 	for _, output := range response.Output {

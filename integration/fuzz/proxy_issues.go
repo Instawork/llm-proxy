@@ -17,8 +17,8 @@ import (
 // cache-heavy traffic.
 //
 // We fire two byte-identical requests that differ ONLY in the synthetic
-// cached-token count and assert the recorded input tokens and cost are
-// identical. No knowledge of the exact estimate is required — the request
+// cached-token count and assert the recorded prompt size (input + cache
+// tokens) is identical and the cached request costs no more. The request
 // bodies are identical, so any divergence is a double-count regression.
 func (r *Runner) costCacheTokenNoInflation(ctx context.Context) (bool, string) {
 	kh := newKeyHelper(r.admin)
@@ -60,16 +60,21 @@ func (r *Runner) costCacheTokenNoInflation(ctx context.Context) (bool, string) {
 		return false, fmt.Sprintf("want 2 cost records got %d", len(recs))
 	}
 	a, b := recs[0], recs[1]
-	if a.InputTokens <= 0 || b.InputTokens <= 0 {
-		return false, fmt.Sprintf("non-positive input tokens a=%d b=%d", a.InputTokens, b.InputTokens)
+	promptA := a.InputTokens + a.CacheReadInputTokens + a.CacheCreationInputTokens
+	promptB := b.InputTokens + b.CacheReadInputTokens + b.CacheCreationInputTokens
+	if promptA <= 0 || b.CacheReadInputTokens <= 0 {
+		return false, fmt.Sprintf("want a positive prompt and a cache read on the cached request: a=%d b.cache_read=%d", promptA, b.CacheReadInputTokens)
 	}
-	if a.InputTokens != b.InputTokens {
-		return false, fmt.Sprintf("cached request inflated input tokens: no-cache=%d cached=%d (cache double-counted)", a.InputTokens, b.InputTokens)
+	if b.InputTokens != 0 {
+		return false, fmt.Sprintf("cached request left %d tokens as plain input; the fully cached prompt should be all cache reads", b.InputTokens)
 	}
-	if a.TotalCost != b.TotalCost {
-		return false, fmt.Sprintf("cached request inflated cost: no-cache=%.6f cached=%.6f", a.TotalCost, b.TotalCost)
+	if promptA != promptB {
+		return false, fmt.Sprintf("cached request changed the prompt size: no-cache=%d cached=%d (cache double-counted)", promptA, promptB)
 	}
-	return true, fmt.Sprintf("cache tokens not double-counted (input=%d cost=%.6f for both)", a.InputTokens, a.TotalCost)
+	if b.TotalCost > a.TotalCost {
+		return false, fmt.Sprintf("cached request cost more than uncached: no-cache=%.6f cached=%.6f", a.TotalCost, b.TotalCost)
+	}
+	return true, fmt.Sprintf("cache tokens not double-counted (prompt=%d, cost %.6f -> %.6f)", promptA, a.TotalCost, b.TotalCost)
 }
 
 // rateLimitKeyRPD exercises the per-day request cap (RPD), a window the fuzzer

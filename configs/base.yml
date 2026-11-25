@@ -224,6 +224,54 @@ retired_models:
       replacement: gpt-5.6-sol
       aliases:
         - o4-mini-deep-research-2025-06-26
+    # 2026-10-23 shutdown wave (announced 2026-04-22; developers.openai.com/api/docs/deprecations).
+    "gpt-3.5-turbo":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-terra
+      aliases:
+        - gpt-3.5-turbo-0125
+        - gpt-3.5-turbo-1106
+        - gpt-3.5-turbo-16k
+        - gpt-3.5-turbo-completions
+    "gpt-4":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - gpt-4-0613
+        - gpt-4-0613-completions
+        - gpt-4-completions
+    "gpt-4-turbo":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - gpt-4-turbo-2024-04-09
+        - gpt-4-turbo-completions
+    "gpt-4.1-nano":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-luna
+      aliases:
+        - gpt-4.1-nano-2025-04-14
+    "o1":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o1-2024-12-17
+    "o1-pro":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o1-pro-2024-12-17
+        - o1-pro-2025-03-19
+    "o3-mini":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-sol
+      aliases:
+        - o3-mini-2025-01-31
+    "o4-mini":
+      retired_date: "2026-10-23"
+      replacement: gpt-5.6-terra
+      aliases:
+        - o4-mini-2025-04-16
   anthropic:
     "claude-opus-4-1":
       retired_date: "2026-08-05"
@@ -356,7 +404,7 @@ providers:
       "gpt-5":
         enabled: true
         deprecated: true # snapshot gpt-5-2025-08-07 shuts down 2026-12-11
-        replacement: "gpt-5.6-sol"
+        replacement: "gpt-6.1-sol" # deprecations page 2026-11-16 (was gpt-5.6-sol)
         aliases: ["gpt-5-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -368,10 +416,11 @@ providers:
         pricing:
           input: 1.25
           output: 10.00
+          cache_read: 0.125
       "gpt-5-mini":
         enabled: true
         deprecated: true # snapshot gpt-5-mini-2025-08-07 shuts down 2026-12-11
-        replacement: "gpt-5.6-terra"
+        replacement: "gpt-6.1-terra" # deprecations page 2026-11-16 (was gpt-5.6-terra)
         aliases: ["gpt-5-mini-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -383,10 +432,11 @@ providers:
         pricing:
           input: 0.25
           output: 2.00
+          cache_read: 0.025
       "gpt-5-nano":
         enabled: true
         deprecated: true # snapshot gpt-5-nano-2025-08-07 shuts down 2026-12-11
-        replacement: "gpt-5.6-luna"
+        replacement: "gpt-6-luna" # deprecations page 2026-11-16 (was gpt-5.6-luna)
         aliases: ["gpt-5-nano-2025-08-07"]
         limits:
           tokens_per_minute: 450_000
@@ -398,38 +448,11 @@ providers:
         pricing:
           input: 0.05
           output: 0.40
-      "gpt-4":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-0613", "gpt-4-0613-completions", "gpt-4-completions"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 30.00
-          output: 60.00
-      "gpt-4-turbo":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["gpt-4-turbo-2024-04-09", "gpt-4-turbo-completions"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 10.00
-          output: 30.00
+          cache_read: 0.005
       "gpt-4.1":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -441,8 +464,11 @@ providers:
         pricing:
           input: 2.00
           output: 8.00
+          cache_read: 0.50
       "gpt-4.1-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4.1-mini-2025-04-14"]
         limits:
           tokens_per_minute: 450_000
@@ -454,23 +480,11 @@ providers:
         pricing:
           input: 0.40
           output: 1.60
-      "gpt-4.1-nano":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-luna"
-        aliases: ["gpt-4.1-nano-2025-04-14"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 0.10
-          output: 0.40
+          cache_read: 0.10
       "gpt-4o":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14); gpt-4o-2024-05-13 shut down 2026-10-23
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-2024-05-13", "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"]
         limits:
           tokens_per_minute: 450_000
@@ -482,12 +496,15 @@ providers:
         pricing:
           input: 2.50
           output: 10.00
+          cache_read: 1.25
           overrides:
-            "gpt-4o-2024-05-13": # vendor shutdown 2026-10-23; later snapshots stay active
+            "gpt-4o-2024-05-13": # shut down 2026-10-23; alias kept per hard rule 8 (parent gpt-4o still live), upstream now 404s
               input: 5.00
               output: 15.00
       "gpt-4o-mini":
         enabled: true
+        deprecated: true # vendor shutdown 2027-01-14 (announced 2026-10-14)
+        replacement: "gpt-6-luna"
         aliases: ["gpt-4o-mini-2024-07-18"]
         limits:
           tokens_per_minute: 2_000_000
@@ -499,76 +516,11 @@ providers:
         pricing:
           input: 0.15
           output: 0.60
-      "gpt-3.5-turbo":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23 (gpt-3.5-turbo-1106 on 2026-09-28)
-        replacement: "gpt-5.6-terra"
-        aliases:
-          [
-            "gpt-3.5-turbo-0125",
-            "gpt-3.5-turbo-1106",
-            "gpt-3.5-turbo-16k",
-            "gpt-3.5-turbo-completions",
-          ]
-        limits:
-          tokens_per_minute: 2_000_000
-          requests_per_minute: 5_000
-          tokens_per_day: 48_000_000
-          requests_per_day: 7_200_000
-          burst_tokens: 200_000
-          burst_requests: 500
-        pricing:
-          input: 0.50
-          output: 1.50
-      "o1":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o1-2024-12-17"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 15.00
-          output: 60.00
-      "o3-mini":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o3-mini-2025-01-31"]
-        limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
-        pricing:
-          input: 1.10
-          output: 4.40
-      "o4-mini":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-terra"
-        aliases: ["o4-mini-2025-04-16"]
-        limits:
-          tokens_per_minute: 200_000
-          requests_per_minute: 2_000
-          tokens_per_day: 4_800_000
-          requests_per_day: 2_880_000
-          burst_tokens: 20_000
-          burst_requests: 200
-        pricing:
-          input: 1.10
-          output: 4.40
+          cache_read: 0.075
       "o3":
         enabled: true
         deprecated: true # snapshot o3-2025-04-16 shuts down 2026-12-11
-        replacement: "gpt-5.6-sol"
+        replacement: "gpt-6.1-sol" # deprecations page 2026-11-16 (was gpt-5.6-sol)
         aliases: ["o3-2025-04-16"]
         limits:
           tokens_per_minute: 40_000
@@ -580,10 +532,11 @@ providers:
         pricing:
           input: 2.00
           output: 8.00
+          cache_read: 0.50
       "o3-pro":
         enabled: true
         deprecated: true # snapshot o3-pro-2025-06-10 shuts down 2026-12-11
-        replacement: "gpt-5.6-sol"
+        replacement: "gpt-6.1-sol" # deprecations page 2026-11-16: gpt-6.1-sol with reasoning.mode: pro (was gpt-5.6-sol)
         aliases: ["o3-pro-2025-04-16", "o3-pro-2025-06-10"]
         limits:
           tokens_per_minute: 40_000
@@ -595,21 +548,6 @@ providers:
         pricing:
           input: 20.00
           output: 80.00
-      "o1-pro":
-        enabled: true
-        deprecated: true # vendor shutdown 2026-10-23
-        replacement: "gpt-5.6-sol"
-        aliases: ["o1-pro-2024-12-17", "o1-pro-2025-03-19"]
-        limits:
-          tokens_per_minute: 450_000
-          requests_per_minute: 5_000
-          tokens_per_day: 10_800_000
-          requests_per_day: 7_200_000
-          burst_tokens: 45_000
-          burst_requests: 500
-        pricing:
-          input: 150.00
-          output: 600.00
       "gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-2026-03-05"]
@@ -624,9 +562,11 @@ providers:
           - threshold: 272_000
             input: 2.50
             output: 15.00
+            cache_read: 0.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 5.00
             output: 22.50
+            cache_read: 0.50
       "gpt-5.4-mini":
         enabled: true
         aliases: ["gpt-5.4-mini-2026-03-05", "gpt-5.4-mini-2026-03-17"]
@@ -640,6 +580,7 @@ providers:
         pricing:
           input: 0.75
           output: 4.50
+          cache_read: 0.075
       "gpt-5.4-nano":
         enabled: true
         deprecated: true # announced 2026-10-01; vendor shutdown 2027-04-01
@@ -655,6 +596,7 @@ providers:
         pricing:
           input: 0.20
           output: 1.25
+          cache_read: 0.02
       "gpt-5.4-pro":
         enabled: true
         aliases: ["gpt-5.4-pro-2026-03-05"]
@@ -686,12 +628,18 @@ providers:
           - threshold: 272_000
             input: 5.00
             output: 30.00
+            cache_read: 0.50
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 10.00
             output: 45.00
-      # Flat (audit-10-05-2026, card re-read): unlike gpt-5.4-pro / gpt-5.5, the
-      # GPT-5.5 Pro card publishes no ">272K input tokens at 2x/1.5x" tier
-      # despite its 1.05M context window, so the whole window bills $30/$180.
+            cache_read: 1.00
+      # Tiered again (audit-10-12-2026): the card still prints no ">272K" sentence
+      # (the basis of the flat ruling in #106), but the full "All models" Standard
+      # table at developers.openai.com/api/docs/pricing.md prints
+      # "gpt-5.5-pro (<272K context length) | $30.00 | - | - | $180.00 | $60.00 |
+      # - | - | $270.00", i.e. an explicit >272K column (Batch/Flex rows print "-"
+      # there). The rendered HTML page only shows the short-context columns, so
+      # earlier runs never saw this. Published tier -> encoded.
       "gpt-5.5-pro":
         enabled: true
         aliases: ["gpt-5.5-pro-2026-04-23"]
@@ -703,8 +651,12 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         pricing:
-          input: 30.00
-          output: 180.00
+          - threshold: 272_000
+            input: 30.00
+            output: 180.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 60.00
+            output: 270.00
       # -----------------------------------------------------------------------
       # GPT-5.6 family (GA 2026-07-09). Sol/Terra/Luna are durable capability
       # tiers replacing the mini/nano suffixes. No dated snapshots published
@@ -723,15 +675,22 @@ providers:
           burst_tokens: 45_000
           burst_requests: 500
         # List price. The 4.00/20.00 (>272K 8.00/30.00) promo running since
-        # 2026-08-21 is guaranteed only "at least through 2026-11-21", so it
-        # is intentionally not encoded here.
+        # 2026-08-21 now ends 2026-11-30 (pricing page: "available until
+        # November 30, 2026"; was "at least through 2026-11-21"), so it is
+        # intentionally not encoded here. The pricing page prints only the
+        # promo cached rate (0.40, >272K 0.80); cache_read is that rate at the
+        # same 20% discount, i.e. 10% of list input like the rest of 5.6.
         pricing:
           - threshold: 272_000
             input: 5.00
             output: 30.00
+            cache_read: 0.50
+            cache_write: 6.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 10.00
             output: 45.00
+            cache_read: 1.00
+            cache_write: 12.5
       "gpt-5.6-terra":
         enabled: true
         aliases: []
@@ -746,9 +705,13 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 12.00
+            cache_read: 0.20
+            cache_write: 2.5
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 18.00
+            cache_read: 0.40
+            cache_write: 5.00
       "gpt-5.6-luna":
         enabled: true
         aliases: []
@@ -763,9 +726,13 @@ providers:
           - threshold: 272_000
             input: 0.20
             output: 1.20
+            cache_read: 0.02
+            cache_write: 0.25
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.40
             output: 1.80
+            cache_read: 0.04
+            cache_write: 0.5
       # GPT-6 flagship (API GA 2026-09-04). Same 5.6-generation billing shape:
       # no dated snapshot, >272K input bills 2x input / 1.5x output for the
       # full request, cache writes at 1.25x input.
@@ -783,9 +750,13 @@ providers:
           - threshold: 272_000
             input: 10.00
             output: 50.00
+            cache_read: 1.00
+            cache_write: 12.5
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 20.00
             output: 75.00
+            cache_read: 2.00
+            cache_write: 25.00
       # GPT-6 Sol / Luna (API 2026-09-22, audit-09-23-2026). Same GPT-6 billing
       # shape as Astra: no dated snapshot, >272K input bills 2x input / 1.5x
       # output for the full request, cache writes at 1.25x input.
@@ -803,9 +774,13 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 10.00
+            cache_read: 0.20
+            cache_write: 2.5
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+            cache_read: 0.40
+            cache_write: 5.00
       # GPT-6.1 Sol (released 2026-09-29, audit-10-05-2026): same $2/$10 list as
       # gpt-6-sol; the card prices prompts >272K input at 2x input / 1.5x output.
       "gpt-6.1-sol":
@@ -822,9 +797,33 @@ providers:
           - threshold: 272_000
             input: 2.00
             output: 10.00
+            cache_read: 0.10
+            cache_write: 2.5
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+            cache_read: 0.20
+            cache_write: 5.00
+      # GPT-6.1 Terra (released 2026-10-26, audit-11-02-2026): $1/$5 list, half of
+      # gpt-5.6-terra; the card prices prompts >272K input at 2x input / 1.5x
+      # output. The card lists the bare id as its only snapshot.
+      "gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 1.00
+            output: 5.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.00
+            output: 7.50
       "gpt-6-luna":
         enabled: true
         aliases: []
@@ -839,9 +838,13 @@ providers:
           - threshold: 272_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 0.20
             output: 0.75
+            cache_read: 0.02
+            cache_write: 0.25
       # GPT-5.6 Cyber (2026-08-20): gated behind Trusted Access for Cyber. 400K
       # context; the model card states "prompts with >272K input tokens are
       # priced at 2x input and 1.5x output for the full request" (the pricing
@@ -863,9 +866,67 @@ providers:
           - threshold: 272_000
             input: 12.50
             output: 75.00
+            cache_read: 1.25
+            cache_write: 15.625
+          # No published cached read rate for >272K (pricing page prints "-"), so
+          # cache reads here fall back to the input rate; writes are 2x short.
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 25.00
             output: 112.50
+            cache_write: 31.25
+      # GPT-6 Cyber (2026-11-05): Daybreak Red access + per-model approval and
+      # IP allowlisting. 1.05M context. Tiered since audit-11-16-2026: the card
+      # now says "For requests with more than 272K input tokens, Standard prices
+      # per 1M tokens are $40 for input, $4 for cached input, and $150 for
+      # output" and pricing.md prints a "gpt-6-cyber (long context)" row (was
+      # "-" on 11-09). Short-context cache writes $25 (30 min); the long tier
+      # write is 2x short per the 5.6+ cache-write rule.
+      "gpt-6-cyber":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          - threshold: 272_000
+            input: 20.00
+            output: 100.00
+            cache_read: 2.00
+            cache_write: 25.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 40.00
+            output: 150.00
+            cache_read: 4.00
+            cache_write: 50.00
+      # GPT-5.5 Cyber (limited preview since 2026-05-07, Trusted Access for
+      # Cyber). First seen in the pricing.md "Cyber" table on audit-10-12-2026:
+      # "gpt-5.5-cyber | $12.50 | $1.25 | - | $75.00" with "-" in every
+      # long-context column; the card /models/gpt-5.5-cyber is 404, so there is
+      # no ">272K" sentence to apply -> flat. The help-center Daybreak article
+      # names the Responses API model gpt-5.5-cyber-preview (same version).
+      # Deprecated 2026-11-05: shuts down 2027-02-01. The deprecations page
+      # names no replacement id ("the most capable cyber model available to
+      # you"); the Daybreak guide says to switch to gpt-5.6-cyber (or gpt-6-cyber
+      # with approval).
+      "gpt-5.5-cyber":
+        enabled: true
+        deprecated: true # announced 2026-11-05; vendor shutdown 2027-02-01
+        replacement: "gpt-5.6-cyber"
+        aliases: ["gpt-5.5-cyber-preview"]
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 12.50
+          output: 75.00
       # Codex line: gpt-5.3-codex (Responses API) was deprecated 2026-10-01 with
       # a 2027-04-01 shutdown; the gpt-5/5.1/5.2-codex snapshots shut down
       # 2026-07-23.
@@ -884,6 +945,7 @@ providers:
         pricing:
           input: 1.75
           output: 14.00
+          cache_read: 0.175
       # Rolling ChatGPT-tuned pointer (replaces the retired gpt-5.x-chat-latest
       # snapshots). 400K context, flat pricing per the models index.
       "chat-latest":
@@ -899,6 +961,7 @@ providers:
         pricing:
           input: 5.00
           output: 30.00
+          cache_read: 0.50
       "gpt-5.2":
         enabled: true
         aliases: ["gpt-5.2-2025-12-11"]
@@ -912,6 +975,7 @@ providers:
         pricing:
           input: 1.75
           output: 14.00
+          cache_read: 0.175
       "gpt-5.2-pro":
         enabled: true
         aliases: ["gpt-5.2-pro-2025-12-11"]
@@ -940,10 +1004,11 @@ providers:
         pricing:
           input: 1.25
           output: 10.00
+          cache_read: 0.125
       "gpt-5-pro":
         enabled: true
         deprecated: true # snapshot gpt-5-pro-2025-10-06 shuts down 2026-12-11
-        replacement: "gpt-5.6-sol"
+        replacement: "gpt-6.1-sol" # deprecations page 2026-11-16: gpt-6.1-sol with reasoning.mode: pro (was gpt-5.6-sol)
         aliases: ["gpt-5-pro-2025-08-07", "gpt-5-pro-2025-10-06"]
         limits:
           tokens_per_minute: 450_000
@@ -955,6 +1020,23 @@ providers:
         pricing:
           input: 15.00
           output: 120.00
+      # Search-specialised GPT-5 SKU behind the web search tool. Token rates from
+      # the pricing.md "Specialized" table ("Search | gpt-5-search-api | $1.25 |
+      # $0.125 | $10.00"); the per-call web-search tool fee is separate and not
+      # tracked here. No model card, changelog or deprecation entry exists.
+      "gpt-5-search-api":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 450_000
+          requests_per_minute: 5_000
+          tokens_per_day: 10_800_000
+          requests_per_day: 7_200_000
+          burst_tokens: 45_000
+          burst_requests: 500
+        pricing:
+          input: 1.25
+          output: 10.00
 
   # ---------------------------------------------------------------------------
   # ANTHROPIC PROVIDER
@@ -975,6 +1057,42 @@ providers:
       # Claude 4.6+ / 5-series models use dateless pinned IDs (no dated
       # snapshots) and include the full 1M-token context window at standard
       # pricing — Anthropic removed all long-context (>200K) surcharges.
+      # Claude Fable 5.2 (released 2026-11-09, audit-11-16-2026): $8/$40 list,
+      # 20% below Fable 5.1. Model card + pricing page: 5m cache write $10,
+      # cache read $0.20 (0.025x multiplier, same tier as Fable/Mythos 5.1).
+      # Fable 5.1 is now "Active (legacy)" with no retirement date -> unchanged.
+      "claude-fable-5-2":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 8.00
+          output: 40.00
+          cache_read: 0.20
+          cache_write: 10.00
+      # Verification-program access only (Cyber / Life Sciences). Same pricing
+      # and specs as claude-fable-5-2; inert unless a key has access.
+      "claude-mythos-5-2":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          input: 8.00
+          output: 40.00
+          cache_read: 0.20
+          cache_write: 10.00
       "claude-fable-5-1":
         enabled: true
         aliases: []
@@ -988,6 +1106,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 0.25
+          cache_write: 12.50
       # Limited availability (Project Glasswing approved customers only).
       # Same pricing/specs as claude-fable-5-1; inert unless a key has access.
       "claude-mythos-5-1":
@@ -1003,6 +1123,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 0.25
+          cache_write: 12.50
       "claude-fable-5":
         enabled: true
         aliases: []
@@ -1016,6 +1138,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 1.00
+          cache_write: 12.50
       # Limited availability (Project Glasswing approved customers only).
       # Same pricing/specs as claude-fable-5; inert unless a key has access.
       "claude-mythos-5":
@@ -1031,6 +1155,8 @@ providers:
         pricing:
           input: 10.00
           output: 50.00
+          cache_read: 1.00
+          cache_write: 12.50
       # Claude Opus 5.5 (2026-09-22, audit-09-23-2026): latest Opus, $4/$20,
       # 1M context / 128K output at standard pricing. Supersedes Opus 5, which
       # Anthropic now lists as legacy (no retirement date announced).
@@ -1047,6 +1173,8 @@ providers:
         pricing:
           input: 4.00
           output: 20.00
+          cache_read: 0.20
+          cache_write: 5.00
       "claude-opus-5":
         enabled: true
         aliases: []
@@ -1060,6 +1188,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4.8"]
@@ -1073,6 +1203,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-7":
         enabled: true
         aliases: ["claude-opus-4.7"]
@@ -1086,6 +1218,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-6":
         enabled: true
         aliases: ["claude-opus-4.6"]
@@ -1099,6 +1233,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       "claude-opus-4-5":
         enabled: true
         aliases: ["claude-opus-4.5", "claude-opus-4-5-20251101"]
@@ -1112,6 +1248,8 @@ providers:
         pricing:
           input: 5.00
           output: 25.00
+          cache_read: 0.50
+          cache_write: 6.25
       # Claude Sonnet 5.5 (released 2026-09-28, audit-10-05-2026): $2/$10 list,
       # 1M context at standard pricing; vendor replacement for Sonnet 4.5.
       "claude-sonnet-5-5":
@@ -1127,6 +1265,8 @@ providers:
         pricing:
           input: 2.00
           output: 10.00
+          cache_read: 0.10
+          cache_write: 2.50
       # Sonnet 5 is vendor "legacy" since Sonnet 5.5 shipped (no sunset announced).
       "claude-sonnet-5":
         enabled: true
@@ -1142,6 +1282,8 @@ providers:
         pricing:
           input: 2.00
           output: 10.00
+          cache_read: 0.20
+          cache_write: 2.50
       "claude-sonnet-4-6":
         enabled: true
         aliases: ["claude-sonnet-4.6"]
@@ -1155,6 +1297,8 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
+          cache_read: 0.30
+          cache_write: 3.75
       "claude-sonnet-4-5":
         enabled: true
         deprecated: true # announced 2026-09-30; vendor retirement 2026-11-30
@@ -1173,6 +1317,8 @@ providers:
         pricing:
           input: 3.00
           output: 15.00
+          cache_read: 0.30
+          cache_write: 3.75
       "claude-haiku-4-5":
         enabled: true
         aliases: ["claude-haiku-4.5", "claude-haiku-4-5-20251001"]
@@ -1186,6 +1332,8 @@ providers:
         pricing:
           input: 1.00
           output: 5.00
+          cache_read: 0.10
+          cache_write: 1.25
       # Claude Haiku 5.5 (released 2026-10-07, two days after audit-10-05-2026;
       # verified on the model card and pricing page 2026-10-08). The one Claude
       # 4.6+ model priced by prompt length: "a prompt of over 100,000 tokens pays
@@ -1205,9 +1353,13 @@ providers:
           - threshold: 100_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.50
             output: 2.50
+            cache_read: 0.05
+            cache_write: 0.625
 
   # ---------------------------------------------------------------------------
   # AWS BEDROCK PROVIDER (transparent SigV4 passthrough)
@@ -1238,8 +1390,13 @@ providers:
       burst_requests: 100
 
     models:
+      # AWS moved Claude Sonnet 4.5 to Legacy on 2026-10-08 (model-lifecycle
+      # legacy page: EOL 2027-04-08, "Regional (US/EU/AU/JP) Inference" and
+      # "Global Inference" ids, Mantle not supported). Prices unchanged.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "us.anthropic.claude-sonnet-5-5"
         aliases:
           [
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -1264,12 +1421,16 @@ providers:
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-4-5-20250929-v1:0":
               input: 3.00
               output: 15.00
+              cache_read: 0.30
+              cache_write: 3.75
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases:
@@ -1294,12 +1455,16 @@ providers:
         pricing:
           input: 1.10
           output: 5.50
+          cache_read: 0.11
+          cache_write: 1.375
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-haiku-4-5-20251001-v1:0":
               input: 1.00
               output: 5.00
+              cache_read: 0.10
+              cache_write: 1.25
       # Retired on the native Claude API 2026-08-05 but still served on Bedrock:
       # legacy since 2026-07-08, public extended access from 2026-10-08 (price
       # not yet published), EOL 2027-01-08.
@@ -1325,6 +1490,8 @@ providers:
         pricing:
           input: 15.00
           output: 75.00
+          cache_read: 1.50
+          cache_write: 18.75
       "us.anthropic.claude-sonnet-5":
         enabled: true
         aliases:
@@ -1348,12 +1515,16 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.22
+          cache_write: 2.75
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-5":
               input: 2.00
               output: 10.00
+              cache_read: 0.20
+              cache_write: 2.50
       "us.anthropic.claude-sonnet-4-6":
         enabled: true
         aliases:
@@ -1379,12 +1550,80 @@ providers:
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-sonnet-4-6":
               input: 3.00
               output: 15.00
+              cache_read: 0.30
+              cache_write: 3.75
+      # Claude Fable 5.2 on Bedrock (launch 2026-11-09, audit-11-16-2026). AWS card:
+      # bedrock-runtime only — Geo inference ID us.anthropic.claude-fable-5-2 and
+      # Global inference ID global.anthropic.claude-fable-5-2; the bare id has no
+      # In-Region endpoint (N/A) and the card lists NO bedrock-mantle row, so
+      # there is no bedrock-mantle entry. Cache read 0.025x per Anthropic.
+      "us.anthropic.claude-fable-5-2":
+        enabled: true
+        aliases:
+          [
+            "global.anthropic.claude-fable-5-2",
+            "claude-fable-5-2-bedrock",
+            "claude-fable-5.2-bedrock",
+            "claude-fable-5-2-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        # Native $8/$40 plus the 10% geo premium; global CRIS bills list.
+        pricing:
+          input: 8.80
+          output: 44.00
+          cache_read: 0.22
+          cache_write: 11.00
+          overrides:
+            "global.anthropic.claude-fable-5-2":
+              input: 8.00
+              output: 40.00
+              cache_read: 0.20
+              cache_write: 10.00
+      # Claude Mythos 5.2 on Bedrock (launch 2026-11-09): same card shape and
+      # pricing as Fable 5.2 (geo us. + global. profiles, no Mantle row);
+      # verification-program access only.
+      "us.anthropic.claude-mythos-5-2":
+        enabled: true
+        aliases:
+          [
+            "global.anthropic.claude-mythos-5-2",
+            "claude-mythos-5-2-bedrock",
+            "claude-mythos-5.2-bedrock",
+            "claude-mythos-5-2-bedrock-thinking",
+          ]
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        # Native $8/$40 plus the 10% geo premium; global CRIS bills list.
+        pricing:
+          input: 8.80
+          output: 44.00
+          cache_read: 0.22
+          cache_write: 11.00
+          overrides:
+            "global.anthropic.claude-mythos-5-2":
+              input: 8.00
+              output: 40.00
+              cache_read: 0.20
+              cache_write: 10.00
       # Claude Opus 5.5 on Bedrock (launch 2026-09-22, audit-09-23-2026). AWS
       # card: bedrock-runtime takes the us./eu./au./jp. geo or global.* profile
       # ids; the bare id is Mantle-only (mirrored under bedrock-mantle).
@@ -1412,20 +1651,26 @@ providers:
         pricing:
           input: 4.40
           output: 22.00
+          cache_read: 0.22
+          cache_write: 5.50
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-opus-5-5":
               input: 4.00
               output: 20.00
+              cache_read: 0.20
+              cache_write: 5.00
       # Claude Sonnet 5.5 on Bedrock (launch 2026-09-28, audit-10-05-2026). AWS
-      # card: bedrock-runtime takes the us./eu. geo or global.* profile ids (no
-      # au./jp./in. yet); the bare id is Mantle-only (mirrored under bedrock-mantle).
+      # card: bedrock-runtime takes the us./eu./au. geo or global.* profile ids
+      # (au. added on the card by 2026-10-12; no jp./in. yet); the bare id is
+      # Mantle-only (mirrored under bedrock-mantle).
       "us.anthropic.claude-sonnet-5-5":
         enabled: true
         aliases:
           [
             "eu.anthropic.claude-sonnet-5-5",
+            "au.anthropic.claude-sonnet-5-5",
             "global.anthropic.claude-sonnet-5-5",
             "claude-sonnet-5-5-bedrock",
             "claude-sonnet-5.5-bedrock",
@@ -1443,12 +1688,16 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.11
+          cache_write: 2.75
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
-            # 10% premium above applies to regional (us./eu.) profiles.
+            # 10% premium above applies to regional (us./eu./au.) profiles.
             "global.anthropic.claude-sonnet-5-5":
               input: 2.00
               output: 10.00
+              cache_read: 0.10
+              cache_write: 2.50
       # Claude Haiku 5.5 on Bedrock (launch 2026-10-07, AWS card read 2026-10-08;
       # not yet in any audit). bedrock-runtime takes the us./eu./au./jp. geo or
       # global.* profile ids; the bare id is Mantle-only (mirrored under
@@ -1477,9 +1726,13 @@ providers:
           - threshold: 100_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.55
             output: 2.75
+            cache_read: 0.055
+            cache_write: 0.6875
       # global.* routes worldwide and bills the Anthropic list rate.
       "global.anthropic.claude-haiku-5-5":
         enabled: true
@@ -1495,9 +1748,13 @@ providers:
           - threshold: 100_000
             input: 0.10
             output: 0.50
+            cache_read: 0.01
+            cache_write: 0.125
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.50
             output: 2.50
+            cache_read: 0.05
+            cache_write: 0.625
       "us.anthropic.claude-opus-4-8":
         enabled: true
         aliases:
@@ -1522,12 +1779,16 @@ providers:
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
           overrides:
             # global.* routes worldwide and bills the Anthropic list rate; the
             # 10% premium above applies to regional (us./eu./au./jp.) profiles.
             "global.anthropic.claude-opus-4-8":
               input: 5.00
               output: 25.00
+              cache_read: 0.50
+              cache_write: 6.25
       # -----------------------------------------------------------------------
       # OpenAI on bedrock-runtime (/openai/v1/responses, /openai/v1/chat/completions).
       # The AWS model cards publish no In-Region price on this endpoint: requests
@@ -1748,6 +2009,44 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.00
             output: 15.00
+      # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): same card
+      # shape as gpt-6.1-sol — us./global. profiles only (no in-Region on
+      # bedrock-runtime), US Geo CRIS at list +10%, Global CRIS at list, >272K
+      # tier at 2x input / 1.5x output.
+      "us.openai.gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 1.10
+            output: 5.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.20
+            output: 8.25
+      "global.openai.gpt-6.1-terra":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 40_000
+          requests_per_minute: 1_000
+          tokens_per_day: 960_000
+          requests_per_day: 1_440_000
+          burst_tokens: 4_000
+          burst_requests: 100
+        pricing:
+          - threshold: 272_000
+            input: 1.00
+            output: 5.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.00
+            output: 7.50
       "us.openai.gpt-6-luna":
         enabled: true
         aliases: []
@@ -1904,6 +2203,19 @@ providers:
           - threshold: 0 # Fallback for prompts > 272k input tokens
             input: 4.40
             output: 16.50
+      # GPT-6.1 Terra (Bedrock launch 2026-10-26, audit-11-02-2026): Mantle
+      # in-Region (us-east-1/2, us-west-2) = OpenAI list +10%, >272K tier at
+      # 2x / 1.5x.
+      "openai.gpt-6.1-terra":
+        enabled: true
+        aliases: ["gpt-6.1-terra-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 1.10
+            output: 5.50
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 2.20
+            output: 8.25
       # Daybreak Red: GPT-5.6 Cyber (Bedrock launch 2026-08-12). Mantle-only,
       # us-east-2, no geo/global inference profiles; gated behind OpenAI Trusted
       # Access for Cyber. The AWS card (audit-09-21-2026) publishes a 272K
@@ -1915,21 +2227,45 @@ providers:
         pricing:
           input: 13.75
           output: 82.50
+      # Daybreak Blue: GPT-5.6 Sol (Bedrock launch 2026-08-12, same Trusted
+      # Access for Cyber gate as Daybreak Red). Mantle-only, us-east-2, no
+      # geo/global inference profiles. First audited 2026-10-26 (card verified
+      # directly): 1,050,000 context, In-Region $4.40/$22.00 up to 272K and
+      # $8.80/$33.00 above, i.e. the same rates as GPT-5.6 Sol on Bedrock.
+      "openai.gpt-daybreak-blue-5.6-sol":
+        enabled: true
+        aliases: ["gpt-daybreak-blue-5.6-sol-bedrock"]
+        pricing:
+          - threshold: 272_000
+            input: 4.40
+            output: 22.00
+          - threshold: 0 # Fallback for prompts > 272k input tokens
+            input: 8.80
+            output: 33.00
       # Mantle Anthropic endpoints are in-region, so the 10% regional premium
       # applies (mirrors the matching bedrock SKUs above).
+      # Legacy on AWS since 2026-10-08 (EOL 2027-04-08), mirroring the bedrock
+      # entry; the AWS card lists no Mantle id for Sonnet 4.5, so these keys
+      # only cover callers that still send the dated id to /anthropic/v1.
       "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
         enabled: true
+        deprecated: true # AWS Legacy 2026-10-08; EOL 2027-04-08
+        replacement: "anthropic.claude-sonnet-5-5"
         aliases: ["claude-sonnet-4-5", "anthropic.claude-sonnet-4-5"]
         # >200K tier removed 2026-04-30 with the 1M-context beta retirement.
         pricing:
           input: 3.30
           output: 16.50
+          cache_read: 0.33
+          cache_write: 4.125
       "us.anthropic.claude-haiku-4-5-20251001-v1:0":
         enabled: true
         aliases: ["claude-haiku-4-5", "anthropic.claude-haiku-4-5"]
         pricing:
           input: 1.10
           output: 5.50
+          cache_read: 0.11
+          cache_write: 1.375
       # Mantle catalog IDs (short form).
       # Aliases omit *-bedrock (owned by the bedrock provider) to keep them globally unique.
       "anthropic.claude-sonnet-5":
@@ -1939,18 +2275,24 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.22
+          cache_write: 2.75
       "anthropic.claude-opus-4-8":
         enabled: true
         aliases: ["claude-opus-4-8"]
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
       "anthropic.claude-opus-5":
         enabled: true
         aliases: ["claude-opus-5"]
         pricing:
           input: 5.50
           output: 27.50
+          cache_read: 0.55
+          cache_write: 6.875
       # Claude Opus 5.5 (launch 2026-09-22, audit-09-23-2026): $4/$20 list plus
       # the 10% in-region premium.
       "anthropic.claude-opus-5-5":
@@ -1959,6 +2301,8 @@ providers:
         pricing:
           input: 4.40
           output: 22.00
+          cache_read: 0.22
+          cache_write: 5.50
       # Claude Sonnet 5.5 (launch 2026-09-28, audit-10-05-2026): $2/$10 list plus
       # the 10% in-region premium.
       "anthropic.claude-sonnet-5-5":
@@ -1967,6 +2311,8 @@ providers:
         pricing:
           input: 2.20
           output: 11.00
+          cache_read: 0.11
+          cache_write: 2.75
       # Claude Haiku 5.5 (launch 2026-10-07, AWS card read 2026-10-08): Anthropic
       # list plus the 10% in-region premium, keeping the 100K prompt-length tier.
       "anthropic.claude-haiku-5-5":
@@ -1976,9 +2322,13 @@ providers:
           - threshold: 100_000
             input: 0.11
             output: 0.55
+            cache_read: 0.011
+            cache_write: 0.1375
           - threshold: 0 # Fallback for prompts > 100k input tokens
             input: 0.55
             output: 2.75
+            cache_read: 0.055
+            cache_write: 0.6875
 
   # ---------------------------------------------------------------------------
   # GOOGLE GEMINI PROVIDER
@@ -1995,6 +2345,62 @@ providers:
       burst_requests: 100
 
     models:
+      # Gemini 4 Carbon (GA 2026-11-10, audit-11-16-2026): "our most capable
+      # reasoning model". Flat pricing, no prompt-length tier. Pricing page:
+      # "$2.00 through November 30, 2026. $4.00 starting December 1, 2026" /
+      # "$10.00 ... $20.00"; context caching "$0.10 ... $0.20 starting
+      # December 1, 2026" (implicit caching only). List rates encoded. Not on
+      # the Free tier. Limits copied from gemini-4-argon.
+      "gemini-4-carbon":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 4.00
+          output: 20.00
+          cache_read: 0.20
+      # Gemini 4 Hydrogen (GA 2026-11-12): everyday coding / agentic tier of
+      # the Gemini 4 line. Flat $1.50/$7.50, no promo; implicit context caching
+      # $0.075. Limits copied from gemini-4-argon.
+      "gemini-4-hydrogen":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 1.50
+          output: 7.50
+          cache_read: 0.075
+      # Flagship reasoning model (GA 2026-10-13). Flat pricing, no prompt-length
+      # tier. Introductory 2.00/10.00 through 2026-11-30; the 4.00/20.00 list
+      # rate below applies from 2026-12-01 and is what we encode (context
+      # caching likewise 0.20 list vs 0.10 introductory). Limits copied
+      # from gemini-3.1-pro pending a vendor quota page for this id.
+      "gemini-4-argon":
+        enabled: true
+        aliases: []
+        limits:
+          tokens_per_minute: 5_000_000
+          requests_per_minute: 1_000
+          tokens_per_day: 120_000_000
+          requests_per_day: 1_440_000
+          burst_tokens: 500_000
+          burst_requests: 100
+        pricing:
+          input: 4.00
+          output: 20.00
+          cache_read: 0.20
       "gemini-3.1-pro":
         enabled: true
         # gemini-3.1-pro-preview-customtools is the Custom Tools endpoint id; the
@@ -2011,9 +2417,11 @@ providers:
           - threshold: 200_000
             input: 2.00
             output: 12.00
+            cache_read: 0.20
           - threshold: 0
             input: 4.00
             output: 18.00
+            cache_read: 0.40
       "gemini-3-flash":
         enabled: true
         deprecated: true # vendor legacy status, no shutdown date announced
@@ -2029,8 +2437,15 @@ providers:
         pricing:
           input: 0.50
           output: 3.00
+          cache_read: 0.05
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.6-flash; no shutdown date announced. Removed from the pricing
+      # page, so the last published list rate stays encoded (the id still
+      # serves traffic and must not be priced at zero).
       "gemini-3.5-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.6-flash
+        replacement: "gemini-3.6-flash"
         aliases: ["gemini-flash-3.5"]
         limits:
           tokens_per_minute: 3_000_000
@@ -2045,7 +2460,9 @@ providers:
       # Flash workhorse line (3.6 GA 2026-07-21, 3.7 GA 2026-08-13, 3.8 GA
       # 2026-09-02). Flat pricing — no prompt-length tier. All three bill at
       # an introductory 0.75/3.75 through 2026-12-31; the 1.50/7.50 list rate
-      # below applies from 2027-01-01 and is what we encode.
+      # below applies from 2027-01-01 and is what we encode (cache reads
+      # likewise 0.15 list vs 0.075 introductory). The pricing page no longer
+      # lists 3.7 Flash, so it has no published cache_read rate.
       "gemini-3.6-flash":
         enabled: true
         aliases: ["gemini-flash-3.6", "gemini-3-6-flash"]
@@ -2059,8 +2476,14 @@ providers:
         pricing:
           input: 1.50
           output: 7.50
+          cache_read: 0.15
+      # Deprecated 2026-10-08 (changelog): requests are auto-routed to
+      # gemini-3.8-flash; no shutdown date announced. Removed from the pricing
+      # page; the last published list rate stays encoded.
       "gemini-3.7-flash":
         enabled: true
+        deprecated: true # vendor deprecated 2026-10-08; auto-routed to gemini-3.8-flash
+        replacement: "gemini-3.8-flash"
         aliases: ["gemini-flash-3.7", "gemini-3-7-flash"]
         limits:
           tokens_per_minute: 3_000_000
@@ -2085,6 +2508,7 @@ providers:
         pricing:
           input: 1.50
           output: 7.50
+          cache_read: 0.15
       # Fastest 3.5-class model (GA 2026-07-21). Flat pricing, no tier.
       "gemini-3.5-flash-lite":
         enabled: true
@@ -2099,6 +2523,7 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
+          cache_read: 0.03
       # Note: the gemini-3.1-flash-lite-preview id was shut down 2026-05-25
       # (now listed under retired_models); the GA id below is canonical.
       "gemini-3.1-flash-lite":
@@ -2116,14 +2541,18 @@ providers:
         pricing:
           input: 0.25
           output: 1.50
-      # Gemini 2.5 series: Google withdrew the 2026-10-16 shutdown date in
-      # Aug 2026 ("No shutdown date announced"; Vertex still lists 2026-10-20).
-      # Served "until further notice" but only to projects that already used
-      # them; new projects get 404.
+          cache_read: 0.025
+      # Gemini 2.5 series: served only to projects that already used them (new
+      # projects get 404). Deprecations page (read 2026-11-09): effective
+      # 2026-12-01 API requests to gemini-2.5-pro auto-route to gemini-3.8-flash
+      # and gemini-2.5-flash to gemini-3.5-flash-lite, billed at the
+      # replacement's rates; gemini-2.5-flash-lite "is not deprecated and
+      # remains available until further notice". The 2.5 rates below stay
+      # encoded until the ids actually route away.
       "gemini-2.5-pro":
         enabled: true
-        deprecated: true # no vendor shutdown date; legacy, existing users only
-        replacement: "gemini-3.1-pro"
+        deprecated: true # vendor shutdown 2026-12-01; auto-routes to gemini-3.8-flash
+        replacement: "gemini-3.8-flash"
         aliases: ["gemini-pro-2.5", "gemini-2-5-pro"]
         limits:
           tokens_per_minute: 5_000_000
@@ -2136,13 +2565,15 @@ providers:
           - threshold: 200_000
             input: 1.25
             output: 10.00
+            cache_read: 0.125
           - threshold: 0 # Fallback for prompts > 200k tokens
             input: 2.50
             output: 15.00
+            cache_read: 0.25
       "gemini-2.5-flash":
         enabled: true
-        deprecated: true # no vendor shutdown date; legacy, existing users only
-        replacement: "gemini-3.6-flash"
+        deprecated: true # vendor shutdown 2026-12-01; auto-routes to gemini-3.5-flash-lite
+        replacement: "gemini-3.5-flash-lite"
         aliases:
           [
             "gemini-flash-2.5",
@@ -2159,6 +2590,7 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
+          cache_read: 0.03
       "gemini-2.5-flash-lite":
         enabled: true
         deprecated: true # no vendor shutdown date; legacy, existing users only
@@ -2179,12 +2611,13 @@ providers:
         pricing:
           input: 0.10
           output: 0.40
+          cache_read: 0.01
       # Internal routing id (never an official Google API id); priced as
       # gemini-2.5-flash, so it follows that model's lifecycle.
       "gemini-2.5-flash-thinking":
         enabled: true
-        deprecated: true # follows gemini-2.5-flash (no vendor shutdown date)
-        replacement: "gemini-3.6-flash"
+        deprecated: true # follows gemini-2.5-flash (vendor shutdown 2026-12-01)
+        replacement: "gemini-3.5-flash-lite"
         aliases: ["gemini-flash-2.5-thinking"]
         limits:
           tokens_per_minute: 3_000_000
@@ -2196,6 +2629,7 @@ providers:
         pricing:
           input: 0.30
           output: 2.50
+          cache_read: 0.03
 
   # OpenRouter (OpenAI-compatible Chat Completions at /openrouter/api/v1).
   # Model ids are OpenRouter slugs and keep their vendor namespace. Prices are

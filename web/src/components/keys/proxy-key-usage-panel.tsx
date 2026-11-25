@@ -3,15 +3,13 @@ import { Suspense, lazy, useMemo, useState } from "react";
 import { CopyButton } from "../ui/copy-button";
 import { ProviderLabel } from "../ui/provider-badge";
 import { assistantPrompt, codeExamples, scrubProxyKeyFromText } from "../../lib/code-examples";
+import { promptHint, snippetWarning } from "../../lib/setup-guide-copy";
 import type { Provider } from "../../types";
 import { N8nSetupGuidePanel } from "./n8n-setup-guide";
 
 const CodeBlock = lazy(() =>
   import("../ui/code-block").then((m) => ({ default: m.CodeBlock })),
 );
-
-const CODE_SECRET_WARNING =
-  "Don't paste this code into Cursor, Replit, or any other AI chat — it contains your real proxy key. Use the prompt below instead.";
 
 function CodeBlockFallback({ code }: { code: string }) {
   return (
@@ -25,9 +23,11 @@ export interface ProxyKeyUsagePanelProps {
   proxyKey: string;
   /** When true, omit outer glass panels (e.g. nested inside key detail tabs). */
   embedded?: boolean;
+  /** The key is shared read-only and proxyKey is a placeholder, not a real credential. */
+  sharedKey?: boolean;
 }
 
-export function ProxyKeyUsagePanel({ provider, baseUrl, proxyKey, embedded = false }: ProxyKeyUsagePanelProps) {
+export function ProxyKeyUsagePanel({ provider, baseUrl, proxyKey, embedded = false, sharedKey = false }: ProxyKeyUsagePanelProps) {
   const [activeTab, setActiveTab] = useState(0);
 
   const examples = useMemo(
@@ -100,9 +100,13 @@ export function ProxyKeyUsagePanel({ provider, baseUrl, proxyKey, embedded = fal
           <div className={embedded ? "space-y-3 pt-2" : "space-y-3 p-4"}>
             <div
               role="alert"
-              className="alert alert-error animate-code-secret-warning text-sm font-medium"
+              className={
+                sharedKey
+                  ? "alert alert-info text-sm font-medium"
+                  : "alert alert-error animate-code-secret-warning text-sm font-medium"
+              }
             >
-              <span>{CODE_SECRET_WARNING}</span>
+              <span>{snippetWarning(sharedKey)}</span>
             </div>
             <div className="relative rounded-xl bg-[#282c34] p-3 pt-11">
               <div className="absolute right-3 top-3 z-10">
@@ -133,8 +137,7 @@ export function ProxyKeyUsagePanel({ provider, baseUrl, proxyKey, embedded = fal
           <div>
             <h2 className={embedded ? "text-sm font-semibold" : "font-semibold"}>Prompt for Cursor / Replit / n8n / etc.</h2>
             <p className="text-sm text-base-content/60">
-              Safe to paste into an AI assistant — uses a placeholder for the key, not your real secret. Copy the key
-              from above separately when the assistant asks.
+              {promptHint(sharedKey)}
             </p>
           </div>
           <CopyButton value={prompt} label="Copy prompt" />

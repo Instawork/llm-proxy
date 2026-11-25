@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -388,29 +389,98 @@ func applyUpdateExpression(item map[string]any, input map[string]any) {
 		return
 	}
 
-	setPart := updateExpr
-	if idx := strings.Index(strings.ToUpper(updateExpr), " REMOVE "); idx >= 0 {
-		removePart := strings.TrimSpace(updateExpr[idx+len(" REMOVE "):])
-		setPart = strings.TrimSpace(updateExpr[:idx])
-		for field := range strings.SplitSeq(removePart, ",") {
-			field = resolveAttrName(exprNames, strings.TrimSpace(field))
-			delete(item, field)
+	for _, clause := range splitUpdateClauses(updateExpr) {
+		switch clause.action {
+		case "REMOVE":
+			for field := range strings.SplitSeq(clause.body, ",") {
+				delete(item, resolveAttrName(exprNames, strings.TrimSpace(field)))
+			}
+		case "SET":
+			for assignment := range strings.SplitSeq(clause.body, ",") {
+				parts := strings.SplitN(strings.TrimSpace(assignment), "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				field := resolveAttrName(exprNames, strings.TrimSpace(parts[0]))
+				if val, ok := exprValues[strings.TrimSpace(parts[1])].(map[string]any); ok {
+					item[field] = val
+				}
+			}
+		case "ADD", "DELETE":
+			// Only string-set operands are modelled, which is all the stores use.
+			fields := strings.Fields(clause.body)
+			if len(fields) != 2 {
+				continue
+			}
+			field := resolveAttrName(exprNames, fields[0])
+			operand, _ := exprValues[fields[1]].(map[string]any)
+			applySetOperation(item, field, clause.action, stringSetFrom(operand))
 		}
 	}
+}
 
-	setPart = strings.TrimSpace(strings.TrimPrefix(setPart, "SET "))
-	for assignment := range strings.SplitSeq(setPart, ",") {
-		assignment = strings.TrimSpace(assignment)
-		parts := strings.SplitN(assignment, "=", 2)
-		if len(parts) != 2 {
+type updateClause struct {
+	action string
+	body   string
+}
+
+var updateActions = []string{"SET", "REMOVE", "ADD", "DELETE"}
+
+// splitUpdateClauses splits "SET a = :a ADD b :b" into per-action clauses.
+func splitUpdateClauses(expr string) []updateClause {
+	words := strings.Fields(expr)
+	var clauses []updateClause
+	var cur *updateClause
+	for _, w := range words {
+		if slices.Contains(updateActions, strings.ToUpper(w)) {
+			clauses = append(clauses, updateClause{action: strings.ToUpper(w)})
+			cur = &clauses[len(clauses)-1]
 			continue
 		}
-		field := resolveAttrName(exprNames, strings.TrimSpace(parts[0]))
-		valueKey := strings.TrimSpace(parts[1])
-		if val, ok := exprValues[valueKey].(map[string]any); ok {
-			item[field] = val
+		if cur != nil {
+			if cur.body != "" {
+				cur.body += " "
+			}
+			cur.body += w
 		}
 	}
+	return clauses
+}
+
+func stringSetFrom(av map[string]any) []string {
+	raw, _ := av["SS"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if str, ok := v.(string); ok {
+			out = append(out, str)
+		}
+	}
+	return out
+}
+
+func applySetOperation(item map[string]any, field, action string, operand []string) {
+	current := map[string]struct{}{}
+	if existing, ok := item[field].(map[string]any); ok {
+		for _, v := range stringSetFrom(existing) {
+			current[v] = struct{}{}
+		}
+	}
+	for _, v := range operand {
+		if action == "ADD" {
+			current[v] = struct{}{}
+		} else {
+			delete(current, v)
+		}
+	}
+	if len(current) == 0 {
+		delete(item, field)
+		return
+	}
+	merged := make([]any, 0, len(current))
+	for v := range current {
+		merged = append(merged, v)
+	}
+	item[field] = map[string]any{"SS": merged}
 }
 
 func (f *Server) describeTableResponse(tableName string) map[string]any {

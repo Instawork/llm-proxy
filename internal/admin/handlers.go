@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -105,7 +106,7 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
 	var keys []*apikeys.APIKey
 	if role == adminusers.RoleViewer {
-		keys, err = h.deps.APIKeyStore.ListKeysByOwner(r.Context(), user.Email, provider)
+		keys, err = h.listKeysForViewer(r.Context(), user.Email, provider)
 	} else {
 		keys, err = h.deps.APIKeyStore.ListKeys(r.Context(), provider)
 		if err == nil {
@@ -118,11 +119,73 @@ func (h *handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var spend map[string]keySpend
+	var withSpend []*apikeys.APIKey
+	for _, k := range keys {
+		if listShowsSpend(permissions.AccessToKey(role, user.Email, k)) {
+			withSpend = append(withSpend, k)
+		}
+	}
+	if len(withSpend) > 0 {
+		spend = h.spendOverviewService().KeySpend(r.Context(), withSpend)
+	}
+
 	resp := make([]KeyResponse, 0, len(keys))
 	for _, k := range keys {
-		resp = append(resp, keyToResponse(k, false))
+		access := permissions.AccessToKey(role, user.Email, k)
+		var ks *keySpend
+		if listShowsSpend(access) {
+			if v, ok := spend[k.PK]; ok {
+				ks = &v
+			}
+		}
+		resp = append(resp, keyResponseForAccess(k, access, ks))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// listShowsSpend reports whether a list row carries a spend block. Editors and
+// admins read spend from the overview and key detail pages; viewers have no
+// other list-level view of what their keys have cost.
+func listShowsSpend(access permissions.KeyAccess) bool {
+	return access == permissions.AccessViewer || access == permissions.AccessOwner
+}
+
+// listKeysForViewer returns a viewer's personal keys plus the org-wide keys
+// shared with them.
+func (h *handler) listKeysForViewer(ctx context.Context, email, provider string) ([]*apikeys.APIKey, error) {
+	return viewerKeys(ctx, h.deps.APIKeyStore, email, provider)
+}
+
+// viewerKeys returns the keys a viewer-role user can see: personal keys they
+// own plus org-wide keys shared with them (viewer_emails or requester). Shared
+// keys need a full scan: there is deliberately no index on viewer_emails or
+// requester_email (see docs/API_KEY_MANAGEMENT.md). Keys are de-duplicated by
+// PK.
+func viewerKeys(ctx context.Context, store spendKeyLister, email, provider string) ([]*apikeys.APIKey, error) {
+	owned, err := store.ListKeysByOwner(ctx, email, provider)
+	if err != nil {
+		return nil, err
+	}
+	all, err := store.ListKeys(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(owned))
+	keys := make([]*apikeys.APIKey, 0, len(owned))
+	for _, k := range owned {
+		seen[k.PK] = struct{}{}
+		keys = append(keys, k)
+	}
+	for _, k := range all {
+		if _, dup := seen[k.PK]; dup {
+			continue
+		}
+		if apikeys.IsKeyViewer(k, email) {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
 }
 
 func (h *handler) globalPIIEnabled() bool {
@@ -301,12 +364,30 @@ func (h *handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, _, _, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"], keyActionRead)
 	if !ok {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyDetailResponse(record, h.publicBaseURL(r)))
+	access := permissions.AccessToKey(role, user.Email, record)
+	if access == permissions.AccessViewer {
+		resp := keyResponseForAccess(record, access, nil)
+		if spend, found := h.spendOverviewService().KeySpend(r.Context(), []*apikeys.APIKey{record})[record.PK]; found {
+			resp.Spend = &spend
+		}
+		if base := h.publicBaseURL(r); base != "" {
+			resp.ProxyBase = base
+			resp.BaseURL = base + providerBasePath(record.Provider)
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp := keyDetailResponse(record, h.publicBaseURL(r))
+	resp.Access = string(access)
+	if access == permissions.AccessManager {
+		resp.ViewerEmails = record.ViewerEmails
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +409,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, _, role, ok := h.loadAccessibleKey(w, r, keyID)
+	existing, _, role, ok := h.loadAccessibleKey(w, r, keyID, keyActionWrite)
 	if !ok {
 		return
 	}
@@ -472,7 +553,7 @@ func (h *handler) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"])
+	record, user, role, ok := h.loadAccessibleKey(w, r, mux.Vars(r)["key"], keyActionWrite)
 	if !ok {
 		return
 	}
@@ -714,7 +795,7 @@ func (h *handler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, user, _, ok := h.loadAccessibleKey(w, r, req.Key)
+	record, user, _, ok := h.loadAccessibleKey(w, r, req.Key, keyActionWrite)
 	if !ok {
 		return
 	}

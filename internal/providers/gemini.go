@@ -202,10 +202,11 @@ type GeminiResponse struct {
 
 // GeminiUsage represents token usage in Gemini responses
 type GeminiUsage struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
-	ThoughtsTokenCount   int `json:"thoughtsTokenCount,omitempty"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
 // GeminiCandidate represents a candidate response
@@ -296,6 +297,7 @@ func (g *GeminiProxy) parseNonStreamingResponse(responseBody io.Reader) (*LLMRes
 		RequestID:     response.ResponseId,
 		IsStreaming:   false,
 	}
+	metadata.splitCachedInput(response.UsageMetadata.CachedContentTokenCount)
 
 	// Extract finish reason from the first candidate if available
 	if len(response.Candidates) > 0 {
@@ -411,6 +413,7 @@ func (g *GeminiProxy) parseStreamingResponse(responseBody io.Reader) (*LLMRespon
 				IsStreaming:   true,
 				FinishReason:  finishReason,
 			}
+			metadata.splitCachedInput(streamResponse.UsageMetadata.CachedContentTokenCount)
 		}
 	}
 
@@ -493,6 +496,7 @@ func parseGeminiJSONArrayStream(data []byte) (*LLMResponseMetadata, error) {
 				Provider:      "gemini",
 				IsStreaming:   true,
 			}
+			metadata.splitCachedInput(chunk.UsageMetadata.CachedContentTokenCount)
 		}
 	}
 	if model == "" {

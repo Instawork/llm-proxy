@@ -32,7 +32,15 @@ import {
   pickToday,
   scalarSeries,
 } from "../lib/daily-history";
-import { compact, formatCount, formatUsd, keySpendCapCents, maskKeyId, scopeLabel } from "../lib/format";
+import {
+  cachedInputHint,
+  compact,
+  formatCount,
+  formatUsd,
+  keySpendCapCents,
+  maskKeyId,
+  scopeLabel,
+} from "../lib/format";
 import { donutSlices } from "../lib/group-rows";
 import type { CostKeySpend, CostScopeSpend } from "../types";
 
@@ -49,6 +57,8 @@ function memKeyAgg(byKey: CostKeySpend[]): CostKeyAgg[] {
     requests: row.requests,
     input_tokens: row.input_tokens,
     output_tokens: row.output_tokens,
+    cache_read_tokens: row.cache_read_tokens ?? 0,
+    cache_creation_tokens: row.cache_creation_tokens ?? 0,
   }));
 }
 
@@ -63,6 +73,8 @@ function memUserAgg(byUser: Record<string, CostScopeSpend> | undefined): CostUse
       requests: row.requests,
       input_tokens: row.input_tokens,
       output_tokens: row.output_tokens,
+      cache_read_tokens: row.cache_read_tokens ?? 0,
+      cache_creation_tokens: row.cache_creation_tokens ?? 0,
     }))
     .sort((a, b) => b.spend_usd - a.spend_usd);
 }
@@ -121,6 +133,19 @@ export default function CostPage() {
     "output_tokens_today",
     hasRedis,
   );
+  const cacheReadTokensToday = pickToday(
+    stats?.available ? stats?.cache_read_tokens_today : undefined,
+    history,
+    "cache_read_tokens_today",
+    hasRedis,
+  );
+  const cacheCreationTokensToday = pickToday(
+    stats?.available ? stats?.cache_creation_tokens_today : undefined,
+    history,
+    "cache_creation_tokens_today",
+    hasRedis,
+  );
+  const cachedTokensToday = cacheReadTokensToday.value + cacheCreationTokensToday.value;
   const tokensSource: DataSource =
     inputTokensToday.source === "memory" && outputTokensToday.source === "memory"
       ? "memory"
@@ -231,7 +256,7 @@ export default function CostPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <LiveStat
           title="Spend today"
           value={formatUsd(spendToday.value)}
@@ -248,6 +273,16 @@ export default function CostPage() {
           title="Tokens"
           value={compact(inputTokensToday.value + outputTokensToday.value)}
           hint={`${compact(inputTokensToday.value)} in · ${compact(outputTokensToday.value)} out`}
+          source={tokensSource}
+        />
+        <LiveStat
+          title="Cached input"
+          value={compact(cachedTokensToday)}
+          hint={cachedInputHint(
+            cacheReadTokensToday.value,
+            cacheCreationTokensToday.value,
+            inputTokensToday.value,
+          )}
           source={tokensSource}
         />
         <LiveStat

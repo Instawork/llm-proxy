@@ -196,6 +196,11 @@ type APIKey struct {
 	// email the requester when their key request is approved or the key
 	// later hits a spend limit.
 	RequesterEmail string `dynamodbav:"requester_email,omitempty"`
+	// ViewerEmails lists dashboard users granted read-only access to this
+	// org-wide key (lowercase). Stored as a string set so grants are added and
+	// removed atomically without a read-modify-write. The requester counts as
+	// an implicit viewer and is not stored here.
+	ViewerEmails []string `dynamodbav:"viewer_emails,stringset,omitempty"`
 	// MonthlyCostLimit is the calendar-month cost cap in cents (0 = unlimited).
 	MonthlyCostLimit int64 `dynamodbav:"monthly_cost_limit,omitempty"`
 	// FirstRequestAt is set once when the proxy observes the first tracked LLM

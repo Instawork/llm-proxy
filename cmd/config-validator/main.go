@@ -78,6 +78,11 @@ const (
 	// indicates a decimal-place error (e.g. 0.001 instead of 0.10).
 	minPricePerMillion = 0.01
 
+	// minCachePricePerMillion is the floor for cache_read / cache_write.
+	// Cached input is 10% or less of list on the cheapest models
+	// (GPT-5 Nano cached input is $0.005/1M).
+	minCachePricePerMillion = 0.001
+
 	// maxPricePerMillion is the maximum sane price per 1M tokens ($1000.00).
 	// The highest real-world price we've seen is o1-pro at $600/1M output, so
 	// $1000 leaves headroom while still catching obvious magnitude errors
@@ -150,10 +155,22 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 			for i, tier := range mp.Tiers {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] input", i), tier.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] output", i), tier.Output)...)
+				if tier.CacheRead != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] cache_read", i), tier.CacheRead)...)
+				}
+				if tier.CacheWrite != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("tier[%d] cache_write", i), tier.CacheWrite)...)
+				}
 			}
 			for alias, p := range mp.Overrides {
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] input", alias), p.Input)...)
 				errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] output", alias), p.Output)...)
+				if p.CacheRead != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_read", alias), p.CacheRead)...)
+				}
+				if p.CacheWrite != 0 {
+					errs = append(errs, checkPrice(providerName, modelName, fmt.Sprintf("override[%q] cache_write", alias), p.CacheWrite)...)
+				}
 			}
 		}
 	}
@@ -210,10 +227,14 @@ func validateSemantics(cfg *config.YAMLConfig) []string {
 
 // checkPrice returns an error string if price is outside [minPricePerMillion, maxPricePerMillion].
 func checkPrice(provider, model, field string, price float64) []string {
-	if price < minPricePerMillion {
+	minPrice := minPricePerMillion
+	if strings.Contains(field, "cache_") {
+		minPrice = minCachePricePerMillion
+	}
+	if price < minPrice {
 		return []string{fmt.Sprintf(
-			"%s/%s: %s price $%g/1M is below minimum $%.2f/1M — likely a decimal error",
-			provider, model, field, price, minPricePerMillion,
+			"%s/%s: %s price $%g/1M is below minimum $%g/1M — likely a decimal error",
+			provider, model, field, price, minPrice,
 		)}
 	}
 	if price > maxPricePerMillion {

@@ -13,6 +13,18 @@ export function compact(n: number | undefined | null): string {
   return compactFormatter.format(n);
 }
 
+/**
+ * Hint for a "cached input" stat. Cache tokens are a subset of input tokens,
+ * so the share is only shown when the input total is known.
+ */
+export function cachedInputHint(cacheRead: number, cacheWrite: number, inputTokens?: number): string {
+  const parts = [`${compact(cacheRead)} read`, `${compact(cacheWrite)} written`];
+  if (inputTokens && inputTokens > 0) {
+    parts.push(`${(((cacheRead + cacheWrite) / inputTokens) * 100).toFixed(1)}% of input`);
+  }
+  return parts.join(" · ");
+}
+
 /** Locale-formats an integer count, tolerating undefined/null/NaN from the API. */
 export function formatCount(n: number | undefined | null): string {
   if (n === undefined || n === null || Number.isNaN(n)) return "0";
@@ -74,9 +86,15 @@ export function keyCostLimitPeriod(
 export function formatKeySpendCap(
   key: Pick<
     APIKey,
-    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit"
+    "tags" | "owner_email" | "daily_cost_limit" | "monthly_cost_limit" | "spend"
   >,
 ): string {
+  const cap = key.spend?.cap;
+  if (cap && cap.cents > 0) {
+    return cap.period === "monthly"
+      ? formatMonthlyCostLimit(cap.cents)
+      : formatDailyCostLimit(cap.cents);
+  }
   if (keyCostLimitPeriod(key) === "monthly") {
     return formatMonthlyCostLimit(key.monthly_cost_limit);
   }
@@ -152,6 +170,11 @@ export function formatUsd(amount: number | undefined | null, digits = 4): string
   if (amount === 0) return "$0.00";
   if (Math.abs(amount) < 0.01) return `$${amount.toFixed(digits)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+/** Month-to-date spend for a list row, or "—" when the list response carries none. */
+export function formatKeyMonthSpend(key: Pick<APIKey, "spend">): string {
+  return formatUsd(key.spend?.month.spend_usd);
 }
 
 const MASKED_CREDENTIAL_SPLIT = /…|\u2026|\.\.\./;

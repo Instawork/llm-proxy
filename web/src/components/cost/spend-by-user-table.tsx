@@ -5,6 +5,7 @@ import DataTable from "../ui/data-table";
 import type { CostUserAgg } from "../../lib/daily-history";
 import { spendByUserDisplayRows, type SpendByUserDisplayRow } from "../../lib/group-rows";
 import { formatCount, formatUsd } from "../../lib/format";
+import TokensCell from "./tokens-cell";
 import { useCollapsedRows } from "../../hooks/use-collapsed-rows";
 
 interface SpendByUserTableProps {
@@ -65,11 +66,7 @@ export default function SpendByUserTable({ rows }: SpendByUserTableProps) {
         accessorFn: (row) => `${row.input_tokens}/${row.output_tokens}`,
         header: "Tokens",
         meta: { alignRight: true },
-        cell: ({ row }) => (
-          <span className="text-base-content/70">
-            {formatCount(row.original.input_tokens)}/{formatCount(row.original.output_tokens)}
-          </span>
-        ),
+        cell: ({ row }) => <TokensCell row={row.original} />,
       },
     ],
     [],

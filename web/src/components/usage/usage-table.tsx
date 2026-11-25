@@ -69,6 +69,17 @@ export default function UsageTable({ title, rows, keys, linkKeys = false, source
         cell: ({ getValue }) => formatCount(getValue<number>()),
       },
       {
+        id: "cached",
+        accessorFn: (row) => (row.cache_read_tokens ?? 0) + (row.cache_creation_tokens ?? 0),
+        header: "Cached in",
+        meta: { alignRight: true },
+        cell: ({ row }) => (
+          <span className="text-base-content/70" title="Cache read / cache write tokens (part of input)">
+            {formatCount(row.original.cache_read_tokens ?? 0)}/{formatCount(row.original.cache_creation_tokens ?? 0)}
+          </span>
+        ),
+      },
+      {
         id: "share",
         accessorFn: (row) => (totalTokens > 0 ? (row.tokens / totalTokens) * 100 : 0),
         header: "Share",

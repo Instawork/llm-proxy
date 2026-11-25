@@ -93,6 +93,25 @@ export interface APIKey {
   base_url?: string;
   first_request_at?: string | null;
   masked_key_id?: string;
+  /** How the caller relates to this key; "viewer" means a read-only grant. */
+  access?: "owner" | "manager" | "viewer";
+  read_only?: boolean;
+  /** Explicit per-key viewers; only returned to editors and admins. */
+  viewer_emails?: string[];
+  /** Cost data returned with read-only shared keys. */
+  spend?: SharedKeySpend;
+}
+
+export interface SharedKeySpend {
+  today: KeyCostStats;
+  month: KeyCostMonthStats;
+  cap?: SpendCap;
+  rollup_available: boolean;
+}
+
+export interface KeyViewersResponse {
+  viewers: string[];
+  requester_email?: string;
 }
 
 export interface ProvisioningProviderStatus {
@@ -307,6 +326,8 @@ export interface CostKeySpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostScopeSpend {
@@ -316,6 +337,8 @@ export interface CostScopeSpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostProviderSpend {
@@ -326,6 +349,8 @@ export interface CostProviderSpend {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface CostRecentEvent {
@@ -338,6 +363,8 @@ export interface CostRecentEvent {
   output_spend_usd?: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   model?: string;
 }
 
@@ -351,6 +378,8 @@ export interface CostStats extends StatsWithDailyHistory {
   requests_today?: number;
   input_tokens_today?: number;
   output_tokens_today?: number;
+  cache_read_tokens_today?: number;
+  cache_creation_tokens_today?: number;
   by_key?: CostKeySpend[];
   by_user?: Record<string, CostScopeSpend>;
   by_provider?: CostProviderSpend[];
@@ -486,6 +515,8 @@ export interface ModelStatusResponse {
 export interface UsageScopeCounter {
   requests?: number;
   tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface UsageStats extends StatsWithDailyHistory {
@@ -494,6 +525,8 @@ export interface UsageStats extends StatsWithDailyHistory {
   started_at?: number;
   requests_today?: number;
   tokens_today?: number;
+  cache_read_tokens_today?: number;
+  cache_creation_tokens_today?: number;
   top_models?: PIINameCount[];
   top_providers?: PIINameCount[];
   counters?: Record<string, UsageScopeCounter>;
@@ -626,6 +659,8 @@ export interface SpendKeyRow {
   description: string;
   owner_email?: string;
   enabled: boolean;
+  /** Read-only key shared with the caller; excluded from the caller's totals. */
+  shared?: boolean;
   today: KeyCostStats;
   month: KeyCostMonthStats;
   cap?: SpendCap;
@@ -658,6 +693,8 @@ export type SpendCaveat = "rollup_off" | "history_top_n" | "provider_month_parti
 
 export interface SpendOverviewResponse {
   scope: "mine" | "fleet";
+  /** Which of the viewer's keys the totals cover; absent on the fleet overview. */
+  view?: "all" | "mine" | "shared";
   day: string;
   month: string;
   rollup_available: boolean;
