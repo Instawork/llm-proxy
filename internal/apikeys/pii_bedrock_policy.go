@@ -66,7 +66,7 @@ func CanBypassPIIOffNonBedrockPolicy(email string) bool {
 // because PII redaction is effectively disabled due to an explicit per-key off
 // or inheriting while global PII is enabled.
 func ShouldEnforceBedrockForPIIOff(globalEnabled bool, key *APIKey) bool {
-	if EffectiveRedactPII(globalEnabled, key) {
+	if EffectiveRedactPII(globalEnabled, true, key) {
 		return false
 	}
 	if key != nil && key.RedactPII != nil {

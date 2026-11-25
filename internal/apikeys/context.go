@@ -19,9 +19,11 @@ func FromContext(ctx context.Context) (*APIKey, bool) {
 }
 
 // EffectiveRedactPII returns whether PII redaction should run for this request.
-// keyPref nil means inherit the global default.
-func EffectiveRedactPII(globalEnabled bool, key *APIKey) bool {
-	if key != nil && key.RedactPII != nil {
+// When allowPerKeyOverride is false, any per-key RedactPII setting is ignored
+// and globalEnabled is always enforced. When allowPerKeyOverride is true, a
+// non-nil key.RedactPII overrides globalEnabled; nil inherits globalEnabled.
+func EffectiveRedactPII(globalEnabled, allowPerKeyOverride bool, key *APIKey) bool {
+	if allowPerKeyOverride && key != nil && key.RedactPII != nil {
 		return *key.RedactPII
 	}
 	return globalEnabled

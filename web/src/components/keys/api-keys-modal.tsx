@@ -31,6 +31,7 @@ type ApiKeysModalProps = {
   showAnthropicTierSelect: boolean;
   anthropicTierOptions: string[];
   piiOffRequiresBedrock: boolean;
+  allowPerKeyPiiOverride: boolean;
   viewerMonthlyLimitLabel: string;
   editorMaxDollars: number | null;
 };
@@ -62,6 +63,7 @@ function ApiKeysModalContent({
   showAnthropicTierSelect,
   anthropicTierOptions,
   piiOffRequiresBedrock,
+  allowPerKeyPiiOverride,
   viewerMonthlyLimitLabel,
   editorMaxDollars,
 }: Omit<ApiKeysModalProps, "open">) {
@@ -290,6 +292,7 @@ function ApiKeysModalContent({
               setForm={setForm}
               editingKey={null}
               piiOffRequiresBedrock={piiOffRequiresBedrock}
+              allowPerKeyOverride={allowPerKeyPiiOverride}
             />
           ) : null}
 

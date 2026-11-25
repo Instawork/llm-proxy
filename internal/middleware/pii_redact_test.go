@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -545,23 +547,46 @@ func TestPIIRedactMiddleware_PerKeyOverrideMatrix(t *testing.T) {
 		return redact.Result{Text: "redacted"}, nil
 	}}
 
+	keyInherit := &apikeys.APIKey{}
+	keyOn := &apikeys.APIKey{RedactPII: new(true)}
+	keyOff := &apikeys.APIKey{RedactPII: new(false)}
+
 	cases := []struct {
-		name   string
-		global bool
-		key    *apikeys.APIKey
-		called bool
+		name                string
+		global              bool
+		allowPerKeyOverride bool
+		key                 *apikeys.APIKey
+		called              bool
 	}{
-		{"global on inherit", true, nil, true},
-		{"global off inherit", false, nil, false},
-		{"global off key on", false, func() *apikeys.APIKey { v := true; return &apikeys.APIKey{RedactPII: &v} }(), true},
-		{"global on key off", true, func() *apikeys.APIKey { v := false; return &apikeys.APIKey{RedactPII: &v} }(), false},
+		// allow_per_key_override = false: global setting is always enforced.
+		{"override off / global on / nil key", true, false, nil, true},
+		{"override off / global on / inherit key", true, false, keyInherit, true},
+		{"override off / global on / key on", true, false, keyOn, true},
+		{"override off / global on / key off ignored", true, false, keyOff, true},
+		{"override off / global off / nil key", false, false, nil, false},
+		{"override off / global off / inherit key", false, false, keyInherit, false},
+		{"override off / global off / key on ignored", false, false, keyOn, false},
+		{"override off / global off / key off", false, false, keyOff, false},
+
+		// allow_per_key_override = true: explicit per-key overrides are honored.
+		{"override on / global on / nil key", true, true, nil, true},
+		{"override on / global on / inherit key", true, true, keyInherit, true},
+		{"override on / global on / key on", true, true, keyOn, true},
+		{"override on / global on / key off honored", true, true, keyOff, false},
+		{"override on / global off / nil key", false, true, nil, false},
+		{"override on / global off / inherit key", false, true, keyInherit, false},
+		{"override on / global off / key on honored", false, true, keyOn, true},
+		{"override on / global off / key off", false, true, keyOff, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r.called = 0
 			cap := &captureHandler{}
-			mw := PIIRedactMiddleware(r, PIIRedactConfig{GlobalEnabled: tc.global})(cap)
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       tc.global,
+				AllowPerKeyOverride: tc.allowPerKeyOverride,
+			})(cap)
 			req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
 			if tc.key != nil {
 				req = req.WithContext(apikeys.WithContext(req.Context(), tc.key))
@@ -569,6 +594,134 @@ func TestPIIRedactMiddleware_PerKeyOverrideMatrix(t *testing.T) {
 			mw.ServeHTTP(httptest.NewRecorder(), req)
 			if (r.called > 0) != tc.called {
 				t.Fatalf("redactor called=%d want called=%v", r.called, tc.called)
+			}
+		})
+	}
+}
+
+func TestPIIRedactMiddleware_AllowPerKeyOverride_WireMode(t *testing.T) {
+	const rawSSN = "222-33-4444"
+	const scrubbed = "<PII_US_SSN_1>"
+	body := `{"messages":[{"role":"user","content":"my ssn is ` + rawSSN + `"}]}`
+	keyOff := &apikeys.APIKey{PK: "iw:test-key-off", RedactPII: new(false)}
+
+	makeRedactor := func() *fakeRedactor {
+		return &fakeRedactor{
+			scrubFn: func(in string, _ *redact.Registry) (redact.Result, error) {
+				out := strings.ReplaceAll(in, rawSSN, scrubbed)
+				return redact.Result{Text: out, EntityCounts: map[string]int{"US_SSN": 1}}, nil
+			},
+		}
+	}
+
+	t.Run("override disabled enforces wire redaction even when key sets redact_pii=false", func(t *testing.T) {
+		r := makeRedactor()
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: false,
+			WirePlaceholders:    true,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called != 1 {
+			t.Fatalf("expected redactor called once, got %d", r.called)
+		}
+		if strings.Contains(string(cap.bodySeen), rawSSN) {
+			t.Fatalf("raw SSN leaked to upstream when allow_per_key_override=false: %s", string(cap.bodySeen))
+		}
+		if !strings.Contains(string(cap.bodySeen), scrubbed) {
+			t.Fatalf("expected scrubbed placeholder in upstream body, got %s", string(cap.bodySeen))
+		}
+	})
+
+	t.Run("override enabled honors key redact_pii=false", func(t *testing.T) {
+		r := makeRedactor()
+		cap := &captureHandler{}
+		mw := PIIRedactMiddleware(r, PIIRedactConfig{
+			GlobalEnabled:       true,
+			AllowPerKeyOverride: true,
+			WirePlaceholders:    true,
+		})(cap)
+
+		req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if r.called != 0 {
+			t.Fatalf("expected redactor skipped when override enabled and key off, got %d", r.called)
+		}
+		if string(cap.bodySeen) != body {
+			t.Fatalf("expected original body upstream, got %s", string(cap.bodySeen))
+		}
+	})
+}
+
+type atomicFakeRedactor struct {
+	calls atomic.Int64
+}
+
+func (a *atomicFakeRedactor) Redact(_ context.Context, text string) (redact.Result, error) {
+	a.calls.Add(1)
+	return redact.Result{Text: strings.ReplaceAll(text, "secret", "[REDACTED]"), EntityCounts: map[string]int{"SECRET": 1}}, nil
+}
+
+func (a *atomicFakeRedactor) Scrub(_ context.Context, text string, _ *redact.Registry) (redact.Result, error) {
+	a.calls.Add(1)
+	return redact.Result{Text: strings.ReplaceAll(text, "secret", "<SECRET_1>"), EntityCounts: map[string]int{"SECRET": 1}}, nil
+}
+
+func TestPIIRedactMiddleware_PerKeyOverride_Concurrent(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"secret"}]}`
+	keys := []*apikeys.APIKey{
+		nil,
+		{PK: "iw:inherit"},
+		{PK: "iw:on", RedactPII: new(true)},
+		{PK: "iw:off", RedactPII: new(false)},
+	}
+
+	const workersPerKey = 8
+
+	for _, allowOverride := range []bool{false, true} {
+		name := "override_false"
+		wantCalls := int64(len(keys) * workersPerKey)
+		if allowOverride {
+			name = "override_true"
+			wantCalls = int64((len(keys) - 1) * workersPerKey)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			r := &atomicFakeRedactor{}
+			next := http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+				_, _ = io.ReadAll(req.Body)
+			})
+			mw := PIIRedactMiddleware(r, PIIRedactConfig{
+				GlobalEnabled:       true,
+				AllowPerKeyOverride: allowOverride,
+				WirePlaceholders:    true,
+			})(next)
+
+			var wg sync.WaitGroup
+			for _, k := range keys {
+				for range workersPerKey {
+					wg.Add(1)
+					go func(key *apikeys.APIKey) {
+						defer wg.Done()
+						req := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+						if key != nil {
+							req = req.WithContext(apikeys.WithContext(req.Context(), key))
+						}
+						mw.ServeHTTP(httptest.NewRecorder(), req)
+					}(k)
+				}
+			}
+			wg.Wait()
+
+			if got := r.calls.Load(); got != wantCalls {
+				t.Fatalf("redactor calls = %d, want %d", got, wantCalls)
 			}
 		})
 	}

@@ -1,13 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Instawork/llm-proxy/internal/adminrollup"
+	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/providers"
+	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 // TestCircuitConfigFromYAML_ExpandsRedisURLEnvVar nails down the env-var
@@ -194,6 +202,106 @@ func TestProductionYAML_PIIRedactSetsExplicitMaxBodyBytes(t *testing.T) {
 	if got <= oneMiB {
 		t.Fatalf("production.yml pii_redact.max_body_bytes must be set above the 1 MiB default, got %d", got)
 	}
+}
+
+type stubPIIRedactor struct {
+	called int
+}
+
+func (s *stubPIIRedactor) Redact(_ context.Context, text string) (redact.Result, error) {
+	s.called++
+	return redact.Result{Text: strings.ReplaceAll(text, "222-33-4444", "[REDACTED:US_SSN]")}, nil
+}
+
+func (s *stubPIIRedactor) Scrub(_ context.Context, text string, _ *redact.Registry) (redact.Result, error) {
+	s.called++
+	return redact.Result{Text: strings.ReplaceAll(text, "222-33-4444", "<PII_US_SSN_1>")}, nil
+}
+
+// TestPIIRedactConfigFromYAML_AllowPerKeyOverrideEndToEnd loads the real
+// production and dev YAML overlays, feeds them through piiRedactConfigFromYAML
+// into PIIRedactMiddleware, and verifies that production's
+// allow_per_key_override: false prevents a key with redact_pii: false from
+// bypassing global redaction while dev's allow_per_key_override: true honors it.
+func TestPIIRedactConfigFromYAML_AllowPerKeyOverrideEndToEnd(t *testing.T) {
+	configsDir, err := filepath.Abs(filepath.Join("..", "..", "configs"))
+	if err != nil {
+		t.Fatalf("resolve configs dir: %v", err)
+	}
+	const body = `{"messages":[{"role":"user","content":"ssn 222-33-4444"}]}`
+	keyOff := &apikeys.APIKey{PK: "iw:key-off", RedactPII: new(false)}
+
+	t.Run("production enforces global redaction despite key redact_pii=false", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "production")
+		merged, err := config.LoadAndMergeConfigs([]string{
+			filepath.Join(configsDir, "base.yml"),
+			filepath.Join(configsDir, "production.yml"),
+		})
+		if err != nil {
+			t.Fatalf("load prod configs: %v", err)
+		}
+
+		mwCfg := piiRedactConfigFromYAML(merged.Features.PIIRedact, config.RuntimeEnv{Environment: "production"})
+		if !mwCfg.GlobalEnabled {
+			t.Fatal("production GlobalEnabled must be true")
+		}
+		if mwCfg.AllowPerKeyOverride {
+			t.Fatal("production AllowPerKeyOverride must be false")
+		}
+
+		redactor := &stubPIIRedactor{}
+		var upstreamBody []byte
+		mw := middleware.PIIRedactMiddleware(redactor, mwCfg)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			upstreamBody, _ = io.ReadAll(r.Body)
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", bytes.NewBufferString(body))
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if redactor.called != 1 {
+			t.Fatalf("expected redactor called once under production config, got %d", redactor.called)
+		}
+		if strings.Contains(string(upstreamBody), "222-33-4444") {
+			t.Fatalf("raw SSN reached upstream under production config: %s", string(upstreamBody))
+		}
+	})
+
+	t.Run("dev honors per-key redact_pii=false when allow_per_key_override=true", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "dev")
+		merged, err := config.LoadAndMergeConfigs([]string{
+			filepath.Join(configsDir, "base.yml"),
+			filepath.Join(configsDir, "dev.yml"),
+		})
+		if err != nil {
+			t.Fatalf("load dev configs: %v", err)
+		}
+
+		mwCfg := piiRedactConfigFromYAML(merged.Features.PIIRedact, config.RuntimeEnv{Environment: "dev"})
+		if !mwCfg.GlobalEnabled {
+			t.Fatal("dev GlobalEnabled must be true")
+		}
+		if !mwCfg.AllowPerKeyOverride {
+			t.Fatal("dev AllowPerKeyOverride must be true")
+		}
+
+		redactor := &stubPIIRedactor{}
+		var upstreamBody []byte
+		mw := middleware.PIIRedactMiddleware(redactor, mwCfg)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			upstreamBody, _ = io.ReadAll(r.Body)
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", bytes.NewBufferString(body))
+		req = req.WithContext(apikeys.WithContext(req.Context(), keyOff))
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if redactor.called != 0 {
+			t.Fatalf("expected redactor skipped under dev config for key with redact_pii=false, got %d", redactor.called)
+		}
+		if string(upstreamBody) != body {
+			t.Fatalf("expected original body upstream under dev override, got %s", string(upstreamBody))
+		}
+	})
 }
 
 // TestDeployedYAML_NoDevCORSOrigin guards against dev_cors_origin leaking

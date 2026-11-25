@@ -97,6 +97,11 @@ type PIIRedactConfig struct {
 	// GlobalEnabled is the YAML features.pii_redact.enabled value.
 	GlobalEnabled bool
 
+	// AllowPerKeyOverride is the YAML features.pii_redact.allow_per_key_override
+	// value. When false (the zero value), per-key redact_pii overrides on API
+	// keys are ignored and GlobalEnabled is always enforced.
+	AllowPerKeyOverride bool
+
 	// FailClosed: when true, abort the request with 503 if the redactor
 	// fails or times out. When false ("fail-open"), log a warning and
 	// pass the request through with no redacted-body in context — the
@@ -201,7 +206,7 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			}
 
 			keyRecord, _ := apikeys.FromContext(r.Context())
-			if !apikeys.EffectiveRedactPII(cfg.GlobalEnabled, keyRecord) {
+			if !apikeys.EffectiveRedactPII(cfg.GlobalEnabled, cfg.AllowPerKeyOverride, keyRecord) {
 				next.ServeHTTP(w, r)
 				return
 			}

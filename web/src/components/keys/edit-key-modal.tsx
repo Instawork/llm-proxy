@@ -17,7 +17,7 @@ import {
 } from "../../lib/key-form";
 import { isPersonalKey } from "../../lib/format";
 import { permissions } from "../../lib/permissions";
-import { useConfig, useMe, useUpdateKey } from "../../hooks/queries";
+import { useConfig, useMe, usePII, useUpdateKey } from "../../hooks/queries";
 import type { APIKey, UpdateAPIKeyRequest } from "../../types";
 import { useToast } from "../ui/toast";
 import { ProviderBadge } from "../ui/page-header";
@@ -39,11 +39,13 @@ export default function EditKeyModal({
   const { push } = useToast();
   const { data: me } = useMe();
   const { data: config } = useConfig();
+  const { data: piiData } = usePII();
   const updateKey = useUpdateKey();
 
   const canManagePolicy = permissions.canManageKeyPolicy(me?.role);
   const isPersonal = isPersonalKey(keyRecord);
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
+  const allowPerKeyPiiOverride = Boolean(piiData?.allow_per_key_override);
   const canBypassPiiBedrockPolicy = Boolean(me?.can_bypass_pii_off_non_bedrock_policy);
   const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;
@@ -180,6 +182,7 @@ export default function EditKeyModal({
               setForm={setForm}
               editingKey={keyRecord}
               piiOffRequiresBedrock={piiOffRequiresBedrock}
+              allowPerKeyOverride={allowPerKeyPiiOverride}
             />
           ) : null}
 

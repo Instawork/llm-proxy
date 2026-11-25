@@ -550,7 +550,16 @@ export default function KeyDetailPage() {
                       {!isViewer ? (
                         <>
                           <Meta label="Global fail mode" value={piiQuery.data?.fail_mode ?? "—"} />
-                          <Meta label="Per-key override" value={piiLabel(keyRecord.redact_pii)} />
+                          <Meta
+                            label="Per-key override"
+                            value={
+                              piiQuery.data &&
+                              !piiQuery.data.allow_per_key_override &&
+                              keyRecord.redact_pii != null
+                                ? `${piiLabel(keyRecord.redact_pii)} (ignored — global only)`
+                                : piiLabel(keyRecord.redact_pii)
+                            }
+                          />
                         </>
                       ) : null}
                     </div>

@@ -83,18 +83,22 @@ export function PiiFields({
   setForm,
   editingKey,
   piiOffRequiresBedrock,
+  allowPerKeyOverride = true,
 }: {
   form: KeyFormState;
   setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
   editingKey: APIKey | null;
   piiOffRequiresBedrock: boolean;
+  allowPerKeyOverride?: boolean;
 }) {
+  const overridesDisabled = !allowPerKeyOverride;
   return (
     <label className="form-control w-full">
       <span className="label-text">PII redaction</span>
       <select
         className="select select-bordered w-full"
         value={form.redact_pii}
+        disabled={overridesDisabled && form.redact_pii === "inherit"}
         onChange={(event) =>
           setForm((current) => ({
             ...current,
@@ -103,15 +107,28 @@ export function PiiFields({
         }
       >
         <option value="inherit">Inherit global default</option>
-        <option value="on">On</option>
-        <option value="off">Off</option>
+        <option value="on" disabled={overridesDisabled}>
+          On
+        </option>
+        <option value="off" disabled={overridesDisabled}>
+          Off
+        </option>
       </select>
-      {piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
+      {overridesDisabled ? (
+        <p className="mt-1.5 text-xs text-base-content/60">
+          Per-key PII redaction overrides are disabled by configuration (
+          <code>allow_per_key_override: false</code>). All requests follow the global setting.
+          {form.redact_pii !== "inherit"
+            ? " You can reset this key to inherit the global default."
+            : ""}
+        </p>
+      ) : null}
+      {!overridesDisabled && piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
         <p className="mt-1.5 text-xs text-warning">
           Turning PII off requires a Bedrock key. Create a new Bedrock key instead.
         </p>
       ) : null}
-      {!piiOffRequiresBedrock && form.redact_pii === "off" && form.provider !== "bedrock" ? (
+      {!overridesDisabled && !piiOffRequiresBedrock && form.redact_pii === "off" && form.provider !== "bedrock" ? (
         <p className="mt-1.5 text-xs text-warning">
           Requests on this key will reach the provider with PII unredacted. You will be asked
           to confirm when saving.

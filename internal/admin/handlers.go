@@ -195,6 +195,25 @@ func (h *handler) globalPIIEnabled() bool {
 	return h.deps.YAMLConfig.Features.PIIRedact.Enabled
 }
 
+func (h *handler) allowPerKeyPIIOverride() bool {
+	if h.deps.YAMLConfig == nil {
+		return false
+	}
+	return h.deps.YAMLConfig.Features.PIIRedact.AllowPerKeyOverride
+}
+
+// validatePIIOverridePolicy enforces allow_per_key_override and the PII-off
+// Bedrock rule for the current user. When allow_per_key_override is false,
+// explicit per-key redact_pii values (true/false) are rejected so operators
+// cannot store overrides that request-time enforcement will ignore; nil
+// (inherit / clearing an existing override) is always permitted.
+func (h *handler) validatePIIOverridePolicy(r *http.Request, provider string, redactPII *bool) error {
+	if redactPII != nil && !h.allowPerKeyPIIOverride() {
+		return errors.New("per-key PII redaction overrides are disabled (features.pii_redact.allow_per_key_override is false)")
+	}
+	return h.validatePIIOffPolicy(r, provider, redactPII)
+}
+
 // validatePIIOffPolicy applies the PII-off Bedrock rule for the current user
 // and leaves an audit line naming whoever authorized redaction off for a
 // non-Bedrock key. The key write itself may still fail afterwards; the store
@@ -507,7 +526,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.RedactPII.Defined {
-		if err := h.validatePIIOffPolicy(r, existing.Provider, req.RedactPII.Value); err != nil {
+		if err := h.validatePIIOverridePolicy(r, existing.Provider, req.RedactPII.Value); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
