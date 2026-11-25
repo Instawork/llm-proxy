@@ -190,21 +190,46 @@ func TestDownscaleImageForOCR_DecodedMemoryEstimates(t *testing.T) {
 		t.Fatal("expected stdlib baseline JPEG to be detected as non-progressive")
 	}
 
-	// Minimal JPEG header containing SOI + SOF2 (0xFFC2, progressive DCT).
-	progressiveHeader := []byte{
-		0xFF, 0xD8, // SOI
-		0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, // APP0 length 4
-		0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x0E, 0x10, 0x0E, 0x10, 0x03, 0x01, 0x11, 0x00, // SOF2
+	// Valid, decodable 16x16 grayscale progressive JPEG (SOF2) so
+	// image.DecodeConfig, image.Decode, and isProgressiveJPEG are checked on
+	// the exact same real stream.
+	validProgJPEG := []byte{
+		0xff, 0xd8,
+		0xff, 0xdb, 0x00, 0x43, 0x00,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+		0xff, 0xc2, 0x00, 0x0b, 0x08, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00,
+		0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0f,
+		0xff, 0xc4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x3f, 0x00, 0x0f,
+		0xff, 0xd9,
 	}
-	if !isProgressiveJPEG(progressiveHeader) {
-		t.Fatal("expected SOF2 header to be detected as progressive JPEG")
+	progCfg, progFmt, err := image.DecodeConfig(bytes.NewReader(validProgJPEG))
+	if err != nil {
+		t.Fatalf("DecodeConfig on valid progressive JPEG: %v", err)
+	}
+	if progFmt != "jpeg" || progCfg.Width != 16 || progCfg.Height != 16 {
+		t.Fatalf("progressive JPEG config = (%q, %dx%d), want (jpeg, 16x16)", progFmt, progCfg.Width, progCfg.Height)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(validProgJPEG)); err != nil {
+		t.Fatalf("Decode on valid progressive JPEG: %v", err)
+	}
+	if !isProgressiveJPEG(validProgJPEG) {
+		t.Fatal("expected valid SOF2 progressive JPEG to be detected as progressive")
 	}
 
 	// 3600x3600 baseline YCbCr fits within 64 MiB single-image limit, while
 	// 3600x3600 progressive YCbCr exceeds it due to ~156 MB coefficient blocks.
 	largeCfg := image.Config{Width: 3600, Height: 3600, ColorModel: color.YCbCrModel}
 	baseEst := estimatedDecodeBytes(baseline, "jpeg", largeCfg, 1600, 1600)
-	progEst := estimatedDecodeBytes(progressiveHeader, "jpeg", largeCfg, 1600, 1600)
+	progEst := estimatedDecodeBytes(validProgJPEG, "jpeg", largeCfg, 1600, 1600)
 	if baseEst > maxSingleDecodeBytes {
 		t.Fatalf("3600x3600 baseline estimate = %d, want <= %d", baseEst, maxSingleDecodeBytes)
 	}
@@ -214,9 +239,39 @@ func TestDownscaleImageForOCR_DecodedMemoryEstimates(t *testing.T) {
 
 	// Smaller 1800x1200 progressive JPEG still fits within 64 MiB.
 	medCfg := image.Config{Width: 1800, Height: 1200, ColorModel: color.YCbCrModel}
-	medProgEst := estimatedDecodeBytes(progressiveHeader, "jpeg", medCfg, 1600, 1067)
+	medProgEst := estimatedDecodeBytes(validProgJPEG, "jpeg", medCfg, 1600, 1067)
 	if medProgEst > maxSingleDecodeBytes {
 		t.Fatalf("1800x1200 progressive estimate = %d, want <= %d", medProgEst, maxSingleDecodeBytes)
+	}
+
+	// Sequential 3072x3072 CMYK JPEG holds 4 decoded planes alongside the
+	// interleaved CMYK image (72 MiB > 64 MiB), while 2000x2000 CMYK fits.
+	largeCMYKCfg := image.Config{Width: 3072, Height: 3072, ColorModel: color.CMYKModel}
+	if est := estimatedDecodeBytes(baseline, "jpeg", largeCMYKCfg, 1600, 1600); est <= maxSingleDecodeBytes {
+		t.Fatalf("3072x3072 sequential CMYK estimate = %d, want > %d", est, maxSingleDecodeBytes)
+	}
+	medCMYKCfg := image.Config{Width: 2000, Height: 2000, ColorModel: color.CMYKModel}
+	if est := estimatedDecodeBytes(baseline, "jpeg", medCMYKCfg, 1600, 1600); est > maxSingleDecodeBytes {
+		t.Fatalf("2000x2000 sequential CMYK estimate = %d, want <= %d", est, maxSingleDecodeBytes)
+	}
+
+	// Non-interlaced vs Adam7 interlaced 3000x2400 16-bit RGBA PNG: non-interlaced
+	// fits within 64 MiB, while Adam7 adds the overlapping final pass (~82 MiB).
+	nonInterlacedPNG := makeSyntheticPNG(t, 16, 16)
+	interlacedPNG := append([]byte(nil), nonInterlacedPNG...)
+	interlacedPNG[28] = 1
+	if isInterlacedPNG(nonInterlacedPNG) {
+		t.Fatal("expected stdlib PNG to be non-interlaced")
+	}
+	if !isInterlacedPNG(interlacedPNG) {
+		t.Fatal("expected IHDR interlace=1 PNG to be detected as interlaced")
+	}
+	rgba16Cfg := image.Config{Width: 3000, Height: 2400, ColorModel: color.RGBA64Model}
+	if est := estimatedDecodeBytes(nonInterlacedPNG, "png", rgba16Cfg, 1600, 1280); est > maxSingleDecodeBytes {
+		t.Fatalf("3000x2400 non-interlaced RGBA64 estimate = %d, want <= %d", est, maxSingleDecodeBytes)
+	}
+	if est := estimatedDecodeBytes(interlacedPNG, "png", rgba16Cfg, 1600, 1280); est <= maxSingleDecodeBytes {
+		t.Fatalf("3000x2400 Adam7 RGBA64 estimate = %d, want > %d", est, maxSingleDecodeBytes)
 	}
 }
 

@@ -138,25 +138,49 @@ func isProgressiveJPEG(raw []byte) bool {
 	return true
 }
 
+// isInterlacedPNG checks the PNG IHDR interlace method byte (offset 28).
+// Valid PNG files always place the 13-byte IHDR chunk immediately after the
+// 8-byte PNG signature.
+func isInterlacedPNG(raw []byte) bool {
+	if len(raw) < 29 || string(raw[12:16]) != "IHDR" {
+		return false
+	}
+	return raw[28] != 0
+}
+
 // estimatedDecodeBytes estimates peak decoded memory (source image, decoder
-// working buffers such as progressive JPEG int32 DCT coefficient blocks, and
-// resized RGBA output).
+// working buffers such as Adam7 PNG interlace passes, CMYK JPEG conversion
+// planes, and progressive JPEG int32 DCT coefficient blocks, plus resized RGBA
+// output).
 func estimatedDecodeBytes(raw []byte, format string, cfg image.Config, dstW, dstH int) int64 {
 	pixels := int64(cfg.Width) * int64(cfg.Height)
-	srcBytes := pixels * decodedBytesPerPixel(format, cfg.ColorModel)
-	if format == "jpeg" && isProgressiveJPEG(raw) {
-		// Go's image/jpeg decoder holds progCoeffs ([maxComponents][]block,
-		// 256 bytes per 8x8 int32 block) alongside the decoded pixel buffer.
-		nComp := int64(3)
-		switch cfg.ColorModel {
-		case color.GrayModel:
-			nComp = 1
-		case color.CMYKModel:
-			nComp = 4
+	bpp := decodedBytesPerPixel(format, cfg.ColorModel)
+	srcBytes := pixels * bpp
+	if format == "png" && isInterlacedPNG(raw) {
+		// Go's image/png holds the full output image and the current Adam7 pass
+		// simultaneously; the final pass allocates up to half the image pixels.
+		srcBytes += ((pixels + 1) / 2) * bpp
+	}
+	if format == "jpeg" {
+		if cfg.ColorModel == color.CMYKModel {
+			// Go's image/jpeg decodes four separate planes (YCbCr + black) and
+			// holds them live while allocating the interleaved *image.CMYK.
+			srcBytes += pixels * 4
 		}
-		blocksX := ((int64(cfg.Width) + 15) / 16) * 2
-		blocksY := ((int64(cfg.Height) + 15) / 16) * 2
-		srcBytes += nComp * blocksX * blocksY * 256
+		if isProgressiveJPEG(raw) {
+			// Go's image/jpeg decoder holds progCoeffs ([maxComponents][]block,
+			// 256 bytes per 8x8 int32 block) alongside the decoded pixel buffer.
+			nComp := int64(3)
+			switch cfg.ColorModel {
+			case color.GrayModel:
+				nComp = 1
+			case color.CMYKModel:
+				nComp = 4
+			}
+			blocksX := ((int64(cfg.Width) + 15) / 16) * 2
+			blocksY := ((int64(cfg.Height) + 15) / 16) * 2
+			srcBytes += nComp * blocksX * blocksY * 256
+		}
 	}
 	return srcBytes + int64(dstW)*int64(dstH)*4
 }

@@ -64,6 +64,7 @@ type idGateInflightCall struct {
 	verdict       idGateVerdict
 	stage         string
 	err           error
+	cacheable     bool
 	leaderCtxDone bool
 }
 
@@ -175,6 +176,9 @@ func (c *idGateScanCache) do(
 				if existing.err != nil && existing.leaderCtxDone && ctx.Err() == nil {
 					continue
 				}
+				if existing.err == nil && !existing.cacheable && ctx.Err() == nil {
+					continue
+				}
 				return existing.verdict, existing.stage, existing.err == nil, existing.err
 			case <-ctx.Done():
 				return idGateVerdict{}, "ocr", false, ctx.Err()
@@ -192,6 +196,7 @@ func (c *idGateScanCache) do(
 		call.verdict = out.verdict
 		call.stage = out.stage
 		call.err = out.err
+		call.cacheable = out.cacheable
 		call.leaderCtxDone = leaderCtxDone
 		if out.err == nil && out.cacheable {
 			c.putLocked(digest, out.verdict)
@@ -391,20 +396,21 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 					go func(u uniqueImage) {
 						defer wg.Done()
 
-						select {
-						case reqSem <- struct{}{}:
-							defer func() { <-reqSem }()
-						case <-queueCtx.Done():
-							results <- imageScanResult{
-								index:      u.firstIndex,
-								imageBytes: len(u.raw),
-								stage:      "ocr",
-								err:        fmt.Errorf("id_gate: request concurrency wait timed out: %w", queueCtx.Err()),
-							}
-							return
-						}
-
+						// Acquire reqSem only inside fn() (on the leader path
+						// that actually runs OCR) so coalesced followers waiting
+						// on another request's scan never hold a per-request
+						// slot and starve distinct images in this request.
 						verdict, stage, hit, scanErr := scanCache.do(waitCtx, u.digest, func() idGateScanOutcome {
+							select {
+							case reqSem <- struct{}{}:
+								defer func() { <-reqSem }()
+							case <-queueCtx.Done():
+								return idGateScanOutcome{
+									stage:         "ocr",
+									leaderCtxDone: true,
+									err:           fmt.Errorf("id_gate: request concurrency wait timed out: %w", queueCtx.Err()),
+								}
+							}
 							if globalSem != nil {
 								select {
 								case globalSem <- struct{}{}:
@@ -437,7 +443,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 							if ocrErr != nil {
 								return idGateScanOutcome{
 									stage:         "ocr",
-									leaderCtxDone: reqCancelCtx.Err() != nil,
+									leaderCtxDone: reqCancelCtx.Err() != nil || stageCtx.Err() != nil,
 									err:           ocrErr,
 								}
 							}
@@ -449,7 +455,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 							if analyzeErr != nil {
 								return idGateScanOutcome{
 									stage:         "analyze",
-									leaderCtxDone: reqCancelCtx.Err() != nil,
+									leaderCtxDone: reqCancelCtx.Err() != nil || stageCtx.Err() != nil,
 									err:           analyzeErr,
 								}
 							}

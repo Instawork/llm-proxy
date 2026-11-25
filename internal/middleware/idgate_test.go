@@ -734,11 +734,11 @@ func TestIDGateMiddleware_CoalescedBlockedFollowerLogsCacheHit(t *testing.T) {
 func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T) {
 	largePNG := makeSyntheticPNG(t, 600, 400)
 	var calls atomic.Int32
-	var seenLens []int
+	var seenBodies [][]byte
 	ocrClient := &funcOCR{
 		fn: func(_ context.Context, img []byte, _ string) (string, error) {
 			calls.Add(1)
-			seenLens = append(seenLens, len(img))
+			seenBodies = append(seenBodies, append([]byte(nil), img...))
 			return "plain text", nil
 		},
 	}
@@ -770,13 +770,13 @@ func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("req1 status = %d, want 200", rec1.Code)
 	}
-	if len(seenLens) != 1 || seenLens[0] != len(largePNG) {
-		t.Fatalf("req1 OCR bytes len = %v, want raw PNG len %d", seenLens, len(largePNG))
+	if len(seenBodies) != 1 || !bytes.Equal(seenBodies[0], largePNG) {
+		t.Fatalf("req1 must pass exact original PNG bytes when decode admission is refused")
 	}
 
 	// Release decode capacity. Because the first verdict was produced under
 	// decode admission refusal, it must NOT be cached; req2 must re-scan with
-	// the downscaled JPEG and cache that result for req3.
+	// the downscaled 400x267 JPEG and cache that result for req3.
 	ocrDecodeBudget.release(maxAggregateDecodeBytes)
 	released = true
 
@@ -788,8 +788,12 @@ func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T
 	if calls.Load() != 2 {
 		t.Fatalf("calls after req2 = %d, want 2 (admission-refused verdict must not be cached)", calls.Load())
 	}
-	if seenLens[1] == len(largePNG) {
-		t.Fatalf("req2 should have downscaled image once budget recovered (len=%d)", seenLens[1])
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(seenBodies[1]))
+	if err != nil {
+		t.Fatalf("decode req2 OCR input: %v", err)
+	}
+	if format != "jpeg" || cfg.Width != 400 || cfg.Height != 267 {
+		t.Fatalf("req2 OCR input = (%q, %dx%d), want (jpeg, 400x267)", format, cfg.Width, cfg.Height)
 	}
 
 	rec3 := httptest.NewRecorder()
@@ -800,6 +804,209 @@ func TestIDGateMiddleware_DoesNotCacheDecodeAdmissionRefusedVerdict(t *testing.T
 	if calls.Load() != 2 {
 		t.Fatalf("calls after req3 = %d, want 2 (downscaled verdict should be cached)", calls.Load())
 	}
+}
+
+func TestIDGateMiddleware_InflightFollowerDoesNotReuseAdmissionRefusedVerdict(t *testing.T) {
+	prevHook := idGateTestOnInflightWait
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+
+	largePNG := makeSyntheticPNG(t, 600, 400)
+	imgB64 := base64.StdEncoding.EncodeToString(largePNG)
+	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + imgB64 + `"}}]}]}`
+
+	if !ocrDecodeBudget.tryAcquire(maxAggregateDecodeBytes) {
+		t.Fatal("expected to reserve full decode budget")
+	}
+	budgetReleased := false
+	releaseBudget := func() {
+		if !budgetReleased {
+			ocrDecodeBudget.release(maxAggregateDecodeBytes)
+			budgetReleased = true
+		}
+	}
+	t.Cleanup(releaseBudget)
+
+	synctest.Test(t, func(t *testing.T) {
+		leaderStarted := make(chan struct{})
+		releaseLeader := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseLeader) }) }
+		followerJoined := make(chan struct{}, 1)
+		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+
+		var wg sync.WaitGroup
+		defer func() {
+			release()
+			wg.Wait()
+		}()
+
+		var mu sync.Mutex
+		var seenBodies [][]byte
+		ocrClient := &funcOCR{
+			fn: func(_ context.Context, img []byte, _ string) (string, error) {
+				mu.Lock()
+				n := len(seenBodies) + 1
+				seenBodies = append(seenBodies, append([]byte(nil), img...))
+				mu.Unlock()
+				if n == 1 {
+					close(leaderStarted)
+					<-releaseLeader
+				}
+				return "plain text", nil
+			},
+		}
+
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+			MaxBodyBytes:      10 * 1024 * 1024,
+			MaxImageDimension: 400,
+			CacheTTL:          time.Minute,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		leaderRec := httptest.NewRecorder()
+		followerRec := httptest.NewRecorder()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(leaderRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-leaderStarted:
+		default:
+			t.Fatal("leader did not start OCR")
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(followerRec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-followerJoined:
+		default:
+			t.Fatal("follower did not join in-flight scan")
+		}
+
+		// Capacity recovers before the leader finishes; follower must run its
+		// own admission/downscale instead of reusing the non-cacheable verdict.
+		releaseBudget()
+		release()
+		wg.Wait()
+
+		if leaderRec.Code != http.StatusOK || followerRec.Code != http.StatusOK {
+			t.Fatalf("statuses = (%d, %d), want (200, 200)", leaderRec.Code, followerRec.Code)
+		}
+		if len(seenBodies) != 2 {
+			t.Fatalf("ocr calls = %d, want 2 (follower must not reuse admission-refused verdict)", len(seenBodies))
+		}
+		if !bytes.Equal(seenBodies[0], largePNG) {
+			t.Fatal("leader should have scanned raw PNG under budget refusal")
+		}
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(seenBodies[1]))
+		if err != nil {
+			t.Fatalf("decode follower OCR input: %v", err)
+		}
+		if format != "jpeg" || cfg.Width != 400 || cfg.Height != 267 {
+			t.Fatalf("follower OCR input = (%q, %dx%d), want (jpeg, 400x267)", format, cfg.Width, cfg.Height)
+		}
+	})
+}
+
+func TestIDGateMiddleware_FollowerDoesNotHoldReqSemSlot(t *testing.T) {
+	prevHook := idGateTestOnInflightWait
+	t.Cleanup(func() { idGateTestOnInflightWait = prevHook })
+
+	synctest.Test(t, func(t *testing.T) {
+		sharedStarted := make(chan struct{})
+		releaseShared := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseShared) }) }
+		followerJoined := make(chan struct{}, 1)
+		idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+		distinctScanned := make(chan struct{})
+
+		var wg sync.WaitGroup
+		defer func() {
+			release()
+			wg.Wait()
+		}()
+
+		ocrClient := &funcOCR{
+			fn: func(_ context.Context, img []byte, _ string) (string, error) {
+				if string(img) == "shared-img" {
+					close(sharedStarted)
+					<-releaseShared
+					return "clean", nil
+				}
+				close(distinctScanned)
+				return "clean", nil
+			},
+		}
+
+		// ImageConcurrency=1: request B has [shared-img, distinct-img]. While
+		// shared-img is coalesced behind request A, distinct-img must NOT be
+		// blocked from acquiring reqSem and scanning immediately.
+		mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+			FailClosed:       true,
+			ImageConcurrency: 1,
+			ScanTimeout:      time.Second,
+			CacheTTL:         time.Minute,
+		})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		sharedB64 := base64.StdEncoding.EncodeToString([]byte("shared-img"))
+		distinctB64 := base64.StdEncoding.EncodeToString([]byte("distinct-img"))
+		bodyA := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + sharedB64 + `"}}]}]}`
+		bodyB := fmt.Sprintf(
+			`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}}]}]}`,
+			sharedB64, distinctB64,
+		)
+
+		recA := httptest.NewRecorder()
+		recB := httptest.NewRecorder()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(recA, newReq(t, http.MethodPost, "/openai/v1/chat/completions", bodyA))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-sharedStarted:
+		default:
+			t.Fatal("request A did not start scanning shared-img")
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mw.ServeHTTP(recB, newReq(t, http.MethodPost, "/openai/v1/chat/completions", bodyB))
+		}()
+
+		synctest.Wait()
+		select {
+		case <-followerJoined:
+		default:
+			t.Fatal("request B shared-img did not join in-flight scan")
+		}
+		select {
+		case <-distinctScanned:
+		default:
+			t.Fatal("request B distinct-img was blocked by coalesced follower holding reqSem")
+		}
+
+		release()
+		wg.Wait()
+		if recA.Code != http.StatusOK || recB.Code != http.StatusOK {
+			t.Fatalf("statuses = (%d, %d), want (200, 200)", recA.Code, recB.Code)
+		}
+	})
 }
 
 type lockedWriter struct {
