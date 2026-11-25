@@ -270,13 +270,13 @@ func TestOpenAIIntegration_CostTracking_CreatedKey(t *testing.T) {
 	env.doJSON(t, "/openai/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + created.PK},
 		map[string]any{
-			"model":      "gpt-4o-mini",
+			"model":      "gpt-4.1-mini",
 			"max_tokens": 32,
 			"messages":   []map[string]string{{"role": "user", "content": "Say hi in one word."}},
 		})
 
 	record := env.requireCostTracked(t, baseline, "openai", masked)
-	assert.Contains(t, record.Model, "gpt-4o-mini")
+	assert.Contains(t, record.Model, "gpt-4.1-mini")
 }
 
 // ----------------------------------------------------------------------------
