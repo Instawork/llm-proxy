@@ -177,6 +177,10 @@ type PIIRedactConfig struct {
 //   - Add a redact step for non-provider routes (/health, /openai/v1/models,
 //     etc.). The whole feature is gated to provider POST/PUT to avoid
 //     per-request latency on hot read paths.
+//   - Mutate SigV4-signed passthrough Bedrock requests (/bedrock/*, /model/*):
+//     those forward client-signed bytes verbatim and mutating the body or
+//     signed headers would invalidate X-Amz-Content-Sha256. Bedrock Mantle
+//     (/bedrock-mantle/*) signs upstream server-side and is not exempt.
 //
 // Fail modes
 // ----------
@@ -205,7 +209,27 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				return
 			}
 
+			provider := getProviderFromPath(r.URL.Path)
+			// SigV4 passthrough Bedrock (/bedrock/*, /model/*) forwards
+			// client-signed bytes verbatim; mutating the body or signed headers
+			// breaks X-Amz-Content-Sha256 and violates the SigV4 non-mutation
+			// contract. Bedrock Mantle (/bedrock-mantle/*) signs upstream
+			// server-side and is NOT exempt.
+			if isSigV4PassthroughProvider(provider) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			keyRecord, _ := apikeys.FromContext(r.Context())
+			if !cfg.AllowPerKeyOverride && keyRecord != nil && keyRecord.RedactPII != nil && *keyRecord.RedactPII != cfg.GlobalEnabled {
+				keyID := piiDisplayKeyID(keyRecord, r.Context())
+				logger.Warn(proxylog.ProxyMsg("pii_redact: per-key redact_pii override ignored (allow_per_key_override is false)"),
+					slog.String("provider", provider),
+					slog.String("key_id", keyID),
+					slog.Bool("key_redact_pii", *keyRecord.RedactPII),
+					slog.Bool("global_enabled", cfg.GlobalEnabled))
+				emitPIIOverrideIgnored(cfg.Metrics, provider, *keyRecord.RedactPII)
+			}
 			if !apikeys.EffectiveRedactPII(cfg.GlobalEnabled, cfg.AllowPerKeyOverride, keyRecord) {
 				next.ServeHTTP(w, r)
 				return
@@ -232,10 +256,10 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 				bodyBytes := observedBodyBytes(r, body)
 				logger.Warn(proxylog.ProxyMsg("pii_redact: body exceeds max_body_bytes"),
 					slog.String("path", r.URL.Path),
-					slog.String("provider", getProviderFromPath(r.URL.Path)),
+					slog.String("provider", provider),
 					slog.Int("body_bytes", bodyBytes),
 					slog.Int("max_body_bytes", maxBytes))
-				recordPII(cfg.Recorder, cfg.Metrics, getProviderFromPath(r.URL.Path), keyID, nil, bodyBytes, 0, piiOutcomeOversize)
+				recordPII(cfg.Recorder, cfg.Metrics, provider, keyID, nil, bodyBytes, 0, piiOutcomeOversize)
 				ctx := attachPIISummary(r.Context(), newPIISummary(PIIOutcomeOversize, nil))
 				if cfg.FailClosed {
 					writePIIResponseHeadersPartial(w, ctx)
@@ -259,7 +283,6 @@ func PIIRedactMiddleware(redactor PIIRedactor, cfg PIIRedactConfig) func(http.Ha
 			// Text-only bodies are returned unchanged, so their behaviour
 			// is byte-for-byte identical to before.
 			analysisBody, imageRestores := stripImageDataForAnalysis(body)
-			provider := getProviderFromPath(r.URL.Path)
 
 			analyzeTimeout := redact.ComputeAnalyzeTimeout(len(body), redact.AnalyzeTimeoutConfig{
 				Base:      cfg.AnalyzeTimeout,
@@ -461,6 +484,15 @@ func piiDisplayKeyID(keyRecord *apikeys.APIKey, ctx context.Context) string {
 		return MaskKeyID(keyRecord.PK)
 	}
 	return InboundCredentialID(ctx)
+}
+
+// isSigV4PassthroughProvider reports whether the provider forwards
+// client-signed AWS SigV4 requests verbatim. Wire-mode PII redaction must
+// never mutate these bodies because doing so invalidates X-Amz-Content-Sha256
+// and breaks SigV4 authentication. Bedrock Mantle ("bedrock-mantle") signs
+// upstream server-side and returns false.
+func isSigV4PassthroughProvider(provider string) bool {
+	return strings.EqualFold(provider, apikeys.BedrockProvider)
 }
 
 // shouldRedactRequest filters out routes/methods that don't carry user

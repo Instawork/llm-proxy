@@ -126,6 +126,68 @@ export function piiLabel(value?: PiiRedactSetting): string {
   return "Inherit";
 }
 
+export function piiDisplayLabel(
+  value?: PiiRedactSetting,
+  allowPerKeyOverride?: boolean,
+  provider?: Provider,
+): string {
+  const base = piiLabel(value);
+  if (allowPerKeyOverride === false && value != null) {
+    if (provider === "bedrock" && value === false) {
+      return `${base} (SigV4 exempt)`;
+    }
+    return `${base} (ignored)`;
+  }
+  return base;
+}
+
+export interface PiiFieldPolicy {
+  selectDisabled: boolean;
+  onDisabled: boolean;
+  offDisabled: boolean;
+  overridesDisabled: boolean;
+  isBedrockExempt: boolean;
+}
+
+export function piiFieldPolicy(
+  allowPerKeyOverride: boolean | undefined,
+  provider: Provider,
+  currentValue: PiiFormValue,
+  storedValue?: PiiRedactSetting,
+): PiiFieldPolicy {
+  // Only treat overrides as disabled when the server explicitly reported
+  // allow_per_key_override: false; while /admin/api/pii is loading or errored
+  // (undefined), leave controls enabled rather than falsely claiming disabled.
+  const overridesDisabled = allowPerKeyOverride === false;
+  const isBedrockExempt = provider === "bedrock";
+  if (!overridesDisabled) {
+    return {
+      selectDisabled: false,
+      onDisabled: false,
+      offDisabled: false,
+      overridesDisabled: false,
+      isBedrockExempt,
+    };
+  }
+  if (isBedrockExempt) {
+    return {
+      selectDisabled: false,
+      onDisabled: true,
+      offDisabled: false,
+      overridesDisabled: true,
+      isBedrockExempt: true,
+    };
+  }
+  const hasStoredOverride = storedValue === true || storedValue === false;
+  return {
+    selectDisabled: currentValue === "inherit" && !hasStoredOverride,
+    onDisabled: true,
+    offDisabled: true,
+    overridesDisabled: true,
+    isBedrockExempt: false,
+  };
+}
+
 export function formPiiOffRequiresBedrock(
   redactPii: PiiFormValue,
   globalPiiEnabled: boolean,

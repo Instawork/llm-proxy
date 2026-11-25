@@ -164,7 +164,7 @@ runs first on the way in; response wrappers run on the way out in reverse.
 1. **MetaURLRewriting** — `/meta/{userID}/{provider}/…` → `/{provider}/…`
 2. **APIKeyValidation** — resolve `iw-*` keys; stash `apikeys.APIKey` on context
 3. **CostLimit** — per-key daily/monthly spend caps with optional reservation
-4. **PIIRedact** — Presidio scrub (global and/or per-key override)
+4. **PIIRedact** — Presidio scrub (global, plus per-key `redact_pii` override only when `allow_per_key_override: true`; SigV4 passthrough `/bedrock` is exempt so signed bodies are never mutated)
 5. **TestMode** — integration-test circuit hooks (triple-gated; not for prod)
 6. **Logging** — structured request logging
 7. **RateLimit** — RPM/TPM/RPD/TPD with token estimate + post-response reconcile
@@ -181,7 +181,7 @@ in DynamoDB as `apikeys.APIKey`:
 - `PK` — the proxy key string
 - `ActualKey` — real upstream credential
 - `DailyCostLimit` / `MonthlyCostLimit` — spend caps (cents)
-- `RedactPII`, `AllowStreaming` — per-key PII overrides
+- `RedactPII`, `AllowStreaming` — per-key PII settings (`RedactPII` is only honored when `features.pii_redact.allow_per_key_override: true`; SigV4 passthrough Bedrock is always exempt from wire-mode redaction)
 - `RateLimitRPM/TPM/RPD/TPD` — per-key rate-limit overrides
 - `Provisioned`, `UpstreamKeyID`, `UpstreamKind` — provisioner metadata
 

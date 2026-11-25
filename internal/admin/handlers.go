@@ -204,14 +204,28 @@ func (h *handler) allowPerKeyPIIOverride() bool {
 
 // validatePIIOverridePolicy enforces allow_per_key_override and the PII-off
 // Bedrock rule for the current user. When allow_per_key_override is false,
-// explicit per-key redact_pii values (true/false) are rejected so operators
-// cannot store overrides that request-time enforcement will ignore; nil
-// (inherit / clearing an existing override) is always permitted.
+// explicit per-key redact_pii values are rejected so operators cannot store
+// overrides that request-time enforcement will ignore — with two exceptions:
+//   - nil (inherit / clearing an existing override) is always permitted.
+//   - redact_pii=false on the SigV4 passthrough "bedrock" provider is permitted
+//     because /bedrock requests cannot mutate SigV4-signed bodies and remain
+//     exempt from wire-mode PII redaction (consistent with
+//     apikeys.ValidatePIIOffBedrockPolicy).
 func (h *handler) validatePIIOverridePolicy(r *http.Request, provider string, redactPII *bool) error {
 	if redactPII != nil && !h.allowPerKeyPIIOverride() {
+		if strings.EqualFold(provider, apikeys.BedrockProvider) && !*redactPII {
+			return nil
+		}
 		return errors.New("per-key PII redaction overrides are disabled (features.pii_redact.allow_per_key_override is false)")
 	}
 	return h.validatePIIOffPolicy(r, provider, redactPII)
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // validatePIIOffPolicy applies the PII-off Bedrock rule for the current user
@@ -525,7 +539,7 @@ func (h *handler) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.RedactPII.Defined {
+	if req.RedactPII.Defined && !boolPtrEqual(req.RedactPII.Value, existing.RedactPII) {
 		if err := h.validatePIIOverridePolicy(r, existing.Provider, req.RedactPII.Value); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return

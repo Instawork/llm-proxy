@@ -1,4 +1,4 @@
-import { type KeyFormState, tomorrowDateString } from "../../lib/key-form";
+import { type KeyFormState, piiFieldPolicy, tomorrowDateString } from "../../lib/key-form";
 import type { APIKey } from "../../types";
 
 export function CostFields({
@@ -83,7 +83,7 @@ export function PiiFields({
   setForm,
   editingKey,
   piiOffRequiresBedrock,
-  allowPerKeyOverride = true,
+  allowPerKeyOverride,
 }: {
   form: KeyFormState;
   setForm: React.Dispatch<React.SetStateAction<KeyFormState>>;
@@ -91,14 +91,20 @@ export function PiiFields({
   piiOffRequiresBedrock: boolean;
   allowPerKeyOverride?: boolean;
 }) {
-  const overridesDisabled = !allowPerKeyOverride;
+  const effectiveProvider = editingKey?.provider ?? form.provider;
+  const policy = piiFieldPolicy(
+    allowPerKeyOverride,
+    effectiveProvider,
+    form.redact_pii,
+    editingKey?.redact_pii,
+  );
   return (
     <label className="form-control w-full">
       <span className="label-text">PII redaction</span>
       <select
         className="select select-bordered w-full"
         value={form.redact_pii}
-        disabled={overridesDisabled && form.redact_pii === "inherit"}
+        disabled={policy.selectDisabled}
         onChange={(event) =>
           setForm((current) => ({
             ...current,
@@ -107,14 +113,21 @@ export function PiiFields({
         }
       >
         <option value="inherit">Inherit global default</option>
-        <option value="on" disabled={overridesDisabled}>
+        <option value="on" disabled={policy.onDisabled}>
           On
         </option>
-        <option value="off" disabled={overridesDisabled}>
+        <option value="off" disabled={policy.offDisabled}>
           Off
         </option>
       </select>
-      {overridesDisabled ? (
+      {policy.overridesDisabled && policy.isBedrockExempt ? (
+        <p className="mt-1.5 text-xs text-base-content/60">
+          Per-key PII redaction overrides are disabled by configuration (
+          <code>allow_per_key_override: false</code>). SigV4 Bedrock requests bypass wire-mode PII
+          redaction and may use Off or Inherit.
+        </p>
+      ) : null}
+      {policy.overridesDisabled && !policy.isBedrockExempt ? (
         <p className="mt-1.5 text-xs text-base-content/60">
           Per-key PII redaction overrides are disabled by configuration (
           <code>allow_per_key_override: false</code>). All requests follow the global setting.
@@ -123,12 +136,12 @@ export function PiiFields({
             : ""}
         </p>
       ) : null}
-      {!overridesDisabled && piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
+      {!policy.overridesDisabled && piiOffRequiresBedrock && editingKey && editingKey.provider !== "bedrock" ? (
         <p className="mt-1.5 text-xs text-warning">
           Turning PII off requires a Bedrock key. Create a new Bedrock key instead.
         </p>
       ) : null}
-      {!overridesDisabled && !piiOffRequiresBedrock && form.redact_pii === "off" && form.provider !== "bedrock" ? (
+      {!policy.overridesDisabled && !piiOffRequiresBedrock && form.redact_pii === "off" && effectiveProvider !== "bedrock" ? (
         <p className="mt-1.5 text-xs text-warning">
           Requests on this key will reach the provider with PII unredacted. You will be asked
           to confirm when saving.

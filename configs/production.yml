@@ -175,6 +175,9 @@ features:
     # 503. The largest observed organic production payload is still a
     # 1,092,866-byte Anthropic tool-result body.
     max_body_bytes: 8388608
+    # Security control: production enforces global PII redaction for all
+    # non-Bedrock keys regardless of any stored redact_pii override. SigV4
+    # passthrough /bedrock requests stay exempt so client signatures hold.
     allow_per_key_override: false
     analyze_cache:
       enabled: true

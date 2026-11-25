@@ -113,10 +113,21 @@ func TestHandleCreateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
 	h.deps.YAMLConfig.Features.PIIRedact.AllowPerKeyOverride = false
 
-	t.Run("admin cannot set redact_pii=false on bedrock", func(t *testing.T) {
+	t.Run("redact_pii=false on bedrock is allowed (SigV4 exemption)", func(t *testing.T) {
 		body, _ := json.Marshal(CreateKeyRequest{
 			Provider:  "bedrock",
 			RedactPII: new(false),
+		})
+		req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+		rec := httptest.NewRecorder()
+		h.handleCreateKey(rec, req)
+		assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	})
+
+	t.Run("admin cannot set redact_pii=true on bedrock when override disabled", func(t *testing.T) {
+		body, _ := json.Marshal(CreateKeyRequest{
+			Provider:  "bedrock",
+			RedactPII: new(true),
 		})
 		req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
 		rec := httptest.NewRecorder()
@@ -129,6 +140,18 @@ func TestHandleCreateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 		body, _ := json.Marshal(CreateKeyRequest{
 			Provider:  "openai",
 			ActualKey: "sk-real",
+			RedactPII: new(false),
+		})
+		req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
+		rec := httptest.NewRecorder()
+		h.handleCreateKey(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "allow_per_key_override")
+	})
+
+	t.Run("admin cannot set redact_pii=false on bedrock-mantle", func(t *testing.T) {
+		body, _ := json.Marshal(CreateKeyRequest{
+			Provider:  "bedrock-mantle",
 			RedactPII: new(false),
 		})
 		req := authenticatedRequest(t, h, http.MethodPost, "/admin/api/keys", body)
@@ -260,11 +283,9 @@ func TestHandleUpdateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 	h.deps.YAMLConfig.Features.PIIRedact.Enabled = true
 	h.deps.YAMLConfig.Features.PIIRedact.AllowPerKeyOverride = false
 
-	// Simulate a pre-existing key in DynamoDB with a stored redact_pii=false override.
-	key, err := store.CreateKey(ctx, "bedrock", "unused", "legacy", 0, nil, new(false))
-	require.NoError(t, err)
-
-	t.Run("reject setting redact_pii=false", func(t *testing.T) {
+	t.Run("reject setting redact_pii=false on openai", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "openai", "sk-real", "inherit", 0, nil, nil)
+		require.NoError(t, err)
 		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": false}`))
 		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 		rec := httptest.NewRecorder()
@@ -273,7 +294,9 @@ func TestHandleUpdateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "allow_per_key_override")
 	})
 
-	t.Run("reject setting redact_pii=true", func(t *testing.T) {
+	t.Run("reject setting redact_pii=true on openai", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "openai", "sk-real", "inherit", 0, nil, nil)
+		require.NoError(t, err)
 		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": true}`))
 		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 		rec := httptest.NewRecorder()
@@ -282,7 +305,40 @@ func TestHandleUpdateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "allow_per_key_override")
 	})
 
+	t.Run("allow setting redact_pii=false on bedrock (SigV4 exemption)", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "bedrock", "unused", "bedrock-inherit", 0, nil, nil)
+		require.NoError(t, err)
+		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": false}`))
+		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+		rec := httptest.NewRecorder()
+		h.handleUpdateKey(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	})
+
+	t.Run("reject setting redact_pii=true on bedrock", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "bedrock", "unused", "bedrock-inherit", 0, nil, nil)
+		require.NoError(t, err)
+		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": true}`))
+		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+		rec := httptest.NewRecorder()
+		h.handleUpdateKey(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "allow_per_key_override")
+	})
+
+	t.Run("allow resending unchanged legacy redact_pii on full-object PATCH", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "openai", "sk-real", "legacy", 0, nil, new(false))
+		require.NoError(t, err)
+		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"description": "renamed", "redact_pii": false}`))
+		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
+		rec := httptest.NewRecorder()
+		h.handleUpdateKey(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	})
+
 	t.Run("allow updating unrelated fields on key with legacy override", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "openai", "sk-real", "legacy", 0, nil, new(false))
+		require.NoError(t, err)
 		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"description": "updated"}`))
 		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 		rec := httptest.NewRecorder()
@@ -291,6 +347,8 @@ func TestHandleUpdateKey_RejectsPerKeyPIIOverrideWhenDisabled(t *testing.T) {
 	})
 
 	t.Run("allow clearing legacy override back to null (inherit)", func(t *testing.T) {
+		key, err := store.CreateKey(ctx, "openai", "sk-real", "legacy", 0, nil, new(false))
+		require.NoError(t, err)
 		req := authenticatedRequest(t, h, http.MethodPatch, "/admin/api/keys/"+key.PK, []byte(`{"redact_pii": null}`))
 		req = mux.SetURLVars(req, map[string]string{"key": key.PK})
 		rec := httptest.NewRecorder()

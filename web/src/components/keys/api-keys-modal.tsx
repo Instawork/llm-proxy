@@ -31,7 +31,7 @@ type ApiKeysModalProps = {
   showAnthropicTierSelect: boolean;
   anthropicTierOptions: string[];
   piiOffRequiresBedrock: boolean;
-  allowPerKeyPiiOverride: boolean;
+  allowPerKeyPiiOverride?: boolean;
   viewerMonthlyLimitLabel: string;
   editorMaxDollars: number | null;
 };

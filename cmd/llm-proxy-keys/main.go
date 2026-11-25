@@ -48,7 +48,7 @@ func main() {
 		enableKey     = flag.String("enable", "", "Enable an API key")
 		showKey       = flag.String("show", "", "Show details of a specific API key")
 		tags          = flag.String("tags", "", "Comma-separated key=value tags")
-		redactPIIFlag = flag.String("redact-pii", "", "PII redaction override: true, false, or omit to inherit global")
+		redactPIIFlag = flag.String("redact-pii", "", "PII redaction override: true, false, or omit to inherit global (requires features.pii_redact.allow_per_key_override=true)")
 	)
 
 	flag.Usage = func() {
@@ -128,7 +128,7 @@ func main() {
 	case *enableKey != "":
 		handleEnable(ctx, store, *enableKey, logger)
 	case *provider != "" && *actualKey != "":
-		handleCreate(ctx, store, *provider, *actualKey, *description, *costLimit, *tags, *redactPIIFlag, logger)
+		handleCreate(ctx, store, *provider, *actualKey, *description, *costLimit, *tags, *redactPIIFlag, yamlConfig.Features.PIIRedact.AllowPerKeyOverride, logger)
 	default:
 		flag.Usage()
 		os.Exit(1)
@@ -153,7 +153,7 @@ func loadConfig(configDir, environment string) (*config.YAMLConfig, error) {
 }
 
 // handleCreate creates a new API key
-func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, logger *slog.Logger) {
+func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey, description string, costLimit int64, tagsStr, redactPIIFlag string, allowPerKeyPIIOverride bool, logger *slog.Logger) {
 	// Validate provider
 	validProviders := []string{"openai", "anthropic", "gemini", "openrouter"}
 	isValid := slices.Contains(validProviders, provider)
@@ -185,6 +185,10 @@ func handleCreate(ctx context.Context, store *apikeys.Store, provider, actualKey
 	case "":
 	default:
 		logger.Error("Invalid -redact-pii value; use true, false, or omit", "value", redactPIIFlag)
+		os.Exit(1)
+	}
+	if redactPII != nil && !allowPerKeyPIIOverride {
+		logger.Error("Per-key PII redaction overrides are disabled (features.pii_redact.allow_per_key_override is false); omit -redact-pii to inherit the global setting")
 		os.Exit(1)
 	}
 

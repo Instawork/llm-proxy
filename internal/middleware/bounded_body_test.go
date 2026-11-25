@@ -92,8 +92,8 @@ func TestPIIRedactMiddleware_OversizeWireModeNeverTruncatesUpstream(t *testing.T
 
 	mw.ServeHTTP(httptest.NewRecorder(), newReq(t, http.MethodPost, "/openai/v1/chat/completions", payload))
 
-	if r.called != 0 {
-		t.Fatalf("redactor must not run on oversize body (called=%d)", r.called)
+	if r.called.Load() != 0 {
+		t.Fatalf("redactor must not run on oversize body (called=%d)", r.called.Load())
 	}
 	if string(cap.bodySeen) != payload {
 		t.Fatalf("upstream body truncated: got %d bytes, want %d", len(cap.bodySeen), len(payload))

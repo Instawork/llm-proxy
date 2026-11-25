@@ -45,7 +45,7 @@ export default function EditKeyModal({
   const canManagePolicy = permissions.canManageKeyPolicy(me?.role);
   const isPersonal = isPersonalKey(keyRecord);
   const globalPiiEnabled = Boolean(config?.features?.pii_redact);
-  const allowPerKeyPiiOverride = Boolean(piiData?.allow_per_key_override);
+  const allowPerKeyPiiOverride = piiData?.allow_per_key_override;
   const canBypassPiiBedrockPolicy = Boolean(me?.can_bypass_pii_off_non_bedrock_policy);
   const editorMaxCents = me?.editor_limits?.max_daily_cost_limit_cents ?? 0;
   const editorMaxDollars = editorMaxCents > 0 ? editorMaxCents / 100 : null;

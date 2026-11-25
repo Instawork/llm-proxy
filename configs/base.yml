@@ -67,6 +67,9 @@ features:
     # Datadog and you'd rather pay the redaction cost.
     max_body_bytes: 0
     allow_test_emails: true
+    # Security control: when false, per-key redact_pii overrides on non-Bedrock
+    # keys are ignored at request time and rejected by the admin API. SigV4
+    # passthrough /bedrock requests are always exempt from wire-mode redaction.
     allow_per_key_override: false
     # Cache Presidio /analyze spans per content block (5 min TTL).
     # memory: per-task hot set; redis: shared across ECS tasks.

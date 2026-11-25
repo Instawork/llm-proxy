@@ -9,16 +9,10 @@ import DataTable from "../ui/data-table";
 import { ProviderBadge, StatusBadge } from "../ui/page-header";
 import { ProviderIcon } from "../ui/provider-badge";
 import { formatKeyMonthSpend, formatKeySpendCap, formatUsd } from "../../lib/format";
-import { formatExpiresAt, isExpired } from "../../lib/key-form";
+import { formatExpiresAt, isExpired, piiDisplayLabel } from "../../lib/key-form";
 import { keyDetailPathForMaskedId, keySetupPath } from "../../lib/key-routes";
 import { keyDisplayRows, uniformOr, type KeyRow } from "../../lib/key-stacks";
-import type { APIKey, PiiRedactSetting, Provider } from "../../types";
-
-function piiLabel(value?: PiiRedactSetting): string {
-  if (value === true) return "On";
-  if (value === false) return "Off";
-  return "Inherit";
-}
+import type { APIKey, Provider } from "../../types";
 
 function formatCreatedAt(value?: string): string {
   if (!value) return "—";
@@ -46,6 +40,7 @@ interface KeysTableProps {
   canDelete?: boolean;
   viewerMode?: boolean;
   sharingKey?: string | null;
+  allowPerKeyPiiOverride?: boolean;
   formatRateLimits: (record: APIKey) => string;
 }
 
@@ -57,6 +52,7 @@ export default function KeysTable({
   canDelete = true,
   viewerMode = false,
   sharingKey,
+  allowPerKeyPiiOverride,
   formatRateLimits,
 }: KeysTableProps) {
   // Viewers only see their own keys, so stacking would collapse the whole page into one row
@@ -240,8 +236,12 @@ export default function KeysTable({
           id: "pii",
           accessorFn: (row) =>
             row.kind === "stack"
-              ? uniformOr(row.keys, (k) => piiLabel(k.redact_pii), "Mixed")
-              : piiLabel(row.key.redact_pii),
+              ? uniformOr(
+                  row.keys,
+                  (k) => piiDisplayLabel(k.redact_pii, allowPerKeyPiiOverride, k.provider),
+                  "Mixed",
+                )
+              : piiDisplayLabel(row.key.redact_pii, allowPerKeyPiiOverride, row.key.provider),
           header: "PII redact",
           cell: ({ getValue }) => (
             <span className="badge badge-ghost badge-sm">{getValue<string>()}</span>
@@ -324,7 +324,7 @@ export default function KeysTable({
     );
 
     return cols;
-  }, [keys, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey, viewerMode]);
+  }, [keys, formatRateLimits, onShare, onEdit, onDelete, canDelete, sharingKey, viewerMode, allowPerKeyPiiOverride]);
 
   return (
     <DataTable

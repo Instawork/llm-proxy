@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { keyFormFromRecord, keyUpdateFromForm } from "./key-form";
+import {
+  keyFormFromRecord,
+  keyUpdateFromForm,
+  piiDisplayLabel,
+  piiFieldPolicy,
+} from "./key-form";
 import type { APIKey } from "../types";
 
 function baseRecord(overrides: Partial<APIKey> = {}): APIKey {
@@ -64,5 +69,81 @@ describe("keyUpdateFromForm", () => {
     form.expiry_preset = "never";
     form.expiry_custom = "";
     expect(keyUpdateFromForm(record, form)).toEqual({ expires_at: null });
+  });
+});
+
+describe("piiDisplayLabel", () => {
+  it("shows plain labels when overrides are allowed or still loading", () => {
+    expect(piiDisplayLabel(null, true, "openai")).toBe("Inherit");
+    expect(piiDisplayLabel(true, true, "openai")).toBe("On");
+    expect(piiDisplayLabel(false, true, "openai")).toBe("Off");
+    expect(piiDisplayLabel(false, undefined, "openai")).toBe("Off");
+    expect(piiDisplayLabel(true, undefined, "openai")).toBe("On");
+  });
+
+  it("annotates ignored overrides on non-Bedrock keys when disabled", () => {
+    expect(piiDisplayLabel(null, false, "openai")).toBe("Inherit");
+    expect(piiDisplayLabel(false, false, "openai")).toBe("Off (ignored)");
+    expect(piiDisplayLabel(true, false, "openai")).toBe("On (ignored)");
+  });
+
+  it("distinguishes SigV4-exempt Bedrock Off from ignored Bedrock On", () => {
+    expect(piiDisplayLabel(false, false, "bedrock")).toBe("Off (SigV4 exempt)");
+    expect(piiDisplayLabel(true, false, "bedrock")).toBe("On (ignored)");
+    expect(piiDisplayLabel(null, false, "bedrock")).toBe("Inherit");
+  });
+});
+
+describe("piiFieldPolicy", () => {
+  it("leaves controls enabled while allowPerKeyOverride is undefined (loading/error) or true", () => {
+    expect(piiFieldPolicy(undefined, "openai", "inherit")).toEqual({
+      selectDisabled: false,
+      onDisabled: false,
+      offDisabled: false,
+      overridesDisabled: false,
+      isBedrockExempt: false,
+    });
+    expect(piiFieldPolicy(true, "openai", "off")).toEqual({
+      selectDisabled: false,
+      onDisabled: false,
+      offDisabled: false,
+      overridesDisabled: false,
+      isBedrockExempt: false,
+    });
+  });
+
+  it("locks non-Bedrock inherit keys when disabled, but allows clearing legacy overrides", () => {
+    expect(piiFieldPolicy(false, "openai", "inherit", null)).toEqual({
+      selectDisabled: true,
+      onDisabled: true,
+      offDisabled: true,
+      overridesDisabled: true,
+      isBedrockExempt: false,
+    });
+    expect(piiFieldPolicy(false, "openai", "off", false)).toEqual({
+      selectDisabled: false,
+      onDisabled: true,
+      offDisabled: true,
+      overridesDisabled: true,
+      isBedrockExempt: false,
+    });
+    // Keeps select enabled even after switching a legacy key to inherit before saving.
+    expect(piiFieldPolicy(false, "openai", "inherit", false)).toEqual({
+      selectDisabled: false,
+      onDisabled: true,
+      offDisabled: true,
+      overridesDisabled: true,
+      isBedrockExempt: false,
+    });
+  });
+
+  it("allows Off and Inherit on SigV4 Bedrock keys even when overrides are disabled", () => {
+    expect(piiFieldPolicy(false, "bedrock", "inherit", null)).toEqual({
+      selectDisabled: false,
+      onDisabled: true,
+      offDisabled: false,
+      overridesDisabled: true,
+      isBedrockExempt: true,
+    });
   });
 });
