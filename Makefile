@@ -196,23 +196,31 @@ install:
 # in-memory rate limiter, cost tracker, and circuit-breaker stores can
 # only surface deterministically under -race; a green run without it is
 # not sufficient evidence that a change is safe to merge.
+#
+# UNIT_TEST_SKIP is anchored so plain unit tests whose names contain the word
+# "Integration" (e.g. TestIntegrationAuth_*, TestCreateKeyRequestIntegration*)
+# still run, while real live-API, Presidio, OCR, and DynamoDB integration tests
+# stay skipped.
+UNIT_TEST_PACKAGES := ./cmd/... ./internal/...
+UNIT_TEST_SKIP := ^Test(Integration_|(OpenAI|Anthropic|Gemini)Integration_|DynamoDBTransportIntegration$$)
+
 .PHONY: test
 test:
 	@echo "$(BLUE)Running unit tests (race detector enabled)...$(NC)"
-	@go test -race -v ./internal/... -short -skip "Integration"
+	@go test -race -v $(UNIT_TEST_PACKAGES) -short -skip '$(UNIT_TEST_SKIP)'
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
 .PHONY: test-cover
 test-cover:
 	@echo "$(BLUE)Running unit tests with coverage (race detector enabled)...$(NC)"
-	@go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... -short -skip "Integration"
+	@go test -race -coverprofile=coverage.out -covermode=atomic $(UNIT_TEST_PACKAGES) -short -skip '$(UNIT_TEST_SKIP)'
 	@go tool cover -func=coverage.out | tail -1
 	@echo "$(GREEN)✓ Unit tests with coverage completed$(NC)"
 
 .PHONY: test-verbose
 test-verbose:
 	@echo "$(BLUE)Running unit tests (verbose, race detector enabled)...$(NC)"
-	@go test -race -v ./internal/... -short -skip "Integration"
+	@go test -race -v $(UNIT_TEST_PACKAGES) -short -skip '$(UNIT_TEST_SKIP)'
 	@echo "$(GREEN)✓ Verbose unit tests completed$(NC)"
 
 # Run integration tests (requires API keys)
