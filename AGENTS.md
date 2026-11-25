@@ -53,7 +53,7 @@ CI enforces, exactly:
 3. `gofumpt -l .` — must output nothing (stricter than gofmt)
 4. `make lint` — `staticcheck ./...` (pinned version in the Makefile)
 5. `go run ./cmd/config-validator/` — required after any `configs/*.yml` edit
-6. `make test` — `go test -race ./internal/... -short -skip Integration`
+6. `make test` — `go test -race -v ./cmd/... ./internal/... -short -skip '^Test(Integration_|(OpenAI|Anthropic|Gemini)Integration_|DynamoDBTransportIntegration$)'`
 
 Never drop `-race` when re-running a test subset: concurrency bugs in
 `internal/circuit/`, `internal/ratelimit/`, and `internal/cost/` only surface
