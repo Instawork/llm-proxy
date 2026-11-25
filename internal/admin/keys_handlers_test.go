@@ -388,8 +388,9 @@ func TestHandleCreateShare_Errors(t *testing.T) {
 func TestHandleGetShare_NotFound(t *testing.T) {
 	h, _ := testAdminHandler(t)
 
-	req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/share/not-a-real-id", nil)
-	req = mux.SetURLVars(req, map[string]string{"id": "not-a-real-id"})
+	missingID := "00000000-0000-0000-0000-000000000000"
+	req := authenticatedRequest(t, h, http.MethodGet, "/admin/api/share/"+missingID, nil)
+	req = mux.SetURLVars(req, map[string]string{"id": missingID})
 	rec := httptest.NewRecorder()
 	h.handleGetShare(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -545,8 +546,9 @@ func TestHandleDeleteShare_ExpiredLinkStillRevocable(t *testing.T) {
 func TestHandleDeleteShare_NotFound(t *testing.T) {
 	h, _ := testAdminHandler(t)
 
-	req := authenticatedRequest(t, h, http.MethodDelete, "/admin/api/share/missing", nil)
-	req = mux.SetURLVars(req, map[string]string{"id": "missing"})
+	missingID := "00000000-0000-0000-0000-000000000000"
+	req := authenticatedRequest(t, h, http.MethodDelete, "/admin/api/share/"+missingID, nil)
+	req = mux.SetURLVars(req, map[string]string{"id": missingID})
 	rec := httptest.NewRecorder()
 	h.handleDeleteShare(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)

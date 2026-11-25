@@ -512,11 +512,53 @@ func TestSanitizeRedirect(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "http://localhost:5173/admin/", target)
 
-	ok, _ = sanitizeRedirect("https://evil.com/admin/", "http://localhost:5173")
+	ok, target = sanitizeRedirect("https://llm.example.com/admin/share/11111111-2222-3333-4444-555555555555", "", "https://llm.example.com")
+	assert.True(t, ok)
+	assert.Equal(t, "https://llm.example.com/admin/share/11111111-2222-3333-4444-555555555555", target)
+
+	ok, _ = sanitizeRedirect("https://evil.com/admin/", "http://localhost:5173", "https://llm.example.com")
+	assert.False(t, ok)
+
+	ok, _ = sanitizeRedirect("https://llm.example.com@evil.com/admin/", "https://llm.example.com")
+	assert.False(t, ok)
+
+	ok, _ = sanitizeRedirect("javascript:alert(1)", "http://localhost:5173")
 	assert.False(t, ok)
 
 	ok, _ = sanitizeRedirect("not-a-url", "")
 	assert.False(t, ok)
+}
+
+func TestHandleCallback_PreservesSameOriginShareRedirectInProduction(t *testing.T) {
+	oidcSrv := newTestOIDCServer(t)
+	auth := newTestOAuthAuthenticator(t, oidcSrv, "example.com")
+	auth.devFrontendOrigin = "" // production: no Vite dev CORS origin
+
+	shareRedirect := "https://llm.example.com/admin/share/11111111-2222-3333-4444-555555555555"
+
+	loginRec := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodGet, "/admin/auth/login?redirect="+url.QueryEscape(shareRedirect), nil)
+	loginReq.Host = "llm.example.com"
+	loginReq.Header.Set("X-Forwarded-Proto", "https")
+	auth.handleLogin(loginRec, loginReq)
+	require.Equal(t, http.StatusFound, loginRec.Code)
+
+	authURL, err := url.Parse(loginRec.Header().Get("Location"))
+	require.NoError(t, err)
+	state := authURL.Query().Get("state")
+	require.NotEmpty(t, state)
+
+	cbRec := httptest.NewRecorder()
+	cbReq := httptest.NewRequest(http.MethodGet, "/admin/auth/callback?state="+url.QueryEscape(state)+"&code=auth-code-share", nil)
+	cbReq.Host = "llm.example.com"
+	cbReq.Header.Set("X-Forwarded-Proto", "https")
+	for _, c := range sessionCookies(t, loginRec) {
+		cbReq.AddCookie(c)
+	}
+	auth.handleCallback(cbRec, cbReq)
+
+	require.Equal(t, http.StatusFound, cbRec.Code)
+	assert.Equal(t, shareRedirect, cbRec.Header().Get("Location"))
 }
 
 func TestRegisterRoutes_OAuthLoginRoute(t *testing.T) {

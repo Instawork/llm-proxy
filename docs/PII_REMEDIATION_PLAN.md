@@ -66,9 +66,11 @@ default path, sidecar-error path, oversize path, and `wire_placeholders` path.
   `gorilla/sessions.NewCookieStore` so the admin identity payload is encrypted,
   not just signed; default `Secure=true`; define a rotation policy.
   - Files: `internal/admin/auth.go:67-74,313-315`.
-- ☐ **API-01 — share endpoint.** Already OAuth-gated with a 24h TTL and the
-  upstream provider secret masked; add an audit log on share access/creation.
-  - Files: `internal/admin/handlers.go:472-515`, `internal/apikeys/share.go`.
+- ☑ **API-01 — share endpoint.** OAuth/session-gated behind `auth.requireSession`
+  (any signed-in org role), 24h TTL, canonical UUID `{id}` validation before
+  DynamoDB lookup, creator email (`created_by`) omitted from the response,
+  `Cache-Control: no-store`, and audit logging on share creation and resolution.
+  - Files: `internal/admin/server.go`, `internal/admin/handlers.go`, `internal/apikeys/share.go`.
 - ☐ **Open question — provider key at rest.** Verify whether the real upstream
   provider secret stored in DynamoDB (`internal/apikeys/store.go` CreateKey/
   marshal path) is KMS-wrapped at rest, not just masked in API responses.
