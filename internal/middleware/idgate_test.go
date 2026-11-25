@@ -1110,6 +1110,11 @@ func TestIDGateMiddleware_QueuedLeaderDoesNotBlockUnblockedRequest(t *testing.T)
 		// Let A's x-img enter admission and block waiting on A's reqSem.
 		unblockQueuedX()
 		synctest.Wait()
+		select {
+		case <-xScanned:
+			t.Fatal("request A bypassed reqSem and scanned x-img while slow-first-img held the sole slot")
+		default:
+		}
 
 		// Request B arrives with x-img and a free reqSem + globalSem slot; it
 		// must scan x-img and finish while A's slow-first-img is still held.

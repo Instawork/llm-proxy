@@ -168,8 +168,10 @@ func estimatedDecodeBytes(raw []byte, format string, cfg image.Config, dstW, dst
 		}
 	}
 	if format == "jpeg" {
-		blocksX := ((int64(cfg.Width) + 15) / 16) * 2
-		blocksY := ((int64(cfg.Height) + 15) / 16) * 2
+		// Round up to 32-pixel (4-block) MCU boundaries to cover the largest
+		// sampling factors supported by Go's image/jpeg decoder.
+		blocksX := ((int64(cfg.Width) + 31) / 32) * 4
+		blocksY := ((int64(cfg.Height) + 31) / 32) * 4
 		paddedPixels := (blocksX * 8) * (blocksY * 8)
 		switch cfg.ColorModel {
 		case color.CMYKModel:

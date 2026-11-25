@@ -204,6 +204,18 @@ func (c *idGateScanCache) do(
 			var err error
 			release, err = acquire()
 			if err != nil {
+				c.mu.Lock()
+				if c.ttl > 0 {
+					if entry, ok := c.entries[digest]; ok {
+						if time.Now().After(entry.expires) {
+							delete(c.entries, digest)
+						} else {
+							c.mu.Unlock()
+							return entry.verdict, "", true, nil
+						}
+					}
+				}
+				c.mu.Unlock()
 				return idGateVerdict{}, "ocr", false, err
 			}
 		}
