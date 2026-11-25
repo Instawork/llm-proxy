@@ -29,7 +29,9 @@ func (c *redisAnalyzeCache) redisKey(analysisText string) string {
 }
 
 func (c *redisAnalyzeCache) Get(ctx context.Context, analysisText string) ([]Span, bool) {
-	data, err := c.rdb.Get(ctx, c.redisKey(analysisText)).Bytes()
+	opCtx, cancel := context.WithTimeout(ctx, redisAnalyzeCacheOpTimeout)
+	defer cancel()
+	data, err := c.rdb.Get(opCtx, c.redisKey(analysisText)).Bytes()
 	if err != nil {
 		if err != redis.Nil {
 			slog.Debug("redact: analyze cache redis get failed", "error", err)
@@ -66,7 +68,9 @@ func (c *redisAnalyzeCache) GetMulti(ctx context.Context, analysisTexts []string
 		end := min(start+redisMGetChunkSize, len(keys))
 		chunk := keys[start:end]
 
-		vals, err := c.rdb.MGet(ctx, chunk...).Result()
+		opCtx, cancel := context.WithTimeout(ctx, redisAnalyzeCacheOpTimeout)
+		vals, err := c.rdb.MGet(opCtx, chunk...).Result()
+		cancel()
 		if err != nil {
 			if err != redis.Nil {
 				slog.Debug("redact: analyze cache redis mget failed", "error", err)
@@ -102,7 +106,9 @@ func (c *redisAnalyzeCache) Set(ctx context.Context, analysisText string, spans 
 		slog.Debug("redact: analyze cache redis encode failed", "error", err)
 		return
 	}
-	if err := c.rdb.Set(ctx, c.redisKey(analysisText), data, c.ttl).Err(); err != nil {
+	opCtx, cancel := context.WithTimeout(ctx, redisAnalyzeCacheOpTimeout)
+	defer cancel()
+	if err := c.rdb.Set(opCtx, c.redisKey(analysisText), data, c.ttl).Err(); err != nil {
 		slog.Debug("redact: analyze cache redis set failed", "error", err)
 	}
 }

@@ -8,17 +8,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Instawork/llm-proxy/internal/apikeys"
 	"github.com/Instawork/llm-proxy/internal/redact"
 )
 
 type stubRedactor struct {
-	out redact.Result
-	err error
+	out           redact.Result
+	err           error
+	seenAnalyzeTO time.Duration
 }
 
-func (s *stubRedactor) Redact(_ context.Context, text string) (redact.Result, error) {
+func (s *stubRedactor) Redact(ctx context.Context, text string) (redact.Result, error) {
+	s.seenAnalyzeTO = redact.AnalyzeTimeoutFromContext(ctx, 0)
 	if s.err != nil {
 		return redact.Result{}, s.err
 	}
@@ -160,5 +163,31 @@ func TestHandler_InvalidMode(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestHandler_AttachesSizeScaledAnalyzeTimeout(t *testing.T) {
+	stub := &stubRedactor{}
+	h := NewHandler(stub, &stubKeyStore{record: &apikeys.APIKey{PK: apikeys.KeyPrefix + "abc"}}, Config{
+		MaxBodyBytes: 512 * 1024,
+		AnalyzeTimeout: redact.AnalyzeTimeoutConfig{
+			Base:      8 * time.Second,
+			Per100KiB: 6 * time.Second,
+			Max:       180 * time.Second,
+		},
+	}, nil)
+
+	payload := strings.Repeat("a", 250*1024)
+	req := httptest.NewRequest(http.MethodPost, "/redact?mode=text", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+apikeys.KeyPrefix+"abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	want := 20 * time.Second // 8s base + floor(250KiB/100KiB)*6s
+	if stub.seenAnalyzeTO != want {
+		t.Fatalf("AnalyzeTimeout on ctx = %v, want %v", stub.seenAnalyzeTO, want)
 	}
 }

@@ -157,8 +157,11 @@ features:
     # (~68s budget) safely inside the deadline without weakening fail_mode.
     timeout_ms: 8000
     timeout_ms_per_100kb: 6000
-    # Caps the scaled deadline well under the dedicated ALB's 300s
-    # idle_timeout so the upstream call still fits.
+    # Caps the scaled whole-body deadline well under the dedicated ALB's 300s
+    # idle_timeout so the upstream call still fits. The 180s cap binds around
+    # ~2.9 MiB (~3.9-5.0 MiB at measured throughput); larger payloads up to
+    # max_body_bytes (8 MiB) rely on per-chunk caching across retries within
+    # the 300s analyze_cache TTL.
     timeout_ms_max: 180000
     analyze_concurrency: 4
     # Presidio's spaCy NER is single-threaded per /analyze call, so one large

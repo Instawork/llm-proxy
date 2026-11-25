@@ -2089,14 +2089,20 @@ func registerRedactAPI(r *mux.Router, deps *serverDeps) {
 	if keyLookup == nil && !allowUnauth {
 		return
 	}
+	piiCfg := deps.yamlConfig.Features.PIIRedact
 	maxBody := redactAPICfg.MaxBodyBytes
-	if piiMax := deps.yamlConfig.Features.PIIRedact.MaxBodyBytes; maxBody <= 0 && piiMax > 0 {
-		maxBody = piiMax
+	if maxBody <= 0 && piiCfg.MaxBodyBytes > 0 {
+		maxBody = piiCfg.MaxBodyBytes
 	}
 	r.Handle("/redact", redactapi.NewHandler(deps.redactor, keyLookup, redactapi.Config{
 		MaxBodyBytes:         maxBody,
 		AllowUnauthenticated: allowUnauth,
 		AuthFailures:         deps.authFailures,
+		AnalyzeTimeout: redact.AnalyzeTimeoutConfig{
+			Base:      time.Duration(piiCfg.TimeoutMs) * time.Millisecond,
+			Per100KiB: time.Duration(piiCfg.TimeoutMsPer100KB) * time.Millisecond,
+			Max:       time.Duration(piiCfg.TimeoutMsMax) * time.Millisecond,
+		},
 	}, logger)).Methods(http.MethodPost, http.MethodOptions)
 	logger.Info("🔒 POST /redact API enabled",
 		"fail_mode", redactAPICfg.FailMode,

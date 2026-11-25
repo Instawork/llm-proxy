@@ -4,20 +4,39 @@ import "context"
 
 type analyzeCachePrefetchKey struct{}
 
+type analyzeCachePrefetchState struct {
+	hits    map[string][]Span
+	checked map[string]struct{}
+}
+
 // WithAnalyzeCachePrefetch attaches a batch of cache hits for the current
 // JSON scrub pass. analyzeSpans consults this before per-block Get calls.
 func WithAnalyzeCachePrefetch(ctx context.Context, hits map[string][]Span) context.Context {
 	if len(hits) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, analyzeCachePrefetchKey{}, hits)
+	return context.WithValue(ctx, analyzeCachePrefetchKey{}, analyzeCachePrefetchState{hits: hits})
 }
 
-func analyzeCachePrefetchFromContext(ctx context.Context) map[string][]Span {
-	if v, ok := ctx.Value(analyzeCachePrefetchKey{}).(map[string][]Span); ok {
+func withAnalyzeCachePrefetchChecked(
+	ctx context.Context,
+	hits map[string][]Span,
+	checked map[string]struct{},
+) context.Context {
+	if len(hits) == 0 && len(checked) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, analyzeCachePrefetchKey{}, analyzeCachePrefetchState{
+		hits:    hits,
+		checked: checked,
+	})
+}
+
+func analyzeCachePrefetchFromContext(ctx context.Context) analyzeCachePrefetchState {
+	if v, ok := ctx.Value(analyzeCachePrefetchKey{}).(analyzeCachePrefetchState); ok {
 		return v
 	}
-	return nil
+	return analyzeCachePrefetchState{}
 }
 
 func uniqueAnalysisTexts(texts []string) []string {

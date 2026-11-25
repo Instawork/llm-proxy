@@ -17,11 +17,24 @@ import (
 )
 
 const (
-	analyzeCacheVersion     = "v1"
-	defaultAnalyzeCacheTTL  = 5 * time.Minute
-	defaultMemoryMaxEntries = 4096
-	redisAnalyzeKeyPrefix   = "llm:pii:analyze:" + analyzeCacheVersion + ":"
+	analyzeCacheVersion          = "v1"
+	defaultAnalyzeCacheTTL       = 5 * time.Minute
+	defaultMemoryMaxEntries      = 4096
+	redisAnalyzeKeyPrefix        = "llm:pii:analyze:" + analyzeCacheVersion + ":"
+	redisAnalyzeCacheOpTimeout   = 150 * time.Millisecond
+	analyzeCachePrefetchTimeout  = 250 * time.Millisecond
+	analyzeCacheWriteTimeout     = 250 * time.Millisecond
+	defaultCacheWriteConcurrency = 32
 )
+
+// splitAnalyzeCache allows the redactor to read/write in-process memory layers
+// synchronously (microseconds, zero I/O) while running network-backed layers
+// (Redis) off the waiter-release critical path.
+type splitAnalyzeCache interface {
+	getLocal(analysisText string) ([]Span, bool)
+	setLocal(analysisText string, spans []Span)
+	setRemote(ctx context.Context, analysisText string, spans []Span)
+}
 
 // AnalyzeCache stores Presidio /analyze span lists keyed by analysis text
 // hash so unchanged chat blocks skip redundant sidecar calls.
@@ -170,6 +183,14 @@ func newAnalyzeCacheRedisClient(r *config.RedisConfig) (*redis.Client, error) {
 		}
 		opts = &redis.Options{Addr: addr, Password: password, DB: r.DB}
 	}
+
+	// Best-effort cache client: honor context deadlines on socket I/O and fail
+	// fast instead of retrying stalled sockets into the Presidio request budget.
+	opts.ContextTimeoutEnabled = true
+	opts.DialTimeout = 500 * time.Millisecond
+	opts.ReadTimeout = redisAnalyzeCacheOpTimeout
+	opts.WriteTimeout = redisAnalyzeCacheOpTimeout
+	opts.MaxRetries = -1
 
 	client := redis.NewClient(opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

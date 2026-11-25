@@ -162,9 +162,9 @@ type Config struct {
 	// docker-compose network.
 	AnalyzerURL string
 
-	// Timeout caps each /analyze round trip. Keep this tight (50–250 ms)
-	// — the proxy serves user traffic and a slow sidecar must not stall
-	// requests. Default: 200 ms.
+	// Timeout is the default whole-body /analyze deadline when the caller
+	// does not attach a size-scaled budget via WithAnalyzeTimeout. Shared
+	// across all fields and chunks of a request. Default: 3s.
 	Timeout time.Duration
 
 	// EntityTypes scopes which recognizers run. Empty means "use
@@ -224,6 +224,7 @@ type Redactor struct {
 	client          *http.Client
 	allowTestEmails bool
 	analyzeCache    AnalyzeCache
+	cacheWriteSem   chan struct{}
 	inflightMu      sync.Mutex
 	inflight        map[[32]byte]*inflightAnalyzeCall
 }
@@ -305,6 +306,7 @@ func New(cfg Config) (*Redactor, error) {
 		client:          client,
 		allowTestEmails: allowTestEmails,
 		analyzeCache:    cfg.AnalyzeCache,
+		cacheWriteSem:   make(chan struct{}, defaultCacheWriteConcurrency),
 		inflight:        make(map[[32]byte]*inflightAnalyzeCall),
 	}, nil
 }
@@ -343,14 +345,27 @@ func (r *Redactor) scrub(ctx context.Context, text string, reg *Registry, forceR
 }
 
 func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Span, error) {
-	if prefetch := analyzeCachePrefetchFromContext(ctx); prefetch != nil {
-		if spans, ok := prefetch[analysisText]; ok {
+	prefetch := analyzeCachePrefetchFromContext(ctx)
+	if prefetch.hits != nil {
+		if spans, ok := prefetch.hits[analysisText]; ok {
 			return spans, nil
 		}
 	}
 	if r.analyzeCache != nil {
-		if spans, ok := r.analyzeCache.Get(ctx, analysisText); ok {
-			return spans, nil
+		if _, alreadyPrefetched := prefetch.checked[analysisText]; alreadyPrefetched {
+			// Batch GetMulti already queried remote layers before the Presidio
+			// deadline started; only consult in-process memory here so a
+			// stalled Redis is never hit again per task.
+			if spans, ok := r.cacheGetLocal(analysisText); ok {
+				return spans, nil
+			}
+		} else {
+			getCtx, cancel := context.WithTimeout(ctx, redisAnalyzeCacheOpTimeout)
+			spans, ok := r.analyzeCache.Get(getCtx, analysisText)
+			cancel()
+			if ok {
+				return spans, nil
+			}
 		}
 	}
 	spans, wasChunked, err := r.analyzeChunked(ctx, analysisText)
@@ -361,7 +376,7 @@ func (r *Redactor) analyzeSpans(ctx context.Context, analysisText string) ([]Spa
 	// for chunked texts we also cache the merged full-text spans so exact
 	// repeats hit in one lookup without re-chunking.
 	if wasChunked && r.analyzeCache != nil {
-		r.analyzeCache.Set(ctx, analysisText, spans)
+		r.cacheSet(analysisText, spans)
 	}
 	return spans, nil
 }

@@ -34,14 +34,17 @@ func (r *Redactor) scrubJSON(ctx context.Context, text string, reg *Registry, fo
 	var tasks []jsonScrubTask
 	collectJSONScrubTasks(root, nil, &tasks, adapter)
 
+	// Run cache prefetch under its own tight timeout BEFORE starting the
+	// whole-body Presidio deadline so a slow or stalled Redis never eats into
+	// the Presidio budget.
+	ctx = r.prefetchAnalyzeCache(ctx, tasks)
+
 	if len(tasks) > 0 {
 		overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, overallTimeout)
 		defer cancel()
 	}
-
-	ctx = r.prefetchAnalyzeCache(ctx, tasks)
 
 	acc := Result{EntityCounts: map[string]int{}}
 	if err := r.runJSONScrubTasks(ctx, tasks, reg, forceRedactMarkers, &acc); err != nil {
@@ -235,13 +238,20 @@ func mergeScrubResult(dst *Result, src Result) {
 }
 
 func (r *Redactor) prefetchAnalyzeCache(ctx context.Context, tasks []jsonScrubTask) context.Context {
-	if r.analyzeCache == nil || len(tasks) <= 1 {
+	if r.analyzeCache == nil || len(tasks) == 0 {
 		return ctx
 	}
 	adapter := AdapterForContext(ctx)
 	texts := make([]string, len(tasks))
+	checked := make(map[string]struct{}, len(tasks))
 	for i := range tasks {
-		texts[i] = prepareJSONForAnalysis(tasks[i].text, adapter)
+		prepared := prepareJSONForAnalysis(tasks[i].text, adapter)
+		texts[i] = prepared
+		if prepared != "" {
+			checked[prepared] = struct{}{}
+		}
 	}
-	return WithAnalyzeCachePrefetch(ctx, r.analyzeCache.GetMulti(ctx, texts))
+	prefetchCtx, cancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)
+	defer cancel()
+	return withAnalyzeCachePrefetchChecked(ctx, r.analyzeCache.GetMulti(prefetchCtx, texts), checked)
 }

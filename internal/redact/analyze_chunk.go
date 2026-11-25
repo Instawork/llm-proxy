@@ -43,29 +43,21 @@ func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, boo
 		return spans, false, err
 	}
 
-	// AnalyzeTimeoutFromContext holds the deadline the middleware computed
-	// for this whole request (scaled by total body size). Binding it to an
-	// absolute deadline once, here, means every chunk's analyzeLeaf() call —
-	// which independently reads AnalyzeTimeoutFromContext — shares that one
-	// deadline instead of each restarting a fresh full-length timeout from
-	// its own start time. Without this, N sequential waves of chunks could
-	// take up to N times the intended budget.
-	overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
-	limit := r.analyzeConcurrency()
-	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
-	defer cancel()
-
 	perChunkSpans := make([][]Span, len(chunks))
 
-	// Batch-prefetch per-chunk cache entries so retries or growing-prefix
-	// payloads skip chunks that already succeeded in an earlier wave/attempt.
+	// Batch-prefetch per-chunk cache entries under a tight timeout BEFORE
+	// starting the Presidio deadline so retries or growing-prefix payloads skip
+	// chunks that already succeeded without letting a stalled Redis eat the
+	// Presidio budget.
 	var missing []int
 	if r.analyzeCache != nil {
 		chunkTexts := make([]string, len(chunks))
 		for i := range chunks {
 			chunkTexts[i] = chunks[i].text
 		}
-		hits := r.analyzeCache.GetMulti(ctx, chunkTexts)
+		prefetchCtx, prefetchCancel := context.WithTimeout(ctx, analyzeCachePrefetchTimeout)
+		hits := r.analyzeCache.GetMulti(prefetchCtx, chunkTexts)
+		prefetchCancel()
 		for i := range chunks {
 			if cached, ok := hits[chunks[i].text]; ok {
 				perChunkSpans[i] = rebaseSpans(cached, chunks[i].offset)
@@ -81,6 +73,18 @@ func (r *Redactor) analyzeChunked(ctx context.Context, text string) ([]Span, boo
 	}
 
 	if len(missing) > 0 {
+		// AnalyzeTimeoutFromContext holds the deadline the middleware computed
+		// for this whole request (scaled by total body size). Binding it to an
+		// absolute deadline once, here, means every chunk's analyzeLeaf() call —
+		// which independently reads AnalyzeTimeoutFromContext — shares that one
+		// deadline instead of each restarting a fresh full-length timeout from
+		// its own start time. Without this, N sequential waves of chunks could
+		// take up to N times the intended budget.
+		overallTimeout := AnalyzeTimeoutFromContext(ctx, r.cfg.Timeout)
+		limit := r.analyzeConcurrency()
+		ctx, cancel := context.WithTimeout(ctx, overallTimeout)
+		defer cancel()
+
 		// A fixed pool of workers pulls chunk indexes off jobs, capping
 		// goroutine count at AnalyzeConcurrency.
 		workers := min(limit, len(missing))
