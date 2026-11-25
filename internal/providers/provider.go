@@ -33,14 +33,16 @@ import (
 //	OutputTokens                Y       Y          Y       Y
 //	TotalTokens                 Y       Y          Y       Y
 //	ThoughtTokens               -       extended*  Y       extended*
-//	CacheReadInputTokens        Y       Y          Y       Y
-//	CacheCreationInputTokens    Y*      Y          -       Y
+//	CacheReadInputTokens        Y       Y          Y       Y (Converse, Claude Invoke)
+//	CacheCreationInputTokens    Y†      Y          -       Y (Converse, Claude Invoke)
 //	FinishReason                Y       Y          Y       Y
 //	RequestID                   Y       Y          Y       -
 //
 // * Anthropic and Bedrock-Anthropic surface thinking tokens only when
 // `extended_thinking` is enabled on the request; otherwise the field
 // is zero. Gemini always populates ThoughtTokens for 2.0-pro+.
+//
+// † OpenAI surfaces cache_write_tokens on GPT-5.6 and newer models.
 //
 // Providers that do not surface a field MUST leave it at the zero value
 // — never invent or estimate — so the cost tracker can treat a zero

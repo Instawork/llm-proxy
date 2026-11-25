@@ -1801,7 +1801,9 @@ providers:
       # must name a geo (us.*, in.*) or global.* cross-region inference profile.
       # Geo CRIS bills OpenAI list +10% (same as Mantle In-Region); Global CRIS
       # bills OpenAI list, so the two profiles are separate entries. Both carry
-      # the 5.6-generation >272K tier (2x input / 1.5x output, whole request).
+      # the 5.6-generation >272K tier (2x input / 1.5x output, whole request)
+      # and cache_read / cache_write rates from the AWS Bedrock OpenAI model
+      # cards (docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-*.html).
       # Sol/Terra/Luna GA 2026-07-13, Astra 2026-09-08 (audit-09-14-2026).
       "us.openai.gpt-5.6-sol":
         enabled: true
@@ -2170,6 +2172,9 @@ providers:
       # model cards (audit-09-14-2026) publish a 1M context window and a >272K
       # input tier at 2x input / 1.5x output for the whole request, so the
       # In-Region price is encoded as two tiers like the native gpt-5.4+ entries.
+      # The GPT-5.4 and GPT-5.5 cards publish "—" (no additional fee) for cache
+      # writes, so only cache_read is set here; GPT-5.6+ cards publish 1.25x
+      # input for cache writes.
       "openai.gpt-5.4":
         enabled: true
         aliases: ["gpt-5.4-bedrock"]

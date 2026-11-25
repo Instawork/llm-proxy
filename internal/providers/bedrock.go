@@ -494,26 +494,39 @@ func (b *BedrockProxy) parseInvokeChunk(payload []byte, metadata *LLMResponseMet
 			sawUsage = true
 		}
 	}
-	if m := inner.InvocationMetrics; m != nil &&
-		(m.InputTokenCount > 0 || m.OutputTokenCount > 0 ||
-			m.CacheReadInputTokenCount > 0 || m.CacheWriteInputTokenCount > 0) {
-		// Overwrite each field independently. Bedrock may emit a metrics
-		// block with only a subset of fields populated; blindly assigning all
-		// fields would zero out previously-correct counts from message_start/delta.
-		if m.InputTokenCount > 0 {
-			metadata.InputTokens = m.InputTokenCount
+	// Cache token fields in amazon-bedrock-invocationMetrics are only mapped on
+	// Anthropic Messages stream events (message_stop / message_delta), where
+	// inputTokenCount is verified disjoint (uncached only) so adding cache
+	// counts on top is exact. Non-Anthropic model families (e.g. OpenAI GPT on
+	// bedrock-runtime, whose Converse inputTokens is cache-inclusive) have no
+	// verified InvokeModelWithResponseStream cache-metrics wire capture; leaving
+	// their invocationMetrics cache fields unmapped avoids double-billing and
+	// false >272K tier escalation.
+	isAnthropicMetrics := inner.Type == "message_stop" || inner.Type == "message_delta"
+	if m := inner.InvocationMetrics; m != nil {
+		hasMetrics := m.InputTokenCount > 0 || m.OutputTokenCount > 0 ||
+			(isAnthropicMetrics && (m.CacheReadInputTokenCount > 0 || m.CacheWriteInputTokenCount > 0))
+		if hasMetrics {
+			// Overwrite each field independently. Bedrock may emit a metrics
+			// block with only a subset of fields populated; blindly assigning all
+			// fields would zero out previously-correct counts from message_start/delta.
+			if m.InputTokenCount > 0 {
+				metadata.InputTokens = m.InputTokenCount
+			}
+			if m.OutputTokenCount > 0 {
+				metadata.OutputTokens = m.OutputTokenCount
+			}
+			if isAnthropicMetrics {
+				if m.CacheReadInputTokenCount > 0 {
+					metadata.CacheReadInputTokens = m.CacheReadInputTokenCount
+				}
+				if m.CacheWriteInputTokenCount > 0 {
+					metadata.CacheCreationInputTokens = m.CacheWriteInputTokenCount
+				}
+			}
+			metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
+			sawUsage = true
 		}
-		if m.OutputTokenCount > 0 {
-			metadata.OutputTokens = m.OutputTokenCount
-		}
-		if m.CacheReadInputTokenCount > 0 {
-			metadata.CacheReadInputTokens = m.CacheReadInputTokenCount
-		}
-		if m.CacheWriteInputTokenCount > 0 {
-			metadata.CacheCreationInputTokens = m.CacheWriteInputTokenCount
-		}
-		metadata.TotalTokens = metadata.InputTokens + metadata.OutputTokens
-		sawUsage = true
 	}
 	return sawUsage
 }

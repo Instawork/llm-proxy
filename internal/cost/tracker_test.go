@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/providers"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/stretchr/testify/assert"
@@ -423,28 +424,131 @@ func TestCostTracker_TrackRequest_BedrockInvokeStreamCacheMetrics(t *testing.T) 
 		require.NoError(t, eventstream.NewEncoder().Encode(buf, msg))
 	}
 
+	// Load actual configs/base.yml so pricing stays in sync with production config.
+	cfg, err := config.LoadAndMergeConfigs([]string{"../../configs/base.yml"})
+	require.NoError(t, err)
+
+	loadBedrockModel := func(ct *CostTracker, modelName string) {
+		t.Helper()
+		mc, ok := cfg.Providers["bedrock"].Models[modelName]
+		require.True(t, ok, "missing bedrock/%s in configs/base.yml", modelName)
+		src, ok := mc.Pricing.(*config.ModelPricing)
+		require.True(t, ok)
+		mp := &ModelPricing{Tiers: make([]PricingTier, len(src.Tiers))}
+		for i, tier := range src.Tiers {
+			mp.Tiers[i] = PricingTier{
+				Threshold:  tier.Threshold,
+				Input:      tier.Input,
+				Output:     tier.Output,
+				CacheRead:  tier.CacheRead,
+				CacheWrite: tier.CacheWrite,
+			}
+		}
+		ct.SetPricingForModel("bedrock", modelName, mp)
+	}
+
 	ct := NewCostTracker()
 	ct.SetSyncMode()
 	mock := &mockTransport{}
 	ct.AddTransport(mock)
-	// Mirrors us.openai.gpt-6.1-terra in configs/base.yml.
-	ct.SetPricingForModel("bedrock", "us.openai.gpt-6.1-terra", &ModelPricing{
-		Tiers: []PricingTier{
-			{Threshold: 272_000, Input: 1.10, Output: 5.50, CacheRead: 0.055, CacheWrite: 1.375},
-			{Threshold: 0, Input: 2.20, Output: 8.25, CacheRead: 0.11, CacheWrite: 2.75},
-		},
-	})
+	loadBedrockModel(ct, "us.anthropic.claude-haiku-5-5")
+	loadBedrockModel(ct, "us.openai.gpt-6.1-terra")
 
 	bp := providers.NewBedrockProxy()
 
-	t.Run("short tier meters cache read and write from invocationMetrics", func(t *testing.T) {
+	t.Run("short tier meters Anthropic message_stop cache read and write distinctly", func(t *testing.T) {
 		var buf bytes.Buffer
 		encodeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           12_500,
+				"outputTokenCount":          12_500,
+				"cacheReadInputTokenCount":  50_000,
+				"cacheWriteInputTokenCount": 25_000,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.anthropic.claude-haiku-5-5"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.anthropic.claude-haiku-5-5/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		assert.Equal(t, 12_500, rec.InputTokens)
+		assert.Equal(t, 12_500, rec.OutputTokens)
+		assert.Equal(t, 50_000, rec.CacheReadInputTokens)
+		assert.Equal(t, 25_000, rec.CacheCreationInputTokens)
+		assert.Equal(t, 100_000, rec.TotalTokens)
+
+		// Prompt = 87.5k <= 100k (short tier: 0.11 / 0.55 / 0.011 / 0.1375):
+		// raw input: 0.0125*0.11 + 0.05*0.011 + 0.025*0.1375 = 0.0053625 -> 0.0054
+		// raw output: 0.0125*0.55 = 0.006875 -> 0.0069
+		// raw total: 0.0122375 -> 0.0123
+		assert.InDelta(t, 0.0054, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.0069, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.0123, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
+
+	t.Run("long tier selected when Anthropic message_stop cache tokens push prompt over 100K", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"type": "message_stop",
+			"amazon-bedrock-invocationMetrics": map[string]int{
+				"inputTokenCount":           12_500,
+				"outputTokenCount":          12_500,
+				"cacheReadInputTokenCount":  75_000,
+				"cacheWriteInputTokenCount": 25_000,
+			},
+		})
+
+		md, err := bp.ParseResponseMetadata(&buf, true)
+		require.NoError(t, err)
+		md.Model = "us.anthropic.claude-haiku-5-5"
+
+		before := len(mock.Records())
+		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.anthropic.claude-haiku-5-5/invoke-with-response-stream", ""))
+		recs := mock.Records()
+		require.Len(t, recs, before+1)
+		rec := recs[before]
+
+		// Prompt = 112.5k > 100k (long tier: 0.55 / 2.75 / 0.055 / 0.6875):
+		// raw input: 0.0125*0.55 + 0.075*0.055 + 0.025*0.6875 = 0.0281875 -> 0.0282
+		// raw output: 0.0125*2.75 = 0.034375 -> 0.0344
+		// raw total: 0.0625625 -> 0.0626
+		assert.InDelta(t, 0.0282, rec.InputCost, 1e-9)
+		assert.InDelta(t, 0.0344, rec.OutputCost, 1e-9)
+		assert.InDelta(t, 0.0626, rec.TotalCost, 1e-9)
+
+		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
+			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, rec.InputCost, inCost)
+		assert.Equal(t, rec.OutputCost, outCost)
+		assert.Equal(t, rec.TotalCost, totalCost)
+	})
+
+	t.Run("non-Anthropic OpenAI invoke stream does not double-bill or escalate tier from invocationMetrics cache fields", func(t *testing.T) {
+		var buf bytes.Buffer
+		encodeChunk(t, &buf, map[string]any{
+			"choices": []map[string]any{{"finish_reason": "stop"}},
 			"amazon-bedrock-invocationMetrics": map[string]int{
 				"inputTokenCount":           125_000,
 				"outputTokenCount":          31_250,
-				"cacheReadInputTokenCount":  62_500,
-				"cacheWriteInputTokenCount": 62_500,
+				"cacheReadInputTokenCount":  150_000,
+				"cacheWriteInputTokenCount": 20_000,
 			},
 		})
 
@@ -460,62 +564,16 @@ func TestCostTracker_TrackRequest_BedrockInvokeStreamCacheMetrics(t *testing.T) 
 
 		assert.Equal(t, 125_000, rec.InputTokens)
 		assert.Equal(t, 31_250, rec.OutputTokens)
-		assert.Equal(t, 62_500, rec.CacheReadInputTokens)
-		assert.Equal(t, 62_500, rec.CacheCreationInputTokens)
-		assert.Equal(t, 281_250, rec.TotalTokens)
+		assert.Zero(t, rec.CacheReadInputTokens)
+		assert.Zero(t, rec.CacheCreationInputTokens)
+		assert.Equal(t, 156_250, rec.TotalTokens)
 
-		// Prompt = 250k <= 272k (short tier):
-		// raw input: 0.125 * 1.10 + 0.0625 * 0.055 + 0.0625 * 1.375 = 0.226875 -> 0.2269
-		// raw output: 0.03125 * 5.50 = 0.171875 -> 0.1719
-		// raw total: 0.39875 -> 0.3988
-		assert.InDelta(t, 0.2269, rec.InputCost, 1e-9)
+		// Prompt stays at 125k <= 272k (short tier: 1.10 / 5.50), not escalated to >272k:
+		// raw input: 0.125*1.10 = 0.1375
+		// raw output: 0.03125*5.50 = 0.171875 -> 0.1719
+		// raw total: 0.309375 -> 0.3094
+		assert.InDelta(t, 0.1375, rec.InputCost, 1e-9)
 		assert.InDelta(t, 0.1719, rec.OutputCost, 1e-9)
-		assert.InDelta(t, 0.3988, rec.TotalCost, 1e-9)
-
-		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
-			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
-		)
-		require.NoError(t, err)
-		assert.Equal(t, rec.InputCost, inCost)
-		assert.Equal(t, rec.OutputCost, outCost)
-		assert.Equal(t, rec.TotalCost, totalCost)
-	})
-
-	t.Run("long tier selected when cache read/write pushes prompt over 272K", func(t *testing.T) {
-		var buf bytes.Buffer
-		encodeChunk(t, &buf, map[string]any{
-			"amazon-bedrock-invocationMetrics": map[string]int{
-				"inputTokenCount":           125_000,
-				"outputTokenCount":          31_250,
-				"cacheReadInputTokenCount":  125_000,
-				"cacheWriteInputTokenCount": 62_500,
-			},
-		})
-
-		md, err := bp.ParseResponseMetadata(&buf, true)
-		require.NoError(t, err)
-		md.Model = "us.openai.gpt-6.1-terra"
-
-		before := len(mock.Records())
-		require.NoError(t, ct.TrackRequest(md, "u", "127.0.0.1", "/bedrock/model/us.openai.gpt-6.1-terra/invoke-with-response-stream", ""))
-		recs := mock.Records()
-		require.Len(t, recs, before+1)
-		rec := recs[before]
-
-		// Prompt = 312.5k > 272k (long tier):
-		// raw input: 0.125 * 2.20 + 0.125 * 0.11 + 0.0625 * 2.75 = 0.460625 -> 0.4607
-		// raw output: 0.03125 * 8.25 = 0.2578125 -> 0.2579
-		// raw total: 0.7184375 -> 0.7185
-		assert.InDelta(t, 0.4607, rec.InputCost, 1e-9)
-		assert.InDelta(t, 0.2579, rec.OutputCost, 1e-9)
-		assert.InDelta(t, 0.7185, rec.TotalCost, 1e-9)
-
-		inCost, outCost, totalCost, err := ct.CalculateCostWithCache(
-			md.Provider, md.Model, md.InputTokens, md.CacheReadInputTokens, md.CacheCreationInputTokens, md.OutputTokens,
-		)
-		require.NoError(t, err)
-		assert.Equal(t, rec.InputCost, inCost)
-		assert.Equal(t, rec.OutputCost, outCost)
-		assert.Equal(t, rec.TotalCost, totalCost)
+		assert.InDelta(t, 0.3094, rec.TotalCost, 1e-9)
 	})
 }

@@ -188,13 +188,38 @@ func TestBaseConfig_OpenAIAndBedrockGPTEntriesHaveCachePrices(t *testing.T) {
 		assert.Equal(t, PricingTier{Threshold: 0, Input: 1.25, Output: 10.00, CacheRead: 0.125}, search.Tiers[0])
 	})
 
-	// Bedrock openai.gpt-* models: every tier has cache_read and cache_write,
-	// and Geo (us.*) is exactly 1.1x Global (global.*).
+	// Bedrock openai.gpt-* (GPT-5.4+ families) models: every tier has cache_read
+	// and (except GPT-5.4/5.5 which have no write fee on AWS cards) cache_write,
+	// and Geo (us.*) is exactly 1.1x Global (global.*). Scoped to 5.4+ families
+	// so open-weight models without published cache pricing (e.g. openai.gpt-oss-*)
+	// are not rejected.
+	hasBedrockOpenAICachePricing := func(id string) bool {
+		bare := id
+		for _, prefix := range []string{"us.", "global.", "in.", "eu.", "au.", "jp."} {
+			if stripped, ok := strings.CutPrefix(bare, prefix); ok {
+				bare = stripped
+				break
+			}
+		}
+		if !strings.HasPrefix(bare, "openai.gpt-") || strings.HasPrefix(bare, "openai.gpt-oss-") {
+			return false
+		}
+		return strings.HasPrefix(bare, "openai.gpt-5.4") ||
+			strings.HasPrefix(bare, "openai.gpt-5.5") ||
+			strings.HasPrefix(bare, "openai.gpt-5.6") ||
+			strings.HasPrefix(bare, "openai.gpt-6") ||
+			strings.HasPrefix(bare, "openai.gpt-daybreak-")
+	}
+	// AWS Bedrock model cards publish "—" (no additional cache-write fee) for GPT-5.4 and GPT-5.5.
+	noCacheWrite := func(id string) bool {
+		return strings.HasSuffix(id, "openai.gpt-5.4") || strings.HasSuffix(id, "openai.gpt-5.5")
+	}
+
 	t.Run("bedrock openai.gpt-* models", func(t *testing.T) {
 		checked := 0
 		models := cfg.Providers["bedrock"].Models
 		for name, model := range models {
-			if !strings.Contains(name, "openai.gpt-") {
+			if !hasBedrockOpenAICachePricing(name) {
 				continue
 			}
 			mp, ok := model.Pricing.(*ModelPricing)
@@ -202,7 +227,11 @@ func TestBaseConfig_OpenAIAndBedrockGPTEntriesHaveCachePrices(t *testing.T) {
 			for i, tier := range mp.Tiers {
 				checked++
 				assert.Positive(t, tier.CacheRead, "bedrock/%s tier[%d] cache_read", name, i)
-				assert.Positive(t, tier.CacheWrite, "bedrock/%s tier[%d] cache_write", name, i)
+				if noCacheWrite(name) {
+					assert.Zero(t, tier.CacheWrite, "bedrock/%s tier[%d] cache_write", name, i)
+				} else {
+					assert.Positive(t, tier.CacheWrite, "bedrock/%s tier[%d] cache_write", name, i)
+				}
 			}
 			if suffix, isUS := strings.CutPrefix(name, "us."); isUS {
 				globalModel, exists := models["global."+suffix]
@@ -221,13 +250,13 @@ func TestBaseConfig_OpenAIAndBedrockGPTEntriesHaveCachePrices(t *testing.T) {
 		assert.NotZero(t, checked)
 	})
 
-	// Bedrock Mantle openai.gpt-* models: every tier has cache_read; all except
-	// gpt-5.4 and gpt-5.5 (no published write price on AWS cards) also have cache_write.
+	// Bedrock Mantle openai.gpt-* (GPT-5.4+ families) models: every tier has
+	// cache_read; all except GPT-5.4/5.5 (no published write fee on AWS cards)
+	// also have cache_write.
 	t.Run("bedrock-mantle openai.gpt-* models", func(t *testing.T) {
 		checked := 0
-		noWrite := map[string]bool{"openai.gpt-5.4": true, "openai.gpt-5.5": true}
 		for name, model := range cfg.Providers["bedrock-mantle"].Models {
-			if !strings.HasPrefix(name, "openai.gpt-") {
+			if !hasBedrockOpenAICachePricing(name) {
 				continue
 			}
 			mp, ok := model.Pricing.(*ModelPricing)
@@ -235,7 +264,7 @@ func TestBaseConfig_OpenAIAndBedrockGPTEntriesHaveCachePrices(t *testing.T) {
 			for i, tier := range mp.Tiers {
 				checked++
 				assert.Positive(t, tier.CacheRead, "bedrock-mantle/%s tier[%d] cache_read", name, i)
-				if noWrite[name] {
+				if noCacheWrite(name) {
 					assert.Zero(t, tier.CacheWrite, "bedrock-mantle/%s tier[%d] cache_write", name, i)
 				} else {
 					assert.Positive(t, tier.CacheWrite, "bedrock-mantle/%s tier[%d] cache_write", name, i)
