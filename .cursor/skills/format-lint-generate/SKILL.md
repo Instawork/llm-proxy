@@ -25,7 +25,7 @@ The `.circleci/config.yml` `lint` job fails the build if any of these fail:
 And the `unit-tests` job runs:
 
 1. `go run ./cmd/config-validator/`
-2. `make test` — which is `go test -race -v ./internal/... -short -skip "Integration"`
+2. `make test` — which is `go test -race -v ./cmd/... ./internal/... -short -skip '^Test(Integration_|(OpenAI|Anthropic|Gemini)Integration_|DynamoDBTransportIntegration$)'`
 
 A "passes locally" check sequence must cover **all five**. `make check` (which is `fmt vet lint`) is necessary but **not sufficient** — it does not run `gofmt -s` (only `go fmt`, which is non-simplifying), does not run `gofumpt`, and does not run the config validator. Always run the explicit CI commands when reproducing a CI failure.
 
@@ -95,7 +95,7 @@ The Makefile's test targets all enable `-race`, which is mandatory — concurren
 make test
 
 # Targeted run, race-enabled, equivalent to make test for a single package
-go test -race ./internal/circuit/... -short -skip Integration
+go test -race ./internal/circuit/... -short -skip '^Test(Integration_|(OpenAI|Anthropic|Gemini)Integration_|DynamoDBTransportIntegration$)'
 
 # Integration tests (requires OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY)
 make test-integration
