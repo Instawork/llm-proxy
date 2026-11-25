@@ -282,15 +282,28 @@ func TestIDGateMiddleware_DoesNotCacheErrors(t *testing.T) {
 }
 
 func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
+	const n = 8
+	leaderStarted := make(chan struct{})
+	releaseLeader := make(chan struct{})
+	followersJoined := make(chan struct{}, n-1)
+
+	prevHook := idGateTestOnInflightWait
+	idGateTestOnInflightWait = func() { followersJoined <- struct{}{} }
+	defer func() { idGateTestOnInflightWait = prevHook }()
+
 	var calls atomic.Int32
 	ocrClient := &funcOCR{
 		fn: func(_ context.Context, _ []byte, _ string) (string, error) {
-			calls.Add(1)
-			time.Sleep(40 * time.Millisecond)
+			if calls.Add(1) == 1 {
+				close(leaderStarted)
+				<-releaseLeader
+			}
 			return "receipt text", nil
 		},
 	}
-	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{CacheTTL: time.Minute})(
+	// CacheTTL < 0 disables completed-result caching so only true in-flight
+	// coalescing can keep OCR calls at 1.
+	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{CacheTTL: -1})(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -299,22 +312,34 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 	img := base64.StdEncoding.EncodeToString([]byte("shared-burst-img"))
 	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
 
-	const n = 8
 	var wg sync.WaitGroup
-	start := make(chan struct{})
-	for range n {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+		if rec.Code != http.StatusOK {
+			t.Errorf("leader status = %d, want 200", rec.Code)
+		}
+	}()
+	<-leaderStarted
+
+	for range n - 1 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-start
 			rec := httptest.NewRecorder()
 			mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
 			if rec.Code != http.StatusOK {
-				t.Errorf("status = %d, want 200", rec.Code)
+				t.Errorf("follower status = %d, want 200", rec.Code)
 			}
 		}()
 	}
-	close(start)
+
+	for range n - 1 {
+		<-followersJoined
+	}
+	close(releaseLeader)
 	wg.Wait()
 
 	if calls.Load() != 1 {
@@ -324,6 +349,12 @@ func TestIDGateMiddleware_CoalescesConcurrentIdenticalImages(t *testing.T) {
 
 func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.T) {
 	leaderStarted := make(chan struct{})
+	followerJoined := make(chan struct{}, 1)
+
+	prevHook := idGateTestOnInflightWait
+	idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+	defer func() { idGateTestOnInflightWait = prevHook }()
+
 	var calls atomic.Int32
 	ocrClient := &funcOCR{
 		fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
@@ -365,7 +396,7 @@ func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.
 		mw.ServeHTTP(followerRec, followerReq)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-followerJoined
 	cancelLeader()
 	wg.Wait()
 
@@ -374,6 +405,109 @@ func TestIDGateMiddleware_CoalescedLeaderCancelDoesNotPoisonFollower(t *testing.
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestIDGateMiddleware_CoalescedLeaderDeadlineDoesNotPoisonFollower(t *testing.T) {
+	leaderStarted := make(chan struct{})
+	followerJoined := make(chan struct{}, 1)
+
+	prevHook := idGateTestOnInflightWait
+	idGateTestOnInflightWait = func() { followerJoined <- struct{}{} }
+	defer func() { idGateTestOnInflightWait = prevHook }()
+
+	var calls atomic.Int32
+	ocrClient := &funcOCR{
+		fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
+			if calls.Add(1) == 1 {
+				close(leaderStarted)
+				<-ctx.Done()
+				return "", ctx.Err()
+			}
+			return "PASSPORT 123456789", nil
+		},
+	}
+
+	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{
+		spans: []redact.Span{{EntityType: "US_PASSPORT", Score: 0.9}},
+	}, IDGateConfig{
+		FailClosed:     false,
+		ScoreThreshold: 0.6,
+		CacheTTL:       time.Minute,
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	img := base64.StdEncoding.EncodeToString([]byte("leader-deadline-img"))
+	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,` + img + `"}}]}]}`
+
+	leaderCtx, cancelLeader := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancelLeader()
+	leaderReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body).WithContext(leaderCtx)
+	followerReq := newReq(t, http.MethodPost, "/openai/v1/chat/completions", body)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		mw.ServeHTTP(httptest.NewRecorder(), leaderReq)
+	}()
+
+	<-leaderStarted
+	followerRec := httptest.NewRecorder()
+	go func() {
+		defer wg.Done()
+		mw.ServeHTTP(followerRec, followerReq)
+	}()
+
+	<-followerJoined
+	wg.Wait()
+
+	if followerRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("follower status = %d, want 422 (must retry and block after leader deadline expires)", followerRec.Code)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestIDGateMiddleware_ScanBudgetAccountsForGlobalMaxInFlight(t *testing.T) {
+	ocrClient := &funcOCR{
+		fn: func(ctx context.Context, _ []byte, _ string) (string, error) {
+			timer := time.NewTimer(70 * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				return "ok", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	}
+
+	// ImageConcurrency=4 > MaxInFlight=1 serializes the 2 images (~140ms total),
+	// which exceeds a single 110ms batch budget unless budgetConcurrency uses
+	// min(ImageConcurrency, MaxInFlight) = 1 -> 2 batches = 220ms.
+	mw := IDGateMiddleware(ocrClient, &fakeIDAnalyzer{}, IDGateConfig{
+		FailClosed:       true,
+		ImageConcurrency: 4,
+		MaxInFlight:      1,
+		ScanTimeout:      110 * time.Millisecond,
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	img1 := base64.StdEncoding.EncodeToString([]byte("serial-img-1"))
+	img2 := base64.StdEncoding.EncodeToString([]byte("serial-img-2"))
+	body := fmt.Sprintf(
+		`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,%s"}}]}]}`,
+		img1, img2,
+	)
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newReq(t, http.MethodPost, "/openai/v1/chat/completions", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (scan budget must account for MaxInFlight=1)", rec.Code)
 	}
 }
 

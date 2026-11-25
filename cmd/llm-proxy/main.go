@@ -1964,6 +1964,11 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 	if ocrTimeout <= 0 {
 		ocrTimeout = 30 * time.Second
 	}
+	analyzeTimeout := time.Duration(deps.yamlConfig.Features.PIIRedact.TimeoutMs) * time.Millisecond
+	if analyzeTimeout <= 0 {
+		analyzeTimeout = 3 * time.Second
+	}
+	scanTimeout := ocrTimeout + analyzeTimeout
 	scoreThreshold := idGateCfg.ScoreThreshold
 	if scoreThreshold <= 0 {
 		scoreThreshold = 0.4
@@ -1976,7 +1981,7 @@ func installIDGateMiddleware(r *mux.Router, deps *serverDeps) {
 		EntityTypes:       idGateCfg.EntityTypes,
 		ImageConcurrency:  idGateCfg.ImageConcurrency,
 		MaxInFlight:       idGateCfg.MaxInFlight,
-		ScanTimeout:       ocrTimeout,
+		ScanTimeout:       scanTimeout,
 		MaxImageDimension: idGateCfg.MaxImageDimension,
 		CacheTTL:          time.Duration(idGateCfg.CacheTTLSeconds) * time.Second,
 		CacheMaxEntries:   idGateCfg.CacheMaxEntries,

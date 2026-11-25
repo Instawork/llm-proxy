@@ -301,11 +301,12 @@ type IDGateConfig struct {
 	// reduce multi-image gate latency when the OCR fleet has spare capacity.
 	ImageConcurrency int `yaml:"image_concurrency,omitempty"`
 
-	// MaxInFlight caps concurrent OCR+analyze operations across ALL requests
-	// handled by this proxy instance. 0 leaves cross-request concurrency
-	// unbounded. Set near the OCR fleet's comfortable concurrency sweet spot so
-	// burst traffic queues inside Go (where expired contexts abort before
-	// sending work) instead of overloading the OCR sidecar with zombie calls.
+	// MaxInFlight caps concurrent proxy-to-OCR+analyze calls across ALL
+	// requests handled by this proxy instance. 0 leaves cross-request
+	// concurrency unbounded. Excess burst requests wait in Go where expired
+	// contexts abort before dispatching to ocr-gate; it does not cancel an
+	// inference already running in the sidecar's executor if a dispatched call
+	// times out.
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
 
 	// MaxImageDimension downscales JPEG/PNG images whose longest edge exceeds

@@ -59,11 +59,17 @@ type idGateCacheEntry struct {
 }
 
 type idGateInflightCall struct {
-	done    chan struct{}
-	verdict idGateVerdict
-	stage   string
-	err     error
+	done          chan struct{}
+	verdict       idGateVerdict
+	stage         string
+	err           error
+	leaderCtxDone bool
 }
+
+// idGateTestOnInflightWait is an unexported test hook invoked right before a
+// coalesced follower blocks on existing.done so tests can synchronize without
+// time.Sleep. Always nil in production.
+var idGateTestOnInflightWait func()
 
 type idGateScanCache struct {
 	mu         sync.Mutex
@@ -128,9 +134,10 @@ func (c *idGateScanCache) putLocked(digest [32]byte, v idGateVerdict) {
 }
 
 // do returns a cached verdict if present, joins an identical in-flight scan,
-// or runs fn as the leader for digest. Errors are never cached; if a leader is
-// canceled by its own request context while a follower is still alive, the
-// follower retries rather than inheriting the leader's cancellation.
+// or runs fn as the leader for digest. Errors are never cached; if a leader
+// fails because its own request context was canceled or reached its deadline
+// while a follower is still alive, the follower retries rather than inheriting
+// the leader's context failure.
 func (c *idGateScanCache) do(
 	ctx context.Context,
 	digest [32]byte,
@@ -150,9 +157,12 @@ func (c *idGateScanCache) do(
 		}
 		if existing, ok := c.inflight[digest]; ok {
 			c.mu.Unlock()
+			if hook := idGateTestOnInflightWait; hook != nil {
+				hook()
+			}
 			select {
 			case <-existing.done:
-				if existing.err != nil && errors.Is(existing.err, context.Canceled) && ctx.Err() == nil {
+				if existing.err != nil && existing.leaderCtxDone && ctx.Err() == nil {
 					continue
 				}
 				return existing.verdict, existing.stage, existing.err == nil, existing.err
@@ -166,11 +176,13 @@ func (c *idGateScanCache) do(
 		c.mu.Unlock()
 
 		verdict, stage, err := fn()
+		leaderCtxDone := err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled))
 
 		c.mu.Lock()
 		call.verdict = verdict
 		call.stage = stage
 		call.err = err
+		call.leaderCtxDone = leaderCtxDone
 		if err == nil {
 			c.putLocked(digest, verdict)
 		}
@@ -204,11 +216,12 @@ type IDGateConfig struct {
 	// ImageConcurrency caps how many embedded images in a single request are
 	// OCR'd + analyzed in parallel. <=0 defaults to 4.
 	ImageConcurrency int
-	// MaxInFlight caps concurrent OCR+analyze operations across ALL requests
-	// served by this middleware instance. <=0 leaves cross-request concurrency
-	// unbounded. Setting this near the OCR fleet's concurrency sweet spot lets
-	// excess burst traffic queue in Go (where expired contexts abort before
-	// sending work) instead of overloading the OCR sidecar.
+	// MaxInFlight caps concurrent proxy-to-OCR+analyze calls across ALL
+	// requests served by this middleware instance. <=0 leaves cross-request
+	// concurrency unbounded. Excess burst traffic queues in Go where expired
+	// contexts abort before dispatching to ocr-gate; it does not cancel an
+	// inference already running in the sidecar executor if a dispatched call
+	// times out.
 	MaxInFlight int
 	// ScanTimeout is the per-batch deadline budget for scanning images in a
 	// request (typically matched to the OCR client timeout). Multi-image
@@ -321,22 +334,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				if verdict, ok := scanCache.get(u.digest); ok {
 					cacheHits.Add(1)
 					if verdict.blocked {
-						gateDuration := time.Since(gateStart)
-						logger.Warn(proxylog.ProxyMsg("id_gate: blocked government identity document"),
-							slog.String("path", r.URL.Path),
-							slog.String("provider", provider),
-							slog.Int("image_index", u.firstIndex),
-							slog.String("entity_type", verdict.entityType),
-							slog.Float64("score", verdict.score),
-							slog.Bool("cache_hit", true),
-							slog.Duration("duration", gateDuration))
-						emitIDGateBlocked(cfg.Metrics, provider, verdict.entityType)
-						if cfg.Recorder != nil {
-							cfg.Recorder.RecordBlocked(
-								provider, keyID, verdict.entityType, verdict.score, u.firstIndex, len(images), gateDuration,
-							)
-						}
-						proxylog.ProxyHTTPError(w, idGateBlockMessage, http.StatusUnprocessableEntity)
+						writeIDGateBlocked(w, r, logger, cfg, provider, keyID, u.firstIndex, len(images), verdict, true, time.Since(gateStart))
 						return
 					}
 					continue
@@ -345,6 +343,10 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 			}
 
 			concurrency := min(imageConcurrency, len(toScan))
+			budgetConcurrency := concurrency
+			if globalSem != nil {
+				budgetConcurrency = min(budgetConcurrency, cap(globalSem))
+			}
 			if len(toScan) > 0 {
 				// Scan remaining unique images concurrently (bounded both
 				// per-request and process-wide). A government-ID hit is
@@ -354,7 +356,7 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				var scanCtx context.Context
 				var cancelScan context.CancelFunc
 				if cfg.ScanTimeout > 0 {
-					scanBudget := computeIDGateScanTimeout(len(toScan), concurrency, cfg.ScanTimeout)
+					scanBudget := computeIDGateScanTimeout(len(toScan), budgetConcurrency, cfg.ScanTimeout)
 					scanCtx, cancelScan = context.WithTimeout(r.Context(), scanBudget)
 				} else {
 					scanCtx, cancelScan = context.WithCancel(r.Context())
@@ -453,21 +455,11 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 				var haveErr bool
 				for res := range results {
 					if res.blocked {
-						gateDuration := time.Since(gateStart)
-						logger.Warn(proxylog.ProxyMsg("id_gate: blocked government identity document"),
-							slog.String("path", r.URL.Path),
-							slog.String("provider", provider),
-							slog.Int("image_index", res.index),
-							slog.String("entity_type", res.entityType),
-							slog.Float64("score", res.score),
-							slog.Duration("duration", gateDuration))
-						emitIDGateBlocked(cfg.Metrics, provider, res.entityType)
-						if cfg.Recorder != nil {
-							cfg.Recorder.RecordBlocked(
-								provider, keyID, res.entityType, res.score, res.index, len(images), gateDuration,
-							)
-						}
-						proxylog.ProxyHTTPError(w, idGateBlockMessage, http.StatusUnprocessableEntity)
+						writeIDGateBlocked(w, r, logger, cfg, provider, keyID, res.index, len(images), idGateVerdict{
+							blocked:    true,
+							entityType: res.entityType,
+							score:      res.score,
+						}, false, time.Since(gateStart))
 						return
 					}
 					if res.err != nil && !haveErr {
@@ -529,6 +521,38 @@ func IDGateMiddleware(ocrClient OCRTextExtractor, analyzer IDSpanAnalyzer, cfg I
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func writeIDGateBlocked(
+	w http.ResponseWriter,
+	r *http.Request,
+	logger *slog.Logger,
+	cfg IDGateConfig,
+	provider, keyID string,
+	imageIndex, imageCount int,
+	verdict idGateVerdict,
+	cacheHit bool,
+	gateDuration time.Duration,
+) {
+	attrs := []any{
+		slog.String("path", r.URL.Path),
+		slog.String("provider", provider),
+		slog.Int("image_index", imageIndex),
+		slog.String("entity_type", verdict.entityType),
+		slog.Float64("score", verdict.score),
+	}
+	if cacheHit {
+		attrs = append(attrs, slog.Bool("cache_hit", true))
+	}
+	attrs = append(attrs, slog.Duration("duration", gateDuration))
+	logger.Warn(proxylog.ProxyMsg("id_gate: blocked government identity document"), attrs...)
+	emitIDGateBlocked(cfg.Metrics, provider, verdict.entityType)
+	if cfg.Recorder != nil {
+		cfg.Recorder.RecordBlocked(
+			provider, keyID, verdict.entityType, verdict.score, imageIndex, imageCount, gateDuration,
+		)
+	}
+	proxylog.ProxyHTTPError(w, idGateBlockMessage, http.StatusUnprocessableEntity)
 }
 
 func deduplicateImages(images [][]byte) []uniqueImage {

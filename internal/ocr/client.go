@@ -91,7 +91,7 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 		if attempt > 0 {
 			delay := c.retryBaseDelay << (attempt - 1)
 			if err := sleepWithContext(reqCtx, delay); err != nil {
-				return "", lastErr
+				return "", fmt.Errorf("%w; retry backoff ended: %w", lastErr, err)
 			}
 		}
 
@@ -100,8 +100,11 @@ func (c *Client) ExtractText(ctx context.Context, img []byte, filename string) (
 			return text, nil
 		}
 		lastErr = err
-		if !retryable || reqCtx.Err() != nil {
+		if !retryable {
 			return "", err
+		}
+		if ctxErr := reqCtx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("%w; %w", err, ctxErr)
 		}
 	}
 	return "", lastErr

@@ -212,9 +212,11 @@ features:
     # not abandon in-flight OCR inferences and collapse goodput under load.
     timeout_ms: 15000
     image_concurrency: 4
-    # Bound proxy-to-OCR concurrency near the sidecar sweet spot so excess
-    # burst traffic queues in Go (where expired contexts abort cleanly) instead
-    # of piling up zombie inferences on ocr-gate.
+    # Bound concurrent proxy-to-OCR requests from this proxy instance so excess
+    # burst traffic queues in Go (where expired contexts abort before
+    # dispatching) rather than flooding ocr-gate simultaneously. Note: this
+    # caps proxy-side admission only and does not cancel an inference already
+    # running in the sidecar executor if a dispatched call times out.
     max_in_flight: 8
     max_image_dimension: 1600
     cache_ttl_seconds: 300

@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	_ "image/png"
+	"sync"
 )
 
 const (
@@ -15,19 +16,86 @@ const (
 	// upload size and PIL/numpy decode time on multi-megapixel photos.
 	defaultIDGateMaxImageDim = 1600
 
-	// maxDecodePixels bounds memory spent decoding an oversized image before
-	// downscaling so a decompression bomb cannot exhaust proxy RAM.
+	// maxDecodePixels bounds single-image pixel count before decode.
 	maxDecodePixels = 50_000_000
+
+	// maxSingleDecodeBytes caps estimated decoded buffer memory (source +
+	// resized RGBA destination) for a single image so 16-bit PNGs (8 B/px)
+	// cannot allocate hundreds of MB.
+	maxSingleDecodeBytes = 64 * 1024 * 1024
+
+	// maxAggregateDecodeBytes caps total decoded image memory held across all
+	// concurrent downscales in the proxy process so bursts fit comfortably
+	// inside the llm-proxy container memory limit (default 2048 MiB).
+	maxAggregateDecodeBytes = 128 * 1024 * 1024
 
 	ocrDownscaleJPEGQuality = 85
 )
 
+type decodeMemoryBudget struct {
+	mu    sync.Mutex
+	limit int64
+	used  int64
+}
+
+func (b *decodeMemoryBudget) tryAcquire(bytes int64) bool {
+	if bytes <= 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+bytes > b.limit {
+		return false
+	}
+	b.used += bytes
+	return true
+}
+
+func (b *decodeMemoryBudget) release(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	b.mu.Lock()
+	b.used -= bytes
+	if b.used < 0 {
+		b.used = 0
+	}
+	b.mu.Unlock()
+}
+
+var ocrDecodeBudget = &decodeMemoryBudget{limit: maxAggregateDecodeBytes}
+
+// decodedBytesPerPixel estimates the decoded source buffer footprint per pixel
+// for the ColorModel reported by image.DecodeConfig.
+func decodedBytesPerPixel(m color.Model) int64 {
+	switch m {
+	case color.RGBA64Model, color.NRGBA64Model:
+		return 8
+	case color.Gray16Model:
+		return 2
+	case color.GrayModel:
+		return 1
+	case color.RGBAModel, color.NRGBAModel, color.YCbCrModel, color.NYCbCrAModel:
+		return 4
+	default:
+		if _, ok := m.(color.Palette); ok {
+			return 1
+		}
+		return 4
+	}
+}
+
 // downscaleImageForOCR shrinks JPEG/PNG images whose width or height exceeds
 // maxDim so the OCR sidecar does not spend upload bandwidth and decode CPU on
 // multi-megapixel inputs. It only transforms the copy sent to OCR — never the
-// upstream LLM request body. Small images, unsupported formats, or any error
-// fall back to raw unchanged.
+// upstream LLM request body. Small images, unsupported formats, images that
+// exceed per-image or aggregate decoded-memory limits, or any error fall back
+// to raw unchanged.
 func downscaleImageForOCR(raw []byte, maxDim int) []byte {
+	return downscaleImageForOCRWithBudget(raw, maxDim, ocrDecodeBudget)
+}
+
+func downscaleImageForOCRWithBudget(raw []byte, maxDim int, budget *decodeMemoryBudget) []byte {
 	if maxDim <= 0 || len(raw) == 0 {
 		return raw
 	}
@@ -42,8 +110,21 @@ func downscaleImageForOCR(raw []byte, maxDim int) []byte {
 	if cfg.Width <= maxDim && cfg.Height <= maxDim {
 		return raw
 	}
-	if int64(cfg.Width)*int64(cfg.Height) > maxDecodePixels {
+	pixels := int64(cfg.Width) * int64(cfg.Height)
+	if pixels > maxDecodePixels {
 		return raw
+	}
+
+	dstW, dstH := fitWithinMaxDim(cfg.Width, cfg.Height, maxDim)
+	estimatedBytes := pixels*decodedBytesPerPixel(cfg.ColorModel) + int64(dstW)*int64(dstH)*4
+	if estimatedBytes > maxSingleDecodeBytes {
+		return raw
+	}
+	if budget != nil && !budget.tryAcquire(estimatedBytes) {
+		return raw
+	}
+	if budget != nil {
+		defer budget.release(estimatedBytes)
 	}
 
 	src, _, err := image.Decode(bytes.NewReader(raw))
@@ -51,7 +132,6 @@ func downscaleImageForOCR(raw []byte, maxDim int) []byte {
 		return raw
 	}
 
-	dstW, dstH := fitWithinMaxDim(cfg.Width, cfg.Height, maxDim)
 	dst := resizeImageBox(src, dstW, dstH)
 
 	var buf bytes.Buffer
@@ -75,15 +155,16 @@ func fitWithinMaxDim(w, h, maxDim int) (int, int) {
 	return dstW, dstH
 }
 
-// resizeImageBox downscales src to dstW x dstH by averaging source pixels in
-// each destination cell (area/box filter), avoiding aliasing on small text.
-// Concrete fast paths avoid per-pixel interface dispatch for JPEG/PNG decodes.
+// resizeImageBox downscales src to dstW x dstH by averaging premultiplied
+// source pixels in each destination cell (area/box filter), avoiding aliasing
+// on small text while matching Go's premultiplied image.Image.At() semantics
+// consistently across PNG color types (RGBA, NRGBA, Paletted) and JPEG YCbCr.
 func resizeImageBox(src image.Image, dstW, dstH int) *image.RGBA {
 	switch img := src.(type) {
 	case *image.RGBA:
 		return resizeRGBABox(img.Pix, img.Stride, img.Rect, dstW, dstH)
 	case *image.NRGBA:
-		return resizeRGBABox(img.Pix, img.Stride, img.Rect, dstW, dstH)
+		return resizeNRGBABox(img.Pix, img.Stride, img.Rect, dstW, dstH)
 	case *image.YCbCr:
 		return resizeYCbCrBox(img, dstW, dstH)
 	default:
@@ -121,6 +202,52 @@ func resizeRGBABox(pix []uint8, stride int, bounds image.Rectangle, dstW, dstH i
 			dst.Pix[off+1] = uint8(gSum / count)
 			dst.Pix[off+2] = uint8(bSum / count)
 			dst.Pix[off+3] = uint8(aSum / count)
+		}
+	}
+	return dst
+}
+
+// resizeNRGBABox premultiplies straight-alpha NRGBA pixels into 16-bit
+// premultiplied channels matching color.NRGBA.RGBA() before averaging, so
+// transparent pixels match indexed/Paletted PNGs on JPEG encoding.
+func resizeNRGBABox(pix []uint8, stride int, bounds image.Rectangle, dstW, dstH int) *image.RGBA {
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+
+	for dy := range dstH {
+		sy0 := (dy * srcH) / dstH
+		sy1 := max(sy0+1, min(srcH, ((dy+1)*srcH)/dstH))
+		dstRow := dy * dst.Stride
+		for dx := range dstW {
+			sx0 := (dx * srcW) / dstW
+			sx1 := max(sx0+1, min(srcW, ((dx+1)*srcW)/dstW))
+
+			var rSum, gSum, bSum, aSum uint64
+			count := uint64((sy1 - sy0) * (sx1 - sx0))
+			for sy := sy0; sy < sy1; sy++ {
+				rowOff := sy*stride + sx0*4
+				for sx := sx0; sx < sx1; sx++ {
+					a := uint64(pix[rowOff+3])
+					a16 := a | (a << 8)
+					r := uint64(pix[rowOff+0])
+					r = ((r | (r << 8)) * a) / 0xff
+					g := uint64(pix[rowOff+1])
+					g = ((g | (g << 8)) * a) / 0xff
+					b := uint64(pix[rowOff+2])
+					b = ((b | (b << 8)) * a) / 0xff
+					rSum += r
+					gSum += g
+					bSum += b
+					aSum += a16
+					rowOff += 4
+				}
+			}
+			off := dstRow + dx*4
+			dst.Pix[off+0] = uint8((rSum / count) >> 8)
+			dst.Pix[off+1] = uint8((gSum / count) >> 8)
+			dst.Pix[off+2] = uint8((bSum / count) >> 8)
+			dst.Pix[off+3] = uint8((aSum / count) >> 8)
 		}
 	}
 	return dst

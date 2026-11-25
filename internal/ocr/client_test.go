@@ -3,8 +3,11 @@ package ocr
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,5 +156,62 @@ func TestClientExtractTextRespectsTimeout(t *testing.T) {
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("timeout took %v, expected prompt cancellation", elapsed)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type onCloseReadCloser struct {
+	io.ReadCloser
+	onClose func()
+}
+
+func (c *onCloseReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return err
+}
+
+func TestClientExtractTextPreservesCancelCauseDuringRetryBackoff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "OCR busy; try later", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, 5*time.Second)
+	client.retryBaseDelay = 2 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	base := client.client.Transport
+	client.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := base.RoundTrip(req)
+		if err == nil && resp != nil {
+			// Trigger cancel right after attempt 1's response body is closed
+			// so ExtractText enters retry backoff with a canceled context.
+			resp.Body = &onCloseReadCloser{
+				ReadCloser: resp.Body,
+				onClose:    cancel,
+			}
+		}
+		return resp, err
+	})
+
+	_, err := client.ExtractText(ctx, []byte("fake-image"), "image-0.bin")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled in error chain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("expected 503 status detail in error, got %v", err)
 	}
 }
